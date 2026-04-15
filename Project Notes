@@ -1,0 +1,98 @@
+* **Project folder created:** `C:\Users\Renato\OneDrive\Desktop\restaurant-app`
+
+* **Claude Code setup completed on Windows**
+
+  * Git installed
+  * Git added to PATH
+  * Git Bash confirmed at `C:\Program Files\Git\bin\bash.exe`
+  * VS Code `settings.json` updated so Claude Code can find Git Bash
+  * Claude Code installed
+  * Claude added to PATH at `C:\Users\Renato\.local\bin`
+
+* **Claude Code verification completed**
+
+  * `claude --version` works in PowerShell
+  * `claude --version` works in the VS Code terminal
+  * Claude Code opens in VS Code without the Git Bash error
+
+* **Node.js setup completed**
+
+  * Node installed
+  * Node added to PATH
+  * `node -v` works
+
+* **npm setup confirmed**
+
+  * `npm.cmd -v` works
+  * Plain `npm` in PowerShell is blocked by PowerShell execution policy
+  * For now, use:
+
+    * `npm.cmd run dev`
+    * `npx.cmd create-next-app@latest . --yes`
+
+* **Next.js app created successfully**
+
+  * Ran: `npx.cmd create-next-app@latest . --yes`
+  * Fresh Next.js app scaffold now exists inside `restaurant-app`
+
+* **Local development server works**
+
+  * Ran: `npm.cmd run dev`
+  * Opened: `http://localhost:3000`
+  * Confirmed the app loads in the browser
+
+* **Local environment is now working**
+
+  * VS Code works
+  * Claude Code works
+  * Git/Git Bash work
+  * Node works
+  * npm works through `npm.cmd`
+  * Next.js runs locally
+
+* **Important terminal/dev server notes**
+
+  * To stop the local server: `Ctrl + C`
+  * Closing VS Code also stops the local dev server
+  * Closing VS Code does **not** delete the project files
+
+* **Important project-state note**
+
+  * The current local app is still a **fresh Next.js starter app**
+  * The actual restaurant operations system is **not fully built yet**
+
+* **Main backend/app issue discovered during testing**
+
+  * Error received during account creation/onboarding:
+
+    * `new row violates row-level security policy for table "restaurants" (code: 42501)`
+  * Meaning:
+
+    * Supabase is blocking inserts into the `restaurants` table
+    * This is an RLS/database policy issue, not a frontend form issue
+
+* **Most likely cause of current blocker**
+
+  * Missing or incorrect INSERT policy on the `restaurants` table
+  * Or the inserted row does not match the RLS policy conditions
+
+* **Current known next technical step**
+
+  * Inspect Supabase policies for the `restaurants` table
+  * Confirm what INSERT policy exists
+  * Fix onboarding/database permissions so restaurant creation works
+
+* **Recommended file to create**
+
+  * `project-notes.md`
+  * Store:
+
+    * project goal
+    * current stack
+    * what is already working
+    * known blocker
+    * next steps
+
+* **Best one-line summary**
+
+  * Local development setup is fully working, the Next.js app runs successfully, and the main discovered blocker is a Supabase RLS policy error on the `restaurants` table.

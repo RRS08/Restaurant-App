@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const p = require\\('./node_modules/next/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(node -e \"const p = require\\('./node_modules/tailwindcss/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(npx shadcn@latest --version)",
+      "Bash(npm install:*)",
+      "Bash(npx next:*)",
+      "Bash(npx tsc:*)",
+      "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/.env*)",
+      "Bash(grep -ln \"user_roles\\\\|restaurant_setup_state\\\\|external_pos_connections\" c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/actions/*.ts)"
+    ]
+  }
+}

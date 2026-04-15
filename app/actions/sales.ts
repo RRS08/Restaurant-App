@@ -1,0 +1,328 @@
+'use server'
+
+import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
+import { getAuthContext, logAudit, formatError, resolveLocationId } from '@/lib/auth'
+import { requireLocationAccess, AuthzError } from '@/lib/authz'
+import { getInventoryActivation } from '@/lib/readiness'
+
+// Graceful wrapper around requireLocationAccess so we can keep the
+// existing { error: string } action-style returns without a broad
+// error-handling rewrite across each action body.
+async function requireLocResult(restaurantId: string, locationId: string): Promise<string | null> {
+  try {
+    await requireLocationAccess(restaurantId, locationId)
+    return null
+  } catch (err) {
+    if (err instanceof AuthzError) return err.message
+    throw err
+  }
+}
+
+interface LineItem {
+  menu_item_id: string
+  quantity: number
+}
+
+type OrderSource = 'manual' | 'native_pos' | 'external_pos'
+type PaymentType = 'cash' | 'card' | 'other'
+type PaymentStatus = 'paid' | 'unpaid'
+type OrderStatus = 'completed' | 'voided'
+
+const VALID_SOURCES: OrderSource[] = ['manual', 'native_pos', 'external_pos']
+const VALID_PAYMENT_TYPES: PaymentType[] = ['cash', 'card', 'other']
+const VALID_PAYMENT_STATUSES: PaymentStatus[] = ['paid', 'unpaid']
+const VALID_ORDER_STATUSES: OrderStatus[] = ['completed', 'voided']
+
+function pickEnum<T extends string>(value: FormDataEntryValue | null, allowed: T[], fallback: T): T {
+  const v = (value as string | null)?.trim() ?? ''
+  return (allowed as string[]).includes(v) ? (v as T) : fallback
+}
+
+export async function createOrder(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  // Resolve location — managers are locked to their assigned location
+  const { locationId, error: locError } = await resolveLocationId(ctx)
+  if (locError) return { error: locError }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
+  if (locAuthErr) return { error: locAuthErr }
+
+  // Parse line items
+  const lineItemsRaw = formData.get('line_items') as string
+  let lineItems: LineItem[]
+  try {
+    lineItems = JSON.parse(lineItemsRaw)
+  } catch {
+    return { error: 'Invalid order data.' }
+  }
+
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    return { error: 'Please add at least one item to the order.' }
+  }
+
+  for (const item of lineItems) {
+    if (!item.menu_item_id || !Number.isInteger(item.quantity) || item.quantity < 1) {
+      return { error: 'Each item must have a valid quantity of 1 or more.' }
+    }
+  }
+
+  // Fetch real prices from menu_items (never trust browser prices)
+  const menuItemIds = lineItems.map((li) => li.menu_item_id)
+  const { data: menuItems, error: menuError } = await ctx.supabase
+    .from('menu_items')
+    .select('id, current_price')
+    .in('id', menuItemIds)
+
+  if (menuError || !menuItems) {
+    return { error: formatError('price lookup', menuError) }
+  }
+
+  const priceMap = new Map<string, number>()
+  for (const mi of menuItems) priceMap.set(mi.id, Number(mi.current_price))
+
+  for (const li of lineItems) {
+    if (!priceMap.has(li.menu_item_id)) {
+      return { error: 'One or more items no longer exist. Please refresh.' }
+    }
+  }
+
+  // Calculate totals
+  const orderItemRows = lineItems.map((li) => {
+    const unitPrice = priceMap.get(li.menu_item_id)!
+    return {
+      menu_item_id: li.menu_item_id,
+      quantity: li.quantity,
+      unit_price: unitPrice,
+      total_price: unitPrice * li.quantity,
+    }
+  })
+  const totalAmount = orderItemRows.reduce((sum, row) => sum + row.total_price, 0)
+
+  // POS-ready metadata. Manual flow omits these; defaults apply.
+  // POS / external POS callers should supply their own values so
+  // every order reflects where it came from and how it was paid.
+  const source        = pickEnum<OrderSource>(formData.get('source'), VALID_SOURCES, 'manual')
+  const paymentType   = pickEnum<PaymentType>(formData.get('payment_type'), VALID_PAYMENT_TYPES, 'cash')
+  const paymentStatus = pickEnum<PaymentStatus>(formData.get('payment_status'), VALID_PAYMENT_STATUSES, 'paid')
+  const orderStatus   = pickEnum<OrderStatus>(formData.get('status'), VALID_ORDER_STATUSES, 'completed')
+  const note = ((formData.get('note') as string | null) ?? '').trim() || null
+
+  // Insert order
+  const { data: order, error: orderError } = await ctx.supabase
+    .from('orders')
+    .insert({
+      restaurant_id: ctx.restaurantId,
+      location_id: locationId,
+      total_amount: totalAmount,
+      source,
+      payment_type: paymentType,
+      payment_status: paymentStatus,
+      status: orderStatus,
+      note,
+    })
+    .select('id')
+    .single()
+
+  if (orderError || !order) {
+    console.error('Order creation failed:', orderError)
+    return { error: formatError('order', orderError) }
+  }
+
+  // Insert order_items
+  const { error: itemsError } = await ctx.supabase
+    .from('order_items')
+    .insert(orderItemRows.map((row) => ({ order_id: order.id, ...row })))
+
+  if (itemsError) {
+    console.error('Order items insertion failed:', itemsError)
+    return { error: formatError('order items', itemsError) }
+  }
+
+  // Inventory activation gate: only deplete stock when inventory
+  // has been explicitly activated via /settings. Until then the
+  // order still lands in the Sales ledger, but inventory stays
+  // untouched — honoring the "setup is not activation" rule.
+  const { activatedAt: inventoryActivatedAt } = await getInventoryActivation(ctx.supabase, ctx.restaurantId)
+  const inventoryActive = inventoryActivatedAt !== null
+
+  // Automatic inventory depletion via recipes — skipped for voided
+  // orders so they stay in the record without affecting stock.
+  if (orderStatus === 'voided') {
+    await logAudit(ctx, locationId, 'create_order', 'orders', order.id, { total_amount: totalAmount, status: orderStatus, source })
+    revalidatePath('/sales')
+    const voidRedirect = (formData.get('redirect_to') as string | null)?.trim()
+    redirect(voidRedirect && voidRedirect.startsWith('/') ? voidRedirect : '/sales')
+  }
+
+  const { data: recipeComponents } = inventoryActive
+    ? await ctx.supabase
+        .from('recipe_components')
+        .select('menu_item_id, inventory_item_id, quantity_required')
+        .in('menu_item_id', menuItemIds)
+    : { data: null }
+
+  if (inventoryActive && recipeComponents && recipeComponents.length > 0) {
+    const usageRows: {
+      restaurant_id: string; location_id: string;
+      inventory_item_id: string; transaction_type: string; quantity_change: number
+    }[] = []
+
+    for (const oi of orderItemRows) {
+      for (const comp of recipeComponents.filter((rc) => rc.menu_item_id === oi.menu_item_id)) {
+        usageRows.push({
+          restaurant_id: ctx.restaurantId,
+          location_id: locationId,
+          inventory_item_id: comp.inventory_item_id,
+          transaction_type: 'usage',
+          quantity_change: -(Number(comp.quantity_required) * oi.quantity),
+        })
+      }
+    }
+
+    if (usageRows.length > 0) {
+      const { error: usageError } = await ctx.supabase
+        .from('inventory_transactions')
+        .insert(usageRows)
+      if (usageError) console.error('Inventory usage failed:', usageError)
+    }
+  }
+
+  // Audit
+  await logAudit(ctx, locationId, 'create_order', 'orders', order.id, {
+    total_amount: totalAmount, source, payment_type: paymentType, payment_status: paymentStatus, status: orderStatus,
+  })
+
+  revalidatePath('/sales')
+  revalidatePath('/inventory')
+  // Callers (e.g. /pos) can supply their own return target so the
+  // POS surface stays on /pos after a sale instead of jumping away.
+  const redirectTarget = (formData.get('redirect_to') as string | null)?.trim()
+  redirect(redirectTarget && redirectTarget.startsWith('/') ? redirectTarget : '/sales')
+}
+
+// ----------------------------------------------------------------
+// voidOrder — the minimum clean correction workflow.
+//
+// What it does:
+//   1. Flips orders.status → 'voided' (idempotent, no-op if already voided).
+//   2. Reverses inventory usage by emitting compensating
+//      `inventory_transactions` rows of type 'adjustment' with positive
+//      quantity_change mirroring the original 'usage' deltas. The
+//      reference_note links each reversal back to the source order.
+//
+// What it does NOT do:
+//   • Delete or mutate historical `orders` / `order_items` rows
+//     (auditability).
+//   • Issue refunds or touch payment state.
+//   • Edit line items.
+//
+// Why 'adjustment' instead of a new transaction type:
+//   It's the existing type most aligned with "manual correction" and
+//   needs zero schema change. The `reference_note` column carries the
+//   semantic "Void reversal for order <id>" so reports can distinguish
+//   reversals from generic adjustments.
+// ----------------------------------------------------------------
+export async function voidOrder(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const orderId = (formData.get('order_id') as string | null)?.trim()
+  if (!orderId) return { error: 'Missing order id.' }
+
+  // Load the order (RLS already scopes by restaurant)
+  const { data: order, error: orderError } = await ctx.supabase
+    .from('orders')
+    .select('id, location_id, status, source, total_amount, created_at')
+    .eq('id', orderId)
+    .single()
+
+  if (orderError || !order) return { error: 'Order not found.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+  if (order.status === 'voided') return null // idempotent — nothing to do
+
+  // Reverse inventory ONLY if the original order actually depleted it.
+  // That's true when inventory was active at the moment the order was
+  // created. Orders created before activation have nothing to reverse.
+  const { activatedAt: inventoryActivatedAt } = await getInventoryActivation(ctx.supabase, ctx.restaurantId)
+  const orderDepletedInventory =
+    inventoryActivatedAt !== null && new Date(order.created_at) >= inventoryActivatedAt
+
+  // Compensating inventory adjustments for anything this order depleted.
+  // We look up the line items + their recipe components, compute the
+  // exact same deltas `createOrder` would have written as negative
+  // `usage`, and write them as positive `adjustment` rows.
+  const { data: orderItems } = orderDepletedInventory
+    ? await ctx.supabase
+        .from('order_items')
+        .select('menu_item_id, quantity')
+        .eq('order_id', order.id)
+    : { data: null }
+
+  if (orderDepletedInventory && orderItems && orderItems.length > 0) {
+    const menuItemIds = [...new Set(orderItems.map((oi) => oi.menu_item_id))]
+    const { data: recipeComponents } = await ctx.supabase
+      .from('recipe_components')
+      .select('menu_item_id, inventory_item_id, quantity_required')
+      .in('menu_item_id', menuItemIds)
+
+    if (recipeComponents && recipeComponents.length > 0) {
+      const reversalRows: {
+        restaurant_id: string; location_id: string; inventory_item_id: string
+        transaction_type: string; quantity_change: number; reference_note: string
+      }[] = []
+
+      for (const oi of orderItems) {
+        for (const comp of recipeComponents.filter((rc) => rc.menu_item_id === oi.menu_item_id)) {
+          reversalRows.push({
+            restaurant_id: ctx.restaurantId,
+            location_id: order.location_id,
+            inventory_item_id: comp.inventory_item_id,
+            transaction_type: 'adjustment',
+            quantity_change: Number(comp.quantity_required) * oi.quantity,
+            reference_note: `Void reversal for order ${order.id}`,
+          })
+        }
+      }
+
+      if (reversalRows.length > 0) {
+        const { error: reversalError } = await ctx.supabase
+          .from('inventory_transactions')
+          .insert(reversalRows)
+        if (reversalError) {
+          console.error('Void reversal failed:', reversalError)
+          return { error: formatError('inventory reversal', reversalError) }
+        }
+      }
+    }
+  }
+
+  // Flip status last, so if the reversal fails we haven't voided yet
+  const { error: updateError } = await ctx.supabase
+    .from('orders')
+    .update({ status: 'voided' })
+    .eq('id', order.id)
+
+  if (updateError) {
+    console.error('Order void failed:', updateError)
+    return { error: formatError('void order', updateError) }
+  }
+
+  await logAudit(ctx, order.location_id, 'void_order', 'orders', order.id, {
+    total_amount: Number(order.total_amount),
+    source: order.source,
+  })
+
+  revalidatePath('/sales')
+  revalidatePath('/inventory')
+  revalidatePath('/finance')
+  return null
+}

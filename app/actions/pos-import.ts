@@ -279,6 +279,7 @@ export async function syncExternalPosOrders(
 
   let totalInserted = 0
   let totalSkipped = 0
+  let totalFailed = 0
   let totalPlaceholders = 0
   let totalDepletions = 0
   let failedCount = 0
@@ -287,6 +288,7 @@ export async function syncExternalPosOrders(
   let totalRecordsFetched = 0
   let truncatedCount = 0
   const errors: string[] = []
+  const rejectionNotes: string[] = []
 
   for (const connection of connections) {
     const since = connection.last_orders_sync_at
@@ -307,6 +309,7 @@ export async function syncExternalPosOrders(
         locationId: connection.location_id,
         sourceId: connection.provider,
         orders,
+        meta,
       })
       if (result.error) {
         await updateSyncState(ctx.supabase, connection.id, { last_error: result.error })
@@ -325,8 +328,12 @@ export async function syncExternalPosOrders(
       })
       totalInserted += result.ordersInserted
       totalSkipped += result.ordersSkipped
+      totalFailed += result.ordersFailed
       totalPlaceholders += result.placeholdersCreated
       totalDepletions += result.inventoryDepletionsWritten
+      if (result.rejectionNotes.length > 0) {
+        rejectionNotes.push(...result.rejectionNotes.map((n) => `${connection.provider}: ${n}`))
+      }
       totalPagesFetched += meta.pagesFetched ?? 0
       totalRecordsFetched += meta.recordsFetched ?? 0
       if (meta.truncated) truncatedCount += 1
@@ -354,13 +361,17 @@ export async function syncExternalPosOrders(
   const truncHint = truncatedCount > 0
     ? ` · ${truncatedCount} connection${truncatedCount === 1 ? '' : 's'} truncated (Pilot V1 cap — run sync again to fetch the rest)`
     : ''
-  const failHint = failedCount > 0 ? ` (${failedCount} failed)` : ''
+  const failHint = failedCount > 0 ? ` (${failedCount} connection${failedCount === 1 ? '' : 's'} failed)` : ''
+  const rowFailHint = totalFailed > 0 ? ` · ${totalFailed} row${totalFailed === 1 ? '' : 's'} rejected` : ''
+  const firstNote = rejectionNotes[0]
+  const extraNotes = rejectionNotes.length > 1 ? ` (+${rejectionNotes.length - 1} more)` : ''
+  const noteHint = firstNote ? `. Warning: ${firstNote}${extraNotes}` : ''
 
   const base =
     `Orders sync across ${connections.length} location${connections.length === 1 ? '' : 's'}: ` +
-    `${totalInserted} new, ${totalSkipped} skipped, ` +
+    `${totalInserted} new, ${totalSkipped} duplicate${totalSkipped === 1 ? '' : 's'}, ` +
     `${totalPlaceholders} placeholder item${totalPlaceholders === 1 ? '' : 's'}, ` +
-    `${totalDepletions} inventory movement${totalDepletions === 1 ? '' : 's'}${pageHint}${truncHint}${failHint}.`
+    `${totalDepletions} inventory movement${totalDepletions === 1 ? '' : 's'}${rowFailHint}${pageHint}${truncHint}${failHint}${noteHint}.`
   return { ok: true, message: base }
 }
 
@@ -527,6 +538,7 @@ export async function importCsvOrders(
       locationId: validated.locationId,
       sourceId: 'csv',
       orders,
+      meta,
     })
     if (result.error) return { error: result.error }
 
@@ -644,6 +656,7 @@ export async function importCustomJsonOrders(
       locationId: validated.locationId,
       sourceId: 'custom_json',
       orders,
+      meta,
     })
     if (result.error) return { error: result.error }
 

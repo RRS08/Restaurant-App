@@ -53,7 +53,7 @@ export interface ReadinessSnapshot {
     inventory: { itemCount: number; activatedAt: string | null; baselineCount: number }
     sales: { completedOrderCount: number; firstOrderAt: string | null; daysWithSales: number }
     staffing: { employeeCount: number; shiftCount: number; ratedEmployeeCount: number }
-    finance: { expenseCount: number; connectedBankCount: number }
+    finance: { expenseCount: number; connectedBankCount: number; syncedBankCount: number }
     analytics: {
       daysSinceFirstOrder: number
       minDaysRequired: number
@@ -111,7 +111,7 @@ export async function computeReadiness(
     supabase.from('employees').select('id, hourly_rate').eq('active', true),
     supabase.from('shifts').select('id').limit(1),
     supabase.from('expenses').select('id', { count: 'exact', head: true }),
-    supabase.from('connected_bank_accounts').select('id').eq('active', true),
+    supabase.from('connected_bank_accounts').select('id, last_synced_at').eq('active', true),
   ])
 
   // ---- Menu signals ----
@@ -157,10 +157,20 @@ export async function computeReadiness(
   }
 
   // ---- Finance signals ----
+  // A bank row can be `active=true` but never actually synced. Prior
+  // audit flagged this as a false-confidence leak: "connected" was
+  // treated the same as "has data", and Finance happily flipped to
+  // 'active' with zero bank transactions. We now track both counts
+  // separately so downstream logic can distinguish
+  //   connected, but ghost     → syncedBankCount === 0
+  //   connected and flowing    → syncedBankCount > 0
   const expenseCount = Number(expenseCountRes?.count ?? 0)
+  const bankAccountsList = (bankAccounts ?? []) as Array<{ id: string; last_synced_at: string | null }>
+  const syncedBankCount = bankAccountsList.filter((b) => !!b.last_synced_at).length
   const financeSignals = {
     expenseCount,
-    connectedBankCount: (bankAccounts ?? []).length,
+    connectedBankCount: bankAccountsList.length,
+    syncedBankCount,
   }
 
   const analyticsSignals = {
@@ -210,15 +220,25 @@ export async function computeReadiness(
     else staffing = 'active'
   }
 
+  // Finance only reaches 'active' when there's at least one bank row
+  // that has actually synced. A ghost connection (active=true, never
+  // synced) leaves finance at 'active_with_limitations' so the UI
+  // doesn't imply full bank context when the table is empty.
   let finance: PillarState = 'not_started'
   if (orderCount > 0 || financeSignals.expenseCount > 0) {
-    finance = financeSignals.connectedBankCount > 0 ? 'active' : 'active_with_limitations'
+    finance = financeSignals.syncedBankCount > 0 ? 'active' : 'active_with_limitations'
   } else if (operatingMode) {
     finance = 'setup_in_progress'
   }
 
+  // Same distinction at the bankSync pillar level: connected-but-
+  // never-synced is a real, honest intermediate state.
   let bankSync: PillarState = 'not_started'
-  if (financeSignals.connectedBankCount > 0) bankSync = 'active'
+  if (financeSignals.syncedBankCount > 0) {
+    bankSync = 'active'
+  } else if (financeSignals.connectedBankCount > 0) {
+    bankSync = 'active_with_limitations'
+  }
 
   const corePartial =
     sales !== 'active' ||
@@ -303,6 +323,81 @@ export async function getInventoryActivation(
 
   const raw = data?.inventory_activated_at ?? null
   return { activatedAt: raw ? new Date(raw) : null }
+}
+
+// ================================================================
+// Shared pillar vocabulary
+//
+// Every surface that talks about a pillar's state should read from
+// this dictionary instead of rolling its own wording. Keeps the
+// product's "how sure are we right now?" voice consistent across
+// dashboard, settings, analytics, and finance without any shared
+// UI component — just one agreed-upon text + confidence tier.
+//
+// `confidence` is the tier the UI should use when deciding whether
+// to show full, partial, or locked presentation:
+//
+//   none     pillar not started or mid-setup → do not present as real
+//   partial  pillar live but with caveats   → show but annotate
+//   full     pillar active and trusted      → present normally
+// ================================================================
+
+export type PillarConfidence = 'none' | 'partial' | 'full'
+
+export const PILLAR_STATE_LABEL: Record<PillarState, string> = {
+  not_started: 'Not started',
+  setup_in_progress: 'Setup in progress',
+  ready: 'Ready',
+  active: 'Active',
+  active_with_limitations: 'Active with limitations',
+}
+
+export function pillarConfidence(state: PillarState): PillarConfidence {
+  switch (state) {
+    case 'not_started':
+    case 'setup_in_progress':
+      return 'none'
+    case 'ready':
+    case 'active_with_limitations':
+      return 'partial'
+    case 'active':
+      return 'full'
+  }
+}
+
+/**
+ * Is inventory ACTUALLY depleting stock right now?
+ *
+ * Distinct from `snapshot.pillars.inventory === 'active'`, which can
+ * be flipped on by `dev_bypass_all`. This helper mirrors what
+ * `getInventoryActivation` would return but works off an already-
+ * loaded snapshot so page-level consumers don't need a second DB
+ * round-trip. Use this anywhere the UI needs to talk truthfully
+ * about real writes (e.g. "inventory depletion is live" badges).
+ */
+export function isInventoryWriteLive(snapshot: ReadinessSnapshot): boolean {
+  return snapshot.signals.inventory.activatedAt !== null
+}
+
+/**
+ * Does finance have at least one synced bank account? Mirrors the
+ * new readiness logic so pages can show "bank connected, waiting
+ * for first sync" without re-querying. Purely a signal read — no
+ * DB calls.
+ */
+export function hasSyncedBank(snapshot: ReadinessSnapshot): boolean {
+  return snapshot.signals.finance.syncedBankCount > 0
+}
+
+/**
+ * Bank is connected but has never produced transactions yet. This
+ * is a real, honest intermediate state: not "not connected", but
+ * not "flowing" either. UIs should label it differently from
+ * "no bank connected".
+ */
+export function hasConnectedButUnsyncedBank(snapshot: ReadinessSnapshot): boolean {
+  const f = snapshot.signals.finance
+  return f.connectedBankCount > 0 && f.syncedBankCount === 0
 }
 
 export async function getOperatingMode(

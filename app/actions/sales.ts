@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { getAuthContext, logAudit, formatError, resolveLocationId } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { getInventoryActivation } from '@/lib/readiness'
+import { cancelOpenPaymentIntentsForOrder } from '@/app/actions/payments'
 
 // Graceful wrapper around requireLocationAccess so we can keep the
 // existing { error: string } action-style returns without a broad
@@ -108,7 +109,15 @@ export async function createOrder(
   // every order reflects where it came from and how it was paid.
   const source        = pickEnum<OrderSource>(formData.get('source'), VALID_SOURCES, 'manual')
   const paymentType   = pickEnum<PaymentType>(formData.get('payment_type'), VALID_PAYMENT_TYPES, 'cash')
-  const paymentStatus = pickEnum<PaymentStatus>(formData.get('payment_status'), VALID_PAYMENT_STATUSES, 'paid')
+  // Honest default: cash is born paid (money physically on hand),
+  // but card / other (processor-backed) orders are born UNPAID and
+  // only promote to 'paid' once a payment_intent reaches succeeded.
+  // The persistIntentResult bridge below (payments.ts) owns that
+  // promotion — never `createOrder`. Callers can still override
+  // the default explicitly via the form field (e.g. a cash-equivalent
+  // card flow imported from a reconciled batch).
+  const defaultPaymentStatus: PaymentStatus = paymentType === 'cash' ? 'paid' : 'unpaid'
+  const paymentStatus = pickEnum<PaymentStatus>(formData.get('payment_status'), VALID_PAYMENT_STATUSES, defaultPaymentStatus)
   const orderStatus   = pickEnum<OrderStatus>(formData.get('status'), VALID_ORDER_STATUSES, 'completed')
   const note = ((formData.get('note') as string | null) ?? '').trim() || null
 
@@ -305,6 +314,16 @@ export async function voidOrder(
     }
   }
 
+  // Cascade payment intents BEFORE flipping status. Open intents
+  // are canceled via the canonical payments path so provider-side
+  // state matches. Succeeded intents are left alone (refunds are
+  // not in scope for this phase) but reported as `needsRefund` so
+  // the caller can surface an honest warning. A provider-side
+  // failure is a warning, not a blocker — the order should still
+  // be voidable so operational truth isn't held hostage to a
+  // provider outage.
+  const intentsSummary = await cancelOpenPaymentIntentsForOrder(ctx.supabase, order.id)
+
   // Flip status last, so if the reversal fails we haven't voided yet
   const { error: updateError } = await ctx.supabase
     .from('orders')
@@ -319,6 +338,9 @@ export async function voidOrder(
   await logAudit(ctx, order.location_id, 'void_order', 'orders', order.id, {
     total_amount: Number(order.total_amount),
     source: order.source,
+    intents_canceled: intentsSummary.canceled,
+    intents_needs_refund: intentsSummary.needsRefund,
+    intents_warnings: intentsSummary.warnings,
   })
 
   revalidatePath('/sales')

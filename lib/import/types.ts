@@ -75,5 +75,13 @@ export interface NormalizedOrder {
   totalAmount: number
   status?: 'completed' | 'voided'
   paymentType?: 'cash' | 'card' | 'other'
+  /** Imported sales truth. Adapters that know the real paid state
+   *  should forward it here (Toast/Square/Clover all expose this).
+   *  When the source genuinely can't tell — e.g. a legacy CSV that
+   *  doesn't include payment status — leave it undefined and the
+   *  shared ingest pipeline falls back to a safe default of 'paid'
+   *  (closed tickets in an export are overwhelmingly paid in
+   *  practice). The point is: adapters no longer _have_ to lie. */
+  paymentStatus?: 'paid' | 'unpaid'
   lineItems: NormalizedOrderLineItem[]
 }

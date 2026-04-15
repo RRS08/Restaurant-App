@@ -20,6 +20,15 @@ import type { PillarKey, PillarState } from '@/lib/readiness'
 interface Props {
   greeting: string
   readiness: Record<PillarKey, PillarState> | null
+  /** True when at least one bank is `active=true` but no row has
+   *  ever synced. Lets us show "waiting for first bank sync"
+   *  separately from "no bank connected yet". */
+  bankConnectedUnsynced?: boolean
+  /** Mirrors the inventory write gate — `signals.inventory.activatedAt`
+   *  is non-null. Intentionally distinct from `readiness.inventory`,
+   *  which dev bypass can flip to 'active' without real writes
+   *  happening. */
+  inventoryWriteLive?: boolean
   inventory: {
     outOfStockCount: number
     lowStockCount: number
@@ -71,6 +80,8 @@ const DEFAULT_ITEMS = [
 export default function DashboardClient({
   greeting,
   readiness,
+  bankConnectedUnsynced = false,
+  inventoryWriteLive = false,
   inventory,
   staffing,
   sales,
@@ -90,13 +101,16 @@ export default function DashboardClient({
   // dashboard from pretending inventory is live when it isn't, etc.
   const readinessNotes: { text: string; href: string }[] = []
   if (readiness) {
-    const invState = readiness.inventory
-    if (invState === 'not_started' || invState === 'setup_in_progress' || invState === 'ready') {
+    // Inventory note uses the REAL write gate (inventoryWriteLive),
+    // not the pillar state — pillar state can be flipped 'active'
+    // by dev bypass without actual writes happening, and the note
+    // should always reflect whether stock is moving for real.
+    if (!inventoryWriteLive) {
       readinessNotes.push({
         text: 'Inventory tracking isn\'t active yet — stock counts shown are setup data only.',
         href: '/settings',
       })
-    } else if (invState === 'active_with_limitations') {
+    } else if (readiness.inventory === 'active_with_limitations') {
       readinessNotes.push({
         text: 'Inventory is active with limitations — some menu items are still unmapped.',
         href: '/settings',
@@ -110,11 +124,22 @@ export default function DashboardClient({
       })
     }
 
+    // Finance note now distinguishes three real states:
+    //   • no bank connected        → "running on internal data only"
+    //   • connected but unsynced   → "waiting for first bank sync"
+    //   • connected and flowing    → no note
     if (readiness.finance === 'active_with_limitations') {
-      readinessNotes.push({
-        text: 'Finance is running on internal data only — bank sync not connected.',
-        href: '/finance',
-      })
+      if (bankConnectedUnsynced) {
+        readinessNotes.push({
+          text: 'Bank connected, waiting for first sync. Finance will reconcile once transactions arrive.',
+          href: '/finance',
+        })
+      } else {
+        readinessNotes.push({
+          text: 'Finance is running on internal data only — bank sync not connected.',
+          href: '/finance',
+        })
+      }
     }
   }
 

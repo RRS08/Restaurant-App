@@ -1226,3 +1226,371 @@ create policy "Users can update their pos connection"
 create policy "Users can delete their pos connection"
   on public.external_pos_connections for delete
   using (restaurant_id = public.my_restaurant_id());
+
+
+-- ================================================================
+-- BANK SYNC — Plaid Sandbox phase
+--
+-- Secrets isolation:
+--   Plaid access_tokens are highly sensitive. Instead of adding a
+--   token column to `connected_bank_accounts` (which is readable by
+--   every restaurant member via RLS), we keep tokens in a dedicated
+--   `bank_provider_secrets` table whose RLS only lets OWNERS touch
+--   it. A manager that queries this table directly gets zero rows.
+--
+--   Keyed by provider_item_id so multiple accounts under the same
+--   Plaid Item share one access_token row (Plaid's real model).
+--
+--   Server actions in app/actions/bank.ts are the only place that
+--   SELECT from this table, and they gate with requireRestaurantOwner
+--   before touching anything. Defense in depth: authz guard first,
+--   RLS as the backstop.
+-- ================================================================
+
+create table if not exists public.bank_provider_secrets (
+  id                 uuid primary key default gen_random_uuid(),
+  restaurant_id      uuid not null references public.restaurants(id) on delete cascade,
+  provider           text not null check (provider in ('plaid')),
+  provider_item_id   text not null,
+  access_token       text not null,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (restaurant_id, provider, provider_item_id)
+);
+
+create index if not exists bank_provider_secrets_restaurant_idx
+  on public.bank_provider_secrets (restaurant_id);
+
+alter table public.bank_provider_secrets enable row level security;
+
+-- Owner-only policies. "Owner" = the user whose id matches the
+-- restaurants.owner_user_id for this restaurant row. user_roles-based
+-- owners are also covered via the same lookup path used by authz.
+drop policy if exists "Owners read bank secrets"   on public.bank_provider_secrets;
+drop policy if exists "Owners write bank secrets"  on public.bank_provider_secrets;
+drop policy if exists "Owners update bank secrets" on public.bank_provider_secrets;
+drop policy if exists "Owners delete bank secrets" on public.bank_provider_secrets;
+
+create policy "Owners read bank secrets"
+  on public.bank_provider_secrets for select
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = bank_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = bank_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners write bank secrets"
+  on public.bank_provider_secrets for insert
+  with check (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = bank_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = bank_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners update bank secrets"
+  on public.bank_provider_secrets for update
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = bank_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = bank_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners delete bank secrets"
+  on public.bank_provider_secrets for delete
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = bank_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = bank_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+
+-- ================================================================
+-- PAYMENTS BACKBONE
+--
+-- Canonical, provider-agnostic payment infrastructure. Sits next to
+-- `orders`, never merged into it: orders and payments have distinct
+-- lifecycles and the linkage is by foreign key, not by merging state.
+--
+-- Four tables:
+--
+--   payment_provider_configs
+--     One row per (restaurant, provider). Non-secret configuration
+--     (publishable key, provider account id, default currency).
+--     Writes are owner-only in practice via authz guards.
+--
+--   payment_provider_secrets
+--     Owner-only sensitive secrets (secret_key, webhook_secret).
+--     Same RLS isolation pattern as bank_provider_secrets. Managers
+--     cannot SELECT from this table at all.
+--
+--   payment_intents
+--     Canonical payment intent / session. One per attempt at paying
+--     for an order. Tracks the full canonical lifecycle independent
+--     of the provider's exact wording. Linkage to orders is by
+--     nullable order_id — an intent CAN exist before an order row
+--     (future quote-first flows) but usually points at one.
+--
+--   payment_attempts
+--     One row per attempt against a provider (e.g. a Stripe Charge
+--     under a PaymentIntent). Narrow for V1 — just enough to
+--     preserve raw provider truth and retry history.
+--
+-- Canonical lifecycle:
+--   requires_action  intent created, customer/card action pending
+--   processing       submitted, provider is working
+--   succeeded        captured
+--   failed           terminal failure
+--   canceled         canceled before capture
+--   refunded         reserved; not emitted in this phase
+-- ================================================================
+
+-- ----------------------------------------------------------------
+-- payment_provider_configs
+-- ----------------------------------------------------------------
+create table if not exists public.payment_provider_configs (
+  id                     uuid primary key default gen_random_uuid(),
+  restaurant_id          uuid not null references public.restaurants(id) on delete cascade,
+  provider               text not null check (provider in ('stripe')),
+  provider_account_id    text,
+  provider_location_id   text,
+  publishable_key        text,
+  default_currency       text not null default 'USD',
+  active                 boolean not null default true,
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now(),
+  unique (restaurant_id, provider)
+);
+
+create index if not exists payment_provider_configs_restaurant_idx
+  on public.payment_provider_configs (restaurant_id);
+
+alter table public.payment_provider_configs enable row level security;
+
+drop policy if exists "Members read payment configs"    on public.payment_provider_configs;
+drop policy if exists "Members insert payment configs"  on public.payment_provider_configs;
+drop policy if exists "Members update payment configs"  on public.payment_provider_configs;
+drop policy if exists "Members delete payment configs"  on public.payment_provider_configs;
+
+create policy "Members read payment configs"
+  on public.payment_provider_configs for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Members insert payment configs"
+  on public.payment_provider_configs for insert
+  with check (restaurant_id = public.my_restaurant_id());
+
+create policy "Members update payment configs"
+  on public.payment_provider_configs for update
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Members delete payment configs"
+  on public.payment_provider_configs for delete
+  using (restaurant_id = public.my_restaurant_id());
+
+-- ----------------------------------------------------------------
+-- payment_provider_secrets (owner-only)
+-- ----------------------------------------------------------------
+create table if not exists public.payment_provider_secrets (
+  id                 uuid primary key default gen_random_uuid(),
+  restaurant_id      uuid not null references public.restaurants(id) on delete cascade,
+  provider           text not null check (provider in ('stripe')),
+  secret_key         text not null,
+  webhook_secret     text,
+  created_at         timestamptz not null default now(),
+  updated_at         timestamptz not null default now(),
+  unique (restaurant_id, provider)
+);
+
+create index if not exists payment_provider_secrets_restaurant_idx
+  on public.payment_provider_secrets (restaurant_id);
+
+alter table public.payment_provider_secrets enable row level security;
+
+drop policy if exists "Owners read payment secrets"   on public.payment_provider_secrets;
+drop policy if exists "Owners write payment secrets"  on public.payment_provider_secrets;
+drop policy if exists "Owners update payment secrets" on public.payment_provider_secrets;
+drop policy if exists "Owners delete payment secrets" on public.payment_provider_secrets;
+
+create policy "Owners read payment secrets"
+  on public.payment_provider_secrets for select
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = payment_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = payment_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners write payment secrets"
+  on public.payment_provider_secrets for insert
+  with check (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = payment_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = payment_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners update payment secrets"
+  on public.payment_provider_secrets for update
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = payment_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = payment_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+create policy "Owners delete payment secrets"
+  on public.payment_provider_secrets for delete
+  using (
+    exists (
+      select 1 from public.restaurants r
+      where r.id = payment_provider_secrets.restaurant_id
+        and r.owner_user_id = auth.uid()
+    )
+    or exists (
+      select 1 from public.user_roles ur
+      where ur.restaurant_id = payment_provider_secrets.restaurant_id
+        and ur.user_id = auth.uid()
+        and ur.role = 'owner'
+    )
+  );
+
+-- ----------------------------------------------------------------
+-- payment_intents
+-- ----------------------------------------------------------------
+create table if not exists public.payment_intents (
+  id                    uuid primary key default gen_random_uuid(),
+  restaurant_id         uuid not null references public.restaurants(id) on delete cascade,
+  location_id           uuid not null references public.locations(id)   on delete cascade,
+  order_id              uuid references public.orders(id) on delete set null,
+  provider              text not null check (provider in ('stripe', 'manual')),
+  provider_intent_id    text,
+  status                text not null default 'requires_action'
+                        check (status in ('requires_action','processing','succeeded','failed','canceled','refunded')),
+  amount                numeric(10,2) not null check (amount >= 0),
+  tip_amount            numeric(10,2) not null default 0 check (tip_amount >= 0),
+  tax_amount            numeric(10,2) not null default 0 check (tax_amount >= 0),
+  currency              text not null default 'USD',
+  failure_code          text,
+  failure_message       text,
+  provider_metadata     jsonb,
+  created_at            timestamptz not null default now(),
+  updated_at            timestamptz not null default now(),
+  succeeded_at          timestamptz,
+  canceled_at           timestamptz,
+  unique (provider, provider_intent_id)
+);
+
+create index if not exists payment_intents_restaurant_idx
+  on public.payment_intents (restaurant_id);
+create index if not exists payment_intents_order_idx
+  on public.payment_intents (order_id);
+create index if not exists payment_intents_status_idx
+  on public.payment_intents (restaurant_id, status, created_at desc);
+
+alter table public.payment_intents enable row level security;
+
+drop policy if exists "Members read payment intents"    on public.payment_intents;
+drop policy if exists "Members insert payment intents"  on public.payment_intents;
+drop policy if exists "Members update payment intents"  on public.payment_intents;
+drop policy if exists "Members delete payment intents"  on public.payment_intents;
+
+create policy "Members read payment intents"
+  on public.payment_intents for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Members insert payment intents"
+  on public.payment_intents for insert
+  with check (restaurant_id = public.my_restaurant_id());
+
+create policy "Members update payment intents"
+  on public.payment_intents for update
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Members delete payment intents"
+  on public.payment_intents for delete
+  using (restaurant_id = public.my_restaurant_id());
+
+-- ----------------------------------------------------------------
+-- payment_attempts
+-- ----------------------------------------------------------------
+create table if not exists public.payment_attempts (
+  id                    uuid primary key default gen_random_uuid(),
+  payment_intent_id     uuid not null references public.payment_intents(id) on delete cascade,
+  restaurant_id         uuid not null references public.restaurants(id)     on delete cascade,
+  provider_attempt_id   text,
+  status                text not null
+                        check (status in ('requires_action','processing','succeeded','failed','canceled')),
+  failure_code          text,
+  failure_message       text,
+  provider_metadata     jsonb,
+  created_at            timestamptz not null default now()
+);
+
+create index if not exists payment_attempts_intent_idx
+  on public.payment_attempts (payment_intent_id, created_at desc);
+
+alter table public.payment_attempts enable row level security;
+
+drop policy if exists "Members read payment attempts"    on public.payment_attempts;
+drop policy if exists "Members insert payment attempts"  on public.payment_attempts;
+
+create policy "Members read payment attempts"
+  on public.payment_attempts for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Members insert payment attempts"
+  on public.payment_attempts for insert
+  with check (restaurant_id = public.my_restaurant_id());

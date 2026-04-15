@@ -9,7 +9,13 @@
 
 import { createClient } from '@/lib/supabase/server'
 import DashboardClient from './client'
-import { computeReadiness, type PillarKey, type PillarState } from '@/lib/readiness'
+import {
+  computeReadiness,
+  hasConnectedButUnsyncedBank,
+  isInventoryWriteLive,
+  type PillarKey,
+  type PillarState,
+} from '@/lib/readiness'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -236,16 +242,27 @@ export default async function DashboardPage() {
   // badges next to affected sections instead of pretending everything
   // is equally trustworthy. Uses the existing readiness model; dev
   // bypass and per-pillar overrides flow through automatically.
+  //
+  // We also forward two small derived booleans so the client can
+  // distinguish "bank not connected" from "bank connected but never
+  // synced" without re-reading the snapshot. Both come from the new
+  // shared readiness helpers so every surface uses one definition.
   let readinessPillars: Record<PillarKey, PillarState> | null = null
+  let bankConnectedUnsynced = false
+  let inventoryWriteLive = false
   if (userRole?.restaurant_id) {
     const snapshot = await computeReadiness(supabase, userRole.restaurant_id)
     readinessPillars = snapshot.pillars
+    bankConnectedUnsynced = hasConnectedButUnsyncedBank(snapshot)
+    inventoryWriteLive = isInventoryWriteLive(snapshot)
   }
 
   return (
     <DashboardClient
       greeting={firstName ? `Welcome back, ${firstName}` : 'Dashboard'}
       readiness={readinessPillars}
+      bankConnectedUnsynced={bankConnectedUnsynced}
+      inventoryWriteLive={inventoryWriteLive}
       inventory={{ outOfStockCount, lowStockCount, noCountCount, totalItems: inventoryItemCount }}
       staffing={{ employeeCount, shiftsToday, shiftsThisWeek }}
       sales={{ ordersToday, salesToday, ordersLast7Days, totalLast7Days: salesLast7Days }}

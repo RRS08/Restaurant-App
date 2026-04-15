@@ -35,8 +35,12 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedMenu, NormalizedOrder } from './types'
-import type { SourceId } from './adapter'
+import type { SourceId, SyncMeta } from './adapter'
 import { getInventoryActivation } from '@/lib/readiness'
+
+// Cap on how many per-row rejection notes we surface. Keeps result
+// strings short while still making partial failure honest.
+const MAX_INGEST_NOTES = 5
 
 const UNCATEGORIZED_NAME = 'Imported · Uncategorized'
 const UNCATEGORIZED_EXTERNAL_ID = '__uncategorized__'
@@ -192,13 +196,26 @@ export interface IngestOrdersArgs {
   locationId: string
   sourceId: SourceId
   orders: NormalizedOrder[]
+  /** Optional SyncMeta bucket the ingest pipeline writes into for
+   *  per-row rejection transparency. The calling action reads
+   *  `recordsSkipped` and `notes` after the call and folds them
+   *  into the sync result message. When omitted, rejection reasons
+   *  are still collected into the returned `rejectionNotes` array,
+   *  so newer callers that don't pass meta can still surface them. */
+  meta?: SyncMeta
 }
 
 export interface IngestOrdersResult {
   ordersInserted: number
   ordersSkipped: number
+  /** Rows that failed a DB write mid-batch. Distinct from
+   *  `ordersSkipped` (dedupe skips, which are success cases). */
+  ordersFailed: number
   placeholdersCreated: number
   inventoryDepletionsWritten: number
+  /** Short human-readable rejection reasons — capped at
+   *  MAX_INGEST_NOTES so the UI message stays bounded. */
+  rejectionNotes: string[]
   error: string | null
 }
 
@@ -208,9 +225,23 @@ export async function ingestOrders({
   locationId,
   sourceId,
   orders,
+  meta,
 }: IngestOrdersArgs): Promise<IngestOrdersResult> {
+  const rejectionNotes: string[] = []
+  const pushNote = (note: string) => {
+    if (rejectionNotes.length < MAX_INGEST_NOTES) rejectionNotes.push(note)
+  }
+
   if (orders.length === 0) {
-    return { ordersInserted: 0, ordersSkipped: 0, placeholdersCreated: 0, inventoryDepletionsWritten: 0, error: null }
+    return {
+      ordersInserted: 0,
+      ordersSkipped: 0,
+      ordersFailed: 0,
+      placeholdersCreated: 0,
+      inventoryDepletionsWritten: 0,
+      rejectionNotes,
+      error: null,
+    }
   }
 
   // 1. Find the source's Uncategorized bucket for placeholder items.
@@ -303,6 +334,7 @@ export async function ingestOrders({
   // 6. Insert each new order + its line items, conditionally deplete inventory.
   let ordersInserted = 0
   let ordersSkipped = 0
+  let ordersFailed = 0
   let inventoryDepletionsWritten = 0
 
   for (const o of orders) {
@@ -313,6 +345,12 @@ export async function ingestOrders({
 
     const status = o.status ?? 'completed'
     const paymentType = o.paymentType ?? 'other'
+    // Honest passthrough: adapters that know the real paid state
+    // forward it. Sources that genuinely can't tell leave it
+    // undefined and we fall back to 'paid' — the overwhelming
+    // default for closed-ticket exports. The ingest layer no
+    // longer flattens unilaterally.
+    const paymentStatus = o.paymentStatus ?? 'paid'
 
     const { data: orderRow, error: orderErr } = await supabase
       .from('orders')
@@ -324,7 +362,7 @@ export async function ingestOrders({
         external_provider: sourceId,
         external_id: o.externalId,
         payment_type: paymentType,
-        payment_status: 'paid',
+        payment_status: paymentStatus,
         status,
         created_at: o.postedAt,
       })
@@ -333,14 +371,20 @@ export async function ingestOrders({
 
     if (orderErr || !orderRow) {
       console.error('[import-ingest] order insert failed', o.externalId, orderErr)
+      ordersFailed++
+      pushNote(`Order ${o.externalId}: ${orderErr?.message ?? 'insert failed'}`)
       continue
     }
 
     // Line items
+    const skippedItems: string[] = []
     const lineRows = o.lineItems
       .map((li) => {
         const menuItemId = itemIdByExternalId.get(li.externalItemId)
-        if (!menuItemId) return null
+        if (!menuItemId) {
+          skippedItems.push(li.externalItemId)
+          return null
+        }
         return {
           order_id: orderRow.id,
           menu_item_id: menuItemId,
@@ -351,9 +395,16 @@ export async function ingestOrders({
       })
       .filter((r): r is NonNullable<typeof r> => r !== null)
 
+    if (skippedItems.length > 0) {
+      pushNote(`Order ${o.externalId}: ${skippedItems.length} line item${skippedItems.length === 1 ? '' : 's'} unmapped`)
+    }
+
     if (lineRows.length > 0) {
       const { error: liErr } = await supabase.from('order_items').insert(lineRows)
-      if (liErr) console.error('[import-ingest] line items insert failed', o.externalId, liErr)
+      if (liErr) {
+        console.error('[import-ingest] line items insert failed', o.externalId, liErr)
+        pushNote(`Order ${o.externalId}: line items — ${liErr.message}`)
+      }
     }
 
     ordersInserted++
@@ -394,11 +445,25 @@ export async function ingestOrders({
     }
   }
 
+  // Fold rejection transparency into the optional SyncMeta bucket so
+  // existing callers (pos-import.ts) can surface it in their result
+  // message without a broad refactor. `recordsSkipped` here means
+  // "rows we tried to import but failed" — NOT dedupe skips, which
+  // are successful no-ops.
+  if (meta) {
+    meta.recordsSkipped = (meta.recordsSkipped ?? 0) + ordersFailed
+    if (rejectionNotes.length > 0) {
+      meta.notes = [...(meta.notes ?? []), ...rejectionNotes]
+    }
+  }
+
   return {
     ordersInserted,
     ordersSkipped,
+    ordersFailed,
     placeholdersCreated,
     inventoryDepletionsWritten,
+    rejectionNotes,
     error: null,
   }
 }

@@ -2,6 +2,7 @@ import PageShell from '@/components/page-shell'
 import CleanupButton from './cleanup-button'
 import ReadinessPanel from './readiness-panel'
 import DevTools from './dev-tools'
+import BankCard from './bank-card'
 import { createClient } from '@/lib/supabase/server'
 import { computeReadiness, type ReadinessSnapshot } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
@@ -12,6 +13,8 @@ export default async function SettingsPage() {
 
   let readiness: ReadinessSnapshot | null = null
   let isDev = false
+  let isOwner = false
+  let restaurantId: string | null = null
   let locations: { id: string; name: string }[] = []
   let posConnections: Array<{
     id: string; location_id: string; provider: string; active: boolean
@@ -23,10 +26,12 @@ export default async function SettingsPage() {
     isDev = isDevEmail(user.email)
     const { data: role } = await supabase
       .from('user_roles')
-      .select('restaurant_id')
+      .select('restaurant_id, role')
       .eq('user_id', user.id)
       .single()
     if (role?.restaurant_id) {
+      restaurantId = role.restaurant_id
+      isOwner = role.role === 'owner'
       readiness = await computeReadiness(supabase, role.restaurant_id)
 
       if (isDev) {
@@ -68,6 +73,15 @@ export default async function SettingsPage() {
             </span>
           </div>
           <DevTools readiness={readiness} locations={locations} posConnections={posConnections} />
+        </section>
+      )}
+
+      {isOwner && restaurantId && (
+        <section className="mb-10">
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+            Bank sync
+          </h2>
+          <BankCard restaurantId={restaurantId} />
         </section>
       )}
 

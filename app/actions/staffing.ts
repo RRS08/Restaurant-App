@@ -18,58 +18,6 @@ async function requireLocResult(restaurantId: string, locationId: string): Promi
 }
 
 // ----------------------------------------------------------------
-// Setup — accepts config + generated shift sections from onboarding
-// ----------------------------------------------------------------
-export async function completeStaffingSetup(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
-
-  const houseModel = formData.get('house_model') as string
-  const schedulingStyle = formData.get('scheduling_style') as string
-
-  let sections: { name: string; role: string; area: 'foh' | 'boh'; start: number; end: number }[]
-  try { sections = JSON.parse(formData.get('sections_json') as string) }
-  catch { return { error: 'Invalid data.' } }
-
-  let fohRoles: string[] = []
-  let bohRoles: string[] = []
-  try {
-    fohRoles = JSON.parse((formData.get('foh_roles_json') as string) || '[]')
-    bohRoles = JSON.parse((formData.get('boh_roles_json') as string) || '[]')
-  } catch { return { error: 'Invalid role data.' } }
-
-  if (!sections || sections.length === 0) return { error: 'No shifts configured.' }
-
-  const { error: configError } = await ctx.supabase.from('staffing_config').upsert({
-    restaurant_id: ctx.restaurantId,
-    house_model: houseModel,
-    scheduling_style: schedulingStyle,
-    foh_roles: fohRoles,
-    boh_roles: bohRoles,
-    setup_complete: true,
-  }, { onConflict: 'restaurant_id' })
-
-  if (configError) return { error: formatError('config', configError) }
-
-  await ctx.supabase.from('shift_sections').delete().eq('restaurant_id', ctx.restaurantId)
-  await ctx.supabase.from('shift_sections').insert(
-    sections.map((s, i) => ({
-      restaurant_id: ctx.restaurantId,
-      name: s.name, role: s.role, area: s.area,
-      default_start_hour: s.start, default_end_hour: s.end,
-      sort_order: i + 1,
-    }))
-  )
-
-  revalidatePath('/staffing')
-  return null
-}
-
-export async function seedShiftSections() {}
-
-// ----------------------------------------------------------------
 // Fallback: manager forgot a role during onboarding and wants to
 // add one on the fly for the current house. Appends (dedup) to the
 // staffing_config role array for that area.

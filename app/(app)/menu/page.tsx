@@ -1,20 +1,19 @@
 // ----------------------------------------------------------------
 // Menu Page  →  /menu
 //
-// Server Component — seeds predefined categories, fetches all data
-// needed for the interactive menu client: categories, items,
-// recipe components with inventory names, and inventory items
-// for the ingredient dropdown.
+// Server Component — fetches all data needed for the interactive
+// menu client: categories, items, recipe components with inventory
+// names, and inventory items for the ingredient dropdown.
+//
+// A fresh restaurant with zero categories/items will see an
+// honest empty state inside MenuClient.
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
-import { seedDefaultCategories } from '@/app/actions/menu'
 import MenuClient from './client'
 
 export default async function MenuPage() {
   const supabase = await createClient()
-
-  await seedDefaultCategories()
 
   const [
     { data: categories },

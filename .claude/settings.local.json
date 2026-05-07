@@ -8,7 +8,10 @@
       "Bash(npx next:*)",
       "Bash(npx tsc:*)",
       "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/.env*)",
-      "Bash(grep -ln \"user_roles\\\\|restaurant_setup_state\\\\|external_pos_connections\" c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/actions/*.ts)"
+      "Bash(grep -ln \"user_roles\\\\|restaurant_setup_state\\\\|external_pos_connections\" c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/actions/*.ts)",
+      "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\(onboarding\\\\\\)/onboarding/preview-*)",
+      "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\(onboarding\\\\\\)/onboarding/finance*)",
+      "Bash(cat \"c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\\\\\(app\\\\\\\\\\)/layout.tsx\")"
     ]
   }
 }

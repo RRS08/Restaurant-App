@@ -4,43 +4,6 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getAuthContext, formatError } from '@/lib/auth'
 
-// Predefined sections — seeded automatically when a restaurant has no categories
-const DEFAULT_SECTIONS = [
-  { name: 'Appetizers / Starters', sort_order: 1 },
-  { name: 'Entrées', sort_order: 2 },
-  { name: 'Sides', sort_order: 3 },
-  { name: 'Desserts', sort_order: 4 },
-  { name: 'Soft Drinks', sort_order: 5 },
-  { name: 'Cocktails', sort_order: 6 },
-]
-
-// Ensures all predefined sections exist. Compares existing category
-// names against the default list and inserts only the missing ones.
-// This runs on every menu page load but only writes when needed.
-export async function seedDefaultCategories() {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return
-
-  const { data: existing } = await ctx.supabase
-    .from('menu_categories')
-    .select('name')
-
-  const existingNames = new Set((existing ?? []).map((c) => c.name))
-  const missing = DEFAULT_SECTIONS.filter((s) => !existingNames.has(s.name))
-
-  if (missing.length === 0) return
-
-  await ctx.supabase.from('menu_categories').insert(
-    missing.map((s) => ({
-      restaurant_id: ctx.restaurantId,
-      name: s.name,
-      sort_order: s.sort_order,
-    }))
-  )
-
-  revalidatePath('/menu')
-}
-
 export async function createCategory(
   prevState: { error: string } | null,
   formData: FormData

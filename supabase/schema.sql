@@ -1594,3 +1594,71 @@ create policy "Members read payment attempts"
 create policy "Members insert payment attempts"
   on public.payment_attempts for insert
   with check (restaurant_id = public.my_restaurant_id());
+
+
+-- ================================================================
+-- ONBOARDING V2 — workflow personalization
+--
+-- Adds business_type to restaurant_setup_state and widens the
+-- staffing_config CHECK constraints for the new vocabulary.
+-- Legacy values stay allowed so existing rows keep validating.
+-- ================================================================
+
+alter table public.restaurant_setup_state
+  add column if not exists business_type text;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'restaurant_setup_state_business_type_check'
+  ) then
+    alter table public.restaurant_setup_state
+      add constraint restaurant_setup_state_business_type_check
+      check (business_type is null or business_type in (
+        'full_service', 'quick_service', 'food_truck', 'cafe', 'bar'
+      ));
+  end if;
+end $$;
+
+do $$ begin
+  if exists (select 1 from pg_constraint where conname = 'staffing_config_house_model_check') then
+    alter table public.staffing_config drop constraint staffing_config_house_model_check;
+  end if;
+  alter table public.staffing_config add constraint staffing_config_house_model_check
+    check (house_model in ('split', 'unified', 'foh_boh', 'prep_service'));
+end $$;
+
+do $$ begin
+  if exists (select 1 from pg_constraint where conname = 'staffing_config_scheduling_style_check') then
+    alter table public.staffing_config drop constraint staffing_config_scheduling_style_check;
+  end if;
+  alter table public.staffing_config add constraint staffing_config_scheduling_style_check
+    check (scheduling_style in ('by_role', 'by_team', 'by_shift_block'));
+end $$;
+
+
+-- ================================================================
+-- FINANCE V2 — multi-source expenses
+--
+-- Adds a `source` column to `expenses` so non-manual origins
+-- (inventory purchases, bank-mapped, external imports, labor
+-- estimates) can flow into Finance later without a schema change.
+-- Default 'manual' so existing rows remain valid.
+-- ================================================================
+
+alter table public.expenses
+  add column if not exists source text not null default 'manual';
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'expenses_source_check'
+  ) then
+    alter table public.expenses add constraint expenses_source_check
+      check (source in (
+        'manual', 'inventory_purchase', 'bank_mapped',
+        'external_import', 'labor_estimated'
+      ));
+  end if;
+end $$;
+
+create index if not exists expenses_source_idx
+  on public.expenses (restaurant_id, source);

@@ -52,6 +52,10 @@ export async function createExpense(
     vendor_name: vendorName,
     notes,
     is_inventory_related: isInventoryRelated,
+    // Multi-source expense model. Manual entries flag explicitly so
+    // future origins (inventory_purchase / bank_mapped / etc.) can
+    // be distinguished without inferring from other fields.
+    source: 'manual',
   })
 
   if (error) {

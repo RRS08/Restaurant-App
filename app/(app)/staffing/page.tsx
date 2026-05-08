@@ -9,6 +9,8 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getRoleMatrix, getStarterShiftSections } from '@/lib/onboarding/defaults'
+import { splitRolesForStorage, type BusinessType, type TeamModel } from '@/lib/onboarding/types'
 import StaffingClient from './client'
 
 export default async function StaffingPage() {
@@ -16,13 +18,110 @@ export default async function StaffingPage() {
 
   const { data: config } = await supabase
     .from('staffing_config')
-    .select('house_model, scheduling_style, foh_roles, boh_roles')
+    .select('restaurant_id, house_model, scheduling_style, foh_roles, boh_roles')
     .maybeSingle()
+
+  // ----------------------------------------------------------------
+  // Lazy role backfill.
+  //
+  // Two failure modes get healed here:
+  //   1. staffing_config row exists but foh_roles / boh_roles are
+  //      empty arrays. (foh_roles + boh_roles were added by a later
+  //      schema ALTER with default '{}', so any restaurant whose
+  //      row predates that change carries empty defaults.)
+  //   2. staffing_config row doesn't exist at all (older onboarding
+  //      flow, prior reset, or partial bootstrap).
+  //
+  // In either case the Add Employee drawer ends up with zero role
+  // options and is unusable. We seed from the same RoleMatrix the
+  // wizard uses (business_type + team_model), upserting one row by
+  // restaurant_id. business_type comes from restaurant_setup_state
+  // when set; if missing we fall back to 'full_service' which has a
+  // well-defined matrix entry for every team model.
+  //
+  // Idempotent: only fires when both role arrays are empty, so
+  // legitimate selections are never overwritten. One visit fixes
+  // the row permanently.
+  // ----------------------------------------------------------------
+  let fohRoles = config?.foh_roles ?? []
+  let bohRoles = config?.boh_roles ?? []
+  const needsBackfill = fohRoles.length === 0 && bohRoles.length === 0
+
+  if (needsBackfill) {
+    // Resolve restaurant_id either from the existing config row or
+    // from the caller's user_role. We need it both to upsert the
+    // staffing_config row and to keep the operation idempotent.
+    let restaurantId: string | null = config?.restaurant_id ?? null
+    if (!restaurantId) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: roleRow } = await supabase
+          .from('user_roles')
+          .select('restaurant_id')
+          .eq('user_id', user.id)
+          .maybeSingle()
+        restaurantId = roleRow?.restaurant_id ?? null
+      }
+    }
+
+    if (restaurantId) {
+      const { data: setup } = await supabase
+        .from('restaurant_setup_state')
+        .select('business_type')
+        .maybeSingle()
+      // Default to 'full_service' when business_type is missing —
+      // its matrix has entries for every team model and is the
+      // safest superset for a restaurant with unknown segment.
+      const businessType = ((setup?.business_type ?? 'full_service') as BusinessType)
+
+      // staffing_config.house_model storage values are either the
+      // legacy 'split' (no longer written by onboarding) or the
+      // team-model values 'foh_boh' / 'unified' / 'prep_service'.
+      // Matrix lookup needs a TeamModel; map legacy 'split' to
+      // 'foh_boh' (same two-bucket shape). When no row yet, default
+      // to 'foh_boh' which is the most common team model.
+      const stored = config?.house_model ?? 'foh_boh'
+      const teamModelForMatrix: TeamModel =
+        stored === 'unified' ? 'unified'
+          : stored === 'prep_service' ? 'prep_service'
+            : 'foh_boh'
+
+      const matrix = getRoleMatrix(businessType, teamModelForMatrix)
+      if (matrix) {
+        const seeded = splitRolesForStorage(
+          teamModelForMatrix,
+          matrix.groupA.recommended,
+          matrix.groupB?.recommended ?? []
+        )
+        // Upsert by restaurant_id so this works whether the row
+        // exists (UPDATE) or not (INSERT). When inserting, schema
+        // defaults fill house_model='split' and scheduling_style=
+        // 'by_role'. We don't override house_model on insert because
+        // we don't know the user's actual preference — they can pick
+        // it via onboarding rerun if needed; the role list is what
+        // unblocks Add Employee.
+        const { error: upErr } = await supabase
+          .from('staffing_config')
+          .upsert(
+            {
+              restaurant_id: restaurantId,
+              foh_roles: seeded.fohRoles,
+              boh_roles: seeded.bohRoles,
+            },
+            { onConflict: 'restaurant_id' }
+          )
+        if (!upErr) {
+          fohRoles = seeded.fohRoles
+          bohRoles = seeded.bohRoles
+        }
+      }
+    }
+  }
 
   const [
     { data: employees },
     { data: shifts },
-    { data: sections },
+    { data: sectionsData },
     { data: locations },
   ] = await Promise.all([
     supabase.from('employees').select('id, name, role, primary_location_id').eq('active', true).order('name'),
@@ -30,6 +129,60 @@ export default async function StaffingPage() {
     supabase.from('shift_sections').select('id, name, role, area, default_start_hour, default_end_hour, sort_order').order('sort_order'),
     supabase.from('locations').select('id, name').order('created_at', { ascending: true }),
   ])
+
+  // ----------------------------------------------------------------
+  // Lazy shift-section backfill.
+  //
+  // shift_sections were never seeded by onboarding (the schema
+  // comment says "seeded automatically" but no seeder existed). A
+  // restaurant with zero blocks gets the empty schedule grid and
+  // employees can't be placed. Seed a generic starter set keyed by
+  // team model and re-fetch just the inserted rows.
+  //
+  // Idempotent: only runs when the SELECT returned zero rows. If
+  // the manager has any custom block, this is skipped — we never
+  // overwrite. One visit fixes the restaurant permanently.
+  // ----------------------------------------------------------------
+  let sections = sectionsData ?? []
+  if (sections.length === 0) {
+    // Resolve restaurant_id from config if we have it, else from
+    // user_roles. Mirrors the role-backfill resolution above.
+    let sectionRestaurantId: string | null = config?.restaurant_id ?? null
+    if (!sectionRestaurantId) {
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const { data: roleRow } = await supabase
+          .from('user_roles')
+          .select('restaurant_id')
+          .eq('user_id', user.id)
+          .maybeSingle()
+        sectionRestaurantId = roleRow?.restaurant_id ?? null
+      }
+    }
+
+    if (sectionRestaurantId) {
+      const stored = config?.house_model ?? 'foh_boh'
+      const teamModelForSeed: TeamModel =
+        stored === 'unified' ? 'unified'
+          : stored === 'prep_service' ? 'prep_service'
+            : 'foh_boh'
+
+      const starters = getStarterShiftSections(teamModelForSeed)
+      const insertRows = starters.map((s) => ({
+        restaurant_id: sectionRestaurantId,
+        ...s,
+      }))
+
+      const { data: seeded } = await supabase
+        .from('shift_sections')
+        .insert(insertRows)
+        .select('id, name, role, area, default_start_hour, default_end_hour, sort_order')
+
+      if (seeded && seeded.length > 0) {
+        sections = seeded
+      }
+    }
+  }
 
   // Safe defaults when no config exists yet. The client renders
   // an empty but usable board — no blocking wizard.
@@ -41,8 +194,8 @@ export default async function StaffingPage() {
       defaultLocationId={locations?.[0]?.id ?? null}
       houseModel={houseModel}
       schedulingStyle={schedulingStyle}
-      fohRoles={config?.foh_roles ?? []}
-      bohRoles={config?.boh_roles ?? []}
+      fohRoles={fohRoles}
+      bohRoles={bohRoles}
       employees={(employees ?? []).map((e) => ({
         id: e.id, name: e.name, role: e.role, primaryLocationId: e.primary_location_id,
       }))}
@@ -52,7 +205,7 @@ export default async function StaffingPage() {
         employeeName: (s.employees as unknown as { name: string } | null)?.name ?? '—',
         startTime: s.start_time, endTime: s.end_time, notes: s.notes ?? null,
       }))}
-      sections={(sections ?? []).map((s) => ({
+      sections={sections.map((s) => ({
         id: s.id, name: s.name, role: s.role ?? 'General', area: s.area as 'foh' | 'boh',
         defaultStartHour: s.default_start_hour, defaultEndHour: s.default_end_hour,
         sortOrder: s.sort_order,

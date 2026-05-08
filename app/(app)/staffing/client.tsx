@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useActionState, useTransition, type DragEvent } from 'react'
+import { useEffect, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
 import { quickAssignShift, createEmployee, updateShift, deleteShift, addStaffingRole } from '@/app/actions/staffing'
 
 interface Employee { id: string; name: string; role: string; primaryLocationId: string }
@@ -333,6 +333,22 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
   const [roleState, roleAction, rolePending] = useActionState(addStaffingRole, null)
   const [showAddRole, setShowAddRole] = useState(false)
   const houseLabel = isUnified ? 'your team' : (house === 'foh' ? 'Front of House' : 'Back of House')
+
+  // Auto-close on a successful submit.
+  // createEmployee returns null on success and { error } on failure.
+  // useActionState gives us no explicit "success" event, so we
+  // detect the pending → done transition and close iff state lacks
+  // an error. Without this the drawer stays open with the same
+  // form values after a successful add, the new employee appears
+  // hidden behind it, and the user assumes the click did nothing.
+  const wasPendingRef = useRef(false)
+  useEffect(() => {
+    if (wasPendingRef.current && !pending) {
+      const errored = !!state && 'error' in state && !!state.error
+      if (!errored) onClose()
+    }
+    wasPendingRef.current = pending
+  }, [pending, state, onClose])
 
   return (
     <>

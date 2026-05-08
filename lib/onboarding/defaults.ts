@@ -149,6 +149,49 @@ export function isRoleSelectionValid(tm: TeamModel, a: string[], b: string[]): b
 }
 
 // ================================================================
+// Starter shift sections — seeded into shift_sections.
+//
+// Generic time blocks the manager can rename/replace later. Role
+// is 'General' so the by_role scheduling style still renders one
+// usable group instead of a per-role grid the manager hasn't
+// configured yet.
+//
+// Storage convention: unified mode pins everything to area='foh'
+// (the staffing client treats foh as the unified bucket and hides
+// the FOH/BOH toggle). split-shape models (foh_boh + prep_service)
+// get a 3+2 layout — three service blocks in the front-of-house /
+// service bucket and two prep/cook blocks in the back-of-house /
+// prep bucket.
+// ================================================================
+
+export interface StarterShiftSection {
+  name: string
+  role: string
+  area: 'foh' | 'boh'
+  default_start_hour: number
+  default_end_hour: number
+  sort_order: number
+}
+
+export function getStarterShiftSections(teamModel: TeamModel): StarterShiftSection[] {
+  if (teamModel === 'unified') {
+    return [
+      { name: 'Opening', role: 'General', area: 'foh', default_start_hour: 8,  default_end_hour: 15, sort_order: 1 },
+      { name: 'Mid',     role: 'General', area: 'foh', default_start_hour: 12, default_end_hour: 19, sort_order: 2 },
+      { name: 'Closing', role: 'General', area: 'foh', default_start_hour: 15, default_end_hour: 23, sort_order: 3 },
+    ]
+  }
+  // foh_boh + prep_service: split-shape layout
+  return [
+    { name: 'Opening', role: 'General', area: 'foh', default_start_hour: 8,  default_end_hour: 15, sort_order: 1 },
+    { name: 'Mid',     role: 'General', area: 'foh', default_start_hour: 12, default_end_hour: 19, sort_order: 2 },
+    { name: 'Closing', role: 'General', area: 'foh', default_start_hour: 15, default_end_hour: 23, sort_order: 3 },
+    { name: 'Prep',    role: 'General', area: 'boh', default_start_hour: 7,  default_end_hour: 14, sort_order: 4 },
+    { name: 'Service', role: 'General', area: 'boh', default_start_hour: 14, default_end_hour: 22, sort_order: 5 },
+  ]
+}
+
+// ================================================================
 // Inventory preview seeds (never persisted — display only)
 // ================================================================
 

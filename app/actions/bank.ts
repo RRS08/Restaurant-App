@@ -36,7 +36,17 @@ import {
   Transaction as PlaidTransaction,
   RemovedTransaction,
 } from 'plaid'
-import { getPlaidClient, isPlaidConfigured } from '@/lib/plaid/client'
+import { getPlaidClient, isPlaidConfigured, isPlaidSandbox } from '@/lib/plaid/client'
+
+// Plaid Sandbox dynamic-transactions test profile.
+// `user_transactions_dynamic` is the only Sandbox username for which
+// /sandbox/transactions/create reliably persists rows that surface
+// in /transactions/sync. Pinned to ins_109508 (First Platypus Bank),
+// the canonical Sandbox institution that supports the Transactions
+// product. Used by connectSandboxItem() — see below.
+const SANDBOX_DYNAMIC_INSTITUTION_ID = 'ins_109508'
+const SANDBOX_DYNAMIC_USERNAME = 'user_transactions_dynamic'
+const SANDBOX_DYNAMIC_PASSWORD = 'pass_good'
 
 const PLAID_NOT_CONFIGURED = 'Plaid is not configured yet. Set PLAID_CLIENT_ID and PLAID_SECRET to enable bank sync.'
 
@@ -125,58 +135,83 @@ export async function exchangePlaidPublicToken(
     const accessToken = exchange.data.access_token
     const itemId = exchange.data.item_id
 
-    // Accounts + institution metadata for display. We call
-    // accountsGet with the freshly minted access_token; this also
-    // validates it before we persist.
-    const accountsRes = await plaid.accountsGet({ access_token: accessToken })
-    const accounts = accountsRes.data.accounts
-    const institutionName = accountsRes.data.item.institution_id
-      ? (await safeGetInstitutionName(accountsRes.data.item.institution_id)) ?? null
-      : null
-
-    // Persist the secret first. If the later account upsert fails,
-    // a follow-up sync call can still recover the item using this row.
-    const { error: secretError } = await gate.supabase
-      .from('bank_provider_secrets')
-      .upsert(
-        {
-          restaurant_id: gate.restaurantId,
-          provider: 'plaid',
-          provider_item_id: itemId,
-          access_token: accessToken,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: 'restaurant_id,provider,provider_item_id' }
-      )
-    if (secretError) return { error: `Could not save bank credentials: ${secretError.message}` }
-
-    // Upsert one row per Plaid account.
-    const rows = accounts.map((a) => ({
-      restaurant_id: gate.restaurantId,
-      provider: 'plaid',
-      provider_item_id: itemId,
-      provider_account_id: a.account_id,
-      account_name: a.name,
-      account_mask: a.mask ?? null,
-      account_type: a.type ?? null,
-      account_subtype: a.subtype ?? null,
-      institution_name: institutionName,
-      currency: a.balances.iso_currency_code ?? 'USD',
-      active: true,
-    }))
-    if (rows.length > 0) {
-      const { error: accErr } = await gate.supabase
-        .from('connected_bank_accounts')
-        .upsert(rows, { onConflict: 'restaurant_id,provider,provider_account_id' })
-      if (accErr) return { error: `Could not save accounts: ${accErr.message}` }
-    }
+    const persisted = await persistPlaidItem(gate, accessToken, itemId)
+    if ('error' in persisted) return persisted
 
     revalidatePath('/settings')
     revalidatePath('/finance')
-    return { ok: true, message: `Connected ${rows.length} account${rows.length === 1 ? '' : 's'}.` }
+    return {
+      ok: true,
+      message: `Connected ${persisted.accountCount} account${persisted.accountCount === 1 ? '' : 's'}.`,
+    }
   } catch (err) {
     return { error: formatPlaidError('public token exchange', err) }
   }
+}
+
+// ----------------------------------------------------------------
+// persistPlaidItem
+//
+// Shared write path for any flow that produces a fresh Plaid
+// access_token + item_id (production Link exchange, dev-only
+// sandbox connect, future flows). Calls /accounts/get to validate
+// the token and pull display metadata, then upserts:
+//   bank_provider_secrets   — owner-only, holds the access_token
+//   connected_bank_accounts — one row per Plaid account
+//
+// Pure persistence — does not revalidate caches; callers do that
+// so they can attach their own success message and redirects.
+// ----------------------------------------------------------------
+async function persistPlaidItem(
+  gate: { supabase: Awaited<ReturnType<typeof createClient>>; restaurantId: string },
+  accessToken: string,
+  itemId: string
+): Promise<{ ok: true; accountCount: number } | { error: string }> {
+  const plaid = getPlaidClient()
+
+  const accountsRes = await plaid.accountsGet({ access_token: accessToken })
+  const accounts = accountsRes.data.accounts
+  const institutionName = accountsRes.data.item.institution_id
+    ? (await safeGetInstitutionName(accountsRes.data.item.institution_id)) ?? null
+    : null
+
+  // Persist the secret first. If the later account upsert fails,
+  // a follow-up sync call can still recover the item using this row.
+  const { error: secretError } = await gate.supabase
+    .from('bank_provider_secrets')
+    .upsert(
+      {
+        restaurant_id: gate.restaurantId,
+        provider: 'plaid',
+        provider_item_id: itemId,
+        access_token: accessToken,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'restaurant_id,provider,provider_item_id' }
+    )
+  if (secretError) return { error: `Could not save bank credentials: ${secretError.message}` }
+
+  const rows = accounts.map((a) => ({
+    restaurant_id: gate.restaurantId,
+    provider: 'plaid',
+    provider_item_id: itemId,
+    provider_account_id: a.account_id,
+    account_name: a.name,
+    account_mask: a.mask ?? null,
+    account_type: a.type ?? null,
+    account_subtype: a.subtype ?? null,
+    institution_name: institutionName,
+    currency: a.balances.iso_currency_code ?? 'USD',
+    active: true,
+  }))
+  if (rows.length > 0) {
+    const { error: accErr } = await gate.supabase
+      .from('connected_bank_accounts')
+      .upsert(rows, { onConflict: 'restaurant_id,provider,provider_account_id' })
+    if (accErr) return { error: `Could not save accounts: ${accErr.message}` }
+  }
+
+  return { ok: true, accountCount: rows.length }
 }
 
 // ================================================================
@@ -263,6 +298,8 @@ export async function syncBankTransactions(
       let removed: RemovedTransaction[] = []
       let hasMore = true
 
+      console.log(`[plaid sync] item=${itemId} cursor=${cursor ? cursor.slice(0, 16) + '…' : 'null'}`)
+
       // Drain all pages of the delta in one call.
       while (hasMore) {
         const res = await plaid.transactionsSync({
@@ -276,11 +313,18 @@ export async function syncBankTransactions(
         cursor = res.data.next_cursor
       }
 
-      // Upsert added + modified into bank_transactions.
+      console.log(`[plaid sync] item=${itemId} delta: added=${added.length} modified=${modified.length} removed=${removed.length}`)
+
+      // Upsert added + modified into bank_transactions. Track filter
+      // drops so we can diagnose account_id mismatches.
+      let droppedForUnknownAccount = 0
       const upserts = [...added, ...modified]
         .map((tx) => {
           const localAccountId = bucket.accountIdsByPlaid.get(tx.account_id)
-          if (!localAccountId) return null
+          if (!localAccountId) {
+            droppedForUnknownAccount++
+            return null
+          }
           const amt = Number(tx.amount)
           // Plaid convention: positive amount = outflow (debit),
           // negative = inflow (credit). We normalize to positive
@@ -303,15 +347,26 @@ export async function syncBankTransactions(
         })
         .filter((r): r is NonNullable<typeof r> => r !== null)
 
+      if (droppedForUnknownAccount > 0) {
+        console.warn(
+          `[plaid sync] item=${itemId} dropped ${droppedForUnknownAccount} txn(s) — account_id mismatch.`,
+          'Known local account ids for this item:',
+          [...bucket.accountIdsByPlaid.keys()]
+        )
+      }
+      console.log(`[plaid sync] item=${itemId} upserts=${upserts.length}`)
+
       if (upserts.length > 0) {
         const { error: upErr } = await gate.supabase
           .from('bank_transactions')
           .upsert(upserts, { onConflict: 'connected_bank_account_id,provider_transaction_id' })
         if (upErr) {
+          console.error(`[plaid sync] item=${itemId} upsert failed:`, upErr.message)
           failedItems++
           errors.push(`item ${itemId}: ${upErr.message}`)
           continue
         }
+        console.log(`[plaid sync] item=${itemId} upsert ok`)
       }
 
       // Delete removed rows.
@@ -442,4 +497,440 @@ function formatPlaidError(step: string, err: unknown): string {
     return `[DEV] ${step} failed — ${msg}${code ? ` (${code})` : ''}`
   }
   return `Could not complete ${step}. Please try again.`
+}
+
+// ================================================================
+// 5. maybeAutoSyncBankTransactions
+//
+// Server-only helper called by the Finance page on load. Triggers
+// a real sync only when at least one connected account hasn't been
+// synced recently (or never has). Keeps the page snappy on repeat
+// visits while still feeling "automatic" to the user.
+//
+// Returns whether a sync ran, so callers can decide whether to
+// re-fetch dependent data.
+// ================================================================
+
+const AUTO_SYNC_STALENESS_MS = 5 * 60 * 1000  // 5 minutes
+
+export async function maybeAutoSyncBankTransactions(): Promise<{
+  synced: boolean
+  message?: string
+  error?: string
+}> {
+  if (!isPlaidConfigured()) return { synced: false }
+
+  const gate = await gateOwner()
+  if (!gate.ok) return { synced: false, error: gate.error }
+
+  const { data: rows } = await gate.supabase
+    .from('connected_bank_accounts')
+    .select('last_synced_at')
+    .eq('restaurant_id', gate.restaurantId)
+    .eq('provider', 'plaid')
+    .eq('active', true)
+
+  if (!rows || rows.length === 0) return { synced: false }
+
+  const now = Date.now()
+  const stale = rows.some((r) => {
+    if (!r.last_synced_at) return true
+    return now - new Date(r.last_synced_at).getTime() > AUTO_SYNC_STALENESS_MS
+  })
+  if (!stale) return { synced: false }
+
+  // Reuse the canonical sync path so the auto-trigger has identical
+  // behavior to the manual button.
+  const res = await syncBankTransactions(null, new FormData())
+  if ('error' in res) return { synced: false, error: res.error }
+  return { synced: true, message: res.message }
+}
+
+// ================================================================
+// 6. connectSandboxItem (Sandbox-only, dev-only)
+//
+// Why this exists:
+//   The interactive Plaid Link sandbox flow is non-deterministic
+//   for `user_transactions_dynamic`. Even when the user types the
+//   exact username + pass_good in Link, the resulting Item often
+//   does NOT behave as a dynamic-transactions Item — calls to
+//   /sandbox/transactions/create return 200 but Plaid silently
+//   no-ops, leaving zero rows in /transactions/get. We confirmed
+//   this with a live verdict-A diagnostic.
+//
+//   The reliable, documented way to create a Sandbox Item that
+//   supports /sandbox/transactions/create is to skip Link entirely
+//   and call /sandbox/public_token/create with
+//   `options.override_username = 'user_transactions_dynamic'`. That
+//   endpoint is what Plaid's own examples use for transaction tests.
+//
+// Behavior:
+//   1. /sandbox/public_token/create  → public_token bound to a
+//      First Platypus Bank Item with override_username =
+//      user_transactions_dynamic, transactions product enabled.
+//   2. /item/public_token/exchange   → access_token + item_id.
+//   3. persistPlaidItem(...)         → same write path as the
+//      production Link exchange (bank_provider_secrets +
+//      connected_bank_accounts).
+//
+// Hidden in production:
+//   The action returns an error if PLAID_ENV !== sandbox so it
+//   can never run live. The UI already gates it behind isDev +
+//   plaidSandbox, but the server-side check is defense in depth.
+//
+// Production parity:
+//   This action does NOT replace the user-facing Connect bank
+//   button (that still goes through Plaid Link). It's a separate,
+//   sandbox-only affordance for testing.
+// ================================================================
+export async function connectSandboxItem(
+  _prevState: Result | null,
+  _formData: FormData
+): Promise<Result> {
+  if (!isPlaidConfigured()) return { error: PLAID_NOT_CONFIGURED }
+  if (!isPlaidSandbox()) {
+    return { error: 'Sandbox connect is only available when PLAID_ENV=sandbox.' }
+  }
+  const gate = await gateOwner()
+  if (!gate.ok) return { error: gate.error }
+
+  try {
+    const plaid = getPlaidClient()
+
+    const sandboxRes = await plaid.sandboxPublicTokenCreate({
+      institution_id: SANDBOX_DYNAMIC_INSTITUTION_ID,
+      initial_products: [Products.Transactions],
+      options: {
+        override_username: SANDBOX_DYNAMIC_USERNAME,
+        override_password: SANDBOX_DYNAMIC_PASSWORD,
+      },
+    })
+    const publicToken = sandboxRes.data.public_token
+
+    const exchange = await plaid.itemPublicTokenExchange({ public_token: publicToken })
+    const accessToken = exchange.data.access_token
+    const itemId = exchange.data.item_id
+
+    const persisted = await persistPlaidItem(gate, accessToken, itemId)
+    if ('error' in persisted) return persisted
+
+    revalidatePath('/settings')
+    revalidatePath('/finance')
+    return {
+      ok: true,
+      message:
+        `Sandbox dynamic-transactions Item connected ` +
+        `(${persisted.accountCount} account${persisted.accountCount === 1 ? '' : 's'}). ` +
+        `Now click "Add sandbox rent expense" — it will hit this Item, which is guaranteed ` +
+        `to support /sandbox/transactions/create.`,
+    }
+  } catch (err) {
+    return { error: formatPlaidError('sandbox connect', err) }
+  }
+}
+
+// ================================================================
+// 7. createSandboxRentTransaction (Sandbox-only, dev-only)
+//
+// Calls Plaid's /sandbox/transactions/create endpoint to inject a
+// fake rent expense into the connected sandbox account, then runs
+// the regular sync so the new row flows into bank_transactions and
+// Finance picks it up.
+//
+// Requirements:
+//   • PLAID_ENV must be 'sandbox'
+//   • The Plaid Item must have been created with the
+//     `user_transactions_dynamic` username (otherwise Plaid rejects
+//     the call with INVALID_ITEM)
+//
+// Owner-gated. Visible to dev users only via Finance UI.
+// ================================================================
+export async function createSandboxRentTransaction(
+  _prevState: Result | null,
+  formData: FormData
+): Promise<Result> {
+  if (!isPlaidConfigured()) return { error: 'Plaid is not configured.' }
+
+  const gate = await gateOwner()
+  if (!gate.ok) return { error: gate.error }
+
+  const itemId = (formData.get('provider_item_id') as string | null)?.trim() ?? null
+
+  // ----------------------------------------------------------------
+  // DIAG: full inventory of what's in the DB before we choose an
+  // Item. Lets us see at a glance whether there are stale or
+  // orphan rows that could cause a create vs sync mismatch.
+  // ----------------------------------------------------------------
+  const { data: allSecrets } = await gate.supabase
+    .from('bank_provider_secrets')
+    .select('provider_item_id, updated_at')
+    .eq('restaurant_id', gate.restaurantId)
+    .eq('provider', 'plaid')
+    .order('updated_at', { ascending: false })
+
+  const { data: allAccounts } = await gate.supabase
+    .from('connected_bank_accounts')
+    .select('provider_item_id, provider_account_id, active, last_synced_at')
+    .eq('restaurant_id', gate.restaurantId)
+    .eq('provider', 'plaid')
+
+  console.log('[sandbox rent] DIAG bank_provider_secrets rows:')
+  for (const s of allSecrets ?? []) {
+    console.log(`  item=${s.provider_item_id} updated_at=${s.updated_at}`)
+  }
+  console.log('[sandbox rent] DIAG connected_bank_accounts rows:')
+  for (const a of allAccounts ?? []) {
+    console.log(`  item=${a.provider_item_id} account=${a.provider_account_id} active=${a.active} last_synced=${a.last_synced_at ?? 'never'}`)
+  }
+
+  // Find the access_token. If the caller passed an item_id, target
+  // that one; otherwise pick the most recently connected sandbox item.
+  const secretsQuery = gate.supabase
+    .from('bank_provider_secrets')
+    .select('access_token, provider_item_id')
+    .eq('restaurant_id', gate.restaurantId)
+    .eq('provider', 'plaid')
+    .order('updated_at', { ascending: false })
+    .limit(1)
+
+  const { data: secret } = itemId
+    ? await secretsQuery.eq('provider_item_id', itemId).maybeSingle()
+    : await secretsQuery.maybeSingle()
+
+  if (!secret) return { error: 'No connected sandbox bank found.' }
+
+  console.log(`[sandbox rent] CREATE-SIDE item_id (most-recent secret) = ${secret.provider_item_id}`)
+  const activeItemIds = (allAccounts ?? []).filter((a) => a.active).map((a) => a.provider_item_id)
+  const createItemIsActive = activeItemIds.includes(secret.provider_item_id)
+  console.log(`[sandbox rent] SYNC-SIDE iterates active item_ids = [${activeItemIds.join(', ')}]`)
+  console.log(`[sandbox rent] CREATE-SIDE item ∈ SYNC-SIDE list? ${createItemIsActive ? 'YES' : 'NO — sync will skip this item'}`)
+
+  const amountRaw = (formData.get('amount') as string | null)?.trim()
+  const amount = amountRaw ? parseFloat(amountRaw) : 1500
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { error: 'Amount must be greater than zero.' }
+  }
+
+  const today = new Date().toISOString().split('T')[0]
+  const description = (formData.get('description') as string | null)?.trim() || 'RENT — Monthly'
+
+  // Plaid SDK exposes /sandbox/transactions/create as
+  // `sandboxTransactionsCreate`. The endpoint requires `date_posted`
+  // and `description`; positive amount means an outflow (debit) on
+  // the account, which is what we want for an expense.
+  try {
+    const plaid = getPlaidClient()
+
+    // ------------------------------------------------------------
+    // DIAG: ask Plaid directly what this access_token represents,
+    // before we use it. Confirms (a) Plaid agrees on item_id,
+    // (b) which products are enabled (transactions must be in
+    // there), (c) what accounts Plaid sees vs what we stored.
+    // ------------------------------------------------------------
+    try {
+      const itemRes = await plaid.itemGet({ access_token: secret.access_token })
+      console.log(
+        `[sandbox rent] /item/get plaid_item_id=${itemRes.data.item.item_id} products=${JSON.stringify(itemRes.data.item.products)} update_type=${itemRes.data.item.update_type ?? 'n/a'}`
+      )
+      if (itemRes.data.item.item_id !== secret.provider_item_id) {
+        console.warn(
+          `[sandbox rent] WARN our stored item_id (${secret.provider_item_id}) ≠ Plaid's item_id (${itemRes.data.item.item_id})`
+        )
+      }
+      const accountsRes = await plaid.accountsGet({ access_token: secret.access_token })
+      console.log(
+        `[sandbox rent] /accounts/get returns ${accountsRes.data.accounts.length} account(s):`,
+        accountsRes.data.accounts.map((a) => ({
+          id: a.account_id, name: a.name, type: a.type, subtype: a.subtype,
+        }))
+      )
+      // Cross-check Plaid's account_ids against our local rows.
+      const localAccountIds = new Set(
+        (allAccounts ?? [])
+          .filter((a) => a.provider_item_id === secret.provider_item_id)
+          .map((a) => a.provider_account_id)
+      )
+      const plaidAccountIds = accountsRes.data.accounts.map((a) => a.account_id)
+      const missingFromLocal = plaidAccountIds.filter((id) => !localAccountIds.has(id))
+      if (missingFromLocal.length > 0) {
+        console.warn(
+          `[sandbox rent] WARN Plaid account_ids missing from our DB:`, missingFromLocal,
+          '— sync would drop transactions on these accounts via the bucket.accountIdsByPlaid filter.'
+        )
+      }
+    } catch (verifyErr) {
+      console.warn('[sandbox rent] /item/get or /accounts/get failed:', verifyErr)
+      // Continue — diagnostics shouldn't block the sandbox create.
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sandboxTxnCreate = (plaid as any).sandboxTransactionsCreate?.bind(plaid)
+    if (typeof sandboxTxnCreate !== 'function') {
+      return {
+        error:
+          'Plaid SDK on disk does not expose sandboxTransactionsCreate. ' +
+          'Upgrade `plaid` to a recent version or call /sandbox/transactions/create directly.',
+      }
+    }
+
+    console.log(
+      `[sandbox rent] starting create: item=${secret.provider_item_id} amount=${amount} date=${today}`
+    )
+    const createRes = await sandboxTxnCreate({
+      access_token: secret.access_token,
+      transactions: [
+        {
+          amount,
+          date_posted: today,
+          date_transacted: today,
+          description,
+          iso_currency_code: 'USD',
+        },
+      ],
+    })
+    console.log(
+      `[sandbox rent] plaid create ok: request_id=${createRes?.data?.request_id ?? '?'}`
+    )
+  } catch (err) {
+    console.error('[sandbox rent] plaid create failed:', err)
+    return { error: formatPlaidError('sandbox transaction create', err) }
+  }
+
+  // Plaid documents that /sandbox/transactions/create has a lag
+  // before the new tx surfaces in /transactions/sync. Retry up to
+  // 3 times with growing delays (~6s total worst case).
+  const isEmpty = (msg: string) => /^Bank sync: 0 new, 0 updated, 0 removed/.test(msg)
+  const delays = [0, 1000, 2000, 3000]
+
+  let syncRes: Result | null = null
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt] > 0) {
+      console.log(`[sandbox rent] sync attempt ${attempt + 1} after ${delays[attempt]}ms…`)
+      await new Promise((r) => setTimeout(r, delays[attempt]))
+    } else {
+      console.log('[sandbox rent] sync attempt 1…')
+    }
+    const res = await syncBankTransactions(null, new FormData())
+    if ('error' in res) {
+      console.error(`[sandbox rent] sync attempt ${attempt + 1} failed:`, res.error)
+      return { error: `Local sync failed: ${res.error}` }
+    }
+    console.log(`[sandbox rent] sync attempt ${attempt + 1} result:`, res.message)
+    syncRes = res
+    if (!isEmpty(res.message)) break
+  }
+
+  // ----------------------------------------------------------------
+  // ALWAYS verify via /transactions/get, regardless of sync outcome.
+  // Pulls a 2-day window so a midnight UTC boundary doesn't hide
+  // today's tx. Surfaces the actual response body (transaction
+  // list) in both the server log and the toast message — the
+  // user explicitly asked for response contents, not status codes.
+  // ----------------------------------------------------------------
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  const yesterdayStr = yesterday.toISOString().split('T')[0]
+
+  type VerifyTxn = { name: string; amount: number; date: string; account_id: string; transaction_id: string }
+  let verifyTxns: VerifyTxn[] = []
+  let verifyError: string | null = null
+  try {
+    const plaid = getPlaidClient()
+    const verify = await plaid.transactionsGet({
+      access_token: secret.access_token,
+      start_date: yesterdayStr,
+      end_date: today,
+      options: { count: 100 },
+    })
+    verifyTxns = verify.data.transactions.map((t) => ({
+      name: t.name ?? '(no name)',
+      amount: t.amount,
+      date: t.date,
+      account_id: t.account_id,
+      transaction_id: t.transaction_id,
+    }))
+    console.log(
+      `[sandbox rent] /transactions/get window=${yesterdayStr}..${today} returned ${verifyTxns.length} txn(s):`
+    )
+    for (const t of verifyTxns) {
+      console.log(`  • ${t.date} | ${t.amount.toFixed(2)} | ${t.name} | account=${t.account_id} | txn_id=${t.transaction_id}`)
+    }
+  } catch (err) {
+    verifyError = formatPlaidError('verify', err)
+    console.error('[sandbox rent] /transactions/get failed:', err)
+  }
+
+  revalidatePath('/finance')
+  revalidatePath('/settings')
+
+  // Was the just-created rent actually persisted by Plaid?
+  // Match by amount (Plaid sandbox preserves exact amount) and
+  // description fragment (case-insensitive).
+  const rentMatch = verifyTxns.find(
+    (t) => Math.abs(t.amount - amount) < 0.01 &&
+      t.name.toLowerCase().includes(description.toLowerCase().split(' ')[0])
+  )
+  const exactlyTodaysTxns = verifyTxns.filter((t) => t.date === today)
+
+  // Build a multi-line summary the toast can render.
+  const sample = verifyTxns.slice(0, 6).map(
+    (t) => `  • ${t.date} | $${t.amount.toFixed(2)} | ${t.name}`
+  ).join('\n')
+
+  if (verifyError) {
+    return {
+      error:
+        `Sandbox create returned 200, sync result: ${syncRes?.message ?? '(none)'}\n` +
+        `But /transactions/get verification failed: ${verifyError}`,
+    }
+  }
+
+  if (verifyTxns.length === 0) {
+    // Definitive: Plaid has nothing for the last 2 days on this Item.
+    // /sandbox/transactions/create returned 200 but didn't persist.
+    // This Item is not a valid user_transactions_dynamic Item.
+    return {
+      error:
+        `Plaid persisted ZERO transactions for ${yesterdayStr}..${today} on this Item.\n` +
+        `\n` +
+        `Conclusion: this Item is NOT a valid user_transactions_dynamic Item. ` +
+        `/sandbox/transactions/create returned 200 but no row was actually stored.\n` +
+        `\n` +
+        `Fix: disconnect the bank in External money, reconnect via Plaid Link, ` +
+        `and type EXACTLY "user_transactions_dynamic" as the username (password = pass_good).`,
+    }
+  }
+
+  if (!rentMatch) {
+    // Plaid has SOME transactions but not the rent we just created.
+    // Item may be valid but Plaid is rejecting/ignoring our create.
+    return {
+      ok: true,
+      message:
+        `Sandbox create returned 200 and sync ran, but the $${amount.toFixed(2)} rent ` +
+        `is NOT in /transactions/get for ${yesterdayStr}..${today}.\n` +
+        `\n` +
+        `Plaid returned ${verifyTxns.length} transaction(s) in that window:\n` +
+        `${sample}${verifyTxns.length > 6 ? `\n  …(+${verifyTxns.length - 6} more)` : ''}\n` +
+        `\n` +
+        `Conclusion: this Item likely is NOT a user_transactions_dynamic Item — ` +
+        `Plaid is returning the default sandbox transactions for it but silently ` +
+        `dropping our /sandbox/transactions/create payload.`,
+    }
+  }
+
+  // Rent IS in Plaid's response. Did sync surface it locally?
+  const syncFoundIt = syncRes && !isEmpty(syncRes.message)
+  return {
+    ok: true,
+    message:
+      `Plaid PERSISTED the rent. Verified via /transactions/get:\n` +
+      `  • ${rentMatch.date} | $${rentMatch.amount.toFixed(2)} | ${rentMatch.name}\n` +
+      `\n` +
+      `Sync result: ${syncRes?.message ?? '(no sync ran)'}\n` +
+      (syncFoundIt
+        ? `Local DB updated. The row should now appear in External money.`
+        : `Sync cursor hasn't caught up yet. Refresh Finance — the next auto-sync ` +
+          `(or page load) will pull it in. (${exactlyTodaysTxns.length} txn(s) dated ${today})`)
+  }
 }

@@ -24,6 +24,7 @@
 
 import { useEffect, useState, useActionState, useMemo } from 'react'
 import { createExpense } from '@/app/actions/finance'
+import { connectSandboxItem, createSandboxRentTransaction } from '@/app/actions/bank'
 import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
 import { ConnectBankButton } from '@/components/bank/connect-bank-button'
 
@@ -60,6 +61,8 @@ interface Props {
   locations: { id: string; name: string }[]
   defaultLocationId: string | null
   plaidConfigured: boolean
+  plaidSandbox: boolean
+  isDev: boolean
   cards: {
     expenseTotal7d: number
     expenseCount7d: number
@@ -83,6 +86,15 @@ interface Props {
   }
   bank: {
     accounts: BankAccountSummary[]
+    externalSpend7d: number
+    recognizedExternalSpend7d: number
+    externalSpendCount7d: number
+    unresolvedCount7d: number
+    externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]
+    recentUnresolved: {
+      id: string; description: string | null; merchantName: string | null
+      amount: number; postedAt: string
+    }[]
     inflow7d: number
     outflow7d: number
     txnCount7d: number
@@ -91,33 +103,46 @@ interface Props {
   recentExpenses: RecentExpense[]
 }
 
-type ActivityFilter = 'all' | 'inventory' | 'non_inventory'
 type DrawerKind = 'labor' | 'inventory' | 'external' | null
 
 export default function FinanceClient({
   locations: _locations,
   defaultLocationId,
   plaidConfigured,
+  plaidSandbox,
+  isDev,
   cards,
   laborBreakdown,
   inventoryBreakdown,
   bank,
   recentExpenses,
 }: Props) {
-  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all')
   const [state, action, pending] = useActionState(createExpense, null)
   const [locationId] = useState(defaultLocationId ?? '')
   const [drawer, setDrawer] = useState<DrawerKind>(null)
+  const [activityPage, setActivityPage] = useState(0)
+  const ACTIVITY_PAGE_SIZE = 6
 
-  const netActivity = cards.revenue7d - cards.expenseTotal7d
+  // Net activity = Revenue − Internal logged expenses − Recognized
+  // external spend. "Recognized" = bank outflows Plaid classified
+  // with a Personal Finance Category. Raw inflow never counts as
+  // revenue, and unresolved bank outflows never count as spend until
+  // they're categorized. Computed at the top so every cell that
+  // narrates Net (value, dot, hint, ratio) reads the same number.
+  const totalSpend7d = cards.expenseTotal7d + bank.recognizedExternalSpend7d
+  const netActivity = cards.revenue7d - totalSpend7d
   const netPositive = netActivity >= 0
-  const hasAnyActivity = cards.revenue7d > 0 || cards.expenseTotal7d > 0
+  const hasAnyActivity = cards.revenue7d > 0 || totalSpend7d > 0
 
-  const filteredExpenses = useMemo(() => {
-    if (activityFilter === 'all') return recentExpenses
-    if (activityFilter === 'inventory') return recentExpenses.filter((e) => e.isInventoryRelated)
-    return recentExpenses.filter((e) => !e.isInventoryRelated)
-  }, [recentExpenses, activityFilter])
+  // Recent activity is now a single unfiltered log — the Inventory
+  // / Other filter pills were removed in this pass to keep the card
+  // a clean recent-activity view.
+  const activityPageCount = Math.max(1, Math.ceil(recentExpenses.length / ACTIVITY_PAGE_SIZE))
+  const safeActivityPage = Math.min(activityPage, activityPageCount - 1)
+  const pagedExpenses = recentExpenses.slice(
+    safeActivityPage * ACTIVITY_PAGE_SIZE,
+    safeActivityPage * ACTIVITY_PAGE_SIZE + ACTIVITY_PAGE_SIZE
+  )
 
   const recentInventoryExpenses = useMemo(
     () => recentExpenses.filter((e) => e.isInventoryRelated).slice(0, 8),
@@ -165,7 +190,8 @@ export default function FinanceClient({
               hasAnyActivity={hasAnyActivity}
               netPositive={netPositive}
               revenue={cards.revenue7d}
-              expenses={cards.expenseTotal7d}
+              spend={totalSpend7d}
+              recognizedExternalSpend={bank.recognizedExternalSpend7d}
             />
           </div>
         </div>
@@ -209,74 +235,82 @@ export default function FinanceClient({
           {/* LEFT: Recent activity */}
           <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[500px]">
             {/* Header */}
-            <div className="border-b border-gray-100 px-6 py-5 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Activity</p>
-                <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Recent activity</h2>
-              </div>
-              {recentExpenses.length > 0 && (
-                <div className="inline-flex items-center gap-0.5 rounded-lg border border-gray-200 bg-gray-50/80 p-0.5">
-                  {(['all', 'inventory', 'non_inventory'] as ActivityFilter[]).map((f) => (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setActivityFilter(f)}
-                      className={`text-[11px] font-semibold px-2.5 py-1 rounded-md transition-colors ${
-                        activityFilter === f
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
-                      }`}
-                    >
-                      {f === 'all' ? 'All' : f === 'inventory' ? 'Inventory' : 'Other'}
-                    </button>
-                  ))}
-                </div>
-              )}
+            <div className="border-b border-gray-100 px-6 py-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Activity</p>
+              <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Recent activity</h2>
             </div>
 
-            {/* Body */}
-            <div className="flex-1 overflow-y-auto">
-              {filteredExpenses.length === 0 ? (
-                recentExpenses.length === 0 ? (
-                  <EmptyWorkspacePrompt
-                    title="No expenses recorded yet"
-                    body="Use the Log an expense form on the right to record your first expense. Recent activity will appear here."
-                  />
-                ) : (
-                  <p className="text-xs text-gray-400 text-center py-12">No expenses match this filter.</p>
-                )
+            {/* Body — fixed-height activity log, paginated 6 per page so the
+                card never stretches and rows always slot in cleanly. */}
+            <div className="flex-1 flex flex-col">
+              {recentExpenses.length === 0 ? (
+                <EmptyWorkspacePrompt
+                  title="No expenses recorded yet"
+                  body="Use the Log an expense form on the right to record your first expense. Recent activity will appear here."
+                />
               ) : (
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-white/95 backdrop-blur">
-                    <tr className="border-b border-gray-100 text-left">
-                      <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Date</th>
-                      <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Category</th>
-                      <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Vendor</th>
-                      <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em] text-right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50">
-                    {filteredExpenses.map((exp) => (
-                      <tr key={exp.id} className="hover:bg-gray-50/70 transition-colors">
-                        <td className="px-6 py-3.5 text-gray-700 whitespace-nowrap text-[13px]">
-                          {new Date(exp.expenseDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </td>
-                        <td className="px-6 py-3.5">
-                          <span className={`inline-flex text-[11px] font-medium px-2 py-0.5 rounded-md ${categoryChipClass(exp.category)}`}>
-                            {exp.category}
-                          </span>
-                          {exp.isInventoryRelated && (
-                            <span className="ml-1.5 inline-flex text-[11px] font-medium px-2 py-0.5 rounded-md bg-amber-50 text-amber-800">
-                              Inventory
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-6 py-3.5 text-gray-500 truncate max-w-[220px] text-[13px]">{exp.vendorName || '—'}</td>
-                        <td className="px-6 py-3.5 text-gray-900 font-mono tabular-nums font-medium text-right text-[13px]">${exp.amount.toFixed(2)}</td>
+                <>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-100 text-left">
+                        <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Date</th>
+                        <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Category</th>
+                        <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Vendor</th>
+                        <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em] text-right">Amount</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {pagedExpenses.map((exp) => (
+                        <tr key={exp.id} className="hover:bg-gray-50/70 transition-colors">
+                          <td className="px-6 py-3.5 text-gray-700 whitespace-nowrap text-[13px]">
+                            {new Date(exp.expenseDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                          </td>
+                          <td className={`px-6 py-3.5 truncate max-w-[180px] text-[13px] font-medium ${categoryColorClass(exp.category)}`}>
+                            {exp.category}
+                          </td>
+                          <td className="px-6 py-3.5 text-gray-700 truncate max-w-[220px] text-[13px]">
+                            {exp.vendorName || '—'}
+                          </td>
+                          <td className="px-6 py-3.5 text-gray-900 font-mono tabular-nums font-medium text-right text-[13px]">${exp.amount.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* Pager — pinned at the bottom so the card height is stable
+                      regardless of how full the current page is. */}
+                  <div className="mt-auto border-t border-gray-100 px-6 py-3 flex items-center justify-between">
+                    <p className="text-[11px] text-gray-500">
+                      {recentExpenses.length === 0
+                        ? '0 entries'
+                        : `${safeActivityPage * ACTIVITY_PAGE_SIZE + 1}–${Math.min(
+                            (safeActivityPage + 1) * ACTIVITY_PAGE_SIZE,
+                            recentExpenses.length
+                          )} of ${recentExpenses.length}`}
+                    </p>
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setActivityPage((p) => Math.max(0, p - 1))}
+                        disabled={safeActivityPage === 0}
+                        className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ← Prev
+                      </button>
+                      <span className="text-[11px] text-gray-400 px-1.5">
+                        {safeActivityPage + 1} / {activityPageCount}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActivityPage((p) => Math.min(activityPageCount - 1, p + 1))}
+                        disabled={safeActivityPage >= activityPageCount - 1}
+                        className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -326,7 +360,12 @@ export default function FinanceClient({
             : 'Last 7 days · captured from connected bank'
         }
       >
-        <ExternalDrawerContent bank={bank} plaidConfigured={plaidConfigured} />
+        <ExternalDrawerContent
+          bank={bank}
+          plaidConfigured={plaidConfigured}
+          plaidSandbox={plaidSandbox}
+          isDev={isDev}
+        />
       </Drawer>
     </div>
   )
@@ -360,21 +399,28 @@ function SummaryCell({ label, dotClass, value, hint, empty }: {
 
 // Net activity cell — only metric whose value is colored.
 // Green when positive, red when negative.
-function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, expenses }: {
+//
+// `spend` here is the full deduction: internal logged expenses +
+// recognized external spend (bank outflows Plaid categorized).
+// Unresolved bank activity is intentionally excluded — it's not
+// recognized yet, so claiming it as "spend" would mislead.
+function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, recognizedExternalSpend }: {
   value: number; hasAnyActivity: boolean; netPositive: boolean
-  revenue: number; expenses: number
+  revenue: number; spend: number; recognizedExternalSpend: number
 }) {
   const valueColor = !hasAnyActivity ? 'text-gray-300' : (netPositive ? 'text-green-700' : 'text-red-600')
   const dotClass = !hasAnyActivity ? 'bg-gray-300' : (netPositive ? 'bg-green-500' : 'bg-red-500')
+  const hasRecognizedExternal = recognizedExternalSpend > 0
   const hint = (() => {
-    if (revenue > 0 && expenses > 0) {
-      const pct = Math.round((expenses / revenue) * 100)
-      return expenses > revenue
+    if (revenue > 0 && spend > 0) {
+      const pct = Math.round((spend / revenue) * 100)
+      const base = spend > revenue
         ? `Spending exceeds revenue · ${pct}% ratio`
-        : `Expenses are ${pct}% of revenue`
+        : `Spending is ${pct}% of revenue`
+      return hasRecognizedExternal ? `${base} · incl. external` : base
     }
-    if (revenue > 0) return 'No expenses recorded yet'
-    if (expenses > 0) return 'No sales recorded yet'
+    if (revenue > 0) return 'No spend recorded yet'
+    if (spend > 0) return 'No sales recorded yet'
     return 'Log an expense or connect a bank to begin'
   })()
 
@@ -487,10 +533,17 @@ function InventoryDriverCard({ value, hint, onOpen }: {
   )
 }
 
-// External money card — third middle-row card. Owns the bank
-// connection entry point in the not-connected state.
+// External money card — third middle-row card. Refocused around
+// outside-the-system spend the system wouldn't otherwise capture
+// (rent, utilities, subscriptions, transfers). Inflow is never
+// the headline — Revenue lives in the system, not in the bank.
 function ExternalMoneyCard({ bank, plaidConfigured, onOpen }: {
-  bank: { inflow7d: number; outflow7d: number; txnCount7d: number; state: BankState }
+  bank: {
+    externalSpend7d: number
+    externalSpendCount7d: number
+    unresolvedCount7d: number
+    state: BankState
+  }
   plaidConfigured: boolean
   onOpen: () => void
 }) {
@@ -506,7 +559,8 @@ function ExternalMoneyCard({ bank, plaidConfigured, onOpen }: {
         </div>
         <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed mb-4">
-          Connect a bank to bring real money-movement context into Finance.
+          Connect a bank to surface outside-the-system spending — rent, utilities, subscriptions,
+          and unresolved activity Finance can&apos;t see otherwise.
         </p>
         <div className="mt-auto" onClick={(e) => e.stopPropagation()}>
           <ConnectBankButton configured={plaidConfigured} />
@@ -551,12 +605,18 @@ function ExternalMoneyCard({ bank, plaidConfigured, onOpen }: {
         </>
       ) : (
         <>
-          <div className="flex items-baseline gap-3">
-            <span className="text-[22px] leading-none font-semibold tracking-tight tabular-nums text-gray-900">+{fmt(bank.inflow7d)}</span>
-            <span className="text-[22px] leading-none font-semibold tracking-tight tabular-nums text-gray-900">−{fmt(bank.outflow7d)}</span>
-          </div>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">External spend · 7 days</p>
+          <p className={`text-[26px] leading-none font-semibold tracking-tight tabular-nums ${bank.externalSpend7d === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
+            {fmt(bank.externalSpend7d)}
+          </p>
           <div className="mt-3 flex items-end justify-between gap-2">
-            <p className="text-xs text-gray-500 leading-relaxed">{bank.txnCount7d} transaction{bank.txnCount7d !== 1 ? 's' : ''} · last 7 days</p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              {bank.externalSpendCount7d === 0
+                ? 'No external spend detected'
+                : bank.unresolvedCount7d > 0
+                  ? `${bank.externalSpendCount7d} transaction${bank.externalSpendCount7d !== 1 ? 's' : ''} · ${bank.unresolvedCount7d} unresolved`
+                  : `${bank.externalSpendCount7d} transaction${bank.externalSpendCount7d !== 1 ? 's' : ''} · all categorized`}
+            </p>
             <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
               View →
             </span>
@@ -921,25 +981,40 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
 // External money drawer — explanation/connect when not linked,
 // summary + accounts + caveat when linked.
 // ----------------------------------------------------------------
-function ExternalDrawerContent({ bank, plaidConfigured }: {
+function ExternalDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: {
   bank: {
     accounts: BankAccountSummary[]
+    externalSpend7d: number
+    recognizedExternalSpend7d: number
+    externalSpendCount7d: number
+    unresolvedCount7d: number
+    externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]
+    recentUnresolved: {
+      id: string; description: string | null; merchantName: string | null
+      amount: number; postedAt: string
+    }[]
     inflow7d: number
     outflow7d: number
     txnCount7d: number
     state: BankState
   }
   plaidConfigured: boolean
+  plaidSandbox: boolean
+  isDev: boolean
 }) {
   if (bank.state === 'not_connected') {
     return (
       <div className="space-y-5">
         <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-5">
-          <p className="text-sm font-semibold text-gray-900">Why connect a bank?</p>
+          <p className="text-sm font-semibold text-gray-900">What a bank connection adds</p>
+          <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
+            Revenue stays system-defined — sales come from inside the app. Bank sync is for
+            outside-the-system spending.
+          </p>
           <ul className="mt-3 space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
-            <PreviewBullet>See real money movement alongside your sales and recorded expenses.</PreviewBullet>
-            <PreviewBullet>Spot inflow/outflow patterns Finance can&apos;t infer from internal data alone.</PreviewBullet>
-            <PreviewBullet>Capture activity for future matching — Finance stays a workspace, not a feed.</PreviewBullet>
+            <PreviewBullet>Surface rent, utilities, subscriptions, and other business expenses paid through the bank.</PreviewBullet>
+            <PreviewBullet>Catch unresolved activity Finance can&apos;t see otherwise — transfers, fees, uncategorized outflows.</PreviewBullet>
+            <PreviewBullet>Capture rows for future matching against your recorded expenses.</PreviewBullet>
           </ul>
         </div>
 
@@ -953,8 +1028,9 @@ function ExternalDrawerContent({ bank, plaidConfigured }: {
 
         <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2.5">
           <p className="text-[11px] text-gray-600 leading-relaxed">
-            <strong>What you won&apos;t see here.</strong> A raw bank-feed view. Finance only surfaces
-            aggregates and is for interpretation, not transaction-by-transaction inspection.
+            <strong>What you won&apos;t see here.</strong> A raw bank-feed view, or current account
+            balance as a headline. Finance is the interpretation layer — bank inflow is never
+            presented as revenue.
           </p>
         </div>
       </div>
@@ -967,40 +1043,110 @@ function ExternalDrawerContent({ bank, plaidConfigured }: {
     return latest
   }, null)
 
-  const net = bank.inflow7d - bank.outflow7d
-  const netPositive = net >= 0
+  // Concentration insights — only fire when there's enough signal.
+  const topCategory = bank.externalByCategory[0]
+  const topCategoryShare = bank.externalSpend7d > 0 && topCategory
+    ? Math.round((topCategory.amount / bank.externalSpend7d) * 100)
+    : 0
+  const unresolvedShare = bank.externalSpendCount7d > 0
+    ? Math.round((bank.unresolvedCount7d / bank.externalSpendCount7d) * 100)
+    : 0
 
   return (
     <div className="space-y-6">
-      {/* Stats strip */}
+      {/* Stats strip — outside-the-system spend, not inflow/outflow */}
       <div className="grid grid-cols-3 rounded-xl border border-gray-200 divide-x divide-gray-100 bg-white">
-        <DrawerStat label="Inflow" value={fmt(bank.inflow7d)} tone="positive" />
-        <DrawerStat label="Outflow" value={fmt(bank.outflow7d)} tone="negative" />
-        <DrawerStat label="Activity" value={`${bank.txnCount7d}`} muted={bank.txnCount7d === 0} />
+        <DrawerStat
+          label="External spend"
+          value={fmt(bank.externalSpend7d)}
+          muted={bank.externalSpend7d === 0}
+        />
+        <DrawerStat
+          label="Transactions"
+          value={`${bank.externalSpendCount7d}`}
+          muted={bank.externalSpendCount7d === 0}
+        />
+        <DrawerStat
+          label="Unresolved"
+          value={`${bank.unresolvedCount7d}`}
+          muted={bank.unresolvedCount7d === 0}
+        />
       </div>
 
-      {/* Net direction insight */}
-      {bank.txnCount7d > 0 && (
-        <InsightLine
-          accent={netPositive ? 'teal' : 'amber'}
-          text={
-            netPositive
-              ? `Net ${fmt(Math.abs(net))} into the account this period.`
-              : `Net ${fmt(Math.abs(net))} out of the account this period.`
-          }
-        />
-      )}
-
-      {bank.state === 'connected_unsynced' && (
+      {/* Single insight line, prioritized:
+          - awaiting sync state takes precedence
+          - then a high concentration warning
+          - then a high unresolved share warning */}
+      {bank.state === 'connected_unsynced' ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
           <p className="text-[11px] text-amber-800 leading-relaxed">
             <strong>Awaiting first sync.</strong> Bank linked but no transactions have arrived yet.
-            Trigger a sync from Settings to bring activity in.
           </p>
         </div>
-      )}
+      ) : topCategory && topCategoryShare >= 40 ? (
+        <InsightLine
+          accent="teal"
+          text={`${topCategory.label} is ${topCategoryShare}% of external spend.`}
+        />
+      ) : unresolvedShare >= 30 && bank.unresolvedCount7d > 0 ? (
+        <InsightLine
+          accent="amber"
+          text={`${unresolvedShare}% of bank-detected spend is uncategorized — likely worth a look.`}
+        />
+      ) : null}
 
-      {/* Accounts */}
+      {/* Likely external expenses — categorized outflows */}
+      <DrawerSection title="Likely external expenses">
+        {bank.externalByCategory.length === 0 ? (
+          <p className="text-xs text-gray-400 italic">No categorized outflows yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {bank.externalByCategory.map((row) => (
+              <BreakdownRow
+                key={row.rawLabel}
+                primary={row.label}
+                secondary={`${row.count} ${row.count === 1 ? 'transaction' : 'transactions'}`}
+                value={fmt(row.amount)}
+              />
+            ))}
+          </div>
+        )}
+      </DrawerSection>
+
+      {/* Unresolved activity — outflows the bank could not classify */}
+      <DrawerSection title="Unresolved activity">
+        {bank.recentUnresolved.length === 0 ? (
+          <p className="text-xs text-gray-500 italic">
+            All recent bank-detected spend is categorized.
+          </p>
+        ) : (
+          <>
+            <p className="text-[11px] text-gray-500 leading-relaxed mb-2.5">
+              Bank-detected outflows the system cannot confidently match yet.
+            </p>
+            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200 bg-white overflow-hidden">
+              {bank.recentUnresolved.map((row) => (
+                <li key={row.id} className="px-4 py-2.5 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-gray-900 truncate">
+                      {row.merchantName || row.description || 'Untitled outflow'}
+                    </p>
+                    <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                      {new Date(row.postedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {' · '}No category
+                    </p>
+                  </div>
+                  <p className="text-xs font-semibold text-gray-900 font-mono tabular-nums flex-shrink-0">
+                    {fmt(row.amount)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </DrawerSection>
+
+      {/* Connected accounts — supporting context */}
       <DrawerSection title="Connected accounts">
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200 bg-white overflow-hidden">
           {bank.accounts.map((a) => (
@@ -1024,13 +1170,110 @@ function ExternalDrawerContent({ bank, plaidConfigured }: {
         )}
       </DrawerSection>
 
-      {/* Honesty caveat */}
+      {/* Honesty caveat — reframed to the new External money meaning */}
       <div className="rounded-lg border border-gray-200 bg-gray-50/60 px-3 py-2.5">
         <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>Aggregates only.</strong> Activity is captured for future matching against orders
-          and expenses. Finance is the interpretation layer — not a raw bank-feed page.
+          <strong>External, not authoritative.</strong> Bank-detected spend is the bank&apos;s view,
+          not the system&apos;s record. Revenue still comes from sales recorded inside the app.
+          Categorization depth depends on what the bank reports.
         </p>
       </div>
+
+      {/* Dev-only sandbox affordances — hidden outside sandbox env
+          since /sandbox/* endpoints reject in production.
+          Connect first (deterministic dynamic-transactions Item),
+          then create rent. */}
+      {isDev && plaidSandbox && (
+        <div className="space-y-3">
+          <SandboxConnectTrigger />
+          <SandboxRentTrigger />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// Dev-only: deterministic Plaid Sandbox connect.
+//
+// Plaid Link's interactive sandbox flow is unreliable for the
+// `user_transactions_dynamic` test profile — even when the user
+// types the right username, the resulting Item often does not
+// behave as a dynamic-transactions Item, so /sandbox/transactions/
+// create silently no-ops. This button bypasses Link entirely by
+// calling /sandbox/public_token/create with override_username =
+// user_transactions_dynamic, which guarantees an Item that
+// /sandbox/transactions/create will actually persist rows on.
+//
+// Only visible when isDev && plaidSandbox; the server action also
+// rejects in production as defense in depth.
+// ----------------------------------------------------------------
+function SandboxConnectTrigger() {
+  const [state, action, pending] = useActionState(connectSandboxItem, null)
+  return (
+    <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/40 p-4">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">Dev</span>
+        <p className="text-[11px] font-semibold text-blue-900">Deterministic sandbox connect</p>
+      </div>
+      <p className="text-[11px] text-blue-800/80 leading-relaxed mb-3">
+        Skips Plaid Link and creates a guaranteed{' '}
+        <code className="text-[10px] bg-white/60 px-1 rounded">user_transactions_dynamic</code>{' '}
+        Item via <code className="text-[10px] bg-white/60 px-1 rounded">/sandbox/public_token/create</code>.
+        Use this before testing rent injection — interactive Link is unreliable for the
+        dynamic-transactions flow.
+      </p>
+      <form action={action}>
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-60 transition-colors"
+        >
+          {pending ? 'Connecting…' : 'Connect sandbox dynamic Item'}
+        </button>
+      </form>
+      {state && 'error' in state && (
+        <pre className="mt-2 text-[11px] text-red-700 whitespace-pre-wrap font-sans">{state.error}</pre>
+      )}
+      {state && 'ok' in state && (
+        <pre className="mt-2 text-[11px] text-emerald-700 whitespace-pre-wrap font-sans">{state.message}</pre>
+      )}
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// Dev-only: triggers Plaid /sandbox/transactions/create + sync.
+// Only visible to DEV_EMAILS allowlist users so the affordance
+// never appears in normal operator UI.
+// ----------------------------------------------------------------
+function SandboxRentTrigger() {
+  const [state, action, pending] = useActionState(createSandboxRentTransaction, null)
+  return (
+    <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-4">
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">Dev</span>
+        <p className="text-[11px] font-semibold text-amber-900">Sandbox tools</p>
+      </div>
+      <p className="text-[11px] text-amber-800/80 leading-relaxed mb-3">
+        Inject a fake $1,500 rent expense into the connected sandbox account and re-sync.
+        Requires the Item to be a <code className="text-[10px] bg-white/60 px-1 rounded">user_transactions_dynamic</code> sandbox user.
+      </p>
+      <form action={action}>
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60 transition-colors"
+        >
+          {pending ? 'Creating…' : 'Add sandbox rent expense'}
+        </button>
+      </form>
+      {state && 'error' in state && (
+        <pre className="mt-2 text-[11px] text-red-700 whitespace-pre-wrap font-sans">{state.error}</pre>
+      )}
+      {state && 'ok' in state && (
+        <pre className="mt-2 text-[11px] text-emerald-700 whitespace-pre-wrap font-sans">{state.message}</pre>
+      )}
     </div>
   )
 }
@@ -1105,7 +1348,13 @@ function InsightLine({ text, accent }: { text: string; accent: 'amber' | 'purple
 }
 
 // ================================================================
-// QuickExpenseCard — refined inline form (lower-row right card)
+// QuickExpenseCard
+//
+// The lower-row right card. Visual goals: cleaner field rhythm,
+// consistent input heights, lighter labels, calmer button. The
+// form's behavior is unchanged — every name= attribute, validation
+// rule, default value, and id is preserved so createExpense reads
+// the form exactly as before.
 // ================================================================
 function QuickExpenseCard({
   action, pending, error, locationId,
@@ -1118,14 +1367,11 @@ function QuickExpenseCard({
   return (
     <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[500px]">
       <div className="border-b border-gray-100 px-6 py-5">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-blue-500" />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Action</p>
-        </div>
-        <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Log an expense</h2>
+        <h2 className="text-base font-semibold tracking-tight text-gray-900">Log an expense</h2>
+        <p className="mt-1 text-xs text-gray-500">Manual entry — adds to recorded spend.</p>
       </div>
 
-      <form action={action} className="p-6 space-y-4 flex-1 flex flex-col">
+      <form action={action} className="p-6 flex-1 flex flex-col gap-5">
         <input type="hidden" name="location_id" value={locationId} />
 
         <FormField label="Category" htmlFor="qa-category">
@@ -1134,8 +1380,8 @@ function QuickExpenseCard({
             name="category"
             required
             defaultValue=""
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm
-                       focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900
+                       focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
           >
             <option value="" disabled>Select a category…</option>
             {EXPENSE_CATEGORIES.map((cat) => (
@@ -1146,7 +1392,7 @@ function QuickExpenseCard({
 
         <FormField label="Amount" htmlFor="qa-amount">
           <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium">$</span>
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
             <input
               id="qa-amount"
               name="amount"
@@ -1155,8 +1401,8 @@ function QuickExpenseCard({
               min="0.01"
               step="0.01"
               placeholder="0.00"
-              className="w-full rounded-lg border border-gray-200 bg-white pl-7 pr-3 py-2 text-sm font-mono tabular-nums placeholder:text-gray-300
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-7 pr-3 text-sm font-mono tabular-nums placeholder:text-gray-300
+                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
             />
           </div>
         </FormField>
@@ -1169,8 +1415,8 @@ function QuickExpenseCard({
               type="date"
               required
               defaultValue={new Date().toISOString().split('T')[0]}
-              className="w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-xs
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900
+                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
             />
           </FormField>
           <FormField label="Vendor" htmlFor="qa-vendor" optional>
@@ -1178,43 +1424,45 @@ function QuickExpenseCard({
               id="qa-vendor"
               name="vendor_name"
               type="text"
-              placeholder="e.g. US Foods"
-              className="w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-xs placeholder:text-gray-400
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+              placeholder="US Foods"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400
+                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
             />
           </FormField>
         </div>
 
-        <label className="flex items-center gap-2 cursor-pointer rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-2 hover:bg-gray-50 transition-colors">
+        <label
+          htmlFor="qa-inventory"
+          className="flex items-center gap-2.5 cursor-pointer select-none"
+        >
           <input
             id="qa-inventory"
             name="is_inventory_related"
             type="checkbox"
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40"
           />
-          <span className="text-[11px] text-gray-700 leading-tight">
-            Inventory-related <span className="text-gray-400 font-normal">· food, beverage, supplies</span>
+          <span className="text-xs text-gray-700">
+            Inventory-related
+            <span className="text-gray-400 ml-1">— food, beverage, supplies</span>
           </span>
         </label>
 
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-            <p className="text-[11px] text-red-700">{error}</p>
+            <p className="text-xs text-red-700">{error}</p>
           </div>
         )}
 
-        {/* Submit pinned to bottom of form so the card height feels intentional */}
-        <div className="mt-auto pt-2">
+        {/* Submit pinned to the bottom of the form so the card height
+            stays consistent with the Recent activity card next to it. */}
+        <div className="mt-auto">
           <button
             type="submit"
             disabled={pending}
-            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 shadow-[0_1px_2px_rgba(0,0,0,0.08)] disabled:opacity-60 transition-colors"
+            className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {pending ? 'Saving…' : 'Record expense'}
           </button>
-          <p className="mt-2.5 text-[11px] text-gray-400 text-center">
-            Manual entry · adds to spending pressure
-          </p>
         </div>
       </form>
     </aside>
@@ -1226,9 +1474,9 @@ function FormField({ label, htmlFor, children, optional = false }: {
 }) {
   return (
     <div>
-      <label htmlFor={htmlFor} className="block text-[11px] font-semibold text-gray-600 mb-2 tracking-wide">
+      <label htmlFor={htmlFor} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-700">
         {label}
-        {optional && <span className="text-gray-400 font-normal ml-1">(optional)</span>}
+        {optional && <span className="text-gray-400 font-normal">· optional</span>}
       </label>
       {children}
     </div>
@@ -1278,20 +1526,22 @@ function fmt(amount: number): string {
   return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-// Restrained per-category chip palette for the activity table.
-// Soft 50-tone backgrounds with 700-tone text — readable but never
-// loud. Unknown categories fall back to neutral gray.
-function categoryChipClass(category: string): string {
+// Soft text tints for the Recent activity Category column. Same
+// hue mapping the old chip used, rendered as plain colored text so
+// the row stays scannable without reintroducing pill chrome. The
+// 700 tones land readable on white but stay quieter than the
+// previous 800-tone chips.
+function categoryColorClass(category: string): string {
   const map: Record<string, string> = {
-    'Inventory Purchase': 'bg-amber-50 text-amber-800',
-    'Beverage Purchase': 'bg-teal-50 text-teal-700',
-    'Labor': 'bg-purple-50 text-purple-700',
-    'Rent': 'bg-rose-50 text-rose-700',
-    'Utilities': 'bg-blue-50 text-blue-700',
-    'Maintenance': 'bg-slate-100 text-slate-700',
-    'Marketing': 'bg-purple-50 text-purple-700',
-    'Supplies': 'bg-emerald-50 text-emerald-700',
-    'Miscellaneous': 'bg-gray-100 text-gray-700',
+    'Inventory Purchase': 'text-amber-700',
+    'Beverage Purchase':  'text-teal-700',
+    'Labor':              'text-purple-700',
+    'Rent':               'text-rose-700',
+    'Utilities':          'text-blue-700',
+    'Maintenance':        'text-slate-700',
+    'Marketing':          'text-purple-700',
+    'Supplies':           'text-emerald-700',
+    'Miscellaneous':      'text-gray-600',
   }
-  return map[category] ?? 'bg-gray-100 text-gray-700'
+  return map[category] ?? 'text-gray-700'
 }

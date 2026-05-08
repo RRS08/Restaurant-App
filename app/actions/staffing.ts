@@ -34,16 +34,28 @@ export async function addStaffingRole(
   if (area !== 'foh' && area !== 'boh') return { error: 'Invalid house.' }
 
   const column = area === 'foh' ? 'foh_roles' : 'boh_roles'
+  // maybeSingle so a missing config row doesn't error — we'll create
+  // one via upsert below. The previous select+update pattern silently
+  // failed for restaurants that had no row, since UPDATE with no
+  // matching row is a no-op and Postgres doesn't flag it as an error.
   const { data: config } = await ctx.supabase
-    .from('staffing_config').select(column).eq('restaurant_id', ctx.restaurantId).single()
+    .from('staffing_config').select(column).eq('restaurant_id', ctx.restaurantId).maybeSingle()
 
   const existing: string[] = (config as Record<string, string[]> | null)?.[column] ?? []
   if (existing.some((r) => r.toLowerCase() === role.toLowerCase())) {
     return { error: 'That role already exists for this house.' }
   }
 
-  const { error } = await ctx.supabase.from('staffing_config')
-    .update({ [column]: [...existing, role] }).eq('restaurant_id', ctx.restaurantId)
+  // Upsert by restaurant_id so this works whether or not a config
+  // row exists yet. Defaults match the schema CHECKs: 'split' house
+  // model and 'by_role' scheduling style.
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    {
+      restaurant_id: ctx.restaurantId,
+      [column]: [...existing, role],
+    },
+    { onConflict: 'restaurant_id' }
+  )
 
   if (error) return { error: formatError('role', error) }
   revalidatePath('/staffing')

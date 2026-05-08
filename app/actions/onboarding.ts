@@ -12,7 +12,11 @@ import {
   type SchedulingStyle,
   type TeamModel,
 } from '@/lib/onboarding/types'
-import { STARTER_MENU_SECTIONS, isRoleSelectionValid } from '@/lib/onboarding/defaults'
+import {
+  STARTER_MENU_SECTIONS,
+  getStarterShiftSections,
+  isRoleSelectionValid,
+} from '@/lib/onboarding/defaults'
 
 export async function createRestaurantAndLocation(
   prevState: { error: string } | null,
@@ -316,6 +320,17 @@ export async function completeOnboarding(
   }))
   if (toInsert.length > 0) {
     await admin.from('menu_categories').insert(toInsert)
+  }
+
+  // 7. Starter shift sections (the schedule grid's rows). Without
+  // these, the Staffing board renders the empty-blocks message and
+  // employees can't be scheduled. The page-side backfill heals
+  // older restaurants on first visit; this seeds new ones up front.
+  const starterSections = getStarterShiftSections(parsed.teamModel).map((s) => ({
+    restaurant_id: restaurant.id, ...s,
+  }))
+  if (starterSections.length > 0) {
+    await admin.from('shift_sections').insert(starterSections)
   }
 
   return { ok: true, restaurantId: restaurant.id, usesExternalPos: parsed.usesExternalPos }

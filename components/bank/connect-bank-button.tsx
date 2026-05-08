@@ -104,7 +104,7 @@ export function ConnectBankButton({ configured }: Props) {
           disabled
           className="inline-flex items-center justify-center rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white opacity-50"
         >
-          Connect bank (Plaid Sandbox)
+          Connect bank
         </button>
         <p className="text-xs text-gray-500">
           Plaid is not configured yet. Set <code>PLAID_CLIENT_ID</code> and{' '}
@@ -130,7 +130,7 @@ export function ConnectBankButton({ configured }: Props) {
             ? 'Connecting…'
             : linkToken
               ? 'Opening…'
-              : 'Connect bank (Plaid Sandbox)'}
+              : 'Connect bank'}
       </button>
       {message && <p className="text-sm text-gray-600">{message}</p>}
       {error && <p className="text-sm text-red-600">{error}</p>}

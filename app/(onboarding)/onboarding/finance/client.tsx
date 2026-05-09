@@ -88,7 +88,7 @@ export default function FinanceStepClient({ plaidConfigured, postPath, opMode }:
             Skip bank connection for now
           </Link>
           <Link href={postPath}
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+            className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">
             Finish setup &middot; go to {dest}
           </Link>
         </div>

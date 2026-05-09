@@ -281,7 +281,7 @@ export default function PosClient({ categories, items }: { categories: Category[
                 <button
                   type="submit"
                   disabled={!canCheckout}
-                  className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-bold text-white hover:bg-gray-800 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                 >
                   {pending ? 'Saving…' : `Complete sale · ${CURRENCY(subtotal)}`}
                 </button>

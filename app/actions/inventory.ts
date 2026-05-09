@@ -245,3 +245,238 @@ export async function deleteInventoryItem(formData: FormData): Promise<{ error: 
   revalidatePath('/inventory')
   return undefined
 }
+
+// ================================================================
+// RESTOCK ORDERS — first replenishment workflow.
+//
+// Lifecycle: draft → ordered → received (stock auto-updates).
+// Cancel exits to a terminal 'canceled' status from draft or ordered.
+//
+// Locked rule: stock changes ONLY on receipt. Creating an order
+// does not touch inventory. Receipt inserts an inventory_transactions
+// row (purchase, +qty) which the existing estimated-stock logic
+// folds in automatically. When expected_cost was set, receipt also
+// inserts an expenses row (source='inventory_purchase') so the
+// buy lands in Finance's Spend total without the manager double-
+// logging it. Both side-effect IDs are stored back on the order
+// (received_transaction_id, received_expense_id) so a future
+// "undo receipt" can find and reverse them.
+// ================================================================
+
+export async function createRestockOrder(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const inventoryItemId = (formData.get('inventory_item_id') as string)?.trim()
+  if (!inventoryItemId) return { error: 'Please select an inventory item.' }
+
+  const quantityRaw = formData.get('quantity') as string
+  const quantity = parseFloat(quantityRaw)
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return { error: 'Quantity must be greater than zero.' }
+  }
+
+  const vendor = ((formData.get('vendor') as string)?.trim()) || null
+  const notes = ((formData.get('notes') as string)?.trim()) || null
+  const costRaw = (formData.get('expected_cost') as string)?.trim()
+  const expectedCost = costRaw ? parseFloat(costRaw) : null
+  if (expectedCost !== null && (!Number.isFinite(expectedCost) || expectedCost < 0)) {
+    return { error: 'Expected cost must be 0 or more.' }
+  }
+
+  // Resolve location from the item itself, then enforce that the
+  // current user can write to it. Owners pass through; managers must
+  // match the item's location.
+  const { data: item } = await ctx.supabase
+    .from('inventory_items')
+    .select('location_id')
+    .eq('id', inventoryItemId)
+    .single()
+  if (!item) return { error: 'Inventory item not found.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, item.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase.from('restock_orders').insert({
+    restaurant_id: ctx.restaurantId,
+    location_id: item.location_id,
+    inventory_item_id: inventoryItemId,
+    quantity,
+    vendor,
+    expected_cost: expectedCost,
+    notes,
+    status: 'draft',
+  })
+  if (error) return { error: formatError('restock order', error) }
+
+  await logAudit(ctx, item.location_id, 'create_restock_order', 'restock_orders')
+  revalidatePath('/inventory')
+  return null
+}
+
+export async function markRestockOrdered(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const orderId = (formData.get('order_id') as string)?.trim()
+  if (!orderId) return { error: 'Missing order id.' }
+
+  // Defense-in-depth: verify the order is currently 'draft' before
+  // moving it forward, so a stale/duplicate click can't skip a step.
+  const { data: order } = await ctx.supabase
+    .from('restock_orders')
+    .select('id, status, location_id')
+    .eq('id', orderId)
+    .single()
+  if (!order) return { error: 'Order not found.' }
+  if (order.status !== 'draft') {
+    return { error: `Only draft orders can be marked ordered (current status: ${order.status}).` }
+  }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase
+    .from('restock_orders')
+    .update({ status: 'ordered', ordered_at: new Date().toISOString() })
+    .eq('id', orderId)
+  if (error) return { error: formatError('restock order', error) }
+
+  await logAudit(ctx, order.location_id, 'mark_restock_ordered', 'restock_orders', orderId)
+  revalidatePath('/inventory')
+  return null
+}
+
+export async function markRestockReceived(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const orderId = (formData.get('order_id') as string)?.trim()
+  if (!orderId) return { error: 'Missing order id.' }
+
+  // Pull the full order — we need item, qty, location, and any
+  // expected cost to drive the side effects.
+  const { data: order } = await ctx.supabase
+    .from('restock_orders')
+    .select('id, status, location_id, inventory_item_id, quantity, vendor, expected_cost')
+    .eq('id', orderId)
+    .single()
+  if (!order) return { error: 'Order not found.' }
+  if (order.status === 'received') return { error: 'Order is already received.' }
+  if (order.status === 'canceled') return { error: 'Canceled orders cannot be received.' }
+  // Allow receiving from either 'draft' or 'ordered' — sometimes
+  // managers receive a small delivery before formally marking it
+  // ordered. Skipping the ordered step is operationally fine.
+  const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  // ----- Side effect 1: inventory transaction (the stock bump) -----
+  // unit_cost is recorded only when expected_cost was provided, so
+  // future cost-tracking has data without forcing manager input.
+  const unitCost = order.expected_cost && order.quantity > 0
+    ? Number(order.expected_cost) / Number(order.quantity)
+    : null
+
+  const { data: tx, error: txErr } = await ctx.supabase
+    .from('inventory_transactions')
+    .insert({
+      restaurant_id: ctx.restaurantId,
+      location_id: order.location_id,
+      inventory_item_id: order.inventory_item_id,
+      transaction_type: 'purchase',
+      quantity_change: order.quantity,
+      unit_cost: unitCost,
+      reference_note: `Restock received${order.vendor ? ` · ${order.vendor}` : ''}`,
+    })
+    .select('id')
+    .single()
+  if (txErr || !tx) return { error: formatError('inventory transaction', txErr) }
+
+  // ----- Side effect 2 (optional): expenses bridge to Finance -----
+  // Only fires when the order had an expected cost > 0. Tagged
+  // source='inventory_purchase' so Finance's Spend model recognizes
+  // it as inventory and the de-dup logic against bank-confirmed
+  // food/drink outflows works naturally.
+  let expenseId: string | null = null
+  if (order.expected_cost !== null && Number(order.expected_cost) > 0) {
+    const { data: exp, error: expErr } = await ctx.supabase
+      .from('expenses')
+      .insert({
+        restaurant_id: ctx.restaurantId,
+        location_id: order.location_id,
+        category: 'Inventory Purchase',
+        amount: order.expected_cost,
+        vendor_name: order.vendor,
+        expense_date: new Date().toISOString().split('T')[0],
+        is_inventory_related: true,
+        source: 'inventory_purchase',
+        notes: `Restock #${orderId.slice(0, 8)} received`,
+      })
+      .select('id')
+      .single()
+    // Don't roll back the receipt if the expense write fails — the
+    // stock update is the locked guarantee. Expense bridge is
+    // best-effort; the manager can re-log manually if needed.
+    if (!expErr && exp) expenseId = exp.id
+  }
+
+  // ----- Update the order itself -----
+  const { error: updErr } = await ctx.supabase
+    .from('restock_orders')
+    .update({
+      status: 'received',
+      received_at: new Date().toISOString(),
+      received_transaction_id: tx.id,
+      received_expense_id: expenseId,
+    })
+    .eq('id', orderId)
+  if (updErr) return { error: formatError('restock order', updErr) }
+
+  await logAudit(ctx, order.location_id, 'receive_restock_order', 'restock_orders', orderId, {
+    quantity: Number(order.quantity),
+    expected_cost: order.expected_cost ? Number(order.expected_cost) : null,
+    expense_created: expenseId !== null,
+  })
+  revalidatePath('/inventory')
+  revalidatePath('/finance')
+  return null
+}
+
+export async function cancelRestockOrder(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const orderId = (formData.get('order_id') as string)?.trim()
+  if (!orderId) return { error: 'Missing order id.' }
+
+  const { data: order } = await ctx.supabase
+    .from('restock_orders')
+    .select('id, status, location_id')
+    .eq('id', orderId)
+    .single()
+  if (!order) return { error: 'Order not found.' }
+  if (order.status === 'received') return { error: 'Received orders cannot be canceled.' }
+  if (order.status === 'canceled') return { error: 'Order is already canceled.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase
+    .from('restock_orders')
+    .update({ status: 'canceled', canceled_at: new Date().toISOString() })
+    .eq('id', orderId)
+  if (error) return { error: formatError('restock order', error) }
+
+  await logAudit(ctx, order.location_id, 'cancel_restock_order', 'restock_orders', orderId)
+  revalidatePath('/inventory')
+  return null
+}

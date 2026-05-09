@@ -128,7 +128,7 @@ export default function ReadinessPanel({ readiness }: { readiness: ReadinessSnap
         ) : (
           <form action={invAction}>
             <button type="submit" disabled={!canActivate || invPending}
-              className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              className="rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               {invPending ? 'Activating…' : 'Activate inventory tracking'}
             </button>
             {!canActivate && (

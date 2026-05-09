@@ -63,6 +63,125 @@ export async function addStaffingRole(
 }
 
 // ----------------------------------------------------------------
+// Shift sections (a.k.a. shift blocks) — CRUD.
+//
+// Sections are the rows on the schedule board. They drive lane
+// labels, default times for drag-drop assignment, and the shape of
+// the by_role / by_team grouping. Managers must be able to evolve
+// these past the starter set, so we expose create/update/delete here
+// with the same owner-gating used elsewhere.
+//
+// ON DELETE SET NULL semantics on shifts.section_id mean deleting a
+// block does NOT delete shifts under it — those shifts become
+// "custom" (sectionId === null) and surface on the Custom lane.
+// ----------------------------------------------------------------
+
+const VALID_AREAS = new Set(['foh', 'boh'])
+
+function parseHour(raw: FormDataEntryValue | null, label: string): number | { error: string } {
+  const n = parseInt(String(raw ?? ''), 10)
+  if (!Number.isFinite(n) || n < 0 || n > 24) {
+    return { error: `${label} must be between 0 and 24.` }
+  }
+  return n
+}
+
+export async function createShiftSection(
+  prevState: { error: string } | null, formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const name = (formData.get('name') as string)?.trim()
+  const area = (formData.get('area') as string)?.trim()
+  const role = ((formData.get('role') as string)?.trim()) || 'General'
+  if (!name) return { error: 'Block name is required.' }
+  if (!VALID_AREAS.has(area)) return { error: 'Area must be foh or boh.' }
+
+  const start = parseHour(formData.get('default_start_hour'), 'Start hour')
+  if (typeof start === 'object') return start
+  const end = parseHour(formData.get('default_end_hour'), 'End hour')
+  if (typeof end === 'object') return end
+  if (end === start) return { error: 'End hour must differ from start hour.' }
+
+  // Append at the end of the existing sort order so newly created
+  // blocks land at the bottom of the board, never reshuffling the
+  // manager's existing ordering.
+  const { data: maxRow } = await ctx.supabase
+    .from('shift_sections')
+    .select('sort_order')
+    .eq('restaurant_id', ctx.restaurantId)
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const nextOrder = (maxRow?.sort_order ?? 0) + 10
+
+  const { error } = await ctx.supabase.from('shift_sections').insert({
+    restaurant_id: ctx.restaurantId,
+    name, area, role,
+    default_start_hour: start,
+    default_end_hour: end,
+    sort_order: nextOrder,
+  })
+  if (error) return { error: formatError('block', error) }
+  revalidatePath('/staffing')
+  return null
+}
+
+export async function updateShiftSection(
+  prevState: { error: string } | null, formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const sectionId = (formData.get('section_id') as string)?.trim()
+  const name = (formData.get('name') as string)?.trim()
+  if (!sectionId) return { error: 'No block selected.' }
+  if (!name) return { error: 'Block name is required.' }
+
+  const start = parseHour(formData.get('default_start_hour'), 'Start hour')
+  if (typeof start === 'object') return start
+  const end = parseHour(formData.get('default_end_hour'), 'End hour')
+  if (typeof end === 'object') return end
+  if (end === start) return { error: 'End hour must differ from start hour.' }
+
+  const { error } = await ctx.supabase
+    .from('shift_sections')
+    .update({
+      name,
+      default_start_hour: start,
+      default_end_hour: end,
+    })
+    .eq('id', sectionId)
+    .eq('restaurant_id', ctx.restaurantId)
+  if (error) return { error: formatError('block', error) }
+  revalidatePath('/staffing')
+  return null
+}
+
+export async function deleteShiftSection(
+  prevState: { error: string } | null, formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const sectionId = (formData.get('section_id') as string)?.trim()
+  if (!sectionId) return { error: 'No block selected.' }
+
+  // Shifts under this section are NOT deleted — schema sets
+  // section_id to NULL via ON DELETE SET NULL, which surfaces them
+  // on the Custom lane in the UI.
+  const { error } = await ctx.supabase
+    .from('shift_sections')
+    .delete()
+    .eq('id', sectionId)
+    .eq('restaurant_id', ctx.restaurantId)
+  if (error) return { error: formatError('block', error) }
+  revalidatePath('/staffing')
+  return null
+}
+
+// ----------------------------------------------------------------
 // Quick assign — drag-and-drop creates a shift instantly
 // ----------------------------------------------------------------
 export async function quickAssignShift(
@@ -134,6 +253,78 @@ export async function createEmployee(
 
   if (error) return { error: formatError('employee', error) }
   await logAudit(ctx, locationId, 'create_employee', 'employees')
+  revalidatePath('/staffing')
+  return null
+}
+
+// ----------------------------------------------------------------
+// updateEmployee — name / role / hourly_rate.
+//
+// Used by the bench's quick-manage drawer. Same owner-gating as
+// createEmployee. Restaurant-scoped via the matching restaurant_id
+// filter (RLS would also block cross-restaurant writes, but the
+// explicit filter is defense in depth).
+// ----------------------------------------------------------------
+export async function updateEmployee(
+  prevState: { error: string } | null, formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const employeeId = (formData.get('employee_id') as string)?.trim()
+  const name = (formData.get('name') as string)?.trim()
+  const role = (formData.get('role') as string)?.trim()
+  const hourlyRateRaw = formData.get('hourly_rate') as string
+
+  if (!employeeId) return { error: 'No employee selected.' }
+  if (!name) return { error: 'Employee name is required.' }
+  if (!role) return { error: 'Role is required.' }
+
+  const hourlyRate = hourlyRateRaw ? parseFloat(hourlyRateRaw) : null
+  if (hourlyRate !== null && (isNaN(hourlyRate) || hourlyRate < 0)) {
+    return { error: 'Hourly rate must be 0 or more.' }
+  }
+
+  const { error } = await ctx.supabase
+    .from('employees')
+    .update({ name, role, hourly_rate: hourlyRate })
+    .eq('id', employeeId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('employee', error) }
+  await logAudit(ctx, null, 'update_employee', 'employees', employeeId)
+  revalidatePath('/staffing')
+  return null
+}
+
+// ----------------------------------------------------------------
+// archiveEmployee — soft delete: sets active=false.
+//
+// We never hard-delete employees because shifts have an FK to
+// employees with ON DELETE CASCADE — a hard delete would wipe their
+// schedule history. Archiving keeps history while hiding the
+// employee from the bench (the page filters by active=true).
+// Existing past shifts continue to render on the board until the
+// week passes out of view; that's intentional — managers shouldn't
+// see archive holes in last week's schedule.
+// ----------------------------------------------------------------
+export async function archiveEmployee(
+  prevState: { error: string } | null, formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const employeeId = (formData.get('employee_id') as string)?.trim()
+  if (!employeeId) return { error: 'No employee selected.' }
+
+  const { error } = await ctx.supabase
+    .from('employees')
+    .update({ active: false })
+    .eq('id', employeeId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('employee', error) }
+  await logAudit(ctx, null, 'archive_employee', 'employees', employeeId)
   revalidatePath('/staffing')
   return null
 }

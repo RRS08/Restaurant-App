@@ -17,6 +17,7 @@ export default async function InventoryPage() {
     { data: allTransactions },
     { data: recentTransactions },
     { data: recipeCounts },
+    { data: restockOrders },
   ] = await Promise.all([
     supabase
       .from('inventory_items')
@@ -50,6 +51,16 @@ export default async function InventoryPage() {
     supabase
       .from('recipe_components')
       .select('inventory_item_id'),
+
+    // Active restock orders (draft + ordered) — received and canceled
+    // are terminal and don't surface in the workspace's active list.
+    // The drawer filters this by item; the page-level fetch is one
+    // round-trip for all open orders.
+    supabase
+      .from('restock_orders')
+      .select('id, inventory_item_id, quantity, vendor, expected_cost, notes, status, ordered_at, created_at')
+      .in('status', ['draft', 'ordered'])
+      .order('created_at', { ascending: false }),
   ])
 
   // Latest count per item
@@ -130,10 +141,23 @@ export default async function InventoryPage() {
     }
   }
 
-  type FeedEntry = { id: string; itemName: string; type: string; qty: number; note: string | null; date: string }
+  // FeedEntry carries the originating inventory_item_id so the
+  // selected-item rail can filter movement to just the active
+  // item without a second round-trip. The global activity feed
+  // ignores it.
+  type FeedEntry = {
+    id: string
+    inventoryItemId: string
+    itemName: string
+    type: string
+    qty: number
+    note: string | null
+    date: string
+  }
 
   const txEntries: FeedEntry[] = (recentTransactions ?? []).map((tx) => ({
     id: `tx:${tx.id}`,
+    inventoryItemId: tx.inventory_item_id,
     itemName: (tx.inventory_items as unknown as { name: string } | null)?.name ?? '—',
     type: tx.transaction_type,
     qty: Number(tx.quantity_change),
@@ -143,6 +167,7 @@ export default async function InventoryPage() {
 
   const countEntries: FeedEntry[] = (counts ?? []).map((c) => ({
     id: `ct:${c.id}`,
+    inventoryItemId: c.inventory_item_id,
     itemName: (c.inventory_items as unknown as { name: string } | null)?.name ?? '—',
     type: firstCountId.get(c.inventory_item_id) === c.id ? 'initial_count' : 'count',
     qty: Number(c.quantity_on_hand),
@@ -154,5 +179,26 @@ export default async function InventoryPage() {
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 20)
 
-  return <InventoryClient items={inventoryItems} transactions={activity} />
+  // Shape restock orders for the client. Only active states are
+  // fetched above (draft + ordered) so this is the workspace-active
+  // list ready to drop straight into the drawer.
+  const restockOrdersForClient = (restockOrders ?? []).map((o) => ({
+    id: o.id,
+    inventoryItemId: o.inventory_item_id,
+    quantity: Number(o.quantity),
+    vendor: o.vendor as string | null,
+    expectedCost: o.expected_cost !== null && o.expected_cost !== undefined ? Number(o.expected_cost) : null,
+    notes: o.notes as string | null,
+    status: o.status as 'draft' | 'ordered',
+    orderedAt: (o.ordered_at as string | null) ?? null,
+    createdAt: o.created_at as string,
+  }))
+
+  return (
+    <InventoryClient
+      items={inventoryItems}
+      transactions={activity}
+      restockOrders={restockOrdersForClient}
+    />
+  )
 }

@@ -269,17 +269,31 @@ export default async function FinancePage() {
     .sort((a, b) => b.amount - a.amount)
 
   // ---- Bank activity aggregates (last 7 days) ----
-  // External money is reframed around outside-the-system spend, so
-  // outflows are the load-bearing signal here. Inflows are still
-  // computed but never lead the UI — Revenue is system-defined,
-  // not bank-derived. Rows without a Plaid PFC primary category
-  // are bucketed as "unresolved" so the UI can be honest about
-  // what the bank reveals vs what the system already knows.
+  // OBSERVER-PHASE MODEL — see also the Finance design doc.
+  //
+  // The four spend signals (Labor / Inventory / External / Net)
+  // are sub-parts of one Spend total, not separate buckets. To
+  // avoid double-counting between in-system projections and bank
+  // reality, classify each bank outflow into one of:
+  //
+  //   inventory  → confirms the Inventory bucket (food/drink and
+  //                general-merchandise PFCs). NOT added to External.
+  //   external   → captures the system-blind layer (rent, utilities,
+  //                fees, transfers, subscriptions, etc.).
+  //   unresolved → no PFC yet; surfaced in the External drawer for
+  //                manager triage but excluded from Net.
+  //
+  // Each bucket is then reconciled at the metric level via
+  // max(in-system projection, bank-confirmed) in the client so a
+  // bank row that confirms a logged expense doesn't add on top of
+  // it. Rough first-pass classifier — accepts some misclassification
+  // by design; gets retired once the app initiates payments itself.
   let bankInflow7d = 0
   let bankOutflow7d = 0
   let bankTxnCount7d = 0
   let externalSpendCount7d = 0
   let unresolvedCount7d = 0
+  let bankInventoryConfirmed7d = 0
 
   const externalByCategoryMap = new Map<string, { amount: number; count: number }>()
   type UnresolvedRow = {
@@ -287,6 +301,19 @@ export default async function FinancePage() {
     amount: number; postedAt: string
   }
   const unresolvedRows: UnresolvedRow[] = []
+
+  // PFC → bucket. Conservative mapping: only food/drink and general-
+  // merchandise route to Inventory; everything else categorized goes
+  // to External. Labor/payroll detection is intentionally deferred —
+  // Plaid PFC alone can't reliably tell payroll from generic ACH/
+  // transfer outflows, and that's the layer the action-phase will
+  // own anyway.
+  const inventoryPfcs = new Set(['FOOD_AND_DRINK', 'GENERAL_MERCHANDISE'])
+  const classifyBankPfc = (rawCategory: string | null): 'inventory' | 'external' | 'unresolved' => {
+    if (!rawCategory) return 'unresolved'
+    if (inventoryPfcs.has(rawCategory)) return 'inventory'
+    return 'external'
+  }
 
   for (const tx of periodBankTxns ?? []) {
     const amt = Number(tx.amount)
@@ -300,7 +327,9 @@ export default async function FinancePage() {
     externalSpendCount7d++
 
     const rawCat = (tx.raw_category as string | null)?.trim() || null
-    if (!rawCat) {
+    const klass = classifyBankPfc(rawCat)
+
+    if (klass === 'unresolved') {
       unresolvedCount7d++
       unresolvedRows.push({
         id: tx.id as string,
@@ -311,10 +340,22 @@ export default async function FinancePage() {
       })
       continue
     }
-    const bucket = externalByCategoryMap.get(rawCat) ?? { amount: 0, count: 0 }
+
+    if (klass === 'inventory') {
+      // Inventory PFC rows confirm the Inventory bucket — they're
+      // the bank's echo of food/supply purchases the manager either
+      // already logged or hasn't logged yet. Tracked separately so
+      // they don't show up under External in the drawer.
+      bankInventoryConfirmed7d += amt
+      continue
+    }
+
+    // 'external' — categorized as non-inventory non-labor.
+    // rawCat is non-null here because klass === 'external' implies it.
+    const bucket = externalByCategoryMap.get(rawCat!) ?? { amount: 0, count: 0 }
     bucket.amount += amt
     bucket.count += 1
-    externalByCategoryMap.set(rawCat, bucket)
+    externalByCategoryMap.set(rawCat!, bucket)
   }
 
   const externalByCategory = Array.from(externalByCategoryMap.entries())
@@ -326,11 +367,12 @@ export default async function FinancePage() {
     }))
     .sort((a, b) => b.amount - a.amount)
 
-  // Recognized external spend = bank outflows that Plaid classified
-  // with a Personal Finance Category. Unresolved (uncategorized)
-  // outflows are deliberately excluded — the system has no basis
-  // to call them "spend" yet, so they don't affect Net activity.
-  // This is the only external aggregate that flows into Net.
+  // Recognized external spend = bank-categorized outflows that
+  // are NOT inventory-PFC. Inventory-PFC rows are filtered out
+  // above so they only flow into the Inventory bucket (not double-
+  // counted). This is the bank-confirmed half of the External
+  // bucket; the client max()es it against manual non-inventory
+  // expenses to land on the displayed External value.
   const recognizedExternalSpend7d = externalByCategory.reduce((s, c) => s + c.amount, 0)
 
   // Most recent unresolved outflows. Cap so the drawer stays bounded.
@@ -391,6 +433,7 @@ export default async function FinancePage() {
         })),
         externalSpend7d: Math.round(bankOutflow7d * 100) / 100,
         recognizedExternalSpend7d: round2(recognizedExternalSpend7d),
+        bankInventoryConfirmed7d: round2(bankInventoryConfirmed7d),
         externalSpendCount7d,
         unresolvedCount7d,
         inflow7d: Math.round(bankInflow7d * 100) / 100,

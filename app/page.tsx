@@ -27,8 +27,8 @@ export default function LandingPage() {
           </Link>
           <Link
             href="/signup"
-            className="text-sm font-semibold bg-blue-600 text-white px-4 py-2 rounded-lg
-                       hover:bg-blue-700 transition-colors"
+            className="text-sm font-semibold bg-gray-900 text-white px-4 py-2 rounded-lg
+                       hover:bg-gray-800 transition-colors"
           >
             Get started
           </Link>
@@ -50,8 +50,8 @@ export default function LandingPage() {
           <div className="mt-8 flex items-center justify-center gap-4">
             <Link
               href="/signup"
-              className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-xl
-                         hover:bg-blue-700 transition-colors"
+              className="px-6 py-3 bg-gray-900 text-white font-semibold rounded-xl
+                         hover:bg-gray-800 transition-colors"
             >
               Start for free
             </Link>

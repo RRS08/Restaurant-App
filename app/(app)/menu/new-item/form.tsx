@@ -126,8 +126,8 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
           <button
             type="submit"
             disabled={pending}
-            className="flex-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold
-                       text-white hover:bg-blue-700 transition-colors
+            className="flex-1 rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold
+                       text-white hover:bg-gray-800 transition-colors
                        disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {pending ? 'Adding…' : 'Add to menu'}

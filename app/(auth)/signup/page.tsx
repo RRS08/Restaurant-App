@@ -107,8 +107,8 @@ export default function SignupPage() {
             <button
               type="submit"
               disabled={pending}
-              className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold
-                         text-white hover:bg-blue-700 transition-colors
+              className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold
+                         text-white hover:bg-gray-800 transition-colors
                          disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {pending ? 'Creating account…' : 'Create account'}

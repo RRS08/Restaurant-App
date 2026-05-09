@@ -131,7 +131,7 @@ export default async function PreviewStaffingPage() {
         {/* Footer */}
         <div className="mt-8 flex justify-end">
           <Link href="/onboarding/finance"
-            className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors">
+            className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors">
             Continue to Finance preview
           </Link>
         </div>

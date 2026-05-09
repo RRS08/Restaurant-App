@@ -1662,3 +1662,69 @@ end $$;
 
 create index if not exists expenses_source_idx
   on public.expenses (restaurant_id, source);
+
+
+-- ================================================================
+-- RESTOCK ORDERS — first-class replenishment workflow.
+--
+-- Captures purchasing intent for an inventory item. Stock is NOT
+-- updated until status flips to 'received' — that's the only event
+-- that creates an inventory_transactions row (type='purchase') and
+-- bumps the estimated stock. When the order carried an expected
+-- cost, receipt also writes an expenses row tagged source=
+-- 'inventory_purchase' so Finance reflects the buy without the
+-- manager double-logging.
+--
+-- Status lifecycle:
+--   draft     → created; manager hasn't placed the order yet
+--   ordered   → manager placed it externally
+--   received  → goods landed; inventory_transaction created and
+--               (optionally) an expenses row
+--   canceled  → manager dropped the order without receipt
+--
+-- Foreign-key columns received_transaction_id and received_expense_id
+-- back-reference what was inserted on receipt so future tools (e.g.
+-- "undo receipt") can find and reverse the side effects cleanly.
+-- ================================================================
+create table if not exists public.restock_orders (
+  id                       uuid primary key default gen_random_uuid(),
+  restaurant_id            uuid not null references public.restaurants(id) on delete cascade,
+  location_id              uuid not null references public.locations(id) on delete cascade,
+  inventory_item_id        uuid not null references public.inventory_items(id) on delete cascade,
+  quantity                 numeric(12,2) not null check (quantity > 0),
+  vendor                   text,
+  expected_cost            numeric(10,2),
+  notes                    text,
+  status                   text not null default 'draft'
+                                check (status in ('draft', 'ordered', 'received', 'canceled')),
+  ordered_at               timestamptz,
+  received_at              timestamptz,
+  canceled_at              timestamptz,
+  received_transaction_id  uuid references public.inventory_transactions(id) on delete set null,
+  received_expense_id      uuid references public.expenses(id) on delete set null,
+  created_at               timestamptz not null default now()
+);
+
+create index if not exists restock_orders_item_status_idx
+  on public.restock_orders (inventory_item_id, status);
+
+create index if not exists restock_orders_restaurant_status_idx
+  on public.restock_orders (restaurant_id, status);
+
+alter table public.restock_orders enable row level security;
+
+create policy "Users can view their restock orders"
+  on public.restock_orders for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can insert restock orders"
+  on public.restock_orders for insert
+  with check (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can update their restock orders"
+  on public.restock_orders for update
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can delete their restock orders"
+  on public.restock_orders for delete
+  using (restaurant_id = public.my_restaurant_id());

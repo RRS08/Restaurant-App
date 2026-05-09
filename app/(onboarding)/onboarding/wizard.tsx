@@ -203,11 +203,11 @@ export default function OnboardingWizard() {
             </button>
             {step < 5
               ? <button type="button" onClick={next} disabled={!ok || isPending}
-                  className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+                  className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50">
                   Continue
                 </button>
               : <button type="button" onClick={submit} disabled={!ok || isPending}
-                  className="px-5 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50">
+                  className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50">
                   {isPending ? 'Setting up\u2026' : 'Finish setup'}
                 </button>
             }

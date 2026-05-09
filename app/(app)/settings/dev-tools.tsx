@@ -127,11 +127,7 @@ export default function DevTools({
           <button
             type="submit"
             disabled={bypassPending}
-            className={`rounded-lg px-4 py-2 text-xs font-semibold shadow-sm transition-colors disabled:opacity-60 ${
-              bypassOn
-                ? 'bg-gray-900 text-white hover:bg-gray-800'
-                : 'bg-blue-600 text-white hover:bg-blue-700'
-            }`}
+            className="rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm transition-colors disabled:opacity-60"
           >
             {bypassPending ? 'Saving…' : bypassOn ? 'Disable bypass' : 'Enable bypass'}
           </button>

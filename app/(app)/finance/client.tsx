@@ -88,6 +88,7 @@ interface Props {
     accounts: BankAccountSummary[]
     externalSpend7d: number
     recognizedExternalSpend7d: number
+    bankInventoryConfirmed7d: number
     externalSpendCount7d: number
     unresolvedCount7d: number
     externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]
@@ -123,16 +124,41 @@ export default function FinanceClient({
   const [activityPage, setActivityPage] = useState(0)
   const ACTIVITY_PAGE_SIZE = 6
 
-  // Net activity = Revenue − Internal logged expenses − Recognized
-  // external spend. "Recognized" = bank outflows Plaid classified
-  // with a Personal Finance Category. Raw inflow never counts as
-  // revenue, and unresolved bank outflows never count as spend until
-  // they're categorized. Computed at the top so every cell that
-  // narrates Net (value, dot, hint, ratio) reads the same number.
-  const totalSpend7d = cards.expenseTotal7d + bank.recognizedExternalSpend7d
+  // ----------------------------------------------------------------
+  // Spend model (observer phase).
+  //
+  // The four signals on the page (Labor / Inventory / External /
+  // Net) are sub-parts of one Spend total, not separate buckets:
+  //
+  //   Labor     = scheduled hours × rate (projection only — bank
+  //               payroll detection is deferred to the action phase).
+  //   Inventory = max(manual logs, bank food/drink-PFC outflows).
+  //               max() de-dups: a bank row that confirms a manual
+  //               log doesn't add on top of it.
+  //   External  = max(manual non-inventory expenses, bank non-
+  //               inventory PFC outflows). Captures rent, utilities,
+  //               fees, transfers — the system-blind layer.
+  //   Spend     = Labor + Inventory + External.
+  //   Net       = Revenue − Spend.
+  //
+  // Unresolved bank outflows (no PFC) stay surfaced in the External
+  // drawer for triage but are NOT in Net — we don't claim spend on
+  // rows we can't classify.
+  // ----------------------------------------------------------------
+  const laborSpend = cards.laborEstimate
+  const manualNonInventorySpend = Math.max(0, cards.expenseTotal7d - cards.inventorySpend7d)
+  const inventorySpend = Math.max(cards.inventorySpend7d, bank.bankInventoryConfirmed7d)
+  const externalSpend = Math.max(manualNonInventorySpend, bank.recognizedExternalSpend7d)
+  const totalSpend7d = laborSpend + inventorySpend + externalSpend
   const netActivity = cards.revenue7d - totalSpend7d
   const netPositive = netActivity >= 0
   const hasAnyActivity = cards.revenue7d > 0 || totalSpend7d > 0
+
+  // Convenience for driver cards — share-of-spend for each bucket,
+  // rendered as a small "· N% of spend" suffix so the cards read as
+  // sub-parts of one total instead of four parallel expense buckets.
+  const pctOfSpend = (n: number) =>
+    totalSpend7d > 0 ? Math.round((n / totalSpend7d) * 100) : 0
 
   // Recent activity is now a single unfiltered log — the Inventory
   // / Other filter pills were removed in this pass to keep the card
@@ -179,11 +205,11 @@ export default function FinanceClient({
               empty={cards.revenue7d === 0}
             />
             <SummaryCell
-              label="Expenses"
+              label="Spend"
               dotClass="bg-red-400"
-              value={fmt(cards.expenseTotal7d)}
-              hint={`${cards.expenseCount7d} ${cards.expenseCount7d === 1 ? 'entry' : 'entries'}`}
-              empty={cards.expenseTotal7d === 0}
+              value={fmt(totalSpend7d)}
+              hint="Labor · inventory · external"
+              empty={totalSpend7d === 0}
             />
             <NetActivityCell
               value={netActivity}
@@ -208,18 +234,23 @@ export default function FinanceClient({
           <span className="flex-1 h-px bg-gray-200/70" />
         </div>
         <div className="grid gap-4 lg:grid-cols-3 sm:grid-cols-2">
-          <LaborDriverCard cards={cards} onOpen={() => setDrawer('labor')} />
+          <LaborDriverCard
+            cards={cards}
+            laborSpend={laborSpend}
+            sharePct={pctOfSpend(laborSpend)}
+            onOpen={() => setDrawer('labor')}
+          />
           <InventoryDriverCard
-            value={cards.inventorySpend7d}
-            hint={
-              cards.inventorySpend7d > 0
-                ? 'Inventory-related expenses'
-                : 'Mark expenses as inventory-related'
-            }
+            value={inventorySpend}
+            sharePct={pctOfSpend(inventorySpend)}
+            hasManual={cards.inventorySpend7d > 0}
+            hasBankConfirm={bank.bankInventoryConfirmed7d > 0}
             onOpen={() => setDrawer('inventory')}
           />
           <ExternalMoneyCard
             bank={bank}
+            externalSpend={externalSpend}
+            sharePct={pctOfSpend(externalSpend)}
             plaidConfigured={plaidConfigured}
             onOpen={() => setDrawer('external')}
           />
@@ -452,7 +483,7 @@ function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, r
 // Driver cards (middle row)
 // ================================================================
 
-function LaborDriverCard({ cards, onOpen }: {
+function LaborDriverCard({ cards, laborSpend, sharePct, onOpen }: {
   cards: {
     laborEstimate: number
     laborRatedShiftCount: number
@@ -460,13 +491,21 @@ function LaborDriverCard({ cards, onOpen }: {
     totalShiftCount: number
     laborState: LaborState
   }
+  laborSpend: number
+  sharePct: number
   onOpen: () => void
 }) {
   const accent = 'bg-purple-500'
+  // Labor stays "projected" in the observer phase. Tag is appended
+  // to the hint so the manager knows this isn't a confirmed payroll
+  // outflow yet — once clock-in/out lands, the tag and the
+  // schedule-derived value both swap to actual paid hours.
+  const projectedTag = ' · projected'
+  const shareTag = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
 
   switch (cards.laborState) {
     case 'ok': {
-      const hint =
+      const baseHint =
         cards.laborUnratedShiftCount > 0
           ? `${cards.laborRatedShiftCount} of ${cards.totalShiftCount} shifts costed`
           : `${cards.laborRatedShiftCount} shift${cards.laborRatedShiftCount !== 1 ? 's' : ''} costed`
@@ -475,9 +514,9 @@ function LaborDriverCard({ cards, onOpen }: {
           accent={accent}
           label="Scheduled labor"
           period="This week"
-          value={fmt(cards.laborEstimate)}
+          value={fmt(laborSpend)}
           valueMuted={false}
-          hint={hint}
+          hint={`${baseHint}${shareTag}${projectedTag}`}
           onOpen={onOpen}
         />
       )
@@ -517,9 +556,23 @@ function LaborDriverCard({ cards, onOpen }: {
   }
 }
 
-function InventoryDriverCard({ value, hint, onOpen }: {
-  value: number; hint: string; onOpen: () => void
+function InventoryDriverCard({ value, sharePct, hasManual, hasBankConfirm, onOpen }: {
+  value: number
+  sharePct: number
+  hasManual: boolean
+  hasBankConfirm: boolean
+  onOpen: () => void
 }) {
+  // Hint surfaces the source mix when both manual logs and bank
+  // confirmations contribute. Keeps the card honest about whether
+  // the number is projected, confirmed, or both.
+  const baseHint = (() => {
+    if (!hasManual && !hasBankConfirm) return 'Mark expenses as inventory-related'
+    if (hasManual && hasBankConfirm)   return 'Logged · bank-confirmed'
+    if (hasBankConfirm)                return 'Bank-confirmed'
+    return 'Inventory-related expenses'
+  })()
+  const shareTag = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
   return (
     <ClickableDriverCard
       accent="bg-amber-500"
@@ -527,23 +580,26 @@ function InventoryDriverCard({ value, hint, onOpen }: {
       period="Last 7 days"
       value={fmt(value)}
       valueMuted={value === 0}
-      hint={hint}
+      hint={`${baseHint}${shareTag}`}
       onOpen={onOpen}
     />
   )
 }
 
-// External money card — third middle-row card. Refocused around
-// outside-the-system spend the system wouldn't otherwise capture
-// (rent, utilities, subscriptions, transfers). Inflow is never
-// the headline — Revenue lives in the system, not in the bank.
-function ExternalMoneyCard({ bank, plaidConfigured, onOpen }: {
+// External money card — third middle-row card. Headline value is
+// the de-duped External bucket from the Spend model: max(manual
+// non-inventory expenses, bank non-inventory PFC outflows). The
+// drawer still breaks out bank-specific detail (categories,
+// unresolved rows, accounts) for managers who want to dig in.
+function ExternalMoneyCard({ bank, externalSpend, sharePct, plaidConfigured, onOpen }: {
   bank: {
     externalSpend7d: number
     externalSpendCount7d: number
     unresolvedCount7d: number
     state: BankState
   }
+  externalSpend: number
+  sharePct: number
   plaidConfigured: boolean
   onOpen: () => void
 }) {
@@ -606,16 +662,23 @@ function ExternalMoneyCard({ bank, plaidConfigured, onOpen }: {
       ) : (
         <>
           <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">External spend · 7 days</p>
-          <p className={`text-[26px] leading-none font-semibold tracking-tight tabular-nums ${bank.externalSpend7d === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
-            {fmt(bank.externalSpend7d)}
+          <p className={`text-[26px] leading-none font-semibold tracking-tight tabular-nums ${externalSpend === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
+            {fmt(externalSpend)}
           </p>
           <div className="mt-3 flex items-end justify-between gap-2">
             <p className="text-xs text-gray-500 leading-relaxed">
-              {bank.externalSpendCount7d === 0
-                ? 'No external spend detected'
-                : bank.unresolvedCount7d > 0
-                  ? `${bank.externalSpendCount7d} transaction${bank.externalSpendCount7d !== 1 ? 's' : ''} · ${bank.unresolvedCount7d} unresolved`
-                  : `${bank.externalSpendCount7d} transaction${bank.externalSpendCount7d !== 1 ? 's' : ''} · all categorized`}
+              {(() => {
+                const sharePart = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
+                if (bank.externalSpendCount7d === 0 && externalSpend === 0) {
+                  return 'No external spend detected'
+                }
+                const txnPart = bank.externalSpendCount7d === 0
+                  ? null
+                  : bank.unresolvedCount7d > 0
+                    ? `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''} · ${bank.unresolvedCount7d} unresolved`
+                    : `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''} · all categorized`
+                return txnPart ? `${txnPart}${sharePart}` : `Manual entries${sharePart}`
+              })()}
             </p>
             <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
               View →
@@ -986,6 +1049,7 @@ function ExternalDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: {
     accounts: BankAccountSummary[]
     externalSpend7d: number
     recognizedExternalSpend7d: number
+    bankInventoryConfirmed7d: number
     externalSpendCount7d: number
     unresolvedCount7d: number
     externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]

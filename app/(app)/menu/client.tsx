@@ -175,7 +175,7 @@ function AddSectionForm({ onClose }: { onClose: () => void }) {
       {state?.error && <p className="text-xs text-red-600">{state.error}</p>}
       <div className="flex gap-2">
         <button type="submit" disabled={pending}
-          className="flex-1 px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60">
+          className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-60">
           {pending ? 'Adding…' : 'Add'}
         </button>
         <button type="button" onClick={onClose}
@@ -207,7 +207,7 @@ function AddItemForm({ categoryId, onClose }: { categoryId: string; onClose: () 
       <p className="text-[10px] text-gray-400">Add ingredients later from the item card.</p>
       <div className="flex gap-2">
         <button type="submit" disabled={pending}
-          className="flex-1 px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-60">
+          className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 disabled:opacity-60">
           {pending ? 'Adding…' : 'Add'}
         </button>
         <button type="button" onClick={onClose}
@@ -381,8 +381,8 @@ function ItemPanel({ item, inventoryItems, onClose }: {
                           className="w-24 rounded-lg border border-gray-300 px-2.5 py-2 text-sm placeholder:text-gray-400
                                      focus:outline-none focus:ring-2 focus:ring-blue-500" />
                         <button type="submit" disabled={addPending}
-                          className="flex-1 px-3 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium
-                                     hover:bg-blue-700 disabled:opacity-60 transition-colors">
+                          className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-medium
+                                     hover:bg-gray-800 disabled:opacity-60 transition-colors">
                           {addPending ? 'Adding…' : `Add ${selectedIngredient.name}`}
                         </button>
                       </div>
@@ -426,12 +426,12 @@ function ItemPanel({ item, inventoryItems, onClose }: {
                       <option value="bags">Bags</option>
                     </select>
                     <button type="submit" disabled={createPending || !query.trim()}
-                      className="px-4 py-2 rounded-lg bg-blue-600 text-white text-xs font-medium
-                                 hover:bg-blue-700 disabled:opacity-60 transition-colors">
+                      className="px-4 py-2 rounded-lg bg-gray-900 text-white text-xs font-medium
+                                 hover:bg-gray-800 disabled:opacity-60 transition-colors">
                       {createPending ? '…' : 'Create'}
                     </button>
                     <button type="button" onClick={() => setCreatingNew(false)}
-                      className="px-3 py-2 rounded-lg border border-blue-300 text-xs text-blue-600 hover:bg-blue-100 transition-colors">
+                      className="px-3 py-2 rounded-lg border border-gray-200 text-xs text-gray-700 hover:bg-gray-50 transition-colors">
                       Back
                     </button>
                   </div>

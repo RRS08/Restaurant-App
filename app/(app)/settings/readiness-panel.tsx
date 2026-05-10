@@ -5,6 +5,11 @@
 // Surfaces operating mode + inventory activation for regular users.
 // Dev overrides (if any) flow through here naturally since they're
 // already applied inside computeReadiness.
+//
+// The operating-mode toggle is dev-gated. operating_mode is a locked
+// onboarding decision that branches the whole product (native vs.
+// external POS), so a regular owner cannot flip it from here — the
+// switch is preserved for dev accounts via the `isDev` prop.
 // ----------------------------------------------------------------
 
 import { useActionState } from 'react'
@@ -31,7 +36,7 @@ const PILLAR_ORDER: { key: PillarKey; label: string; hint: string }[] = [
   { key: 'analytics', label: 'Analytics', hint: 'Setup gate + live-data gate (7 days, 10 orders)' },
 ]
 
-export default function ReadinessPanel({ readiness }: { readiness: ReadinessSnapshot }) {
+export default function ReadinessPanel({ readiness, isDev = false }: { readiness: ReadinessSnapshot; isDev?: boolean }) {
   const [modeState, modeAction, modePending] = useActionState(setOperatingMode, null)
   const [invState, invAction, invPending] = useActionState(activateInventory, null)
 
@@ -57,27 +62,41 @@ export default function ReadinessPanel({ readiness }: { readiness: ReadinessSnap
           </span>
         </div>
 
-        <form action={modeAction} className="flex flex-wrap items-center gap-2">
-          <button type="submit" name="operating_mode" value="native_pos"
-            disabled={modePending || readiness.operatingMode === 'native_pos'}
-            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
-              readiness.operatingMode === 'native_pos'
-                ? 'bg-gray-900 text-white border-gray-900 cursor-default'
-                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
-            }`}>
-            Native POS
-          </button>
-          <button type="submit" name="operating_mode" value="external_pos"
-            disabled={modePending || readiness.operatingMode === 'external_pos'}
-            className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
-              readiness.operatingMode === 'external_pos'
-                ? 'bg-gray-900 text-white border-gray-900 cursor-default'
-                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
-            }`}>
-            External POS
-          </button>
-          {modeState?.error && <span className="text-[11px] text-red-600">{modeState.error}</span>}
-        </form>
+        {isDev ? (
+          // Dev-only switch. Regular owners see a locked summary below
+          // because operating_mode is a foundational onboarding choice
+          // that branches the entire product experience.
+          <form action={modeAction} className="flex flex-wrap items-center gap-2">
+            <button type="submit" name="operating_mode" value="native_pos"
+              disabled={modePending || readiness.operatingMode === 'native_pos'}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                readiness.operatingMode === 'native_pos'
+                  ? 'bg-gray-900 text-white border-gray-900 cursor-default'
+                  : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+              }`}>
+              Native POS
+            </button>
+            <button type="submit" name="operating_mode" value="external_pos"
+              disabled={modePending || readiness.operatingMode === 'external_pos'}
+              className={`text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+                readiness.operatingMode === 'external_pos'
+                  ? 'bg-gray-900 text-white border-gray-900 cursor-default'
+                  : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'
+              }`}>
+              External POS
+            </button>
+            <span className="text-[9px] font-bold uppercase tracking-widest text-amber-700">DEV</span>
+            {modeState?.error && <span className="text-[11px] text-red-600">{modeState.error}</span>}
+          </form>
+        ) : (
+          <p className="text-xs text-gray-500 leading-relaxed">
+            {readiness.operatingMode === 'external_pos'
+              ? 'Sales come from your connected POS provider. The Sales page is your imported-orders ledger.'
+              : readiness.operatingMode === 'native_pos'
+                ? 'Sales are entered through the built-in POS. The Sales page is your live native-orders ledger.'
+                : 'Operating mode is set during onboarding.'}
+          </p>
+        )}
       </div>
 
       {/* Pillar grid */}

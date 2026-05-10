@@ -27,7 +27,15 @@ type PaymentType = 'cash' | 'card' | 'other'
 
 const CURRENCY = (n: number) => `$${n.toFixed(2)}`
 
-export default function PosClient({ categories, items }: { categories: Category[]; items: Item[] }) {
+export default function PosClient({
+  categories,
+  items,
+  operatingMode = null,
+}: {
+  categories: Category[]
+  items: Item[]
+  operatingMode?: 'native_pos' | 'external_pos' | null
+}) {
   const [activeCategoryId, setActiveCategoryId] = useState<string | 'all'>(
     categories[0]?.id ?? 'all'
   )
@@ -109,6 +117,22 @@ export default function PosClient({ categories, items }: { categories: Category[
           <p className="mt-1 text-sm text-gray-500">Ring up a sale. Orders post to the Sales ledger and deplete stock automatically.</p>
         </div>
       </div>
+
+      {/* External-POS advisory.
+          The native POS surface is intentionally not disabled — it
+          stays available for testing and for the rare case where a
+          manager needs to ring up a sale outside their external POS.
+          Imported orders from the connected provider are still the
+          canonical source of truth on this branch. */}
+      {operatingMode === 'external_pos' && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3">
+          <span className="flex-shrink-0 mt-0.5 text-[10px] font-bold uppercase tracking-widest text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">External POS</span>
+          <p className="text-xs text-indigo-700 leading-relaxed">
+            Your restaurant is set up to import sales from an external POS. Orders rung up here still post to the
+            Sales ledger, but your provider is the canonical source of truth — use this surface only when needed.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-6">
 

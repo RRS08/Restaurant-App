@@ -37,6 +37,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { NormalizedMenu, NormalizedOrder } from './types'
 import type { SourceId, SyncMeta } from './adapter'
 import { getInventoryActivation } from '@/lib/readiness'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 // Cap on how many per-row rejection notes we surface. Keeps result
 // strings short while still making partial failure honest.
@@ -270,32 +271,45 @@ export async function ingestOrders({
     uncategorizedId = insertedUncat?.id ?? null
   }
 
-  // 2. Pre-resolve all external_item_ids → local menu_item.id in one query.
+  // 2. Pre-resolve all external_item_ids → local menu_item snapshot
+  //    in one query. Returning name + category_id lets each line item
+  //    persist a per-row snapshot (menu_item_name_snapshot,
+  //    menu_category_id_snapshot) for future historical-fidelity
+  //    reports — same foundation columns the native createOrder path
+  //    populates.
   const allExternalItemIds = [
     ...new Set(orders.flatMap((o) => o.lineItems.map((li) => li.externalItemId))),
   ]
   const { data: existingItems } = await supabase
     .from('menu_items')
-    .select('id, external_id')
+    .select('id, external_id, name, category_id')
     .eq('restaurant_id', restaurantId)
     .eq('external_provider', sourceId)
     .in('external_id', allExternalItemIds)
 
-  const itemIdByExternalId = new Map<string, string>()
+  type MenuSnapshot = { id: string; name: string; categoryId: string | null }
+  const itemSnapByExternalId = new Map<string, MenuSnapshot>()
   for (const row of existingItems ?? []) {
-    if (row.external_id) itemIdByExternalId.set(row.external_id, row.id)
+    if (row.external_id) {
+      itemSnapByExternalId.set(row.external_id, {
+        id: row.id as string,
+        name: (row.name as string | null) ?? '',
+        categoryId: (row.category_id as string | null) ?? null,
+      })
+    }
   }
 
   // 3. Create placeholder items for unknown externals so sales never fail.
   let placeholdersCreated = 0
   for (const order of orders) {
     for (const li of order.lineItems) {
-      if (itemIdByExternalId.has(li.externalItemId)) continue
+      if (itemSnapByExternalId.has(li.externalItemId)) continue
+      const placeholderName = li.itemName || `Imported item ${li.externalItemId}`
       const { data: placeholder, error: placeholderErr } = await supabase
         .from('menu_items')
         .insert({
           restaurant_id: restaurantId,
-          name: li.itemName || `Imported item ${li.externalItemId}`,
+          name: placeholderName,
           current_price: li.unitPrice,
           category_id: uncategorizedId,
           active: true,
@@ -306,7 +320,11 @@ export async function ingestOrders({
         .select('id')
         .single()
       if (!placeholderErr && placeholder) {
-        itemIdByExternalId.set(li.externalItemId, placeholder.id)
+        itemSnapByExternalId.set(li.externalItemId, {
+          id: placeholder.id as string,
+          name: placeholderName,
+          categoryId: uncategorizedId,
+        })
         placeholdersCreated++
       }
     }
@@ -314,6 +332,16 @@ export async function ingestOrders({
 
   // 4. Inventory activation state — read once for the whole batch.
   const { activatedAt: inventoryActivatedAt } = await getInventoryActivation(supabase, restaurantId)
+
+  // 4b. Resolve the location's timezone once so every imported order
+  //     can carry a correct business_date (date in restaurant-local
+  //     time at the moment the order was POSTED, not at import time).
+  const { data: locationRow } = await supabase
+    .from('locations')
+    .select('timezone')
+    .eq('id', locationId)
+    .maybeSingle()
+  const locationTimezone = (locationRow?.timezone as string | null) ?? null
 
   // 5. Dedupe existing orders by
   //    (restaurant_id, location_id, external_provider, external_id).
@@ -352,6 +380,15 @@ export async function ingestOrders({
     // longer flattens unilaterally.
     const paymentStatus = o.paymentStatus ?? 'paid'
 
+    // business_date / voided_at are part of the reporting foundation
+    // (see schema.sql notes). business_date is the local-tz date at
+    // POSTED time so cross-day imports bucket correctly. voided_at
+    // is set only for orders that arrive already in the voided state
+    // — adapters that emit voided rows preserve "when it happened"
+    // for free; later in-app voids set it via voidOrder.
+    const businessDate = businessDateInTimezone(o.postedAt, locationTimezone)
+    const voidedAt = status === 'voided' ? o.postedAt : null
+
     const { data: orderRow, error: orderErr } = await supabase
       .from('orders')
       .insert({
@@ -365,6 +402,8 @@ export async function ingestOrders({
         payment_status: paymentStatus,
         status,
         created_at: o.postedAt,
+        business_date: businessDate,
+        voided_at: voidedAt,
       })
       .select('id')
       .single()
@@ -376,21 +415,28 @@ export async function ingestOrders({
       continue
     }
 
-    // Line items
+    // Line items.
+    // Each row carries the menu item's name + category at sale time
+    // so future weekly summaries can preserve historical fidelity if
+    // the menu is later renamed or items are moved between sections.
+    // Falls back to the adapter-supplied li.itemName when the local
+    // record's name is empty (rare, mostly for fresh placeholders).
     const skippedItems: string[] = []
     const lineRows = o.lineItems
       .map((li) => {
-        const menuItemId = itemIdByExternalId.get(li.externalItemId)
-        if (!menuItemId) {
+        const snap = itemSnapByExternalId.get(li.externalItemId)
+        if (!snap) {
           skippedItems.push(li.externalItemId)
           return null
         }
         return {
           order_id: orderRow.id,
-          menu_item_id: menuItemId,
+          menu_item_id: snap.id,
           quantity: Math.max(1, Math.round(li.quantity)),
           unit_price: li.unitPrice,
           total_price: li.totalPrice,
+          menu_item_name_snapshot: snap.name || li.itemName || null,
+          menu_category_id_snapshot: snap.categoryId,
         }
       })
       .filter((r): r is NonNullable<typeof r> => r !== null)

@@ -12,7 +12,8 @@
       "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\(onboarding\\\\\\)/onboarding/preview-*)",
       "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\(onboarding\\\\\\)/onboarding/finance*)",
       "Bash(cat \"c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\\\\\(app\\\\\\\\\\)/layout.tsx\")",
-      "Bash(node -e \"const p = require\\('plaid'\\); const api = new p.PlaidApi\\(new p.Configuration\\({ basePath: p.PlaidEnvironments.sandbox, baseOptions: { headers: { 'PLAID-CLIENT-ID': 'x', 'PLAID-SECRET': 'x', 'Plaid-Version': '2020-09-14' } } }\\)\\); console.log\\('sandboxPublicTokenCreate:', typeof api.sandboxPublicTokenCreate\\); console.log\\('itemPublicTokenExchange:', typeof api.itemPublicTokenExchange\\); console.log\\('sandboxTransactionsCreate:', typeof api.sandboxTransactionsCreate\\);\")"
+      "Bash(node -e \"const p = require\\('plaid'\\); const api = new p.PlaidApi\\(new p.Configuration\\({ basePath: p.PlaidEnvironments.sandbox, baseOptions: { headers: { 'PLAID-CLIENT-ID': 'x', 'PLAID-SECRET': 'x', 'Plaid-Version': '2020-09-14' } } }\\)\\); console.log\\('sandboxPublicTokenCreate:', typeof api.sandboxPublicTokenCreate\\); console.log\\('itemPublicTokenExchange:', typeof api.itemPublicTokenExchange\\); console.log\\('sandboxTransactionsCreate:', typeof api.sandboxTransactionsCreate\\);\")",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

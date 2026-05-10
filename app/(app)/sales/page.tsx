@@ -11,11 +11,27 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
-import PageShell from '@/components/page-shell'
+import { getOperatingMode } from '@/lib/readiness'
 import SalesClient from './client'
 
 export default async function SalesPage() {
   const supabase = await createClient()
+
+  // Resolve the caller's restaurant once so we can look up
+  // operating_mode alongside the orders fetch. RLS still scopes the
+  // orders query — we just need the restaurant id for the mode lookup.
+  const { data: { user } } = await supabase.auth.getUser()
+  let operatingMode: 'native_pos' | 'external_pos' | null = null
+  if (user) {
+    const { data: role } = await supabase
+      .from('user_roles')
+      .select('restaurant_id')
+      .eq('user_id', user.id)
+      .single()
+    if (role?.restaurant_id) {
+      operatingMode = await getOperatingMode(supabase, role.restaurant_id)
+    }
+  }
 
   // 50 most recent orders with their line items + location name.
   // RLS scopes by restaurant automatically.
@@ -53,9 +69,9 @@ export default async function SalesPage() {
     })),
   }))
 
-  return (
-    <PageShell title="Sales" description="Review recent orders and correct mistaken sales.">
-      <SalesClient orders={normalized} />
-    </PageShell>
-  )
+  // The page header (title + subtitle + source-of-truth chip) lives
+  // inside SalesClient now, mirroring the Finance pattern. Keeping
+  // it there means the chip can sit beside the h1 and the band reads
+  // as one thing.
+  return <SalesClient orders={normalized} operatingMode={operatingMode} />
 }

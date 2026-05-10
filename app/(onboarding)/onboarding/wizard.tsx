@@ -340,12 +340,35 @@ function RoleChip({ role, on, onToggle, faint = false }: { role: string; on: boo
 // Step 5 — POS
 // ================================================================
 function StepPos({ value, onChange }: { value: boolean | null; onChange: (v: boolean) => void }) {
+  // This single answer branches the entire product experience. It sets
+  // operating_mode for the restaurant and is intentionally hard to flip
+  // post-setup (Settings exposes the switch only to dev accounts), so
+  // the copy spells out what each branch actually turns on.
+  const options: Array<{ v: boolean; title: string; sub: string; bullets: string[] }> = [
+    {
+      v: true,
+      title: 'Yes \u2014 I use another POS',
+      sub: 'Toast, Clover, Square, or similar. We import from there.',
+      bullets: [
+        'Sales come in from your existing POS',
+        'Menu can be imported from your provider',
+        'Sales page becomes a review ledger of imported orders',
+      ],
+    },
+    {
+      v: false,
+      title: 'No \u2014 set me up fresh',
+      sub: 'No external POS. We\u2019ll run sales natively in-app.',
+      bullets: [
+        'Built-in POS for ringing up sales',
+        'Native menu builder',
+        'Sales page is the live ledger of native sales',
+      ],
+    },
+  ]
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      {[
-        { v: true, title: 'Yes, I use another POS', sub: 'We\u2019ll route you to import your menu and sales from your existing system.' },
-        { v: false, title: 'No, start fresh', sub: 'We\u2019ll set you up with our native POS and menu builder.' },
-      ].map(opt => (
+      {options.map(opt => (
         <button key={String(opt.v)} type="button" onClick={() => onChange(opt.v)}
           className={`text-left rounded-xl border p-5 transition-all ${
             value === opt.v
@@ -354,6 +377,14 @@ function StepPos({ value, onChange }: { value: boolean | null; onChange: (v: boo
           }`}>
           <p className={`text-sm font-semibold ${value === opt.v ? 'text-blue-700' : 'text-gray-900'}`}>{opt.title}</p>
           <p className="mt-1.5 text-xs text-gray-500 leading-relaxed">{opt.sub}</p>
+          <ul className="mt-3 space-y-1.5">
+            {opt.bullets.map((b, i) => (
+              <li key={i} className="flex items-start gap-2 text-[11px] text-gray-600 leading-relaxed">
+                <span className={`mt-1 h-1 w-1 flex-shrink-0 rounded-full ${value === opt.v ? 'bg-blue-500' : 'bg-gray-400'}`} />
+                <span>{b}</span>
+              </li>
+            ))}
+          </ul>
         </button>
       ))}
     </div>

@@ -5,15 +5,66 @@
 // menu client: categories, items, recipe components with inventory
 // names, and inventory items for the ingredient dropdown.
 //
+// Branches on operating_mode (locked at onboarding):
+//   external_pos → render an import panel up top so users can connect
+//                  their provider and pull menu, then review below.
+//   native_pos   → standard native menu builder.
+// External POS connections + locations are fetched alongside so the
+// import panel can render with live state. The dev path (DevTools in
+// Settings) is unchanged — this is the production-grade branch-A
+// surface, not a replacement for dev tooling.
+//
 // A fresh restaurant with zero categories/items will see an
 // honest empty state inside MenuClient.
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getOperatingMode } from '@/lib/readiness'
+import { isDevEmail } from '@/lib/dev'
 import MenuClient from './client'
 
 export default async function MenuPage() {
   const supabase = await createClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  const isDev = isDevEmail(user?.email)
+
+  // Resolve restaurant id once for the operating-mode + locations +
+  // connections lookups. RLS still scopes the rest of the queries.
+  let restaurantId: string | null = null
+  if (user) {
+    const { data: role } = await supabase
+      .from('user_roles')
+      .select('restaurant_id')
+      .eq('user_id', user.id)
+      .single()
+    restaurantId = role?.restaurant_id ?? null
+  }
+
+  const operatingMode = restaurantId
+    ? await getOperatingMode(supabase, restaurantId)
+    : null
+  const isExternalPos = operatingMode === 'external_pos'
+
+  // Locations + active POS connections only matter for the external
+  // branch's import panel — skip the round-trips on native restaurants.
+  const [{ data: locations }, { data: posConnections }] = isExternalPos && restaurantId
+    ? await Promise.all([
+        supabase
+          .from('locations')
+          .select('id, name')
+          .eq('restaurant_id', restaurantId)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('external_pos_connections')
+          .select('id, location_id, provider, active, external_store_id, last_menu_sync_at, last_error')
+          .eq('restaurant_id', restaurantId)
+          .order('created_at', { ascending: true }),
+      ])
+    : [{ data: [] as Array<{ id: string; name: string }> }, { data: [] as Array<{
+        id: string; location_id: string; provider: string; active: boolean
+        external_store_id: string | null; last_menu_sync_at: string | null; last_error: string | null
+      }> }]
 
   const [
     { data: categories },
@@ -78,6 +129,16 @@ export default async function MenuPage() {
     recipe: recipeMap.get(item.id) ?? [],
   }))
 
+  const externalConnections = (posConnections ?? []).map((c) => ({
+    id: c.id,
+    locationId: c.location_id,
+    provider: c.provider,
+    active: c.active,
+    externalStoreId: c.external_store_id,
+    lastMenuSyncAt: c.last_menu_sync_at,
+    lastError: c.last_error,
+  }))
+
   return (
     <MenuClient
       categories={(categories ?? []).map((c) => ({
@@ -91,6 +152,10 @@ export default async function MenuPage() {
         name: ii.name,
         unitOfMeasure: ii.unit_of_measure,
       }))}
+      operatingMode={operatingMode}
+      locations={locations ?? []}
+      externalConnections={externalConnections}
+      isDev={isDev}
     />
   )
 }

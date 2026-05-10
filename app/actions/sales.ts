@@ -6,6 +6,7 @@ import { getAuthContext, logAudit, formatError, resolveLocationId } from '@/lib/
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { getInventoryActivation } from '@/lib/readiness'
 import { cancelOpenPaymentIntentsForOrder } from '@/app/actions/payments'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 // Graceful wrapper around requireLocationAccess so we can keep the
 // existing { error: string } action-style returns without a broad
@@ -72,37 +73,60 @@ export async function createOrder(
     }
   }
 
-  // Fetch real prices from menu_items (never trust browser prices)
+  // Fetch real prices + name/category snapshots from menu_items
+  // (never trust browser prices). Name + category come back so each
+  // order_items row can preserve them at sale time — historical
+  // fidelity for future weekly reports even if the menu item is
+  // later renamed or moved between categories.
   const menuItemIds = lineItems.map((li) => li.menu_item_id)
   const { data: menuItems, error: menuError } = await ctx.supabase
     .from('menu_items')
-    .select('id, current_price')
+    .select('id, current_price, name, category_id')
     .in('id', menuItemIds)
 
   if (menuError || !menuItems) {
     return { error: formatError('price lookup', menuError) }
   }
 
-  const priceMap = new Map<string, number>()
-  for (const mi of menuItems) priceMap.set(mi.id, Number(mi.current_price))
+  type MenuSnapshot = { price: number; name: string; categoryId: string | null }
+  const menuSnap = new Map<string, MenuSnapshot>()
+  for (const mi of menuItems) {
+    menuSnap.set(mi.id, {
+      price: Number(mi.current_price),
+      name: mi.name,
+      categoryId: (mi.category_id as string | null) ?? null,
+    })
+  }
 
   for (const li of lineItems) {
-    if (!priceMap.has(li.menu_item_id)) {
+    if (!menuSnap.has(li.menu_item_id)) {
       return { error: 'One or more items no longer exist. Please refresh.' }
     }
   }
 
-  // Calculate totals
+  // Calculate totals + capture per-line snapshots.
   const orderItemRows = lineItems.map((li) => {
-    const unitPrice = priceMap.get(li.menu_item_id)!
+    const snap = menuSnap.get(li.menu_item_id)!
     return {
       menu_item_id: li.menu_item_id,
       quantity: li.quantity,
-      unit_price: unitPrice,
-      total_price: unitPrice * li.quantity,
+      unit_price: snap.price,
+      total_price: snap.price * li.quantity,
+      menu_item_name_snapshot: snap.name,
+      menu_category_id_snapshot: snap.categoryId,
     }
   })
   const totalAmount = orderItemRows.reduce((sum, row) => sum + row.total_price, 0)
+
+  // Resolve the location's timezone so we can stamp business_date
+  // at insert. Single-row lookup; cheap. Falls back to UTC inside
+  // the helper if the location row has no timezone set.
+  const { data: locationRow } = await ctx.supabase
+    .from('locations')
+    .select('timezone')
+    .eq('id', locationId)
+    .maybeSingle()
+  const businessDate = businessDateInTimezone(new Date(), locationRow?.timezone ?? null)
 
   // POS-ready metadata. Manual flow omits these; defaults apply.
   // POS / external POS callers should supply their own values so
@@ -122,6 +146,13 @@ export async function createOrder(
   const note = ((formData.get('note') as string | null) ?? '').trim() || null
 
   // Insert order
+  // - business_date is the local-tz date at insert moment, used by
+  //   future weekly summaries to bucket sales without doing per-row
+  //   timezone math.
+  // - voided_at is set here (not later in voidOrder) ONLY when the
+  //   caller explicitly opens the order as voided (rare — usually
+  //   creation produces 'completed'). See voidOrder for the normal
+  //   correction path.
   const { data: order, error: orderError } = await ctx.supabase
     .from('orders')
     .insert({
@@ -133,6 +164,8 @@ export async function createOrder(
       payment_status: paymentStatus,
       status: orderStatus,
       note,
+      business_date: businessDate,
+      voided_at: orderStatus === 'voided' ? new Date().toISOString() : null,
     })
     .select('id')
     .single()
@@ -324,10 +357,12 @@ export async function voidOrder(
   // provider outage.
   const intentsSummary = await cancelOpenPaymentIntentsForOrder(ctx.supabase, order.id)
 
-  // Flip status last, so if the reversal fails we haven't voided yet
+  // Flip status last, so if the reversal fails we haven't voided yet.
+  // voided_at is stamped alongside status so future weekly summaries
+  // can answer "what changed this week" without a join to audit_log.
   const { error: updateError } = await ctx.supabase
     .from('orders')
-    .update({ status: 'voided' })
+    .update({ status: 'voided', voided_at: new Date().toISOString() })
     .eq('id', order.id)
 
   if (updateError) {

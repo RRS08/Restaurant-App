@@ -3,262 +3,745 @@
 // ----------------------------------------------------------------
 // Sales Client
 //
-// Lightweight review layer with small operational cues:
-//   • badges for source, payment type, payment status, status
-//   • source filter (manual / native POS / external POS / all)
-//   • row click opens a minimal drill-down sheet with line items
-//   • Void action from the drill-down for completed orders
+// Sales is the canonical ledger / review / correction workspace for
+// completed orders. The UI is intentionally SHARED across both
+// branches (native_pos + external_pos) — only the data origin and
+// a thin layer of copy differ. Everything structural — page
+// hierarchy, filter strip, row design, drawer — is identical so the
+// pillar reads as one workspace.
+//
+// Two bands:
+//   1. Header — eyebrow + h1 + mode-aware subtitle + source chip
+//   2. Activity — filter strip + paged orders table + drawer
+//
+// The drawer is the inspection workspace: identity, context chips,
+// line items, totals, audit-minded footer, and the correction action.
 // ----------------------------------------------------------------
 
 import { useState, useMemo, useActionState, useEffect } from 'react'
 import { voidOrder } from '@/app/actions/sales'
 
+// ================================================================
+// Domain types
+// ================================================================
+
 type Source = 'manual' | 'native_pos' | 'external_pos'
 type PaymentType = 'cash' | 'card' | 'other'
 type PaymentStatus = 'paid' | 'unpaid'
 type OrderStatus = 'completed' | 'voided'
+type OperatingMode = 'native_pos' | 'external_pos' | null
 
-interface LineItem { id: string; name: string; quantity: number; unitPrice: number; totalPrice: number }
+interface LineItem {
+  id: string
+  name: string
+  quantity: number
+  unitPrice: number
+  totalPrice: number
+}
+
 interface Order {
-  id: string; total: number; createdAt: string
-  source: Source; paymentType: PaymentType; paymentStatus: PaymentStatus; status: OrderStatus
-  note: string | null; locationName: string | null; lineItems: LineItem[]
+  id: string
+  total: number
+  createdAt: string
+  source: Source
+  paymentType: PaymentType
+  paymentStatus: PaymentStatus
+  status: OrderStatus
+  note: string | null
+  locationName: string | null
+  lineItems: LineItem[]
 }
 
-const SOURCE_META: Record<Source, { label: string; className: string }> = {
-  manual:       { label: 'Manual',      className: 'bg-gray-100 text-gray-700' },
-  native_pos:   { label: 'POS',         className: 'bg-blue-50 text-blue-700' },
-  external_pos: { label: 'External',    className: 'bg-indigo-50 text-indigo-700' },
+// ================================================================
+// Source / status vocab — same per-branch, just a label
+// ================================================================
+
+const SOURCE_LABEL: Record<Source, string> = {
+  manual: 'Manual',
+  native_pos: 'POS',
+  external_pos: 'External',
 }
 
-const STATUS_META: Record<OrderStatus, { label: string; className: string }> = {
-  completed: { label: 'Completed', className: 'bg-green-50 text-green-700' },
-  voided:    { label: 'Voided',    className: 'bg-red-50 text-red-700 line-through decoration-red-500' },
+// Soft text tints for the source column. Restraint over chrome:
+// colored text instead of pill chips so the row reads scannably,
+// matching Finance's category-tint pattern.
+const SOURCE_TEXT: Record<Source, string> = {
+  manual: 'text-gray-700',
+  native_pos: 'text-blue-700',
+  external_pos: 'text-indigo-700',
 }
 
-const CURRENCY = (n: number) => `$${n.toFixed(2)}`
+// Drawer chip styles still use pills — appropriate at that scale.
+const SOURCE_CHIP: Record<Source, string> = {
+  manual: 'bg-gray-100 text-gray-700',
+  native_pos: 'bg-blue-50 text-blue-700',
+  external_pos: 'bg-indigo-50 text-indigo-700',
+}
+
+const STATUS_META: Record<OrderStatus, { label: string; chip: string; dot: string }> = {
+  completed: { label: 'Completed', chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
+  voided:    { label: 'Voided',    chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
+}
+
+// ================================================================
+// Filter model
+// ================================================================
 
 type Filter = 'all' | Source
 
-export default function SalesClient({ orders }: { orders: Order[] }) {
+// Filter chips are operating-mode aware so the strip doesn't
+// advertise sources that won't show up. The set is light (UI only) —
+// "All" still surfaces every order, regardless of source, on either
+// branch.
+function filtersForMode(mode: OperatingMode): Filter[] {
+  if (mode === 'external_pos') return ['all', 'external_pos', 'manual']
+  if (mode === 'native_pos') return ['all', 'native_pos', 'manual']
+  return ['all', 'native_pos', 'external_pos', 'manual']
+}
+
+// ================================================================
+// Formatting helpers
+// ================================================================
+
+function fmtMoney(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function fmtRowDate(iso: string): { day: string; time: string } {
+  const d = new Date(iso)
+  return {
+    day: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+    time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+  }
+}
+
+function fmtFullDate(iso: string): string {
+  return new Date(iso).toLocaleString('en-US', {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  })
+}
+
+function fmtRelative(iso: string, now: Date = new Date()): string {
+  const diffMs = now.getTime() - new Date(iso).getTime()
+  const diffMin = Math.round(diffMs / 60000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin} min ago`
+  const diffHr = Math.round(diffMin / 60)
+  if (diffHr < 24) return `${diffHr} hour${diffHr === 1 ? '' : 's'} ago`
+  const diffDay = Math.round(diffHr / 24)
+  if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`
+  const diffWk = Math.round(diffDay / 7)
+  return `${diffWk} week${diffWk === 1 ? '' : 's'} ago`
+}
+
+// First two item names, joined by · with an N more suffix.
+function fmtItemPreview(items: LineItem[]): string {
+  if (items.length === 0) return '—'
+  const visible = items.slice(0, 2).map((i) => i.name).join(' · ')
+  const extra = items.length - 2
+  return extra > 0 ? `${visible} · +${extra} more` : visible
+}
+
+// Short, read-only order id (last 6 of a uuid). Lets the drawer
+// surface a consistent identifier without ever exposing the raw uuid.
+function shortId(id: string): string {
+  const cleaned = id.replace(/-/g, '')
+  return cleaned.slice(-6).toUpperCase()
+}
+
+// ================================================================
+// Sales client
+// ================================================================
+
+// 10 rows per page: a fixed page size lets the ledger card hold a
+// stable visual height (see `min-h` on the card shell below). Rows
+// swap inside the surface; the surface itself never resizes.
+const PAGE_SIZE = 10
+
+export default function SalesClient({
+  orders,
+  operatingMode = null,
+}: {
+  orders: Order[]
+  operatingMode?: OperatingMode
+}) {
   const [filter, setFilter] = useState<Filter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
+
+  // Filter ordering is mode-aware so the most-relevant source appears
+  // second (right after All), matching the pillar's actual data origin.
+  const availableFilters = filtersForMode(operatingMode)
 
   const visible = useMemo(() => {
     if (filter === 'all') return orders
     return orders.filter((o) => o.source === filter)
   }, [orders, filter])
 
-  const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
+  // Reset pagination if the filter narrows past the current page.
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
+  const safePage = Math.min(page, pageCount - 1)
+  const pagedOrders = visible.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE)
 
-  // Close the sheet if the selected order disappears after revalidation
+  useEffect(() => {
+    if (page >= pageCount) setPage(0)
+  }, [page, pageCount])
+
+  // Close the drawer if the open order disappears after revalidation.
   useEffect(() => {
     if (openId && !orders.find((o) => o.id === openId)) setOpenId(null)
   }, [orders, openId])
 
-  return (
-    <div className="max-w-5xl">
+  const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-      {/* Controls */}
-      <div className="flex items-center justify-between gap-3 mb-5">
-        <div className="flex flex-wrap items-center gap-1">
-          {(['all', 'manual', 'native_pos', 'external_pos'] as Filter[]).map((f) => {
-            const active = filter === f
-            const label =
-              f === 'all' ? 'All' :
-              f === 'manual' ? 'Manual' :
-              f === 'native_pos' ? 'POS' : 'External'
-            return (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setFilter(f)}
-                className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-all ${
-                  active ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                {label}
-              </button>
-            )
-          })}
+  // Counts for the eyebrow / header strip — kept as scope-of-list
+  // info, not analytics.
+  const completedInView = visible.filter((o) => o.status === 'completed').length
+  const voidedInView = visible.filter((o) => o.status === 'voided').length
+
+  const subtitle = operatingMode === 'external_pos'
+    ? 'Review imported orders from your connected POS and correct mistaken sales.'
+    : operatingMode === 'native_pos'
+      ? 'Review native sales rung up at the in-app POS and correct mistakes.'
+      : 'Review recent orders and correct mistaken sales.'
+
+  return (
+    <div className="max-w-[1200px]">
+
+      {/* ================================================================ */}
+      {/* 1. HEADER                                                        */}
+      {/* ================================================================ */}
+      <div className="mb-7 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Sales</h1>
+          <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
         </div>
+        <SourceChip operatingMode={operatingMode} />
       </div>
 
-      {visible.length === 0 ? (
-        <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-16 text-center">
-          <p className="text-lg font-medium text-gray-400">No sales found</p>
-          <p className="mt-1 text-sm text-gray-300">
-            {orders.length === 0 ? 'Create your first sale to get started.' : 'Try a different filter.'}
+      {/* ================================================================ */}
+      {/* 2. ACTIVITY                                                      */}
+      {/* ================================================================ */}
+      <section>
+        <div className="mb-4 flex items-center gap-3">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-900">
+            Recent activity
+          </p>
+          <span className="flex-1 h-px bg-gray-200/70" />
+          <p className="text-[11px] text-gray-500 tabular-nums">
+            {visible.length === 0
+              ? 'No orders'
+              : `${completedInView} completed${voidedInView > 0 ? ` · ${voidedInView} voided` : ''}`}
           </p>
         </div>
-      ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-100 text-left bg-gray-50/60">
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Date</th>
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Source</th>
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Payment</th>
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Location</th>
-                <th className="px-5 py-2.5 text-[11px] font-semibold text-gray-500 uppercase tracking-wide text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {visible.map((o) => {
-                const srcMeta = SOURCE_META[o.source]
-                const statusMeta = STATUS_META[o.status]
-                const isVoided = o.status === 'voided'
-                return (
-                  <tr
-                    key={o.id}
-                    onClick={() => setOpenId(o.id)}
-                    className={`group cursor-pointer transition-colors ${openId === o.id ? 'bg-blue-50/60' : 'hover:bg-gray-50'}`}
-                  >
-                    <td className={`px-5 py-3 ${isVoided ? 'text-gray-400' : 'text-gray-900'}`}>
-                      {new Date(o.createdAt).toLocaleString('en-US', {
-                        month: 'short', day: 'numeric', year: 'numeric',
-                        hour: 'numeric', minute: '2-digit',
-                      })}
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${srcMeta.className}`}>
-                        {srcMeta.label}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className="inline-flex items-center gap-1.5">
-                        <span className="text-[11px] font-medium text-gray-700 capitalize">{o.paymentType}</span>
-                        <span className={`inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                          o.paymentStatus === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-                        }`}>
-                          {o.paymentStatus}
-                        </span>
-                      </span>
-                    </td>
-                    <td className="px-5 py-3">
-                      <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusMeta.className}`}>
-                        {statusMeta.label}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-gray-600">{o.locationName ?? '—'}</td>
-                    <td className={`px-5 py-3 font-mono text-right ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                      {CURRENCY(o.total)}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+
+        {/* Filter strip + scope counter */}
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white p-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            {availableFilters.map((f) => {
+              const active = filter === f
+              const count = f === 'all' ? orders.length : orders.filter((o) => o.source === f).length
+              const label =
+                f === 'all' ? 'All' :
+                f === 'manual' ? 'Manual' :
+                f === 'native_pos' ? 'POS' : 'External'
+              return (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => { setFilter(f); setPage(0) }}
+                  className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${
+                    active
+                      ? 'bg-gray-900 text-white shadow-sm'
+                      : 'text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  {label}
+                  <span className={`text-[10px] tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
+                    {count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
-      )}
+
+        {/* Orders card.
+            Fixed-height ledger surface. The min-h is sized to fit a
+            full page of 10 rows + thead + pager, so the card keeps a
+            stable visual frame regardless of how many rows are on
+            the current page. When a page is short, the existing
+            `mt-auto` on the pager pins it to the bottom and the empty
+            space sits as quiet whitespace inside the same stable
+            surface — no filler rows, no shrinking. */}
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[680px]">
+          {visible.length === 0 ? (
+            <EmptyLedger orders={orders.length} filter={filter} />
+          ) : (
+            <>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 text-left">
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">When</th>
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Items</th>
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Source</th>
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Payment</th>
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Status</th>
+                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em] text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {pagedOrders.map((o) => (
+                    <OrderRow
+                      key={o.id}
+                      order={o}
+                      selected={openId === o.id}
+                      onOpen={() => setOpenId(o.id)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Pager pinned at bottom for stable card height. */}
+              <div className="mt-auto border-t border-gray-100 px-6 py-3 flex items-center justify-between">
+                <p className="text-[11px] text-gray-500">
+                  {visible.length === 0
+                    ? '0 entries'
+                    : `${safePage * PAGE_SIZE + 1}–${Math.min((safePage + 1) * PAGE_SIZE, visible.length)} of ${visible.length}`}
+                </p>
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(0, p - 1))}
+                    disabled={safePage === 0}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ← Prev
+                  </button>
+                  <span className="text-[11px] text-gray-400 px-1.5 tabular-nums">
+                    {safePage + 1} / {pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                    disabled={safePage >= pageCount - 1}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Next →
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </section>
 
       {selected && <OrderDrawer order={selected} onClose={() => setOpenId(null)} />}
     </div>
   )
 }
 
-// ----------------------------------------------------------------
-// OrderDrawer — minimal drill-down: line items + void action.
-// ----------------------------------------------------------------
+// ================================================================
+// SourceChip — page-level data-origin pill (Finance pattern)
+// ================================================================
+function SourceChip({ operatingMode }: { operatingMode: OperatingMode }) {
+  const variants: Record<NonNullable<OperatingMode> | 'unset', { label: string; tone: string; dot: string }> = {
+    native_pos: {
+      label: 'Native POS ledger',
+      tone: 'text-blue-700',
+      dot: 'bg-blue-500',
+    },
+    external_pos: {
+      label: 'External POS ledger',
+      tone: 'text-indigo-700',
+      dot: 'bg-indigo-500',
+    },
+    unset: {
+      label: 'Operating mode not set',
+      tone: 'text-gray-600',
+      dot: 'bg-gray-400',
+    },
+  }
+  const v = variants[operatingMode ?? 'unset']
+  return (
+    <div className="hidden sm:inline-flex items-center gap-2 self-start text-[11px] font-medium px-3 py-1.5 rounded-full border border-gray-200/80 bg-white/80 backdrop-blur-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+      <span className={`w-1.5 h-1.5 rounded-full ${v.dot}`} />
+      <span className={v.tone}>{v.label}</span>
+    </div>
+  )
+}
+
+// ================================================================
+// OrderRow — list-row scan
+// ================================================================
+function OrderRow({
+  order,
+  selected,
+  onOpen,
+}: {
+  order: Order
+  selected: boolean
+  onOpen: () => void
+}) {
+  const date = fmtRowDate(order.createdAt)
+  const isVoided = order.status === 'voided'
+  const status = STATUS_META[order.status]
+  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
+
+  return (
+    <tr
+      onClick={onOpen}
+      aria-selected={selected}
+      className={`group cursor-pointer transition-colors ${
+        selected
+          ? 'bg-blue-50/70 shadow-[inset_3px_0_0_rgba(59,130,246,0.6)]'
+          : 'hover:bg-gray-50/70'
+      }`}
+    >
+      <td className={`px-6 py-3.5 whitespace-nowrap text-[13px] ${isVoided ? 'text-gray-400' : 'text-gray-700'}`}>
+        <div className="font-medium tabular-nums">{date.day}</div>
+        <div className="text-[11px] text-gray-400 tabular-nums">{date.time}</div>
+      </td>
+      <td className={`px-6 py-3.5 max-w-[280px] text-[13px] ${isVoided ? 'text-gray-400' : 'text-gray-800'}`}>
+        <p className="truncate">{fmtItemPreview(order.lineItems)}</p>
+        <p className="text-[11px] text-gray-400 tabular-nums">
+          {itemCount} {itemCount === 1 ? 'unit' : 'units'}
+          {order.locationName ? <> · {order.locationName}</> : null}
+        </p>
+      </td>
+      <td className={`px-6 py-3.5 text-[13px] font-medium ${isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]}`}>
+        {SOURCE_LABEL[order.source]}
+      </td>
+      <td className="px-6 py-3.5 text-[13px]">
+        <div className="flex items-center gap-2">
+          <span className={`capitalize ${isVoided ? 'text-gray-400' : 'text-gray-700'}`}>{order.paymentType}</span>
+          {order.paymentStatus === 'unpaid' && !isVoided && (
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
+              Unpaid
+            </span>
+          )}
+        </div>
+      </td>
+      <td className="px-6 py-3.5">
+        <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+          {status.label}
+        </span>
+      </td>
+      <td className={`px-6 py-3.5 font-mono tabular-nums text-right text-[13px] ${
+        isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-medium'
+      }`}>
+        {fmtMoney(order.total)}
+      </td>
+    </tr>
+  )
+}
+
+// ================================================================
+// EmptyLedger — calm, branch-aware empty state
+// ================================================================
+function EmptyLedger({ orders, filter }: { orders: number; filter: Filter }) {
+  const isFilterEmpty = orders > 0 && filter !== 'all'
+  return (
+    <div className="px-6 py-20 text-center">
+      <p className="text-sm font-semibold text-gray-700">
+        {isFilterEmpty ? 'Nothing matches this filter' : 'No orders in the ledger yet'}
+      </p>
+      <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
+        {isFilterEmpty
+          ? 'Switch back to All to see every order, or pick a different source.'
+          : 'Completed sales appear here for review and correction. The first order will land in this list automatically.'}
+      </p>
+    </div>
+  )
+}
+
+// ================================================================
+// OrderDrawer — inspection workspace
+//
+// Family-aligned with the Finance / Staffing / Inventory drawers:
+//
+//   • Aside is `flex flex-col` so the header band is fixed-height
+//     and only the body scrolls — same shell every drawer in the app
+//     uses.
+//   • Header is the family's calm `text-base font-bold` title +
+//     subtitle line + labeled "Close" button. No giant total in the
+//     header — the receipt-y dollar hero made the drawer feel like
+//     a transaction snapshot instead of a managed object.
+//   • Body opens with a 3-cell stats strip (`Total / Items / Lines`)
+//     in the family's bordered/divided shell — same anatomy as the
+//     Labor and Inventory-spend stat strips. The dollar amount is
+//     still prominent, but as one cell of a structured object summary
+//     rather than the drawer's hero.
+//   • Sections use the family's quiet `mb-3 text-[10px] uppercase
+//     tracking-widest text-gray-500` eyebrow with no divider line —
+//     drawer-level rhythm is calmer than the page-level band rhythm.
+//   • Items is the body's central section: slightly stronger eyebrow
+//     tone (text-gray-700) and a compact line-list with the family's
+//     primary/secondary/value row pattern.
+//   • Correction is a real action-resolution zone: a full-bleed
+//     `border-t` separates it from the inspection content, then a
+//     calm tinted card houses the explanation + the destructive
+//     action.
+// ================================================================
 function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) {
   const [state, action, pending] = useActionState(voidOrder, null)
   const canVoid = order.status === 'completed'
-  const srcMeta = SOURCE_META[order.source]
-  const statusMeta = STATUS_META[order.status]
+  const status = STATUS_META[order.status]
+  const isVoided = order.status === 'voided'
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
   }, [onClose])
+
+  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
+  const recordedVia =
+    order.source === 'native_pos' ? 'In-app POS'
+      : order.source === 'external_pos' ? 'External POS import'
+        : 'Manual entry'
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <aside className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-2xl z-50 overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-100 px-6 py-4 flex items-start justify-between z-10">
+      <div
+        onClick={onClose}
+        className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
+      />
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+
+        {/* ============================================================ */}
+        {/* HEADER — family pattern: title + subtitle + Close            */}
+        {/* The total moves out of the header into the stats strip below */}
+        {/* so the drawer no longer reads as "big-dollar receipt first,  */}
+        {/* everything else second." Identity is the lead: the order id  */}
+        {/* + status pill, then the time it happened in the subtitle.    */}
+        {/* ============================================================ */}
+        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Order</p>
-            <h2 className="text-lg font-bold text-gray-900 truncate">
-              {new Date(order.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}
-            </h2>
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-bold text-gray-900 tabular-nums">
+                Order #{shortId(order.id)}
+              </h2>
+              <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+                {status.label}
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-gray-500">
+              <span className="text-gray-700">{fmtFullDate(order.createdAt)}</span>
+              <span className="text-gray-400"> · {fmtRelative(order.createdAt)}</span>
+            </p>
           </div>
-          <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1 -mt-1 -mr-1">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+          >
+            Close
           </button>
         </div>
 
-        <div className="p-6 space-y-5">
-          {/* Meta */}
-          <div className="flex flex-wrap gap-2">
-            <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${srcMeta.className}`}>{srcMeta.label}</span>
-            <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusMeta.className}`}>{statusMeta.label}</span>
-            <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 capitalize">
-              {order.paymentType}
-            </span>
-            <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-              order.paymentStatus === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-            }`}>{order.paymentStatus}</span>
+        {/* Voided audit stamp — full-bleed strip directly under the
+            header so the corrected status reads before the body
+            content. Sits between the fixed header and the scrollable
+            body so it never collides with content on scroll. */}
+        {isVoided && (
+          <div className="border-b border-red-200/60 bg-red-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+            <p className="text-[11px] text-red-700">
+              Voided · the original record stays in the ledger for auditability.
+            </p>
+          </div>
+        )}
+
+        {/* ============================================================ */}
+        {/* BODY — scrollable, family rhythm                             */}
+        {/* ============================================================ */}
+        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+
+          {/* Stats strip — family pattern (Total / Items / Lines) */}
+          <div className="grid grid-cols-3 rounded-xl border border-gray-200 divide-x divide-gray-100 bg-white">
+            <DrawerStatCell
+              label="Total"
+              value={fmtMoney(order.total)}
+              valueClass={isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}
+            />
+            <DrawerStatCell
+              label="Items"
+              value={`${itemCount}`}
+              muted={itemCount === 0}
+            />
+            <DrawerStatCell
+              label="Lines"
+              value={`${order.lineItems.length}`}
+              muted={order.lineItems.length === 0}
+            />
           </div>
 
-          {order.locationName && (
-            <p className="text-xs text-gray-500">{order.locationName}</p>
-          )}
-
-          {/* Line items */}
+          {/* Context — source / payment / payment status as a quiet
+              chip group. Lives outside the stats strip because these
+              are categorical (chip) signals, not numeric (cell). */}
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">Items</p>
-            <ul className="rounded-lg border border-gray-200 divide-y divide-gray-50">
+            <p className="mb-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Context
+            </p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${SOURCE_CHIP[order.source]}`}>
+                {SOURCE_LABEL[order.source]}
+              </span>
+              <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 capitalize">
+                {order.paymentType}
+              </span>
+              <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                order.paymentStatus === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
+              }`}>
+                {order.paymentStatus}
+              </span>
+            </div>
+          </div>
+
+          {/* Provenance — quiet two-up grid */}
+          <div>
+            <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Provenance
+            </p>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              <DrawerMeta label="Recorded via" value={recordedVia} />
+              <DrawerMeta label="Location" value={order.locationName ?? '—'} />
+            </dl>
+            {order.note && (
+              <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50/40 px-3.5 py-2.5">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                  Note
+                </p>
+                <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Items — drawer's central section.
+              Eyebrow tone is bumped from gray-500 to gray-700 (the only
+              section to do so) so Items reads as the body's primary
+              content without resorting to dividers, badges, or color. */}
+          <div>
+            <div className="mb-3 flex items-baseline justify-between gap-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+                Items
+              </p>
+              <p className="text-[11px] text-gray-400 tabular-nums">
+                {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'} · {itemCount} {itemCount === 1 ? 'unit' : 'units'}
+              </p>
+            </div>
+            <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100">
               {order.lineItems.map((li) => (
-                <li key={li.id} className="flex items-start justify-between px-3 py-2 text-xs">
+                <li key={li.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                   <div className="min-w-0">
-                    <p className="font-semibold text-gray-900 truncate">{li.name}</p>
-                    <p className="text-[10px] text-gray-400 tabular-nums mt-0.5">
-                      {CURRENCY(li.unitPrice)} × {li.quantity}
+                    <p className="text-xs font-medium text-gray-900 truncate">{li.name}</p>
+                    <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">
+                      {fmtMoney(li.unitPrice)} × {li.quantity}
                     </p>
                   </div>
-                  <p className="font-mono text-gray-900 tabular-nums whitespace-nowrap">
-                    {CURRENCY(li.totalPrice)}
+                  <p className="text-sm font-semibold font-mono tabular-nums text-gray-900 flex-shrink-0">
+                    {fmtMoney(li.totalPrice)}
                   </p>
                 </li>
               ))}
             </ul>
           </div>
+        </div>
 
-          {/* Totals */}
-          <div className="flex items-center justify-between text-sm font-bold text-gray-900 pt-2 border-t border-gray-100">
-            <span>Total</span>
-            <span className={`font-mono tabular-nums ${order.status === 'voided' ? 'line-through text-gray-400' : ''}`}>
-              {CURRENCY(order.total)}
-            </span>
-          </div>
-
-          {/* Void action */}
-          <div className="pt-3 border-t border-gray-100">
-            {canVoid ? (
-              <form action={action}>
+        {/* ============================================================ */}
+        {/* ACTION RESOLUTION ZONE                                       */}
+        {/* Full-width footer band, separated from the scrollable body   */}
+        {/* by a top border so it reads as the drawer's concluding       */}
+        {/* operational moment — not just another bottom card. Pinned    */}
+        {/* below the body's flex-1 region so it never scrolls away.     */}
+        {/* ============================================================ */}
+        <div className="border-t border-gray-200 bg-gray-50/40 px-6 py-5 flex-shrink-0">
+          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Correction
+          </p>
+          {canVoid ? (
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs font-semibold text-gray-900">Void this order</p>
+              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+                Use this when the order was rung up in error or refunded outside the system.
+                Voiding marks the record as corrected and reverses any inventory it depleted.
+                The original entry stays in the ledger so the sale, the void event, and any
+                reversed stock movement all remain visible for auditing.
+              </p>
+              <form action={action} className="mt-4">
                 <input type="hidden" name="order_id" value={order.id} />
                 <button
                   type="submit"
                   disabled={pending}
-                  className="w-full rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
+                  className="w-full rounded-lg border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
                 >
                   {pending ? 'Voiding…' : 'Void this order'}
                 </button>
-                <p className="mt-2 text-[10px] text-gray-400 leading-relaxed">
-                  Voiding marks the order as corrected and reverses any inventory it depleted. The original record stays in the ledger for auditability.
-                </p>
-                {state?.error && <p className="text-[11px] text-red-600 mt-2">{state.error}</p>}
+                {state?.error && (
+                  <p className="mt-2 text-[11px] text-red-600">{state.error}</p>
+                )}
               </form>
-            ) : (
-              <p className="text-[11px] text-gray-400">This order is already voided.</p>
-            )}
-          </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-gray-200 bg-white p-4">
+              <p className="text-xs font-semibold text-gray-700">No further correction available</p>
+              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+                This order has already been voided. The record is preserved as-is so the original
+                sale, the void event, and any reversed inventory all stay visible to an auditor.
+              </p>
+            </div>
+          )}
         </div>
       </aside>
     </>
+  )
+}
+
+// ================================================================
+// Drawer-local primitives
+//
+// Match the family's stat-cell / meta-pair pattern exactly. The
+// stat cell is the Sales analogue of Finance's `DrawerStat` — same
+// padding, same uppercase label, same bold value — so the strip
+// reads as the same component family across pillars.
+// ================================================================
+function DrawerStatCell({
+  label,
+  value,
+  muted = false,
+  valueClass,
+}: {
+  label: string
+  value: string
+  muted?: boolean
+  valueClass?: string
+}) {
+  const tone = valueClass ?? (muted ? 'text-gray-300' : 'text-gray-900')
+  return (
+    <div className="px-4 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
+      <p className={`mt-1 text-base font-bold tabular-nums truncate font-mono ${tone}`}>{value}</p>
+    </div>
+  )
+}
+
+// Stacked key/value pair used in the Provenance grid. Vertical
+// orientation so two pairs sit side by side without competing for
+// width — labels stay restrained on top, values get full width below.
+function DrawerMeta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">{label}</dt>
+      <dd className="mt-1 text-[12px] text-gray-800 truncate">{value}</dd>
+    </div>
   )
 }

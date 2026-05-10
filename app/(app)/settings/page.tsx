@@ -58,7 +58,7 @@ export default async function SettingsPage() {
           <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
             Pillar readiness
           </h2>
-          <ReadinessPanel readiness={readiness} />
+          <ReadinessPanel readiness={readiness} isDev={isDev} />
         </section>
       )}
 

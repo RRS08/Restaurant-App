@@ -1728,3 +1728,72 @@ create policy "Users can update their restock orders"
 create policy "Users can delete their restock orders"
   on public.restock_orders for delete
   using (restaurant_id = public.my_restaurant_id());
+
+
+-- ================================================================
+-- Sales reporting foundation
+--
+-- These columns are foundation-only — nothing in the live UI reads
+-- them yet. They exist so future weekly business summaries / report
+-- emails / analytics can run cheaply and accurately:
+--
+--   orders.business_date
+--     Date the sale "belongs to" in the restaurant's local timezone.
+--     Pre-computed at insert so weekly aggregations don't have to
+--     join locations + convert per row, and so orders posted near
+--     midnight don't slip into the wrong business day.
+--
+--   orders.voided_at
+--     Timestamp the void event happened. Status alone tells you the
+--     order is voided; this column tells you WHEN, which is what
+--     weekly "what changed this week" summaries actually need.
+--
+--   order_items.menu_item_name_snapshot
+--     Item name as displayed at sale time. Without this, renaming a
+--     menu item retroactively rewrites history (the live join reads
+--     the new name). Reports about last week should preserve the
+--     name as customers saw it.
+--
+--   order_items.menu_category_id_snapshot
+--     Category the item lived in at sale time. Items can be moved
+--     between categories; preserving this lets per-category weekly
+--     trend reports stay honest.
+--
+-- Subtotal / discount / tax columns are intentionally NOT added yet —
+-- no current write path (manual entry, native POS, or any of the
+-- three external adapters) actually emits them. They'll land in the
+-- same pass that wires up an adapter that does.
+-- ================================================================
+
+alter table public.orders      add column if not exists business_date date;
+alter table public.orders      add column if not exists voided_at     timestamptz;
+alter table public.order_items add column if not exists menu_item_name_snapshot   text;
+alter table public.order_items add column if not exists menu_category_id_snapshot uuid
+  references public.menu_categories(id) on delete set null;
+
+-- Backfill business_date for existing rows using the location's
+-- timezone. Idempotent — only fills NULLs.
+update public.orders o
+set business_date = (o.created_at at time zone l.timezone)::date
+from public.locations l
+where o.location_id = l.id
+  and o.business_date is null;
+
+-- Backfill name + category snapshots from current menu_items state.
+-- Best-effort — for rows where a rename has already happened we lose
+-- the original, but going forward every new row carries the snapshot
+-- inline.
+update public.order_items oi
+set menu_item_name_snapshot = mi.name,
+    menu_category_id_snapshot = mi.category_id
+from public.menu_items mi
+where oi.menu_item_id = mi.id
+  and (oi.menu_item_name_snapshot is null or oi.menu_category_id_snapshot is null);
+
+-- Indexes optimized for weekly-summary read patterns.
+create index if not exists orders_business_date_idx
+  on public.orders (restaurant_id, business_date desc);
+
+create index if not exists orders_voided_at_idx
+  on public.orders (restaurant_id, voided_at desc)
+  where voided_at is not null;

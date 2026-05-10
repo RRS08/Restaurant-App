@@ -18,9 +18,11 @@ import {
   createInventoryCount,
   createInventoryItem,
   createRestockOrder,
-  markRestockOrdered,
+  quickAddToOrder,
   markRestockReceived,
   cancelRestockOrder,
+  updateRestockQuantity,
+  placeAllDrafts,
 } from '@/app/actions/inventory'
 
 interface Item {
@@ -66,6 +68,16 @@ type Filter = 'all' | 'out' | 'low' | 'no_count'
 const PAGE_SIZE = 12
 const ACTIVITY_LIMIT = 8
 
+// Drawer state — exactly one drawer open at a time. Discriminated
+// union so adding a new drawer is a single new branch in the
+// render block at the bottom of InventoryClient.
+type DrawerState =
+  | { mode: 'item'; itemId: string }
+  | { mode: 'create-item' }
+  | { mode: 'cart' }
+  | { mode: 'orders' }
+  | null
+
 export default function InventoryClient({ items, transactions, restockOrders }: {
   items: Item[]
   transactions: Transaction[]
@@ -74,15 +86,18 @@ export default function InventoryClient({ items, transactions, restockOrders }: 
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [page, setPage] = useState(1)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
-  // Track how many items exist so we can auto-close the create card
-  // once revalidation has delivered the new row.
+  const [drawer, setDrawer] = useState<DrawerState>(null)
+  const selectedId = drawer?.mode === 'item' ? drawer.itemId : null
+
+  // Auto-close the create-item drawer once revalidation delivers
+  // the new row.
   const itemCountRef = useRef(items.length)
   useEffect(() => {
-    if (creating && items.length > itemCountRef.current) setCreating(false)
+    if (drawer?.mode === 'create-item' && items.length > itemCountRef.current) {
+      setDrawer(null)
+    }
     itemCountRef.current = items.length
-  }, [items.length, creating])
+  }, [items.length, drawer])
 
   const counts = useMemo(() => ({
     out: items.filter((i) => i.status === 'out').length,
@@ -115,10 +130,39 @@ export default function InventoryClient({ items, transactions, restockOrders }: 
 
   const selectedItem = selectedId ? items.find((i) => i.id === selectedId) ?? null : null
 
-  // Keep the selected item's data fresh when server revalidation returns new items
+  // If the selected item disappears (archived/deleted), close the drawer.
   useEffect(() => {
-    if (selectedId && !items.find((i) => i.id === selectedId)) setSelectedId(null)
+    if (selectedId && !items.find((i) => i.id === selectedId)) setDrawer(null)
   }, [items, selectedId])
+
+  // ---- Restock-order indexing ----
+  // The order-builder rail and the per-row "Add" affordance both
+  // need fast lookups. Build them once per render so neither path
+  // does linear filtering inside the hot list.
+  const itemsById = useMemo(() => {
+    const m = new Map<string, Item>()
+    for (const it of items) m.set(it.id, it)
+    return m
+  }, [items])
+
+  const ordersByItem = useMemo(() => {
+    const m = new Map<string, RestockOrder[]>()
+    for (const o of restockOrders) {
+      const list = m.get(o.inventoryItemId) ?? []
+      list.push(o)
+      m.set(o.inventoryItemId, list)
+    }
+    return m
+  }, [restockOrders])
+
+  const draftOrders = useMemo(
+    () => restockOrders.filter((o) => o.status === 'draft'),
+    [restockOrders]
+  )
+  const orderedOrders = useMemo(
+    () => restockOrders.filter((o) => o.status === 'ordered'),
+    [restockOrders]
+  )
 
   return (
     <div className="max-w-[1400px]">
@@ -143,150 +187,194 @@ export default function InventoryClient({ items, transactions, restockOrders }: 
           <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
             Add ingredients and products to start tracking stock health and movements.
           </p>
-          <Link
-            href="/inventory/new-item"
+          <button
+            type="button"
+            onClick={() => setDrawer({ mode: 'create-item' })}
             className="mt-5 inline-flex items-center rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
           >
-            + New item
-          </Link>
+            + Track new item
+          </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-6">
+        <>
+          {/* ---- QUERY / ACTION STRIP ----
+              One horizontal strip: wide search on the left, three
+              page-level actions on the right (+ Item / Orders /
+              Cart). Cart carries a live badge of draft line count.
+              All three open drawers — there's no permanent rail
+              anymore; the page stays focused on the list. */}
+          <div className="mb-5 flex flex-wrap items-center gap-2.5">
+            <div className="relative flex-1 min-w-[280px]">
+              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+              </svg>
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search items by name…"
+                className="h-10 w-full rounded-lg border border-gray-200/80 bg-white pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-[0_1px_2px_rgba(0,0,0,0.03)] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+              />
+            </div>
 
-          {/* ================= LEFT / MAIN COLUMN ================= */}
-          <div className="min-w-0">
+            <button
+              type="button"
+              onClick={() => setDrawer({ mode: 'create-item' })}
+              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+              Item
+            </button>
 
-            {/* ---- TOOLBAR: search (grows) + clickable status chips. */}
-            {/*    Canonical card shell so the strip reads as one     */}
-            {/*    productized control surface, not loose elements.   */}
-            <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 py-3 mb-5 flex flex-col lg:flex-row lg:items-center gap-3">
-              <div className="relative lg:flex-1 lg:min-w-0">
-                <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
-                </svg>
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search items…"
-                  className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-                />
+            <button
+              type="button"
+              onClick={() => setDrawer({ mode: 'orders' })}
+              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Orders
+              {orderedOrders.length > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold px-1">
+                  {orderedOrders.length}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setDrawer({ mode: 'cart' })}
+              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              Cart
+              {draftOrders.length > 0 && (
+                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold px-1">
+                  {draftOrders.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* ---- ITEM LIST ----
+              Full-width central surface. Card header band carries
+              the section eyebrow + title on the left and the
+              filter chips on the right — visually aligned under
+              the page-level + Item / Orders / Cart actions above.
+              No column headers; each row is self-contained. */}
+          <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+            <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Stock</p>
+                <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Replenishment discovery</h2>
               </div>
-
-              <div className="flex flex-wrap items-center gap-2 lg:ml-auto lg:flex-shrink-0">
+              <div className="flex flex-wrap items-center gap-2">
                 <SummaryChip tone="red"    label="Out"      value={counts.out}      active={filter === 'out'}      onClick={() => setFilter(filter === 'out' ? 'all' : 'out')} />
                 <SummaryChip tone="amber"  label="Low"      value={counts.low}      active={filter === 'low'}      onClick={() => setFilter(filter === 'low' ? 'all' : 'low')} />
                 <SummaryChip tone="gray"   label="No count" value={counts.no_count} active={filter === 'no_count'} onClick={() => setFilter(filter === 'no_count' ? 'all' : 'no_count')} />
-                <SummaryChip tone="blue"   label="Total"    value={counts.total}    active={filter === 'all'}      onClick={() => setFilter('all')} />
+                <SummaryChip tone="blue"   label="All"      value={counts.total}    active={filter === 'all'}      onClick={() => setFilter('all')} />
+                {(filter !== 'all' || query.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => { setFilter('all'); setQuery('') }}
+                    className="ml-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                  >
+                    Clear
+                  </button>
+                )}
               </div>
             </div>
 
-            {/* ---- STOCK TABLE — canonical card with eyebrow header  */}
-            {/*    band, table body, and pager pinned inside the      */}
-            {/*    same shell so the surface reads as one finished    */}
-            {/*    block (matches Finance's Recent activity card).    */}
-            <section className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-              <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Stock</p>
-                  <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Items</h2>
-                </div>
-                <span className="flex-shrink-0 text-[10px] text-gray-400">
-                  {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}{filter !== 'all' ? ` · filtered` : ''}
-                </span>
-              </div>
-
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 text-left">
-                    <th className="px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Item</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 text-right">Est. stock</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 text-right">Threshold</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Status</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 text-right w-12"></th>
+            <table className="w-full text-sm">
+              <tbody className="divide-y divide-gray-100">
+                {pageItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-6 py-14 text-center text-xs text-gray-400">
+                      No items match this filter.
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {pageItems.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-xs text-gray-400">
-                        No items match this filter.
-                      </td>
-                    </tr>
-                  ) : pageItems.map((item) => (
-                    <ItemRow key={item.id} item={item}
+                ) : pageItems.map((item) => {
+                  const itemOrders = ordersByItem.get(item.id) ?? []
+                  const draftLine = itemOrders.find((o) => o.status === 'draft') ?? null
+                  return (
+                    <ItemRow
+                      key={item.id}
+                      item={item}
+                      draftLine={draftLine}
                       selected={item.id === selectedId}
-                      onOpen={() => setSelectedId(item.id)} />
-                  ))}
-                </tbody>
-              </table>
+                      onOpen={() => setDrawer({ mode: 'item', itemId: item.id })}
+                    />
+                  )
+                })}
+              </tbody>
+            </table>
 
-              {/* Pager — pinned inside the card with a top divider so
-                  the table reads as a finished block. Matches the
-                  Recent activity pager pattern in Finance. */}
-              {filteredItems.length > PAGE_SIZE && (
-                <div className="border-t border-gray-100 px-6 py-3 flex items-center justify-between">
-                  <p className="text-[11px] text-gray-500">
-                    {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)} of {filteredItems.length}
-                  </p>
-                  <div className="inline-flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={safePage === 1}
-                      className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      ← Prev
-                    </button>
-                    <span className="text-[11px] text-gray-400 px-1.5">
-                      {safePage} / {totalPages}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={safePage === totalPages}
-                      className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Next →
-                    </button>
-                  </div>
+            {filteredItems.length > PAGE_SIZE && (
+              <div className="border-t border-gray-100 px-6 py-3 flex items-center justify-between">
+                <p className="text-[11px] text-gray-500">
+                  Showing <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> of <span className="font-semibold text-gray-700">{filteredItems.length}</span> items
+                </p>
+                <div className="inline-flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={safePage === 1}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ←
+                  </button>
+                  <span className="text-[11px] text-gray-500 px-2 tabular-nums">
+                    {safePage} / {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={safePage === totalPages}
+                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    →
+                  </button>
                 </div>
-              )}
-            </section>
-
-            {/* Activity feed — on small screens only (desktop has it in the rail) */}
-            <div className="lg:hidden">
-              {transactions.length > 0 && <ActivityFeed transactions={transactions} />}
-            </div>
-          </div>
-
-          {/* ================= RIGHT / SUPPORT RAIL (desktop only) =================
-              Stable support surface — always shows Track new item
-              (or its inline create form) + Recent activity. Item-
-              specific work happens in the drawer launched from row
-              click, not by replacing the rail. */}
-          <aside className="hidden lg:block">
-            <div className="sticky top-4 space-y-4">
-              {creating
-                ? <CreateItemCard onCancel={() => setCreating(false)} />
-                : <NewItemRailCard onStartCreate={() => { setSelectedId(null); setCreating(true) }} />}
-              {transactions.length > 0 && <ActivityFeed transactions={transactions} />}
-            </div>
-          </aside>
-        </div>
+              </div>
+            )}
+          </section>
+        </>
       )}
 
-      {/* ---- ITEM WORKSPACE DRAWER ----
-          Opens on row click for any viewport. Slides in from the
-          right; the rail stays untouched behind it. Uses the same
-          drawer pattern Staffing's edit/add drawers use so the
-          two pillars feel like siblings. */}
-      {selectedItem && (
+      {/* ---- DRAWERS ----
+          One drawer kind active at a time. Drawer state union at
+          the top of the component keeps this list exhaustive. */}
+      {drawer?.mode === 'item' && selectedItem && (
         <ItemWorkspaceDrawer
           item={selectedItem}
           transactions={transactions}
-          restockOrders={restockOrders.filter((o) => o.inventoryItemId === selectedItem.id)}
-          onClose={() => setSelectedId(null)}
+          restockOrders={ordersByItem.get(selectedItem.id) ?? []}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+      {drawer?.mode === 'create-item' && (
+        <CreateItemDrawer onClose={() => setDrawer(null)} />
+      )}
+      {drawer?.mode === 'cart' && (
+        <CartDrawer
+          drafts={draftOrders}
+          itemsById={itemsById}
+          onClose={() => setDrawer(null)}
+          onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
+        />
+      )}
+      {drawer?.mode === 'orders' && (
+        <OrdersDrawer
+          ordered={orderedOrders}
+          itemsById={itemsById}
+          transactions={transactions}
+          onClose={() => setDrawer(null)}
+          onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
         />
       )}
     </div>
@@ -420,279 +508,585 @@ function ThresholdStat({ value, onChange, onSave, dirty, saving, saved, unit, ed
 }
 
 // ----------------------------------------------------------------
-// NewItemRailCard — calm default empty state for the right rail.
-// Header band (eyebrow + title) matches the Finance / Staffing
-// pattern so the rail reads as a deliberate detail surface, not
-// just a placeholder. Same rail card family as the selected item
-// card and the create-item card; clicking + New item swaps the
-// rail into the inline CreateItemCard flow on the same page.
+// DrawerShell — shared chrome used by every page-level drawer here
+// (Cart / Orders / Create-item). Same shape as Staffing's drawers
+// so the inventory drawers feel like the same product family.
 // ----------------------------------------------------------------
-function NewItemRailCard({ onStartCreate }: { onStartCreate: () => void }) {
+function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
+  eyebrow?: string
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  // Close on Escape — same convention every other drawer in the
+  // app uses.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
   return (
-    <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-      <div className="border-b border-gray-100 px-6 py-4">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Inventory</p>
-        <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Track stock</h2>
-      </div>
-      <div className="p-6">
-        <p className="text-xs text-gray-500 leading-relaxed">
-          Select an item to review its stock, threshold, and recent movement — or start tracking
-          something new. Inventory covers both recipe ingredients and standalone supplies
-          (napkins, takeout boxes, paper goods, cleaning supplies).
-        </p>
-        <button
-          type="button"
-          onClick={onStartCreate}
-          className="mt-5 inline-flex items-center justify-center w-full rounded-lg border border-gray-200/80 bg-white px-4 py-2.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-        >
-          + Track new item
-        </button>
-      </div>
-    </aside>
+    <>
+      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
+      <aside
+        className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
+        aria-label={title}
+      >
+        <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            {eyebrow && (
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+                {eyebrow}
+              </p>
+            )}
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight">
+              {title}
+            </h2>
+            {subtitle && (
+              <p className="mt-1 text-xs text-gray-500 leading-relaxed">{subtitle}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+        {children}
+      </aside>
+    </>
   )
 }
 
 // ----------------------------------------------------------------
-// CreateItemCard — inline new-inventory-item form. Reuses the
-// existing createInventoryItem server action so validation and
-// persistence stay identical to the standalone page.
+// CartDrawer — the shopping cart. Lists draft restock_orders for
+// the whole restaurant. Place order at the bottom flips them all
+// to 'ordered' (placeAllDrafts).
 // ----------------------------------------------------------------
-function CreateItemCard({ onCancel }: { onCancel: () => void }) {
+function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
+  drafts: RestockOrder[]
+  itemsById: Map<string, Item>
+  onClose: () => void
+  onInspectItem: (itemId: string) => void
+}) {
+  const draftCost = drafts.reduce((s, o) => s + (o.expectedCost ?? 0), 0)
+  return (
+    <DrawerShell
+      eyebrow="Replenishment"
+      title="Cart"
+      subtitle="Items staged for your next replenishment order."
+      onClose={onClose}
+    >
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        {drafts.length === 0 ? (
+          <div className="text-center py-10">
+            <div className="mx-auto w-10 h-10 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center mb-3">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+            </div>
+            <p className="text-sm font-semibold text-gray-900">Your cart is empty</p>
+            <p className="mx-auto mt-1.5 max-w-[280px] text-xs text-gray-500 leading-relaxed">
+              Add items from the inventory list to start building your next replenishment order. Stock only updates once you mark an order received.
+            </p>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {drafts.map((order) => (
+              <CartLineItem
+                key={order.id}
+                order={order}
+                item={itemsById.get(order.inventoryItemId)}
+                editable
+                onInspect={() => onInspectItem(order.inventoryItemId)}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {drafts.length > 0 && (
+        <div className="flex-shrink-0 border-t border-gray-100 px-6 py-4 bg-white">
+          <div className="flex items-center justify-between text-xs text-gray-600 mb-3">
+            <span>
+              {drafts.length} {drafts.length === 1 ? 'item' : 'items'}
+            </span>
+            {draftCost > 0 && (
+              <span className="tabular-nums font-medium text-gray-900">
+                ~${draftCost.toFixed(2)} <span className="text-gray-400 font-normal">expected total</span>
+              </span>
+            )}
+          </div>
+          <PlaceOrderButton draftCount={drafts.length} />
+        </div>
+      )}
+    </DrawerShell>
+  )
+}
+
+// ----------------------------------------------------------------
+// OrdersDrawer — placed orders awaiting receipt + recent inventory
+// movement. Receipt is the commit that bumps stock; activity
+// surfaces past receipts and other movements at a glance.
+// ----------------------------------------------------------------
+function OrdersDrawer({ ordered, itemsById, transactions, onClose, onInspectItem }: {
+  ordered: RestockOrder[]
+  itemsById: Map<string, Item>
+  transactions: Transaction[]
+  onClose: () => void
+  onInspectItem: (itemId: string) => void
+}) {
+  return (
+    <DrawerShell
+      eyebrow="Replenishment"
+      title="Orders"
+      subtitle="Placed orders awaiting receipt and recent movement."
+      onClose={onClose}
+    >
+      <div className="flex-1 overflow-y-auto">
+        {/* AWAITING RECEIPT */}
+        <div className="px-6 py-5">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Awaiting receipt</p>
+            {ordered.length > 0 && (
+              <span className="text-[10px] text-gray-400">{ordered.length} {ordered.length === 1 ? 'line' : 'lines'}</span>
+            )}
+          </div>
+          {ordered.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center">
+              <p className="text-xs font-medium text-gray-700">No placed orders</p>
+              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+                When you place a draft order from the cart, items waiting for receipt will appear here.
+              </p>
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {ordered.map((order) => (
+                <CartLineItem
+                  key={order.id}
+                  order={order}
+                  item={itemsById.get(order.inventoryItemId)}
+                  showReceiveAction
+                  onInspect={() => onInspectItem(order.inventoryItemId)}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* RECENT ACTIVITY — global movement feed kept accessible
+            here instead of a permanent rail card. */}
+        {transactions.length > 0 && (
+          <div className="px-6 pb-6">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-3">Recent activity</p>
+            <ActivityFeed transactions={transactions} />
+          </div>
+        )}
+      </div>
+    </DrawerShell>
+  )
+}
+
+// ----------------------------------------------------------------
+// CreateItemDrawer — drawer-wrapped version of the previous inline
+// CreateItemCard. The form behavior is unchanged; the chrome
+// matches the rest of the page-level drawers.
+// ----------------------------------------------------------------
+function CreateItemDrawer({ onClose }: { onClose: () => void }) {
   const [state, action, pending] = useActionState(createInventoryItem, null)
   const nameRef = useRef<HTMLInputElement>(null)
-
   useEffect(() => { nameRef.current?.focus() }, [])
 
   return (
-    <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-      <div className="border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Track</p>
-          <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">New item</h2>
-          <p className="text-xs text-gray-500 leading-relaxed mt-1.5">
-            Recipe ingredient, operational supply — anything you want to monitor.
-          </p>
-        </div>
-        <button type="button" onClick={onCancel} aria-label="Cancel"
-          className="text-gray-400 hover:text-gray-600 p-1 -mt-0.5 flex-shrink-0">
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
+    <DrawerShell
+      eyebrow="Track"
+      title="New item"
+      subtitle="Recipe ingredient, operational supply — anything you want to monitor."
+      onClose={onClose}
+    >
+      <form action={action} className="flex-1 flex flex-col min-h-0">
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+          <div>
+            <label htmlFor="ci-name" className="block text-[11px] font-semibold text-gray-600 mb-1">
+              Item name
+            </label>
+            <input
+              ref={nameRef}
+              id="ci-name"
+              name="name"
+              type="text"
+              required
+              placeholder="Mozzarella, Olive oil, Napkins, Takeout boxes…"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            />
+          </div>
 
-      <form action={action} className="p-6 space-y-4">
-        <div>
-          <label htmlFor="ci-name" className="block text-[11px] font-semibold text-gray-600 mb-1">
-            Item name
-          </label>
-          <input
-            ref={nameRef}
-            id="ci-name"
-            name="name"
-            type="text"
-            required
-            placeholder="Mozzarella, Olive oil, Napkins, Takeout boxes…"
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-          />
-        </div>
+          <div>
+            <label htmlFor="ci-unit" className="block text-[11px] font-semibold text-gray-600 mb-1">
+              Unit of measure
+            </label>
+            <select
+              id="ci-unit"
+              name="unit_of_measure"
+              defaultValue="units"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            >
+              <option value="units">Units (each)</option>
+              <option value="kg">Kilograms (kg)</option>
+              <option value="lbs">Pounds (lbs)</option>
+              <option value="liters">Liters</option>
+              <option value="gallons">Gallons</option>
+              <option value="oz">Ounces (oz)</option>
+              <option value="cases">Cases</option>
+              <option value="bags">Bags</option>
+            </select>
+          </div>
 
-        <div>
-          <label htmlFor="ci-unit" className="block text-[11px] font-semibold text-gray-600 mb-1">
-            Unit of measure
-          </label>
-          <select
-            id="ci-unit"
-            name="unit_of_measure"
-            defaultValue="units"
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-          >
-            <option value="units">Units (each)</option>
-            <option value="kg">Kilograms (kg)</option>
-            <option value="lbs">Pounds (lbs)</option>
-            <option value="liters">Liters</option>
-            <option value="gallons">Gallons</option>
-            <option value="oz">Ounces (oz)</option>
-            <option value="cases">Cases</option>
-            <option value="bags">Bags</option>
-          </select>
-        </div>
+          <div>
+            <label htmlFor="ci-threshold" className="block text-[11px] font-semibold text-gray-600 mb-1">
+              Low stock threshold
+            </label>
+            <input
+              id="ci-threshold"
+              name="low_stock_threshold"
+              type="number"
+              min="0"
+              step="0.01"
+              defaultValue="5"
+              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            />
+          </div>
 
-        <div>
-          <label htmlFor="ci-threshold" className="block text-[11px] font-semibold text-gray-600 mb-1">
-            Low stock threshold
-          </label>
-          <input
-            id="ci-threshold"
-            name="low_stock_threshold"
-            type="number"
-            min="0"
-            step="0.01"
-            defaultValue="5"
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
-          />
+          {state?.error && (
+            <p className="text-[11px] text-red-600">{state.error}</p>
+          )}
         </div>
 
-        {state?.error && (
-          <p className="text-[11px] text-red-600">{state.error}</p>
-        )}
-
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex-shrink-0 border-t border-gray-100 px-6 py-4 bg-white flex items-center gap-2">
           <button
             type="button"
-            onClick={onCancel}
-            className="flex-1 rounded-lg border border-gray-200 px-4 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+            onClick={onClose}
+            className="flex-1 h-10 rounded-lg border border-gray-200 px-4 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={pending}
-            className="flex-1 rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-60 transition-colors"
+            className="flex-1 h-10 rounded-lg bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
           >
             {pending ? 'Creating…' : 'Create item'}
           </button>
         </div>
       </form>
-    </aside>
+    </DrawerShell>
   )
 }
 
 // ----------------------------------------------------------------
-// ItemRow — interactive row, clicks open the detail panel
+// CartLineItem — single line in the OrderBuilderCard.
+//
+// editable=true (draft mode):
+//   - inline qty editor (saves via updateRestockQuantity)
+//   - remove × button (cancels the draft via cancelRestockOrder)
+//
+// showReceiveAction=true (ordered mode):
+//   - "Mark received" button (markRestockReceived → stock bump)
+//   - cancel × is also available as a quiet escape hatch
+//
+// The line title links into the drawer for full inspection / edit
+// of vendor, cost, notes — keeping this row compact.
 // ----------------------------------------------------------------
-function ItemRow({ item, selected, onOpen }: { item: Item; selected: boolean; onOpen: () => void }) {
-  const [menuOpen, setMenuOpen] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
-  const st = STATUS[item.status]
-  const isUrgent = item.status === 'out' || item.status === 'low'
+function CartLineItem({ order, item, editable, showReceiveAction, onInspect }: {
+  order: RestockOrder
+  item: Item | undefined
+  editable?: boolean
+  showReceiveAction?: boolean
+  onInspect: () => void
+}) {
+  const [qtyState, qtyAction, qtyPending] = useActionState(updateRestockQuantity, null)
+  const [recvState, recvAction, recvPending] = useActionState(markRestockReceived, null)
+  const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
 
-  useEffect(() => {
-    const handle = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
-    }
-    if (menuOpen) document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [menuOpen])
-
-  const handleDelete = async () => {
-    setDeleteError(null)
-    const fd = new FormData()
-    fd.set('item_id', item.id)
-    const result = await deleteInventoryItem(fd)
-    if (result?.error) setDeleteError(result.error)
-    else setMenuOpen(false)
-  }
-
-  // Click anywhere on the row opens the detail panel, except
-  // inside interactive zones (actions menu).
-  const rowClass = [
-    'group cursor-pointer transition-colors relative',
-    selected ? 'bg-blue-50/60' : isUrgent ? 'hover:bg-red-50/40' : 'hover:bg-gray-50',
-  ].join(' ')
+  const unit = item?.unitOfMeasure ?? ''
+  const error = qtyState?.error ?? recvState?.error ?? cancelState?.error
 
   return (
-    <tr className={rowClass} onClick={onOpen}>
-      {/* Item */}
-      <td className="px-5 py-3">
-        <div className="flex items-center gap-2">
-          {selected
-            ? <span className="w-1 h-8 rounded-full bg-blue-500" />
-            : isUrgent && <span className={`w-1 h-8 rounded-full ${item.status === 'out' ? 'bg-red-500' : 'bg-amber-500'}`} />}
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-gray-900 truncate group-hover:text-blue-700 transition-colors">
-              {item.name}
-            </p>
-            {/* Item-type label is shown for BOTH variants so standalone
-                items don't read as "missing metadata" relative to
-                recipe-linked ones. */}
-            <p className="text-[10px] text-gray-400 mt-0.5">
-              {item.recipeLinks > 0
-                ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
-                : 'Standalone item'}
-            </p>
-          </div>
+    <li className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+      <div className="flex items-start justify-between gap-2">
+        <button
+          type="button"
+          onClick={onInspect}
+          className="text-left min-w-0 flex-1 group/title"
+        >
+          <p className="text-xs font-semibold text-gray-900 truncate group-hover/title:text-blue-700 transition-colors">
+            {item?.name ?? '—'}
+          </p>
+          <p className="text-[10px] text-gray-400 truncate mt-0.5">
+            {[order.vendor, order.expectedCost !== null ? `~$${order.expectedCost.toFixed(2)}` : null]
+              .filter(Boolean).join(' · ') || (item?.recipeLinks ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}` : 'Standalone')}
+          </p>
+        </button>
+
+        <form action={cancelAction} className="flex-shrink-0">
+          <input type="hidden" name="order_id" value={order.id} />
+          <button
+            type="submit"
+            disabled={cancelPending}
+            aria-label="Remove from order"
+            className="text-gray-300 hover:text-red-600 transition-colors p-0.5 disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      {/* Editable mode: inline qty editor that auto-saves on blur/
+          submit. Read-only mode in ordered: just a quantity readout
+          plus the receive button. */}
+      <div className="mt-2 flex items-center gap-2">
+        {editable ? (
+          <form action={qtyAction} className="flex items-center gap-1.5">
+            <input type="hidden" name="order_id" value={order.id} />
+            <input
+              name="quantity"
+              type="number"
+              min="0.01"
+              step="0.01"
+              defaultValue={order.quantity}
+              disabled={qtyPending}
+              className="h-7 w-20 rounded-md border border-gray-200 bg-white px-2 text-xs font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition disabled:opacity-60"
+            />
+            <span className="text-[10px] text-gray-400">{unit}</span>
+            <button
+              type="submit"
+              disabled={qtyPending}
+              className="text-[10px] font-semibold text-gray-500 hover:text-gray-900 disabled:opacity-50"
+            >
+              {qtyPending ? 'Saving…' : 'Update'}
+            </button>
+          </form>
+        ) : (
+          <p className="text-xs font-mono font-semibold text-gray-900 tabular-nums flex-1">
+            {order.quantity.toFixed(order.quantity % 1 === 0 ? 0 : 2)} <span className="text-[10px] text-gray-400 font-sans font-normal">{unit}</span>
+          </p>
+        )}
+
+        {showReceiveAction && (
+          <form action={recvAction} className="ml-auto">
+            <input type="hidden" name="order_id" value={order.id} />
+            <button
+              type="submit"
+              disabled={recvPending}
+              className="rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+            >
+              {recvPending ? 'Receiving…' : 'Mark received'}
+            </button>
+          </form>
+        )}
+      </div>
+
+      {error && <p className="mt-1.5 text-[10px] text-red-600">{error}</p>}
+    </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// PlaceOrderButton — bulk-flip drafts → ordered. The dark commit
+// at the bottom of the cart's draft section.
+// ----------------------------------------------------------------
+function PlaceOrderButton({ draftCount }: { draftCount: number }) {
+  const [state, action, pending] = useActionState(placeAllDrafts, null)
+  return (
+    <form action={action}>
+      <button
+        type="submit"
+        disabled={pending || draftCount === 0}
+        className="w-full rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      >
+        {pending ? 'Placing…' : `Place order · ${draftCount} ${draftCount === 1 ? 'item' : 'items'}`}
+      </button>
+      {state?.error && <p className="mt-1.5 text-[10px] text-red-600">{state.error}</p>}
+    </form>
+  )
+}
+
+// ----------------------------------------------------------------
+// Default restock quantity for a quick-add. Uses the threshold as
+// the floor — managers can refine in the drawer if they want a
+// bigger or smaller order. Conservative starting point that always
+// produces a plausible draft, even when stock isn't tracked yet.
+// ----------------------------------------------------------------
+function defaultRestockQty(item: Item): number {
+  const t = item.threshold || 1
+  return Math.max(t, 1)
+}
+
+// ----------------------------------------------------------------
+// ItemRow — replenishment-discovery row. Reads left-to-right:
+//
+//   [stripe] Item name                       Est. stock  • Status  [cart]
+//            type · Threshold N unit
+//
+// Left:   thin status-colored stripe (red/amber/green/gray) for
+//         at-a-glance scanning. Item name on top; supporting meta
+//         line carries type context + the threshold target.
+// Right:  one tight cluster — current stock value (the strongest
+//         scanning anchor on the right) → status text → cart
+//         action. Reads as "where we are now → next move."
+//
+// Selected: bg + stripe both shift blue so the row open in the
+// drawer is unmistakable without becoming loud.
+// ----------------------------------------------------------------
+function ItemRow({ item, draftLine, selected, onOpen }: {
+  item: Item
+  draftLine: RestockOrder | null
+  selected: boolean
+  onOpen: () => void
+}) {
+  const stockColor =
+    item.estimated === null ? 'text-gray-300'
+      : item.estimated <= 0 ? 'text-red-600'
+        : item.status === 'low' ? 'text-amber-700'
+          : 'text-gray-900'
+  const typeLabel = item.recipeLinks > 0
+    ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
+    : 'Standalone item'
+
+  // Left-edge stripe — status semantics by default, swaps to blue
+  // when the row is selected so "this is the row I'm inspecting"
+  // reads even faster than the status itself.
+  const stripeClass = selected
+    ? 'bg-blue-500'
+    : item.status === 'out'      ? 'bg-red-500'
+      : item.status === 'low'    ? 'bg-amber-500'
+        : item.status === 'ok'   ? 'bg-green-500'
+          : 'bg-gray-300'
+
+  // Inline status — colored dot + label, no pill chrome.
+  const statusTextClass =
+    item.status === 'out'      ? 'text-red-600'
+      : item.status === 'low'  ? 'text-amber-600'
+        : item.status === 'ok' ? 'text-green-700'
+          : 'text-gray-500'
+  const statusDotClass =
+    item.status === 'out'      ? 'bg-red-500'
+      : item.status === 'low'  ? 'bg-amber-500'
+        : item.status === 'ok' ? 'bg-green-500'
+          : 'bg-gray-400'
+  const statusLabel = STATUS[item.status].label
+
+  return (
+    <tr
+      onClick={onOpen}
+      className={`group cursor-pointer transition-all ${
+        selected
+          // Selected: stronger blue tint + 2px blue inset ring at
+          // 30% alpha gives clear "this row is open in the drawer"
+          // recognition without going loud.
+          ? 'bg-blue-50 shadow-[inset_0_0_0_2px_rgba(59,130,246,0.30)]'
+          // Hover: full gray-50 (was /80) + a soft 1px gray inset
+          // line so the row reads as a discrete inspectable object
+          // when the cursor lands on it. Subtle but present.
+          : 'hover:bg-gray-50 hover:shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]'
+      }`}
+    >
+      {/* Item — left-edge stripe + name + meta line. py-4 (bumped
+          from py-3.5) gives each row a touch more vertical
+          presence so the list reads as objects, not lines. */}
+      <td className="relative px-6 py-4">
+        <span
+          className={`absolute left-0 top-0 bottom-0 w-[3px] ${stripeClass}`}
+          aria-hidden
+        />
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900 truncate group-hover:text-blue-700 transition-colors">
+            {item.name}
+          </p>
+          <p className="mt-0.5 text-[11px] text-gray-500 truncate">
+            <span>{typeLabel}</span>
+            <span className="text-gray-300 mx-1.5">·</span>
+            <span>
+              Threshold{' '}
+              <span className="font-mono tabular-nums text-gray-600">
+                {item.threshold.toFixed(2)}
+              </span>{' '}
+              {item.unitOfMeasure}
+            </span>
+          </p>
         </div>
       </td>
 
-      {/* Estimated stock */}
-      <td className="px-5 py-3 text-right">
+      {/* Right cluster — Est. stock anchors the scan, then status,
+          then the cart action. Tight padding (pl-2 pr-1.5 / px-1.5 /
+          pl-1.5 pr-4) collapses the gaps between them so they read
+          as one decision zone rather than three independent
+          columns. */}
+      <td className="pl-2 pr-1.5 py-4 text-right whitespace-nowrap">
         {item.estimated !== null ? (
-          <div className="inline-flex items-baseline gap-1 font-mono">
-            <span className={`text-base font-bold tabular-nums ${
-              item.estimated <= 0 ? 'text-red-600'
-                : item.status === 'low' ? 'text-amber-700'
-                  : 'text-gray-900'
-            }`}>{item.estimated.toFixed(2)}</span>
-            <span className="text-[10px] text-gray-400">{item.unitOfMeasure}</span>
-          </div>
+          <span className="inline-flex items-baseline gap-1 font-mono">
+            <span className={`text-base font-bold tabular-nums ${stockColor}`}>
+              {item.estimated.toFixed(2)}
+            </span>
+            <span className="text-[10px] font-medium text-gray-400">{item.unitOfMeasure}</span>
+          </span>
         ) : (
           <span className="text-gray-300 text-xs">—</span>
         )}
       </td>
 
-      {/* Threshold — read-only in row, editable in panel */}
-      <td className="px-5 py-3 text-right">
-        <span className="inline-flex items-baseline gap-1 font-mono text-xs text-gray-500">
-          <span className="tabular-nums">{item.threshold.toFixed(2)}</span>
-          <span className="text-[10px] text-gray-400">{item.unitOfMeasure}</span>
+      <td className="px-1.5 py-4 whitespace-nowrap">
+        <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${statusTextClass}`}>
+          <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass}`} />
+          {statusLabel}
         </span>
       </td>
 
-      {/* Status */}
-      <td className="px-5 py-3">
-        <span className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full ${st.color}`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${st.dot}`} />
-          {st.label}
-        </span>
-      </td>
-
-      {/* Actions */}
-      <td className="px-5 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-        <div className="relative inline-block" ref={menuRef}>
-          <button type="button" onClick={() => { setMenuOpen(!menuOpen); setDeleteError(null) }}
-            className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded hover:bg-gray-100">
+      {/* Cart icon — final action in the right cluster. The button
+          picks up emphasis from the row hover via group-hover, so
+          the action affordance brightens together with the row —
+          one signal, two surfaces. */}
+      <td className="pl-1.5 pr-4 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+        {draftLine ? (
+          <button
+            type="button"
+            onClick={onOpen}
+            title={`In cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
+            aria-label="In cart"
+            className="relative inline-flex items-center justify-center w-8 h-8 rounded-md bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 group-hover:border-blue-300 transition-colors"
+          >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v.01M12 12v.01M12 19v.01" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
+            <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[14px] h-[14px] rounded-full bg-blue-600 text-white text-[9px] font-bold px-0.5 leading-none">
+              {Math.floor(draftLine.quantity)}
+            </span>
           </button>
-
-          {menuOpen && (
-            <div className="absolute right-0 top-full mt-1 w-52 bg-white rounded-lg border border-gray-200 shadow-lg z-20 py-1">
-              <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase">Stock</p>
-              <Link href="/inventory/new-count" onClick={() => setMenuOpen(false)}
-                className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Record count</Link>
-              <Link href="/inventory/new-transaction" onClick={() => setMenuOpen(false)}
-                className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">Log transaction</Link>
-
-              <div className="my-1 border-t border-gray-100" />
-
-              <p className="px-3 py-1 text-[10px] font-semibold text-gray-400 uppercase">Lifecycle</p>
-              <form action={archiveInventoryItem}>
-                <input type="hidden" name="item_id" value={item.id} />
-                <button type="submit" onClick={() => setMenuOpen(false)}
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
-                  Archive item
-                </button>
-              </form>
-
-              {item.hasDependencies ? (
-                <div className="px-3 py-2">
-                  <p className="text-xs text-gray-400">Delete unavailable</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">Has linked recipes, counts, or transactions. Use archive instead.</p>
-                </div>
-              ) : (
-                <button type="button" onClick={handleDelete}
-                  className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50">
-                  Delete item
-                </button>
-              )}
-
-              {deleteError && <p className="px-3 py-1 text-[10px] text-red-500">{deleteError}</p>}
-            </div>
-          )}
-        </div>
+        ) : (
+          <form action={quickAddToOrder} className="inline-block">
+            <input type="hidden" name="inventory_item_id" value={item.id} />
+            <input type="hidden" name="quantity" value={defaultRestockQty(item)} />
+            <button
+              type="submit"
+              title="Add to cart"
+              aria-label="Add to cart"
+              className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-900 hover:border-gray-300 group-hover:border-gray-300 group-hover:text-gray-700 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            </button>
+          </form>
+        )}
       </td>
     </tr>
   )
@@ -800,68 +1194,6 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
         {new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
       </span>
     </li>
-  )
-}
-
-// ----------------------------------------------------------------
-// ReplenishmentSection — drawer subsection that hosts the restock
-// workflow for a single item.
-//
-// Three states:
-//   - active orders exist  → list them with status + next action
-//   - none, form closed    → "+ Create restock order" CTA
-//   - none, form open      → inline create form
-//
-// Stock is only touched when an order is marked received; that's
-// handled by the markRestockReceived server action and shows up
-// here as the active order disappearing from this list (it moves
-// to terminal 'received' status, which the page-level fetch
-// excludes).
-// ----------------------------------------------------------------
-function ReplenishmentSection({ item, orders }: { item: Item; orders: RestockOrder[] }) {
-  const [creating, setCreating] = useState(false)
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Replenishment</p>
-        {!creating && orders.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="text-[11px] text-gray-500 hover:text-gray-700"
-          >
-            + Add another
-          </button>
-        )}
-      </div>
-
-      {orders.length === 0 && !creating && (
-        <button
-          type="button"
-          onClick={() => setCreating(true)}
-          className="w-full rounded-lg border border-gray-200/80 bg-white px-3 py-2.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-        >
-          + Create restock order
-        </button>
-      )}
-
-      {orders.length > 0 && (
-        <ul className="space-y-2">
-          {orders.map((order) => (
-            <RestockOrderRow key={order.id} order={order} unit={item.unitOfMeasure} />
-          ))}
-        </ul>
-      )}
-
-      {creating && (
-        <div className={orders.length > 0 ? 'mt-3' : ''}>
-          <CreateRestockForm
-            item={item}
-            onClose={() => setCreating(false)}
-          />
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -974,18 +1306,16 @@ function CreateRestockForm({ item, onClose }: { item: Item; onClose: () => void 
 }
 
 // ----------------------------------------------------------------
-// RestockOrderRow — single active order in the Replenishment list.
+// RestockOrderRow — single line inside the drawer's Replenishment
+// section. Two flavors:
 //
-// Shows a status pill, the quantity + vendor + optional cost, and
-// the next-step action(s). Action progression:
-//   draft   → "Mark ordered" (white outlined) + "Cancel" (red text)
-//   ordered → "Mark received" (dark filled, primary commit) + "Cancel"
-//
-// Marking received is what actually bumps stock — that commit lives
-// here, not in the create form.
+//   draft   → status pill, qty + vendor/cost detail, Cancel.
+//             Placement (draft → ordered) happens in the rail
+//             cart's bulk Place order action — not here.
+//   ordered → status pill, readonly summary, "Mark received"
+//             (the dark commit that bumps stock), Cancel.
 // ----------------------------------------------------------------
 function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string }) {
-  const [orderedState, orderedAction, orderedPending] = useActionState(markRestockOrdered, null)
   const [receivedState, receivedAction, receivedPending] = useActionState(markRestockReceived, null)
   const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
 
@@ -996,7 +1326,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
     : 'bg-blue-50 text-blue-700'
   const statusDot = isDraft ? 'bg-gray-400' : 'bg-blue-500'
 
-  const error = orderedState?.error ?? receivedState?.error ?? cancelState?.error
+  const error = receivedState?.error ?? cancelState?.error
 
   return (
     <li className="rounded-lg border border-gray-200 bg-white px-3 py-2.5">
@@ -1020,16 +1350,9 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
 
       <div className="mt-2.5 flex items-center gap-2">
         {isDraft ? (
-          <form action={orderedAction} className="flex-1">
-            <input type="hidden" name="order_id" value={order.id} />
-            <button
-              type="submit"
-              disabled={orderedPending}
-              className="w-full rounded-md border border-gray-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
-            >
-              {orderedPending ? 'Saving…' : 'Mark ordered'}
-            </button>
-          </form>
+          <p className="flex-1 text-[10px] text-gray-400">
+            Place from the order builder when ready.
+          </p>
         ) : (
           <form action={receivedAction} className="flex-1">
             <input type="hidden" name="order_id" value={order.id} />
@@ -1059,6 +1382,98 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
         <p className="mt-1.5 text-[11px] text-red-600">{error}</p>
       )}
     </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// ItemDestructiveSection — drawer footer block for Archive / Delete.
+// Replaces the old row-level kebab menu so the list stays focused
+// on stock + ordering. Same conventions as Staffing's destructive
+// confirms: text-only at rest, expand-into-confirm on click.
+// ----------------------------------------------------------------
+function ItemDestructiveSection({ item }: { item: Item }) {
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
+
+  const handleDelete = async () => {
+    setDeletePending(true)
+    setDeleteError(null)
+    const fd = new FormData()
+    fd.set('item_id', item.id)
+    const result = await deleteInventoryItem(fd)
+    if (result?.error) {
+      setDeleteError(result.error)
+      setDeletePending(false)
+    }
+    // On success the page revalidates and the drawer closes via the
+    // selectedId-not-found effect upstream — no local cleanup needed.
+  }
+
+  return (
+    <div className="pt-4 mt-2 border-t border-gray-100">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">Manage</p>
+
+      <div className="flex items-center gap-3">
+        <form action={archiveInventoryItem}>
+          <input type="hidden" name="item_id" value={item.id} />
+          <button
+            type="submit"
+            className="text-[11px] font-medium text-gray-600 hover:text-gray-900"
+          >
+            Archive item
+          </button>
+        </form>
+
+        <span className="text-gray-200">·</span>
+
+        {item.hasDependencies ? (
+          <span
+            className="text-[11px] text-gray-300"
+            title="Has linked recipes, counts, or transactions. Archive instead."
+          >
+            Delete unavailable
+          </span>
+        ) : !confirmDelete ? (
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            className="text-[11px] font-medium text-red-600 hover:text-red-700"
+          >
+            Delete item
+          </button>
+        ) : (
+          <span className="text-[11px] text-gray-400">Confirm below</span>
+        )}
+      </div>
+
+      {confirmDelete && !item.hasDependencies && (
+        <div className="mt-2.5 rounded-lg border border-red-200 bg-red-50/60 p-3">
+          <p className="text-xs font-semibold text-red-900">Delete {item.name}?</p>
+          <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
+            This is permanent. Use Archive if you might restore it later.
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deletePending}
+              className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
+            >
+              {deletePending ? 'Deleting…' : 'Confirm delete'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setConfirmDelete(false); setDeleteError(null) }}
+              className="text-[11px] text-gray-500 hover:text-gray-700"
+            >
+              Cancel
+            </button>
+          </div>
+          {deleteError && <p className="mt-1.5 text-[11px] text-red-700">{deleteError}</p>}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -1145,91 +1560,183 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
     .filter((tx) => tx.inventoryItemId === item.id)
     .slice(0, 5)
 
-  const body = (
-    <>
-      {/* Sticky header — eyebrow + title + status & type pills.
-          Matches Staffing's DrawerShell rhythm so the two
-          pillars feel like the same drawer family. */}
-      <header className="sticky top-0 bg-white border-b border-gray-100 px-6 py-5 z-10 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">Inventory item</p>
-          <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
-          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-            <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
-              <span className={`w-1 h-1 rounded-full ${st.dot}`} />
-              {st.label}
-            </span>
-            <span
-              className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600"
-              title={typeTitle}
-            >
-              {typeLabel}
-            </span>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close"
-          className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
-        >
-          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </header>
+  // Below-threshold gap drives the Stock overview card's headline.
+  const belowThresholdBy =
+    item.estimated !== null && item.estimated < item.threshold
+      ? item.threshold - item.estimated
+      : null
 
-      <div className="p-6 space-y-6">
-          {/* ---- STOCK SECTION: Est. stock + Threshold ---- */}
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">Stock</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-gray-50 border border-gray-100 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Est. stock</p>
-                <div className="mt-1 flex items-baseline gap-1">
-                  <span className={`text-xl font-bold font-mono tabular-nums ${
-                    item.estimated === null ? 'text-gray-300'
-                      : item.estimated <= 0 ? 'text-red-600'
-                        : item.status === 'low' ? 'text-amber-700'
-                          : 'text-gray-900'
-                  }`}>
-                    {item.estimated !== null ? item.estimated.toFixed(2) : '—'}
-                  </span>
-                  <span className="text-[10px] text-gray-400">{item.unitOfMeasure}</span>
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
+      <aside
+        className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
+        aria-label={`${item.name} workspace`}
+      >
+        {/* Sticky header — same family as Staffing's drawers. The
+            type/recipe pill carries first-class context for both
+            recipe-linked ingredients and standalone supplies. */}
+        <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">Inventory item</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
+            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
+                <span className={`w-1 h-1 rounded-full ${st.dot}`} />
+                {st.label}
+              </span>
+              <span
+                className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600"
+                title={typeTitle}
+              >
+                {typeLabel}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
+          >
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* ---- 3-STAT GRID — current stock, threshold, unit.
+                 Mirrors the mockup's stat band; these are the
+                 numbers a manager checks first. Threshold is
+                 click-to-edit via ThresholdStat. */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Current stock</p>
+              <div className="mt-1 flex items-baseline gap-1">
+                <span className={`text-base font-semibold font-mono tabular-nums ${
+                  item.estimated === null ? 'text-gray-300'
+                    : item.estimated <= 0 ? 'text-red-600'
+                      : item.status === 'low' ? 'text-amber-700'
+                        : 'text-gray-900'
+                }`}>
+                  {item.estimated !== null ? item.estimated.toFixed(2) : '—'}
+                </span>
+                <span className="text-[10px] text-gray-400">{item.unitOfMeasure}</span>
+              </div>
+            </div>
+            <ThresholdStat
+              value={threshold}
+              onChange={setThreshold}
+              onSave={saveThreshold}
+              dirty={thresholdDirty}
+              saving={thresholdSaving}
+              saved={thresholdSaved}
+              unit={item.unitOfMeasure}
+              editing={thresholdEditing}
+              onEditingChange={setThresholdEditing}
+            />
+            <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Unit</p>
+              <p className="mt-1 text-base font-semibold text-gray-900 truncate">{item.unitOfMeasure}</p>
+            </div>
+          </div>
+
+          {/* ---- STOCK OVERVIEW — narrative on stock health,
+                 last count, counting method. Replaces a generic
+                 "Stock" eyebrow with a card the mockup calls out
+                 explicitly. */}
+          <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            <p className="text-xs font-semibold text-gray-900 mb-2.5">Stock overview</p>
+            <div className="grid grid-cols-2 gap-3 text-[11px]">
+              <div>
+                {belowThresholdBy !== null ? (
+                  <>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400">Below threshold by</p>
+                    <p className="text-base font-bold font-mono tabular-nums text-red-600 mt-0.5">
+                      {belowThresholdBy.toFixed(2)} {item.unitOfMeasure}
+                    </p>
+                    <p className="text-[10px] text-gray-500 leading-relaxed mt-1">
+                      Reorder soon to avoid stockouts.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[10px] uppercase tracking-wide text-gray-400">Health</p>
+                    <p className="text-sm font-semibold text-gray-900 mt-0.5">
+                      {item.status === 'no_count' ? 'No count yet' : 'Above threshold'}
+                    </p>
+                    <p className="text-[10px] text-gray-500 leading-relaxed mt-1">
+                      {item.status === 'no_count'
+                        ? 'Record a first count to start tracking.'
+                        : 'Stock is comfortably above the reorder line.'}
+                    </p>
+                  </>
+                )}
+              </div>
+              <div className="space-y-2.5">
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400">Last count</p>
+                  <p className="text-xs font-medium text-gray-900 mt-0.5">
+                    {hasCount
+                      ? `${item.lastCount!.toFixed(2)} ${item.unitOfMeasure}`
+                      : 'No count recorded'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] uppercase tracking-wide text-gray-400">Counting method</p>
+                  <p className="text-xs font-medium text-gray-900 mt-0.5">Manual</p>
                 </div>
               </div>
-              <ThresholdStat
-                value={threshold}
-                onChange={setThreshold}
-                onSave={saveThreshold}
-                dirty={thresholdDirty}
-                saving={thresholdSaving}
-                saved={thresholdSaved}
-                unit={item.unitOfMeasure}
-                editing={thresholdEditing}
-                onEditingChange={setThresholdEditing}
-              />
             </div>
           </div>
 
-          {/* ---- PRIMARY ACTION: Update stock count ---- */}
-          <div>
-            <div className="flex items-baseline justify-between gap-2 mb-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Update count</p>
-              {hasCount && (
-                <span className="text-[10px] text-gray-400 tabular-nums whitespace-nowrap">
-                  Last {item.lastCount!.toFixed(2)} {item.unitOfMeasure}
-                </span>
-              )}
+          {/* ---- RECENT ACTIVITY — item-scoped movement. */}
+          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+            <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+              <p className="text-xs font-semibold text-gray-900">Recent activity</p>
+              <span className="text-[10px] text-gray-400">
+                {itemMovement.length === 0 ? 'No movement' : `Last ${itemMovement.length}`}
+              </span>
             </div>
-            <h3 className="text-sm font-semibold text-gray-900">{countCtaLabel}</h3>
-            <p className="text-[11px] text-gray-500 leading-relaxed mt-0.5 mb-3">
-              {hasCount
-                ? 'Enter the quantity you physically have on hand right now.'
-                : 'Enter the current quantity on hand to start tracking.'}
-            </p>
+            {itemMovement.length === 0 ? (
+              <p className="px-4 py-5 text-center text-[11px] text-gray-400">
+                Counts and transactions for this item will surface here.
+              </p>
+            ) : (
+              <ul className="divide-y divide-gray-50">
+                {itemMovement.map((tx) => (
+                  <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} />
+                ))}
+              </ul>
+            )}
+          </div>
 
-            <form action={countAction} className="space-y-2">
+          {/* ---- REPLENISH — Add to cart with quantity stepper +
+                 active order lines + detail form. The mockup's
+                 shopping-cart-oriented section. */}
+          <ReplenishSection
+            item={item}
+            orders={restockOrders}
+          />
+
+          {/* ---- UPDATE COUNT — kept available but compact; the
+                 mockup deemphasizes counting in favor of replenish,
+                 so this lives near the bottom rather than at the
+                 top of the drawer. */}
+          <details className="group rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+            <summary className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors list-none">
+              <div>
+                <p className="text-xs font-semibold text-gray-900">{countCtaLabel}</p>
+                <p className="text-[11px] text-gray-500 mt-0.5">
+                  {hasCount ? 'Adjust the quantity on hand' : 'Record the first physical count'}
+                </p>
+              </div>
+              <svg className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            <form action={countAction} className="border-t border-gray-100 px-4 py-3 space-y-2">
               <input type="hidden" name="inventory_item_id" value={item.id} />
               <div className="relative">
                 <input
@@ -1239,67 +1746,184 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                   min="0"
                   step="0.01"
                   placeholder="0.00"
-                  className="w-full rounded-lg border border-gray-200 bg-white px-3.5 py-3 pr-14 text-lg font-mono font-bold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition"
+                  className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 pr-14 text-sm font-mono font-semibold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                 />
-                <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-medium text-gray-400">{item.unitOfMeasure}</span>
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-medium text-gray-400">{item.unitOfMeasure}</span>
               </div>
               <button
                 type="submit"
                 disabled={countPending}
-                className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-60 transition-colors"
+                className="w-full h-10 rounded-lg bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
               >
                 {countPending ? 'Saving…' : 'Save count'}
               </button>
+              {countState?.error && (
+                <p className="text-[11px] text-red-600">{countState.error}</p>
+              )}
             </form>
-            {countState?.error && (
-              <p className="text-[11px] text-red-600 mt-2">{countState.error}</p>
-            )}
-          </div>
+          </details>
 
-          {/* ---- REPLENISHMENT — restock workflow lives here.
-                 Stock changes only on receipt; this section holds
-                 active orders (draft + ordered) and the inline
-                 create form. Future supplier ordering / payment
-                 flows extend this section without restructuring. */}
-          <ReplenishmentSection
-            item={item}
-            orders={restockOrders}
-          />
-
-          {/* ---- ITEM-SCOPED MOVEMENT — last few transactions for
-                 THIS item only. Calm rail-sized rendering: glyph
-                 + type label + qty + date, item name omitted
-                 because we're already in the item context. */}
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">Movement</p>
-            {itemMovement.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-3 py-4 text-center">
-                <p className="text-[11px] text-gray-500">No movement recorded yet</p>
-                <p className="text-[10px] text-gray-400 mt-0.5 leading-relaxed">
-                  Counts and transactions for this item will surface here.
-                </p>
-              </div>
-            ) : (
-              <ul className="rounded-lg border border-gray-200 bg-white divide-y divide-gray-50 overflow-hidden">
-                {itemMovement.map((tx) => (
-                  <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} />
-                ))}
-              </ul>
-            )}
-          </div>
+          {/* ---- DESTRUCTIVE SECTION — archive + delete moved
+                 here from the row's old kebab menu. */}
+          <ItemDestructiveSection item={item} />
         </div>
-    </>
-  )
-
-  return (
-    <>
-      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
-      <aside
-        className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-xl z-50 overflow-y-auto"
-        aria-label={`${item.name} workspace`}
-      >
-        {body}
       </aside>
     </>
+  )
+}
+
+// ----------------------------------------------------------------
+// ReplenishSection — replaces the prior ReplenishmentSection with
+// a shopping-cart-style "Add to cart" surface as the primary
+// interaction. Active drafts/ordered for THIS item are shown above
+// the stepper; the stepper drives quickAddToOrder for quantity-only
+// adds, and a "Add details" toggle reveals the full CreateRestockForm
+// when the manager wants vendor / cost / notes.
+// ----------------------------------------------------------------
+function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[] }) {
+  const [qty, setQty] = useState<number>(defaultRestockQty(item))
+  const [showDetails, setShowDetails] = useState(false)
+  const drafts = orders.filter((o) => o.status === 'draft')
+  const ordered = orders.filter((o) => o.status === 'ordered')
+
+  const projectedAfterAdd =
+    item.estimated !== null ? item.estimated + qty : qty
+
+  // Step controls: increment by 1 for whole-unit items, 0.5 for
+  // fractional. We don't track fractional preference per item, so
+  // use 1 by default and let manual entry handle decimals.
+  const step = 1
+  const dec = () => setQty((n) => Math.max(step, Math.round((n - step) * 100) / 100))
+  const inc = () => setQty((n) => Math.round((n + step) * 100) / 100)
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+        <p className="text-xs font-semibold text-gray-900">Replenish</p>
+        {(drafts.length > 0 || ordered.length > 0) && (
+          <span className="text-[10px] text-gray-400">
+            {drafts.length > 0 && `${drafts.length} draft${drafts.length === 1 ? '' : 's'}`}
+            {drafts.length > 0 && ordered.length > 0 && ' · '}
+            {ordered.length > 0 && `${ordered.length} placed`}
+          </span>
+        )}
+      </div>
+
+      <div className="px-4 py-4 space-y-3">
+        {/* Active orders for THIS item — drafts first, then ordered.
+            Each line carries its own actions (cancel, mark received). */}
+        {drafts.length > 0 && (
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-1.5">In your cart</p>
+            <ul className="space-y-2">
+              {drafts.map((order) => (
+                <RestockOrderRow key={order.id} order={order} unit={item.unitOfMeasure} />
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {ordered.length > 0 && (
+          <div>
+            <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-1.5">Awaiting receipt</p>
+            <ul className="space-y-2">
+              {ordered.map((order) => (
+                <RestockOrderRow key={order.id} order={order} unit={item.unitOfMeasure} />
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Add-to-cart stepper + primary commit. */}
+        <div className={drafts.length > 0 || ordered.length > 0 ? 'pt-3 border-t border-gray-100' : ''}>
+          <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-2">Add to cart</p>
+
+          {/* Stepper row: - [qty input] + [unit readout] */}
+          <div className="flex items-center gap-2">
+            <div className="inline-flex items-stretch rounded-lg border border-gray-200 bg-white overflow-hidden flex-1 max-w-[200px]">
+              <button
+                type="button"
+                onClick={dec}
+                className="px-3 text-gray-500 hover:bg-gray-50 transition-colors"
+                aria-label="Decrease quantity"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
+                </svg>
+              </button>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                value={qty}
+                onChange={(e) => {
+                  const n = parseFloat(e.target.value)
+                  if (Number.isFinite(n) && n > 0) setQty(n)
+                }}
+                className="flex-1 min-w-0 text-center text-sm font-mono font-semibold tabular-nums border-x border-gray-200 focus:outline-none focus:bg-blue-50/40"
+                aria-label="Quantity"
+              />
+              <button
+                type="button"
+                onClick={inc}
+                className="px-3 text-gray-500 hover:bg-gray-50 transition-colors"
+                aria-label="Increase quantity"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
+            <span className="text-xs text-gray-500">{item.unitOfMeasure}</span>
+          </div>
+
+          {/* Projection line — keeps the manager honest about what
+              this add will do to stock once received. */}
+          <p className="mt-2 text-[11px] text-gray-500">
+            Est. after receipt:{' '}
+            <span className="font-mono tabular-nums font-medium text-gray-900">
+              {projectedAfterAdd.toFixed(2)} {item.unitOfMeasure}
+            </span>
+          </p>
+
+          {/* Add to cart — primary commit. quickAddToOrder takes
+              just qty + item id so this stays a one-click add. */}
+          <form action={quickAddToOrder} className="mt-3">
+            <input type="hidden" name="inventory_item_id" value={item.id} />
+            <input type="hidden" name="quantity" value={qty} />
+            <button
+              type="submit"
+              disabled={qty <= 0}
+              className="w-full h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+              Add to cart
+            </button>
+          </form>
+
+          {/* Detail form — vendor + expected cost + notes. Same
+              CreateRestockForm we had before, just gated behind a
+              text-link toggle so the simple add stays simple. */}
+          {!showDetails ? (
+            <button
+              type="button"
+              onClick={() => setShowDetails(true)}
+              className="mt-2.5 w-full text-center text-[11px] font-medium text-gray-500 hover:text-gray-700"
+            >
+              + Add details (vendor, expected cost, notes)
+            </button>
+          ) : (
+            <div className="mt-3">
+              <CreateRestockForm
+                item={item}
+                onClose={() => setShowDetails(false)}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }

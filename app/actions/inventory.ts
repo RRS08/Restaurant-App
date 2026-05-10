@@ -480,3 +480,100 @@ export async function cancelRestockOrder(
   revalidatePath('/inventory')
   return null
 }
+
+// ----------------------------------------------------------------
+// quickAddToOrder — thin wrapper around createRestockOrder for the
+// inventory row's "+ Add" button. React's plain `<form action>`
+// expects `(formData) => void | Promise<void>`, but the canonical
+// createRestockOrder is a useActionState-style action with the
+// `(prevState, formData)` signature. This wrapper bridges the gap
+// without forcing the row into useActionState (which would mean
+// one hook per row in the hot list).
+// ----------------------------------------------------------------
+export async function quickAddToOrder(formData: FormData) {
+  await createRestockOrder(null, formData)
+}
+
+// ----------------------------------------------------------------
+// updateRestockQuantity — edit the quantity on a draft order.
+// Only allowed while the order is still 'draft'; once placed, the
+// quantity is locked because the manager has already committed it
+// to the vendor. The Order Builder rail uses this for inline qty
+// edits on cart line items.
+// ----------------------------------------------------------------
+export async function updateRestockQuantity(
+  prevState: { error: string } | null,
+  formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const orderId = (formData.get('order_id') as string)?.trim()
+  if (!orderId) return { error: 'Missing order id.' }
+
+  const qtyRaw = formData.get('quantity') as string
+  const quantity = parseFloat(qtyRaw)
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    return { error: 'Quantity must be greater than zero.' }
+  }
+
+  const { data: order } = await ctx.supabase
+    .from('restock_orders')
+    .select('id, status, location_id')
+    .eq('id', orderId)
+    .single()
+  if (!order) return { error: 'Order not found.' }
+  if (order.status !== 'draft') {
+    return { error: 'Quantity can only be edited while the order is a draft.' }
+  }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase
+    .from('restock_orders')
+    .update({ quantity })
+    .eq('id', orderId)
+  if (error) return { error: formatError('restock order', error) }
+
+  revalidatePath('/inventory')
+  return null
+}
+
+// ----------------------------------------------------------------
+// placeAllDrafts — flip every draft restock order in the manager's
+// restaurant to 'ordered' in one shot. This is the cart's "Place
+// order" action; per-line-item receipt then happens independently
+// as goods arrive (markRestockReceived already handles that).
+//
+// We deliberately don't bundle drafts into a parent purchase-order
+// row in this pass — line-item lifecycle is the right granularity
+// for partial deliveries and multi-vendor splits.
+// ----------------------------------------------------------------
+export async function placeAllDrafts(
+  prevState: { error: string } | null,
+  _formData: FormData
+) {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  // Confirm there's something to place. Empty cart = no-op.
+  const { count } = await ctx.supabase
+    .from('restock_orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('status', 'draft')
+  if (!count || count === 0) {
+    return { error: 'No draft items to place.' }
+  }
+
+  const { error } = await ctx.supabase
+    .from('restock_orders')
+    .update({ status: 'ordered', ordered_at: new Date().toISOString() })
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('status', 'draft')
+  if (error) return { error: formatError('restock orders', error) }
+
+  await logAudit(ctx, null, 'place_restock_drafts', 'restock_orders', undefined, { count })
+  revalidatePath('/inventory')
+  return null
+}

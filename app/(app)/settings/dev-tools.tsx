@@ -21,6 +21,7 @@ import {
   resetReadiness,
   resetPillarOverrides,
 } from '@/app/actions/dev'
+import { setPaymentProviderConfig } from '@/app/actions/payments'
 import {
   connectExternalPos,
   syncExternalPosMenu,
@@ -531,6 +532,75 @@ ord_0002,2026-04-12T14:00:00Z,12.50,cash,completed,itm_wings,Buffalo Wings,1,9.0
           </div>
         )}
       </div>
+
+      {/* ------------- 7. Stripe (test mode) keys ------------- */}
+      <StripeKeysSection />
+    </div>
+  )
+}
+
+// ================================================================
+// StripeKeysSection — owner-only Stripe test-mode setup.
+//
+// Writes the secret + publishable keys to the per-restaurant
+// `payment_provider_configs` + `payment_provider_secrets` tables via
+// the existing `setPaymentProviderConfig` server action. The secret
+// stays on the server (RLS gates the secrets table to owners). The
+// browser only ever sees the publishable key, surfaced separately
+// through `payment_provider_configs.publishable_key`.
+//
+// Intentionally scoped to the dev tools section — this is a
+// development-time setup path, not a polished settings page. Use
+// Stripe TEST keys only.
+// ================================================================
+function StripeKeysSection() {
+  const [state, action, pending] = useActionState(setPaymentProviderConfig, null)
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-5 mt-4">
+      <div className="mb-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Stripe · test mode</p>
+        <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Configure payment provider</h3>
+        <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
+          Paste your <code>sk_test_…</code> secret key and <code>pk_test_…</code> publishable key.
+          Secrets are stored per-restaurant under RLS and never exposed to the browser.
+          Required before the POS card workflow can request a Stripe Terminal connection token.
+        </p>
+      </div>
+      <form action={action} className="space-y-2">
+        <input type="hidden" name="provider" value="stripe" />
+        <label className="block">
+          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Secret key (sk_test_…)</span>
+          <input
+            type="password"
+            name="secret_key"
+            autoComplete="off"
+            required
+            placeholder="sk_test_..."
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-mono placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+          />
+        </label>
+        <label className="block">
+          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Publishable key (pk_test_…)</span>
+          <input
+            type="text"
+            name="publishable_key"
+            autoComplete="off"
+            placeholder="pk_test_..."
+            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-mono placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+          />
+        </label>
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            type="submit"
+            disabled={pending}
+            className="rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-60 transition-colors"
+          >
+            {pending ? 'Saving…' : 'Save Stripe keys'}
+          </button>
+          {state && 'ok' in state && <p className="text-[11px] text-green-700">{state.message}</p>}
+          {state && 'error' in state && <p className="text-[11px] text-red-600">{state.error}</p>}
+        </div>
+      </form>
     </div>
   )
 }

@@ -24,7 +24,7 @@ import {
   updateRestockQuantity,
   placeAllDrafts,
 } from '@/app/actions/inventory'
-import { cleanupDuplicateInventoryItems, mergeInventoryItems } from '@/app/actions/inventory-cleanup'
+import { cleanupDuplicateInventoryItems, mergeInventoryItems, runInventoryIntegrityChecks } from '@/app/actions/inventory-cleanup'
 
 interface Item {
   id: string; name: string; unitOfMeasure: string; threshold: number
@@ -80,7 +80,7 @@ type DrawerState =
   | { mode: 'merge-items' }
   | null
 
-export default function InventoryClient({ items, transactions, restockOrders, duplicateGroups = [], mergeableItems = [] }: {
+export default function InventoryClient({ items, transactions, restockOrders, duplicateGroups = [], mergeableItems = [], archivedInRecipes = [] }: {
   items: Item[]
   transactions: Transaction[]
   restockOrders: RestockOrder[]
@@ -94,6 +94,11 @@ export default function InventoryClient({ items, transactions, restockOrders, du
    *  drawer's pickers. Always available, even when the auto-banner
    *  doesn't fire (e.g., one duplicate was already archived). */
   mergeableItems?: { id: string; name: string; active: boolean }[]
+  /** Names of archived inventory items still referenced by active
+   *  recipe_components. Depletion writes to these archived ids land
+   *  on rows the page filters out of the table; one-click banner
+   *  triggers `runInventoryIntegrityChecks` which reactivates them. */
+  archivedInRecipes?: string[]
 }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -218,6 +223,17 @@ export default function InventoryClient({ items, transactions, restockOrders, du
           groups={duplicateGroups}
           onPickManually={() => setDrawer({ mode: 'merge-items' })}
         />
+      )}
+
+      {/* Archived-in-recipes banner.
+          Surfaces inventory_items that were archived while still
+          referenced by active recipe_components. POS depletion still
+          writes to the archived id; the page render filters those
+          rows out of the table; movement disappears. One click runs
+          `runInventoryIntegrityChecks`, which now auto-reactivates
+          these items so depletion lands on a visible row again. */}
+      {archivedInRecipes.length > 0 && (
+        <ArchivedInRecipesBanner names={archivedInRecipes} />
       )}
 
       {items.length === 0 ? (
@@ -1440,6 +1456,10 @@ function ItemDestructiveSection({ item }: { item: Item }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deletePending, setDeletePending] = useState(false)
+  // archiveInventoryItem is now useActionState-shaped so the inline
+  // archive button can surface the new "blocked because recipe-linked"
+  // error returned by the action's recipe-link guard.
+  const [archiveState, archiveAction, archivePending] = useActionState(archiveInventoryItem, null)
 
   const handleDelete = async () => {
     setDeletePending(true)
@@ -1460,13 +1480,14 @@ function ItemDestructiveSection({ item }: { item: Item }) {
       <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">Manage</p>
 
       <div className="flex items-center gap-3">
-        <form action={archiveInventoryItem}>
+        <form action={archiveAction}>
           <input type="hidden" name="item_id" value={item.id} />
           <button
             type="submit"
-            className="text-[11px] font-medium text-gray-600 hover:text-gray-900"
+            disabled={archivePending}
+            className="text-[11px] font-medium text-gray-600 hover:text-gray-900 disabled:opacity-60"
           >
-            Archive item
+            {archivePending ? 'Archiving…' : 'Archive item'}
           </button>
         </form>
 
@@ -1491,6 +1512,14 @@ function ItemDestructiveSection({ item }: { item: Item }) {
           <span className="text-[11px] text-gray-400">Confirm below</span>
         )}
       </div>
+
+      {/* Archive error — the action's recipe-link guard surfaces here
+          when the user tries to archive an item that's still in an
+          active recipe. Tells them to remove the recipe link first
+          instead of silently archiving into the invisible state. */}
+      {archiveState?.error && (
+        <p className="mt-2 text-[11px] text-amber-700 leading-relaxed">{archiveState.error}</p>
+      )}
 
       {confirmDelete && !item.hasDependencies && (
         <div className="mt-2.5 rounded-lg border border-red-200 bg-red-50/60 p-3">
@@ -2055,6 +2084,72 @@ function DuplicateMergeBanner({
             Pick manually
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// ArchivedInRecipesBanner — surfaces archived inventory_items still
+// referenced by active recipe_components. This is the smoking-gun
+// state for "POS depletion writes exist but stock movement isn't
+// visible" — the recipe forwards depletion to the archived id while
+// the Inventory table filters that row out. One click runs the
+// integrity check, which auto-reactivates these rows so depletion
+// lands on a visible item again.
+// ================================================================
+function ArchivedInRecipesBanner({ names }: { names: string[] }) {
+  const [pending, startTransition] = useTransition()
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const handleRepair = () => {
+    setResult(null)
+    startTransition(async () => {
+      const res = await runInventoryIntegrityChecks()
+      if (res?.error) {
+        setResult({ ok: false, message: res.error })
+      } else {
+        const reactivated = (res?.issues ?? []).find(
+          (i) => i.category === 'Reactivated recipe-linked items'
+        )
+        setResult({
+          ok: true,
+          message: reactivated?.message ?? 'Integrity check complete — no recipe-linked archived items found.',
+        })
+      }
+    })
+  }
+
+  const preview = names.slice(0, 3).join(', ')
+  const more = names.length > 3 ? `, +${names.length - 3} more` : ''
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+            Archived items still used in active recipes
+          </p>
+          <p className="mt-1 text-xs text-amber-800 leading-relaxed">
+            {names.length} archived inventory item{names.length === 1 ? '' : 's'} {names.length === 1 ? 'is' : 'are'} still
+            referenced by active recipes. POS depletion is being written to {names.length === 1 ? 'that row' : 'those rows'} — which the Inventory page
+            doesn&apos;t render — so stock movement disappears from view. Reactivate to make movement visible again.
+          </p>
+          <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">{preview}{more}</p>
+          {result && (
+            <p className={`mt-2 text-[11px] ${result.ok ? 'text-green-700' : 'text-red-700'}`}>
+              {result.message}
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={handleRepair}
+          disabled={pending}
+          className="flex-shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+        >
+          {pending ? 'Repairing…' : 'Reactivate items'}
+        </button>
       </div>
     </div>
   )

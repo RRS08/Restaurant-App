@@ -40,12 +40,14 @@
 // ----------------------------------------------------------------
 
 import { revalidatePath } from 'next/cache'
+import Stripe from 'stripe'
 import { createClient } from '@/lib/supabase/server'
 import {
   requireRestaurantOwner,
   requireLocationAccess,
   AuthzError,
 } from '@/lib/authz'
+import { getAuthContext, resolveLocationId } from '@/lib/auth'
 import {
   getPaymentAdapter,
   PaymentAdapterError,
@@ -464,6 +466,280 @@ export async function createPaymentIntent(
     message: `Payment intent ${normalized.status}.`,
     intentId: intentRow.id,
     clientSecret: normalized.clientSecret ?? null,
+  }
+}
+
+// ================================================================
+// 2b. createTerminalPaymentIntent (location-scoped, pre-sale)
+//
+// Native-POS Stripe Terminal flow needs a PaymentIntent BEFORE an
+// order row exists — the cashier hasn't finalized the sale yet, and
+// the sale must not be finalized until Stripe confirms the card-
+// present payment succeeded. So this action diverges from the
+// online-card `createPaymentIntent` above in three ways:
+//
+//   • It does not require an `order_id`. The intent is created with
+//     `order_id = null`; `verifyAndFinalizeSale` (inside createOrder)
+//     links the order afterward.
+//   • It creates the Stripe PaymentIntent with
+//     `payment_method_types: ['card_present']` and
+//     `capture_method: 'automatic'`, which is what Terminal needs.
+//     The existing adapter's `createPaymentSession` is fixed to
+//     `['card']` and is left untouched so the online-card flow
+//     stays intact.
+//   • Idempotency: the canonical `payment_intents.id` (uuid we
+//     generate before talking to Stripe) is used as the Stripe
+//     idempotency key, so a re-clicked "Charge card" with the same
+//     internal intent never spawns a duplicate Stripe intent.
+//
+// Form fields:
+//   amount      required — positive decimal total
+//   description optional
+//   currency    optional (defaults to 'USD')
+// ================================================================
+export async function createTerminalPaymentIntent(
+  prevState: Result | null,
+  formData: FormData
+): Promise<Result<{ ok: true; message: string; intentId: string; clientSecret: string }>> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const { locationId, error: locError } = await resolveLocationId(ctx)
+  if (locError) return { error: locError }
+
+  try {
+    await requireLocationAccess(ctx.restaurantId, locationId)
+  } catch (err) {
+    const mapped = authzErrorToResult(err)
+    if (mapped) return mapped
+    throw err
+  }
+
+  const amountRaw = (formData.get('amount') as string | null)?.trim()
+  const amount = amountRaw ? parseFloat(amountRaw) : NaN
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return { error: 'Amount must be greater than zero.' }
+  }
+
+  const currency = ((formData.get('currency') as string | null)?.trim() || 'USD').toUpperCase()
+  const description = (formData.get('description') as string | null)?.trim() || null
+
+  // 1. Insert canonical row first. We need its uuid as the Stripe
+  //    idempotency key before we talk to Stripe.
+  const { data: intentRow, error: insErr } = await ctx.supabase
+    .from('payment_intents')
+    .insert({
+      restaurant_id: ctx.restaurantId,
+      location_id: locationId,
+      order_id: null,
+      provider: 'stripe',
+      status: 'requires_action',
+      amount,
+      tip_amount: 0,
+      tax_amount: 0,
+      currency,
+    })
+    .select('id')
+    .single()
+  if (insErr || !intentRow) {
+    return { error: insErr?.message ?? 'Could not create payment intent.' }
+  }
+
+  // 2. Read the Stripe secret directly (same RLS-gated path
+  //    buildAdapterContext uses).
+  const { data: providerConfig } = await ctx.supabase
+    .from('payment_provider_configs')
+    .select('active, default_currency')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'stripe')
+    .maybeSingle()
+  if (!providerConfig?.active) {
+    return { error: 'Stripe is not configured for this restaurant.' }
+  }
+  const { data: secretRow } = await ctx.supabase
+    .from('payment_provider_secrets')
+    .select('secret_key')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'stripe')
+    .maybeSingle()
+  if (!secretRow?.secret_key) {
+    return { error: 'Stripe credentials are missing. Configure Stripe in Settings → Developer tools first.' }
+  }
+
+  // 3. Talk to Stripe directly here (rather than the adapter) because
+  //    Terminal needs `card_present`, which the adapter's
+  //    createPaymentSession does not expose. We keep the rest of the
+  //    adapter contract intact for the online-card / manual paths.
+  // The Stripe constructor's config type is polluted by an older
+  // ambient `declare module 'stripe'` shipped inside
+  // @stripe/terminal-js's nested stripe types. Cast through unknown
+  // so TS accepts the current SDK's actual signature — runtime is
+  // unaffected and the SDK picks its real default API version.
+  const stripe = new Stripe(secretRow.secret_key, { typescript: true } as unknown as Stripe.StripeConfig)
+
+  let pi: Stripe.PaymentIntent
+  try {
+    pi = await stripe.paymentIntents.create(
+      {
+        amount: Math.round(amount * 100),
+        currency: currency.toLowerCase(),
+        payment_method_types: ['card_present'],
+        capture_method: 'automatic',
+        description: description ?? undefined,
+        metadata: {
+          internal_intent_id: intentRow.id,
+          restaurant_id: ctx.restaurantId,
+          location_id: locationId,
+          flow: 'native_pos_terminal',
+        },
+      },
+      { idempotencyKey: `terminal_pi_create_${intentRow.id}` }
+    )
+  } catch (err) {
+    // Roll the canonical row back to a `failed` state so it doesn't
+    // sit orphaned at `requires_action` forever. Don't delete it —
+    // we want the audit trail.
+    await ctx.supabase
+      .from('payment_intents')
+      .update({
+        status: 'failed',
+        failure_message:
+          err instanceof Stripe.errors.StripeError ? err.message : 'Stripe error',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', intentRow.id)
+
+    if (err instanceof Stripe.errors.StripeError) {
+      const dev = process.env.NODE_ENV === 'development'
+      return { error: dev ? `[DEV] Stripe: ${err.message}` : 'Stripe could not create the payment.' }
+    }
+    return { error: 'Could not create payment intent.' }
+  }
+
+  // 4. Persist the provider id + client_secret-bearing status onto
+  //    the canonical row.
+  await ctx.supabase
+    .from('payment_intents')
+    .update({
+      provider_intent_id: pi.id,
+      status: 'requires_action',
+      provider_metadata: {
+        id: pi.id,
+        status: pi.status,
+        amount: pi.amount,
+        currency: pi.currency,
+        livemode: pi.livemode,
+      },
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', intentRow.id)
+
+  if (!pi.client_secret) {
+    return { error: 'Stripe did not return a client_secret. Cannot drive Terminal flow without it.' }
+  }
+
+  return {
+    ok: true,
+    message: 'Terminal payment intent created.',
+    intentId: intentRow.id,
+    clientSecret: pi.client_secret,
+  }
+}
+
+// ================================================================
+// 2c. verifyAndLinkTerminalIntent (internal helper)
+//
+// Called from `createOrder` when a `verified_payment_intent_id` form
+// field is present. Confirms the intent really did succeed on Stripe
+// before we let the order get inserted + inventory get depleted.
+//
+// Returns the canonical intent row id we should link the new order
+// to, or an error string we surface back to the caller (which then
+// blocks the order create entirely).
+//
+// Idempotency note: if this intent already has an `order_id` set,
+// the order was already finalized — the caller treats that as an
+// error so it doesn't double-finalize.
+// ================================================================
+export async function verifyAndLinkTerminalIntent(
+  supabase: Supa,
+  restaurantId: string,
+  locationId: string,
+  paymentIntentId: string
+): Promise<
+  | { ok: true; intentRow: { id: string; provider_intent_id: string | null } }
+  | { ok: false; error: string }
+> {
+  const { data: intent } = await supabase
+    .from('payment_intents')
+    .select('id, restaurant_id, location_id, provider, provider_intent_id, status, order_id')
+    .eq('id', paymentIntentId)
+    .maybeSingle()
+  if (!intent) return { ok: false, error: 'Payment intent not found.' }
+
+  // Hard scope check — even though RLS would normally prevent reads
+  // across restaurants, we still want a friendly error message
+  // rather than a silent null.
+  if (intent.restaurant_id !== restaurantId || intent.location_id !== locationId) {
+    return { ok: false, error: 'Payment intent does not belong to this order context.' }
+  }
+  if (intent.provider !== 'stripe') {
+    return { ok: false, error: 'Only Stripe terminal intents are supported here.' }
+  }
+  if (intent.order_id) {
+    return { ok: false, error: 'This payment has already finalized a sale.' }
+  }
+  if (!intent.provider_intent_id) {
+    return { ok: false, error: 'Payment intent never reached Stripe — cannot verify.' }
+  }
+
+  // Read the Stripe secret (RLS-gated to owners) and verify the
+  // status with Stripe directly. We do not trust client-side
+  // "succeeded" reports.
+  const { data: secret } = await supabase
+    .from('payment_provider_secrets')
+    .select('secret_key')
+    .eq('restaurant_id', restaurantId)
+    .eq('provider', 'stripe')
+    .maybeSingle()
+  if (!secret?.secret_key) {
+    return { ok: false, error: 'Stripe credentials missing — cannot verify payment.' }
+  }
+
+  const stripe = new Stripe(secret.secret_key, { typescript: true } as unknown as Stripe.StripeConfig)
+  try {
+    const pi = await stripe.paymentIntents.retrieve(intent.provider_intent_id)
+    if (pi.status !== 'succeeded') {
+      // Persist the latest status onto the row so a future refresh
+      // doesn't have to round-trip Stripe again to know it failed.
+      await supabase
+        .from('payment_intents')
+        .update({
+          status:
+            pi.status === 'canceled' ? 'canceled'
+              : pi.status === 'processing' ? 'processing'
+              : 'requires_action',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', intent.id)
+      return { ok: false, error: `Stripe says payment is "${pi.status}", not succeeded — sale cannot be finalized.` }
+    }
+
+    // Mark canonical row as succeeded. order_id is linked by the
+    // caller after the order row is inserted.
+    await supabase
+      .from('payment_intents')
+      .update({
+        status: 'succeeded',
+        succeeded_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', intent.id)
+
+    return { ok: true, intentRow: { id: intent.id, provider_intent_id: intent.provider_intent_id } }
+  } catch (err) {
+    const msg = err instanceof Stripe.errors.StripeError ? err.message : 'Unknown Stripe error'
+    return { ok: false, error: `Could not verify payment with Stripe: ${msg}` }
   }
 }
 

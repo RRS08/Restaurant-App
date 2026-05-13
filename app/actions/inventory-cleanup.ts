@@ -388,22 +388,50 @@ export async function runInventoryIntegrityChecks() {
     }
   }
 
-  // ---- WARNING: Archived items still in active recipes ----
+  // ---- AUTO-FIX: Archived items still in active recipes ----
+  //
+  // Root cause documented in detail elsewhere: an archived
+  // `inventory_items` row that's still referenced by an active
+  // `recipe_components` row is a silent inconsistency. POS depletion
+  // queries `recipe_components` with no active-state filter, finds
+  // the archived inventory_item_id, and writes the usage row to it.
+  // The Inventory page render filters `active=true` before mapping
+  // into the table, so the archived row never appears — depletion
+  // writes accumulate on a row the user cannot see. From the user's
+  // POV, "stock isn't moving."
+  //
+  // The repair is reactivation: an active recipe link means the item
+  // IS in operational use, so the archived state was always
+  // contradictory. We reactivate inline; archiving is now blocked at
+  // the `archiveInventoryItem` action when recipes still reference
+  // the item, so this state should not recur.
   const { data: archivedInRecipes } = await supabase
     .from('recipe_components')
-    .select('inventory_items!inner ( name, active )')
+    .select('inventory_item_id, inventory_items!inner ( id, name, active )')
     .eq('inventory_items.active', false)
 
-  if ((archivedInRecipes ?? []).length > 0) {
-    const names = new Set(
-      (archivedInRecipes ?? []).map((r) =>
-        (r.inventory_items as unknown as { name: string })?.name
-      ).filter(Boolean)
-    )
+  const reactivatedIds = new Set<string>()
+  const reactivatedNames = new Set<string>()
+  for (const rc of archivedInRecipes ?? []) {
+    const inv = rc.inventory_items as unknown as { id: string; name: string } | null
+    if (inv) {
+      reactivatedIds.add(inv.id)
+      reactivatedNames.add(inv.name)
+    }
+  }
+
+  if (reactivatedIds.size > 0) {
+    await supabase
+      .from('inventory_items')
+      .update({ active: true })
+      .in('id', [...reactivatedIds])
+
+    const sample = [...reactivatedNames].slice(0, 3).join(', ')
+    const more = reactivatedNames.size > 3 ? '…' : ''
     issues.push({
-      type: 'warning',
-      category: 'Archived in recipes',
-      message: `${names.size} archived item${names.size > 1 ? 's' : ''} still used in active recipes: ${[...names].slice(0, 3).join(', ')}${names.size > 3 ? '…' : ''}`,
+      type: 'auto_fixed',
+      category: 'Reactivated recipe-linked items',
+      message: `Reactivated ${reactivatedIds.size} archived item${reactivatedIds.size > 1 ? 's' : ''} still used in active recipes (depletion was writing to invisible rows): ${sample}${more}`,
     })
   }
 

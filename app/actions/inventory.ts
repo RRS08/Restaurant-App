@@ -182,28 +182,61 @@ export async function createInventoryTransaction(
 
 // Archive an inventory item (set active = false).
 // Preserves all history — the item just stops appearing in active lists.
-export async function archiveInventoryItem(formData: FormData) {
+//
+// Refuses to archive when recipe_components still reference the item.
+// Background: a previous gap let users archive items that menus
+// still depended on. POS depletion would then write to the archived
+// id, the Inventory page would filter that row out of the table,
+// and stock movement would silently disappear. The integrity check
+// reactivates anything stuck in this state; this guard prevents new
+// instances. The action is now useActionState-shaped so the inline
+// archive button can surface the error.
+export async function archiveInventoryItem(
+  _prevState: { error: string } | null,
+  formData: FormData
+): Promise<{ error: string } | null> {
   const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
   const itemId = formData.get('item_id') as string
-  if (!itemId) return
+  if (!itemId) return { error: 'No item specified.' }
 
   const { data: item } = await ctx.supabase
     .from('inventory_items')
-    .select('location_id')
+    .select('location_id, name')
     .eq('id', itemId)
     .single()
-  if (!item) return
+  if (!item) return { error: 'Item not found.' }
   const locAuthErr = await requireLocResult(ctx.restaurantId, item.location_id)
-  if (locAuthErr) return
+  if (locAuthErr) return { error: locAuthErr }
 
-  await ctx.supabase
+  // Guard: refuse archive when recipes still depend on this item.
+  // Inline lookup is cheap (head:true count) and prevents the silent
+  // "depletion writes to invisible row" state we just had to repair.
+  const { count: recipeCount } = await ctx.supabase
+    .from('recipe_components')
+    .select('id', { count: 'exact', head: true })
+    .eq('inventory_item_id', itemId)
+
+  if ((recipeCount ?? 0) > 0) {
+    return {
+      error: `Cannot archive — "${item.name}" is used in ${recipeCount} active recipe${recipeCount === 1 ? '' : 's'}. Remove the recipe links first.`,
+    }
+  }
+
+  const { error: updateError } = await ctx.supabase
     .from('inventory_items')
     .update({ active: false })
     .eq('id', itemId)
 
+  if (updateError) {
+    return { error: formatError('archive item', updateError) }
+  }
+
   revalidatePath('/inventory')
+  revalidatePath('/menu')
+  revalidatePath('/pos')
+  return null
 }
 
 // Delete an inventory item — only allowed when it has NO dependent records.

@@ -13,7 +13,10 @@
       "Bash(ls -la c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\(onboarding\\\\\\)/onboarding/finance*)",
       "Bash(cat \"c:/Users/Renato/OneDrive/Desktop/restaurant-app/app/\\\\\\\\\\(app\\\\\\\\\\)/layout.tsx\")",
       "Bash(node -e \"const p = require\\('plaid'\\); const api = new p.PlaidApi\\(new p.Configuration\\({ basePath: p.PlaidEnvironments.sandbox, baseOptions: { headers: { 'PLAID-CLIENT-ID': 'x', 'PLAID-SECRET': 'x', 'Plaid-Version': '2020-09-14' } } }\\)\\); console.log\\('sandboxPublicTokenCreate:', typeof api.sandboxPublicTokenCreate\\); console.log\\('itemPublicTokenExchange:', typeof api.itemPublicTokenExchange\\); console.log\\('sandboxTransactionsCreate:', typeof api.sandboxTransactionsCreate\\);\")",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(node -e \"console.log\\(require\\('stripe/package.json'\\).version\\)\")",
+      "Bash(xargs grep -l \"class Stripe \")",
+      "Bash(grep -rln \"apiVersion: \\\\\"2020-08-27\\\\\"\\\\|apiVersion: '2020-08-27'\\\\|apiVersion\\\\\\\\?: \\\\\"2020-08-27\\\\\"\\\\|apiVersion\\\\\\\\?: '2020-08-27'\" node_modules)"
     ]
   }
 }

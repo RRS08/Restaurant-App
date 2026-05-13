@@ -209,6 +209,28 @@ export default async function InventoryPage() {
     active: item.active,
   }))
 
+  // Archived-in-recipes detection.
+  //
+  // An archived inventory_item that's still referenced by a
+  // recipe_component is the root cause of "POS sales create
+  // depletion writes but inventory movement isn't visible." The
+  // integrity check now auto-repairs this state (reactivates the
+  // archived rows); we surface the count + names to the client so a
+  // banner can offer one-click resolution without forcing the user
+  // to dig through Settings.
+  const itemById = new Map<string, { name: string; active: boolean }>()
+  for (const item of items ?? []) {
+    itemById.set(item.id, { name: item.name, active: item.active })
+  }
+  const archivedInRecipeNames = new Set<string>()
+  for (const rc of recipeCounts ?? []) {
+    const inv = itemById.get(rc.inventory_item_id)
+    if (inv && !inv.active) {
+      archivedInRecipeNames.add(inv.name)
+    }
+  }
+  const archivedInRecipes = [...archivedInRecipeNames]
+
   // Per-item diagnostic — surfaces the exact numbers behind every
   // estimated-stock value. If two inventory_items share a name (a
   // common testing accident) both rows print, making the
@@ -314,6 +336,7 @@ export default async function InventoryPage() {
       restockOrders={restockOrdersForClient}
       duplicateGroups={duplicateGroups}
       mergeableItems={mergeableItems}
+      archivedInRecipes={archivedInRecipes}
     />
   )
 }

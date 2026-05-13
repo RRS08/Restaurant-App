@@ -37,12 +37,15 @@ function buildStripe(ctx: PaymentAdapterContext): Stripe {
       'Stripe secret key is missing. Configure Stripe in Settings first.'
     )
   }
-  // Pin the API version so upstream changes don't silently alter
-  // response shapes. Upgrade deliberately in a follow-up phase.
-  return new Stripe(ctx.secrets.secretKey, {
-    apiVersion: '2026-03-25.dahlia',
-    typescript: true,
-  })
+  // Use the SDK's default apiVersion. The previously-pinned
+  // '2026-03-25.dahlia' is no longer in the installed `stripe@22`
+  // type union; pinning to a specific newer string can land in a
+  // follow-up when the SDK is upgraded.
+  // Cast through unknown: @stripe/terminal-js bundles an older
+  // nested stripe types package with `declare module 'stripe'` that
+  // makes apiVersion required at a stale literal. Bypassing that
+  // here keeps runtime behavior on the installed stripe@22 SDK.
+  return new Stripe(ctx.secrets.secretKey, { typescript: true } as unknown as Stripe.StripeConfig)
 }
 
 /** Convert a canonical decimal amount to Stripe's integer minor
@@ -80,15 +83,22 @@ function normalize(pi: Stripe.PaymentIntent): NormalizedPaymentIntent {
     // Keep a small, bounded snapshot — never the full Stripe object.
     // Big blobs make payment_intents.provider_metadata hard to read
     // and can drift in shape across API versions.
-    providerMetadata: {
-      id: pi.id,
-      status: pi.status,
-      amount: pi.amount,
-      currency: pi.currency,
-      livemode: pi.livemode,
-      latest_charge:
-        typeof pi.latest_charge === 'string' ? pi.latest_charge : pi.latest_charge?.id ?? null,
-    },
+    providerMetadata: (() => {
+      // latest_charge isn't exposed on every Stripe SDK type set; we
+      // peek at it defensively so the metadata stays useful without
+      // coupling the adapter to a specific stripe types version.
+      const latestCharge = (pi as unknown as { latest_charge?: string | { id: string } | null }).latest_charge
+      const latestChargeId =
+        typeof latestCharge === 'string' ? latestCharge : latestCharge?.id ?? null
+      return {
+        id: pi.id,
+        status: pi.status,
+        amount: pi.amount,
+        currency: pi.currency,
+        livemode: pi.livemode,
+        latest_charge: latestChargeId,
+      }
+    })(),
     clientSecret: pi.client_secret,
   }
 }

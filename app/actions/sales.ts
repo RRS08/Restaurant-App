@@ -5,7 +5,10 @@ import { revalidatePath } from 'next/cache'
 import { getAuthContext, logAudit, formatError, resolveLocationId } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { getInventoryActivation } from '@/lib/readiness'
-import { cancelOpenPaymentIntentsForOrder } from '@/app/actions/payments'
+import {
+  cancelOpenPaymentIntentsForOrder,
+  verifyAndLinkTerminalIntent,
+} from '@/app/actions/payments'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 // Graceful wrapper around requireLocationAccess so we can keep the
@@ -61,6 +64,28 @@ export async function createOrder(
     lineItems = JSON.parse(lineItemsRaw)
   } catch {
     return { error: 'Invalid order data.' }
+  }
+
+  // Verified-Stripe-Terminal gate.
+  // When the POS card workflow drives this finalization, it includes
+  // a `verified_payment_intent_id` pointing at a Stripe Terminal
+  // payment that has already returned succeeded on the terminal.
+  // We do NOT trust the client — `verifyAndLinkTerminalIntent`
+  // round-trips Stripe to confirm `status === 'succeeded'` before
+  // we let the order insert + inventory depletion proceed. If
+  // verification fails, this action returns early and nothing
+  // touches Sales or Inventory.
+  const verifiedIntentId = (formData.get('verified_payment_intent_id') as string | null)?.trim() || null
+  let verifiedIntentRow: { id: string; provider_intent_id: string | null } | null = null
+  if (verifiedIntentId) {
+    const verifyResult = await verifyAndLinkTerminalIntent(
+      ctx.supabase,
+      ctx.restaurantId,
+      locationId,
+      verifiedIntentId
+    )
+    if (!verifyResult.ok) return { error: verifyResult.error }
+    verifiedIntentRow = verifyResult.intentRow
   }
 
   if (!Array.isArray(lineItems) || lineItems.length === 0) {
@@ -183,6 +208,17 @@ export async function createOrder(
   if (itemsError) {
     console.error('Order items insertion failed:', itemsError)
     return { error: formatError('order items', itemsError) }
+  }
+
+  // Link the verified Stripe Terminal intent to this newly-created
+  // order. The verify step above marked the intent succeeded;
+  // setting order_id closes the loop so future refreshes (or this
+  // order's voidOrder) can find the intent by order_id.
+  if (verifiedIntentRow) {
+    await ctx.supabase
+      .from('payment_intents')
+      .update({ order_id: order.id, updated_at: new Date().toISOString() })
+      .eq('id', verifiedIntentRow.id)
   }
 
   // Inventory activation gate: only deplete stock when inventory

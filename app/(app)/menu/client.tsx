@@ -217,7 +217,7 @@ export default function MenuClient({
             </div>
           </div>
 
-          <div className="space-y-8">
+          <div className="space-y-10">
             {categories.map((cat) => {
               const sectionItems = itemsByCategory.get(cat.id) ?? []
               return (
@@ -325,7 +325,7 @@ function SectionBlock({
           pulled out of this row and placed below the cards as a softer
           local action — repeating it across every section header read
           too heavy. */}
-      <div className="mb-3 flex items-center gap-3">
+      <div className="mb-4 flex items-center gap-3">
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-700 whitespace-nowrap">
           {category.name}
         </h2>
@@ -398,7 +398,7 @@ function SectionBlock({
           {/* Soft local "+ Add item" — sits under the cards as a quiet
               text link rather than a repeated header pill. Anchors a
               popover the same way the page-level Add section button does. */}
-          <div className="relative mt-3 inline-block">
+          <div className="relative mt-4 inline-block">
             <button
               type="button"
               onClick={onToggleAddItem}
@@ -432,7 +432,7 @@ function ItemCard({
 }) {
   const isInactive = !item.active
   const ringClass = selected
-    ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.15)]'
+    ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.12)]'
     : 'border-gray-200/80 hover:border-gray-300'
 
   // Availability cue. Healthy items return null and the card stays
@@ -446,6 +446,7 @@ function ItemCard({
   })
   // Cards visually dim when the item is unsellable for any reason
   // (inactive, manually disabled, auto-disabled by a stock-out).
+  // 70% retains card readability while reading as "not in play."
   const unsellable = item.effectiveSellability === 'auto_disabled'
     || item.effectiveSellability === 'manually_disabled'
     || isInactive
@@ -455,31 +456,39 @@ function ItemCard({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-60' : ''}`}
+      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 py-3.5 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''}`}
     >
-      <div className="flex items-start justify-between gap-2">
+      {/* Identity row — name + price baseline-aligned so the eye reads
+          them as one operational pair. Price tone bumped to gray-900
+          font-medium to feel more deliberate. */}
+      <div className="flex items-baseline justify-between gap-3">
         <p
-          className={`text-sm font-semibold truncate transition-colors ${
+          className={`text-sm font-semibold tracking-tight truncate transition-colors ${
             selected ? 'text-blue-700' : 'text-gray-900 group-hover:text-blue-700'
           }`}
         >
           {item.name}
         </p>
-        <span
-          className={`text-[13px] font-mono tabular-nums flex-shrink-0 ${
-            selected ? 'text-gray-900 font-semibold' : 'text-gray-700'
-          }`}
-        >
+        <span className="text-[13px] font-mono tabular-nums font-medium text-gray-900 flex-shrink-0">
           {fmtMoney(item.currentPrice)}
         </span>
       </div>
+      {/* Supporting band — one concise row of operational signals.
+          Tones are restrained so multiple chips don't feel scattered:
+            • recipe count / no recipe  → quiet (green for mapped,
+              gray-50 for unmapped)
+            • imported                  → indigo (provenance)
+            • inactive                  → gray-50 (structural)
+            • availability cue          → low=amber, out=red, disabled=gray
+          Healthy items return null on the availability chip and only
+          the recipe chip renders, keeping the band lightest. */}
       <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
         {hasRecipe(item) ? (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-50 text-green-700">
             {item.recipe.length} ingredient{item.recipe.length !== 1 ? 's' : ''}
           </span>
         ) : (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200/70">
             No recipe
           </span>
         )}
@@ -489,7 +498,7 @@ function ItemCard({
           </span>
         )}
         {isInactive && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200/70">
             Inactive
           </span>
         )}
@@ -500,7 +509,7 @@ function ItemCard({
                 ? 'bg-red-50 text-red-700'
                 : availabilityCue.tone === 'amber'
                   ? 'bg-amber-50 text-amber-700'
-                  : 'bg-gray-100 text-gray-600'
+                  : 'bg-gray-50 text-gray-600 border border-gray-200/70'
             }`}
           >
             {availabilityCue.label}
@@ -785,7 +794,7 @@ function ItemDrawer({
               Close
             </button>
           </div>
-          <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <h2 className="text-base font-bold text-gray-900 truncate">{item.name}</h2>
             <span
               className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
@@ -796,10 +805,13 @@ function ItemDrawer({
               {item.active ? 'Active' : 'Inactive'}
             </span>
           </div>
-          <p className="mt-1.5 text-xs">
-            <span className="text-gray-900 font-mono tabular-nums font-semibold">{fmtMoney(item.currentPrice)}</span>
-            <span className="text-gray-400"> · </span>
-            <span className="text-gray-600">{sourceLabel}</span>
+          {/* Price gets its own line with stronger typography so it
+              reads as the item's headline value, with the muted
+              source label as the soft secondary signal. */}
+          <p className="mt-2 flex items-baseline gap-2 text-xs">
+            <span className="text-[15px] font-mono tabular-nums font-semibold text-gray-900">{fmtMoney(item.currentPrice)}</span>
+            <span className="text-gray-300">·</span>
+            <span className="text-gray-500">{sourceLabel}</span>
           </p>
         </div>
 
@@ -816,22 +828,28 @@ function ItemDrawer({
         {/* BODY
             Stats strip and a separate Details section both removed.
             All identity (price / section / source / status) now lives
-            in the header, leaving the body single-purpose: the
-            ingredients workspace. The drawer reads as "manage what
-            this item is made of," not "inspect a stack of metadata
-            cards." */}
-        <div className="flex-1 overflow-y-auto px-6 py-6">
+            in the header. Body bands are Ingredients (primary
+            workspace) → Availability (projection + override). The
+            space-y-8 between them gives the drawer a slightly more
+            generous rhythm than the body's prior single-section
+            layout — enough air to read each as its own band without
+            losing density. */}
+        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-8">
 
-          {/* Ingredients section — body's only band */}
+          {/* Ingredients section — body's primary band.
+              List → spacing → "+ Add ingredient" reveal trigger. The
+              list and the trigger are intentionally close (mt-3) so
+              the trigger reads as the next step beneath the list, not
+              as a separate orphaned action. */}
           <div>
             <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
               Ingredients
             </p>
 
             {item.recipe.length > 0 && (
-              <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100 mb-3">
+              <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100 mb-3 overflow-hidden">
                 {item.recipe.map((rc) => (
-                  <li key={rc.id} className="flex items-center justify-between px-3.5 py-2.5">
+                  <li key={rc.id} className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-gray-50/60">
                     <div className="min-w-0">
                       <p className="text-xs font-medium text-gray-900 truncate">{rc.inventoryItemName}</p>
                       <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">
@@ -1182,41 +1200,61 @@ function AvailabilitySection({
     { value: 'force_disabled', label: 'Force disabled', hint: 'Hide from POS regardless of stock.' },
   ]
 
+  // Active override hint — surfaces the consequence of the current
+  // selection. Helps the manager understand what the override means
+  // without having to read all three options.
+  const activeOverrideHint = overrideOptions.find((o) => o.value === item.override)?.hint
+  const isOverrideOn = item.override !== 'none'
+
   return (
     <div>
-      <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+      <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
         Availability
       </p>
 
-      {/* System truth — projection chip + bottleneck + sellability */}
-      <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-3 mb-3 space-y-2">
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] text-gray-500">Projection</span>
+      {/* System truth — compact operational summary.
+          Two key/value rows + an optional bottleneck row. POS
+          sellability is the bottom line and gets a thin top border
+          to read as the conclusion drawn from the projection above. */}
+      <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-3 mb-3">
+        <div className="flex items-center justify-between gap-3 py-1">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Projection</span>
           <span className={`inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded ${projectionToneClass[projectionChip.tone]}`}>
             {projectionChip.label}
           </span>
         </div>
         {item.bottleneckInventoryItemName && (item.projectionState === 'low' || item.projectionState === 'out') && (
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] text-gray-500">Limited by</span>
+          <div className="flex items-center justify-between gap-3 py-1">
+            <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Limited by</span>
             <span className="text-[11px] text-gray-700 truncate">{item.bottleneckInventoryItemName}</span>
           </div>
         )}
-        <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
-          <span className="text-[11px] text-gray-500">POS sellability</span>
+        <div className="flex items-center justify-between gap-3 pt-2 mt-1 border-t border-gray-100">
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">POS sellability</span>
           <span className="text-[11px] font-medium text-gray-800 truncate">
             {sellabilityLabel[item.effectiveSellability]}
           </span>
         </div>
       </div>
 
-      {/* Manual override controls — three-state pill group.
-          Each option submits the override action; the server clears
-          the audit timestamps when going back to 'none'. */}
-      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
-          Manual override
-        </p>
+      {/* Manual override — three-option control with the active
+          option's consequence read inline. "System default" is the
+          neutral baseline (always renders as the leftmost option);
+          force states are positioned right so the visual order
+          mirrors "less intervention → more intervention." */}
+      <div className="rounded-xl border border-gray-200 bg-gray-50/40 px-3.5 py-3">
+        <div className="mb-2.5 flex items-baseline justify-between gap-3">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Manual override
+          </p>
+          {isOverrideOn && item.overrideSetAt && (
+            <p className="text-[10px] text-gray-400 tabular-nums">
+              since {new Date(item.overrideSetAt).toLocaleString('en-US', {
+                month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+              })}
+            </p>
+          )}
+        </div>
         <div className="grid grid-cols-3 gap-1.5">
           {overrideOptions.map((opt) => {
             const active = item.override === opt.value
@@ -1239,14 +1277,9 @@ function AvailabilitySection({
             )
           })}
         </div>
-        <p className="mt-2 text-[10px] text-gray-500 leading-relaxed">
-          {overrideOptions.find((o) => o.value === item.override)?.hint}
-        </p>
-        {item.override !== 'none' && item.overrideSetAt && (
-          <p className="mt-1 text-[10px] text-gray-400">
-            Override active since {new Date(item.overrideSetAt).toLocaleString('en-US', {
-              month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-            })}
+        {activeOverrideHint && (
+          <p className="mt-2.5 text-[11px] text-gray-500 leading-relaxed">
+            {activeOverrideHint}
           </p>
         )}
         {state?.error && <p className="mt-2 text-[11px] text-red-600">{state.error}</p>}

@@ -188,29 +188,45 @@ export default function DashboardClient({
 
       {/* ================================================================ */}
       {/* 1. HEADER                                                        */}
+      {/* Family pattern: title + subtitle on the left, bell on the right, */}
+      {/* anchored by a bottom divider so the rest of the page reads as    */}
+      {/* content beneath page chrome.                                     */}
       {/* ================================================================ */}
-      <div className="flex items-start justify-between mb-6">
+      <div className="mb-7 pb-5 border-b border-gray-100 flex items-end justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">{greeting}</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <h1 className="text-2xl font-bold text-gray-900 leading-tight">{greeting}</h1>
+          <p className="mt-1.5 text-sm text-gray-500 leading-relaxed">
             {hasIssues
-              ? `${alerts.length} thing${alerts.length > 1 ? 's' : ''} need${alerts.length === 1 ? 's' : ''} your attention`
-              : 'Everything looks good right now'}
+              ? `${alerts.length} thing${alerts.length > 1 ? 's' : ''} need${alerts.length === 1 ? 's' : ''} your attention right now.`
+              : 'Everything looks good right now.'}
           </p>
         </div>
         <NotificationBell alerts={alerts} />
       </div>
 
-      {/* ---- READINESS NOTES (honest, non-redesign cues) ---- */}
+      {/* ---- READINESS NOTES (honest, non-redesign cues)
+              Calmer amber treatment: thin left accent stripe + soft
+              background. Family card chrome so it reads as a
+              supporting alert surface, not a full alert banner. ---- */}
       {readinessNotes.length > 0 && (
-        <div className="mb-6 rounded-xl border border-amber-100 bg-amber-50/70 p-4">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700 mb-2">Heads up</p>
-          <ul className="space-y-1.5">
+        <div className="mb-6 rounded-xl border border-gray-200 bg-white overflow-hidden border-l-2 border-l-amber-300">
+          <div className="px-5 py-3 border-b border-gray-100 bg-amber-50/30">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+              Heads up
+            </p>
+          </div>
+          <ul className="divide-y divide-gray-100">
             {readinessNotes.map((note, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-amber-900">
-                <span className="mt-1 w-1 h-1 rounded-full bg-amber-500 flex-shrink-0" />
-                <span className="flex-1">{note.text}</span>
-                <Link href={note.href} className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 whitespace-nowrap">
+              <li key={i} className="px-5 py-3 flex items-start gap-3 text-xs">
+                <span
+                  className="mt-1.5 w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="flex-1 text-gray-700 leading-relaxed">{note.text}</span>
+                <Link
+                  href={note.href}
+                  className="text-[11px] font-semibold text-amber-700 hover:text-amber-900 whitespace-nowrap flex-shrink-0"
+                >
                   Review →
                 </Link>
               </li>
@@ -220,125 +236,198 @@ export default function DashboardClient({
       )}
 
       {/* ================================================================ */}
-      {/* 2. TOP ROW — 4 pillar cards                                      */}
+      {/* 2. TOP ROW — 4 pillar summary cards                              */}
+      {/*                                                                  */}
+      {/* Unified neutral chrome. Pillar identity comes from a small       */}
+      {/* colored dot beside the eyebrow (Sales blue, Staff amber,         */}
+      {/* Inventory gray, Finance emerald). State is conveyed by a soft    */}
+      {/* left-edge border accent + value tone when warranted — never a   */}
+      {/* full-card background tint, which kept the page feeling like      */}
+      {/* alert tiles instead of product cards.                            */}
       {/* ================================================================ */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 mb-8">
-        <Link href="/sales" className="bg-white rounded-xl border border-gray-200 p-4 hover:border-blue-200 hover:shadow-sm transition-colors">
-          <p className="text-xs font-semibold text-blue-600 uppercase tracking-widest">Sales</p>
-          <p className="text-xl font-bold text-gray-900 mt-1.5">
-            ${sales.salesToday.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-          </p>
-          <p className="text-xs text-gray-500 mt-0.5">{sales.ordersToday} order{sales.ordersToday !== 1 ? 's' : ''} today</p>
-        </Link>
+        <PillarCard
+          href="/sales"
+          label="Sales"
+          dot="bg-blue-500"
+          value={`$${sales.salesToday.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+          sub={`${sales.ordersToday} order${sales.ordersToday !== 1 ? 's' : ''} today`}
+        />
 
-        <Link href="/staffing" className={`rounded-xl border p-4 hover:shadow-sm transition-colors ${
-          staffing.shiftsToday === 0 || staffing.employeeCount === 0
-            ? 'bg-amber-50 border-amber-200 hover:border-amber-300'
-            : 'bg-white border-gray-200 hover:border-amber-200'
-        }`}>
-          <p className="text-xs font-semibold text-amber-600 uppercase tracking-widest">Staff</p>
-          <p className={`text-xl font-bold mt-1.5 ${
-            staffing.shiftsToday === 0 || staffing.employeeCount === 0 ? 'text-amber-700' : 'text-gray-900'
-          }`}>{staffing.shiftsToday} shift{staffing.shiftsToday !== 1 ? 's' : ''} today</p>
-          <p className="text-xs text-gray-500 mt-0.5">{staffing.employeeCount} active employees</p>
-        </Link>
+        <PillarCard
+          href="/staffing"
+          label="Staff"
+          dot="bg-amber-500"
+          value={`${staffing.shiftsToday} shift${staffing.shiftsToday !== 1 ? 's' : ''} today`}
+          sub={`${staffing.employeeCount} active employee${staffing.employeeCount === 1 ? '' : 's'}`}
+          state={
+            staffing.shiftsToday === 0 || staffing.employeeCount === 0 ? 'warn' : 'normal'
+          }
+        />
 
-        <Link href="/inventory" className={`rounded-xl border p-4 hover:shadow-sm transition-colors ${
-          inventory.outOfStockCount > 0 ? 'bg-red-50 border-red-200 hover:border-red-300'
-            : stockAlerts > 0 || inventory.noCountCount > 0 ? 'bg-amber-50 border-amber-200 hover:border-amber-300'
-              : 'bg-white border-gray-200 hover:border-gray-300'
-        }`}>
-          <p className={`text-xs font-semibold uppercase tracking-widest ${
-            inventory.outOfStockCount > 0 ? 'text-red-600' : stockAlerts > 0 || inventory.noCountCount > 0 ? 'text-amber-600' : 'text-gray-400'
-          }`}>Inventory</p>
-          <p className={`text-xl font-bold mt-1.5 ${
-            inventory.outOfStockCount > 0 ? 'text-red-700' : stockAlerts > 0 ? 'text-amber-700' : 'text-gray-900'
-          }`}>{stockAlerts > 0 ? `${stockAlerts} alert${stockAlerts !== 1 ? 's' : ''}` : 'All clear'}</p>
-          <p className="text-xs text-gray-500 mt-0.5">{inventory.totalItems} items tracked</p>
-        </Link>
+        <PillarCard
+          href="/inventory"
+          label="Inventory"
+          dot="bg-gray-400"
+          value={stockAlerts > 0 ? `${stockAlerts} alert${stockAlerts !== 1 ? 's' : ''}` : 'All clear'}
+          sub={`${inventory.totalItems} items tracked`}
+          state={
+            inventory.outOfStockCount > 0
+              ? 'critical'
+              : stockAlerts > 0 || inventory.noCountCount > 0
+                ? 'warn'
+                : 'normal'
+          }
+        />
 
-        <Link href="/finance" className="bg-white rounded-xl border border-gray-200 p-4 hover:border-emerald-200 hover:shadow-sm transition-colors">
-          <p className="text-xs font-semibold text-emerald-600 uppercase tracking-widest">Finance</p>
-          <p className="text-xl font-bold text-gray-900 mt-1.5">
-            ${finance.expenseTotal30d.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
-          </p>
-          <p className="text-xs text-gray-500 mt-0.5">{finance.expenseCount30d} expenses · 30d</p>
-        </Link>
+        <PillarCard
+          href="/finance"
+          label="Finance"
+          dot="bg-emerald-500"
+          value={`$${finance.expenseTotal30d.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+          sub={`${finance.expenseCount30d} expense${finance.expenseCount30d === 1 ? '' : 's'} · 30d`}
+        />
       </div>
 
       {/* ================================================================ */}
       {/* 3. MIDDLE — graphs + right support                               */}
+      {/* Family chrome on the chart cards (header band + body), neutral   */}
+      {/* eyebrows, calmer chart heights matching Analytics' rhythm.       */}
       {/* ================================================================ */}
-      <div className="grid gap-6 grid-cols-1 xl:grid-cols-12 mb-6">
-        <div className="xl:col-span-9 grid gap-6 grid-cols-1 md:grid-cols-2">
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-xs font-semibold text-blue-600 uppercase tracking-widest mb-4">Sales — last 7 days</h2>
-            <SimpleLineChart data={salesByDay} color="#3b82f6" height={300} />
+      <div className="grid gap-4 grid-cols-1 xl:grid-cols-12 mb-6">
+        <div className="xl:col-span-9 grid gap-4 grid-cols-1 md:grid-cols-2">
+          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <div className="border-b border-gray-100 px-5 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Sales rhythm
+              </p>
+              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+                Daily revenue over the last 7 days.
+              </p>
+            </div>
+            <div className="px-5 py-4">
+              <SimpleLineChart data={salesByDay} color="#3b82f6" height={200} />
+            </div>
           </div>
-          <div className="bg-white rounded-xl border border-gray-200 p-5">
-            <h2 className="text-xs font-semibold text-amber-600 uppercase tracking-widest mb-4">Shifts — this week</h2>
-            <SimpleBarChart data={shiftsByDay} color="#f97316" height={300} />
+          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <div className="border-b border-gray-100 px-5 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Shift coverage
+              </p>
+              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+                Scheduled shifts per day this week.
+              </p>
+            </div>
+            <div className="px-5 py-4">
+              <SimpleBarChart data={shiftsByDay} color="#f59e0b" height={200} />
+            </div>
           </div>
         </div>
 
-        {/* Right support — Inventory Watchlist (top, larger) + Next Up (bottom, smaller) */}
-        <div className="xl:col-span-3 flex flex-col gap-3">
+        {/* Right support — Inventory Watchlist + Next Up.
+            Same rounded-xl family chrome as the top cards. Each is a
+            two-band card (header band with eyebrow, body band with
+            content) so the rail rhymes with the chart cards. */}
+        <div className="xl:col-span-3 flex flex-col gap-4">
 
-          {/* Inventory watchlist — shows actual problem items */}
-          <div className="bg-white rounded-lg border border-gray-200 px-3.5 py-3 flex-1">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Inventory watchlist</h2>
+          {/* Inventory watchlist */}
+          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex-1 flex flex-col">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Inventory watchlist
+              </p>
+            </div>
             {watchlist.length === 0 ? (
-              <p className="text-xs text-gray-400 py-1">All items OK</p>
+              <p className="flex-1 px-4 py-5 text-xs text-gray-400 text-center">
+                All items in good standing.
+              </p>
             ) : (
-              <div className="space-y-1.5">
-                {watchlist.map((item, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <span className="text-xs text-gray-700 truncate mr-2">{item.name}</span>
-                    <span className={`text-[10px] font-semibold flex-shrink-0 px-1.5 py-0.5 rounded ${
-                      item.status === 'Out' ? 'bg-red-50 text-red-600'
-                        : item.status === 'Low' ? 'bg-amber-50 text-amber-600'
-                          : 'bg-gray-100 text-gray-500'
-                    }`}>{item.status}</span>
-                  </div>
-                ))}
-              </div>
+              <ul className="flex-1 divide-y divide-gray-100">
+                {watchlist.map((item, i) => {
+                  const tone =
+                    item.status === 'Out'
+                      ? { dot: 'bg-red-500', text: 'text-red-700' }
+                      : item.status === 'Low'
+                        ? { dot: 'bg-amber-500', text: 'text-amber-700' }
+                        : { dot: 'bg-gray-400', text: 'text-gray-500' }
+                  return (
+                    <li key={i} className="px-4 py-2.5 flex items-center gap-2.5">
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${tone.dot}`}
+                        aria-hidden="true"
+                      />
+                      <span className="text-xs text-gray-800 truncate flex-1">
+                        {item.name}
+                      </span>
+                      <span className={`text-[10px] font-semibold flex-shrink-0 ${tone.text}`}>
+                        {item.status}
+                      </span>
+                    </li>
+                  )
+                })}
+              </ul>
             )}
           </div>
 
-          {/* Next up — compact */}
-          <div className="bg-white rounded-lg border border-gray-200 px-3.5 py-3">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-1.5">Next up</h2>
-            {nextShift ? (
-              <div>
-                <p className="text-xs font-medium text-gray-900">{nextShift.employeeName} · {nextShift.role}</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  {new Date(nextShift.startTime).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                  {' · '}
-                  {new Date(nextShift.startTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                  {' – '}
-                  {new Date(nextShift.endTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
-                </p>
-              </div>
-            ) : (
-              <p className="text-xs text-gray-400">No upcoming shifts</p>
-            )}
+          {/* Next up */}
+          <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Next up
+              </p>
+            </div>
+            <div className="px-4 py-3">
+              {nextShift ? (
+                <>
+                  <p className="text-xs font-semibold text-gray-900 truncate">
+                    {nextShift.employeeName} · {nextShift.role}
+                  </p>
+                  <p className="mt-1 text-[11px] text-gray-500 tabular-nums leading-relaxed">
+                    {new Date(nextShift.startTime).toLocaleDateString('en-US', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                    })}
+                    {' · '}
+                    {new Date(nextShift.startTime).toLocaleTimeString('en-US', {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                    {' – '}
+                    {new Date(nextShift.endTime).toLocaleTimeString('en-US', {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    })}
+                  </p>
+                </>
+              ) : (
+                <p className="text-xs text-gray-400">No upcoming shifts.</p>
+              )}
+            </div>
           </div>
 
         </div>
       </div>
 
       {/* ================================================================ */}
-      {/* 4. BOTTOM — editable checklist + action needed + quick actions    */}
+      {/* 4. BOTTOM — opening checklist + action needed + quick actions     */}
+      {/* All three share the family chrome (rounded-xl, two-band card,    */}
+      {/* eyebrow header band + body) so the bottom row reads as a         */}
+      {/* coherent triplet rather than three mismatched widget tiles.      */}
       {/* ================================================================ */}
       <div className="grid gap-4 grid-cols-1 md:grid-cols-3">
 
         {/* Editable checklist */}
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-3.5">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">Opening checklist</h2>
-            <span className="text-[10px] text-gray-400">{checked.size}/{items.length}</span>
+        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+          <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Opening checklist
+            </p>
+            <span className="text-[10px] tabular-nums text-gray-400">
+              {checked.size}/{items.length}
+            </span>
           </div>
-          <div>
+          <div className="px-4 py-3 flex-1">
             {items.map((item, i) => (
               <div key={i} className="flex items-center gap-2 group">
                 {editingIdx === i ? (
@@ -353,7 +442,7 @@ export default function DashboardClient({
                   <button type="button" onClick={() => toggleCheck(i)}
                     className="flex items-center gap-2.5 flex-1 px-1.5 py-1.5 rounded text-left hover:bg-gray-50 transition-colors">
                     <span className={`w-3.5 h-3.5 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
-                      checked.has(i) ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
+                      checked.has(i) ? 'bg-gray-900 border-gray-900' : 'border-gray-300'
                     }`}>
                       {checked.has(i) && (
                         <svg className="w-2 h-2 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
@@ -361,7 +450,9 @@ export default function DashboardClient({
                         </svg>
                       )}
                     </span>
-                    <span className={`text-xs ${checked.has(i) ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{item}</span>
+                    <span className={`text-xs ${checked.has(i) ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                      {item}
+                    </span>
                   </button>
                 )}
                 <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
@@ -378,59 +469,133 @@ export default function DashboardClient({
                 </div>
               </div>
             ))}
-          </div>
-          <div className="flex gap-1.5 mt-2">
-            <input
-              value={newItem}
-              onChange={(e) => setNewItem(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') addItem() }}
-              placeholder="Add item…"
-              className="flex-1 text-xs px-2 py-1.5 rounded border border-gray-200 placeholder:text-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            />
-            <button type="button" onClick={addItem} disabled={!newItem.trim()}
-              className="text-[10px] font-medium text-blue-600 hover:text-blue-500 disabled:text-gray-300 px-1.5">Add</button>
+            <div className="flex gap-1.5 mt-2">
+              <input
+                value={newItem}
+                onChange={(e) => setNewItem(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addItem() }}
+                placeholder="Add item…"
+                className="flex-1 text-xs px-2 py-1.5 rounded border border-gray-200 placeholder:text-gray-300 focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+              />
+              <button type="button" onClick={addItem} disabled={!newItem.trim()}
+                className="text-[10px] font-semibold text-gray-700 hover:text-gray-900 disabled:text-gray-300 px-1.5">
+                Add
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Action needed — compact operational guidance */}
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-3.5">
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2.5">Action needed</h2>
+        {/* Action needed */}
+        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Action needed
+            </p>
+          </div>
           {actionItems.length === 0 ? (
-            <p className="text-xs text-gray-400 py-1">Nothing urgent right now</p>
+            <p className="px-4 py-5 text-xs text-gray-400 text-center">
+              Nothing urgent right now.
+            </p>
           ) : (
-            <div className="space-y-1">
+            <ul className="divide-y divide-gray-100">
               {actionItems.slice(0, 5).map((action, i) => (
-                <Link key={i} href={action.href}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded text-xs text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition-colors">
-                  <span className="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />
-                  {action.text}
-                </Link>
+                <li key={i}>
+                  <Link
+                    href={action.href}
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-xs text-gray-800 hover:bg-gray-50 transition-colors"
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0"
+                      aria-hidden="true"
+                    />
+                    <span className="flex-1 truncate">{action.text}</span>
+                    <span className="text-gray-400 text-[10px] flex-shrink-0">→</span>
+                  </Link>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
 
-        {/* Quick actions — exactly 4 */}
-        <div className="bg-white rounded-lg border border-gray-200 px-4 py-3.5">
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-2.5">Quick actions</h2>
-          <div className="space-y-1">
+        {/* Quick actions */}
+        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Quick actions
+            </p>
+          </div>
+          <ul className="px-4 py-3 space-y-1.5">
             {[
               { label: 'Open POS', href: '/pos' },
               { label: 'Record inventory count', href: '/inventory/new-count' },
               { label: 'Log inventory transaction', href: '/inventory/new-transaction' },
               { label: 'Schedule shift', href: '/staffing' },
             ].map((action) => (
-              <Link key={action.href} href={action.href}
-                className="flex items-center justify-between px-3 py-2 rounded text-xs font-medium
-                           text-gray-700 bg-gray-50 hover:bg-gray-100 hover:text-gray-900 transition-colors">
-                {action.label}
-                <span className="text-gray-400 text-[10px]">→</span>
-              </Link>
+              <li key={action.href}>
+                <Link
+                  href={action.href}
+                  className="flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-gray-700 bg-gray-50 hover:bg-gray-100 hover:text-gray-900 transition-colors"
+                >
+                  {action.label}
+                  <span className="text-gray-400 text-[10px]">→</span>
+                </Link>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
 
       </div>
     </div>
+  )
+}
+
+// ================================================================
+// PillarCard — top-row summary tile. Unified white chrome; pillar
+// identity via a small colored dot; state via a thin left-edge
+// border accent and value tone. Never tints the whole card.
+// ================================================================
+function PillarCard({
+  href,
+  label,
+  dot,
+  value,
+  sub,
+  state = 'normal',
+}: {
+  href: string
+  label: string
+  dot: string
+  value: string
+  sub: string
+  state?: 'normal' | 'warn' | 'critical'
+}) {
+  const accent =
+    state === 'critical'
+      ? 'border-l-2 border-l-red-300'
+      : state === 'warn'
+        ? 'border-l-2 border-l-amber-300'
+        : ''
+  const valueTone =
+    state === 'critical'
+      ? 'text-red-700'
+      : state === 'warn'
+        ? 'text-amber-700'
+        : 'text-gray-900'
+  return (
+    <Link
+      href={href}
+      className={`rounded-xl border border-gray-200 bg-white p-4 hover:border-gray-300 hover:shadow-sm transition-colors block ${accent}`}
+    >
+      <div className="flex items-center gap-2">
+        <span className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} aria-hidden="true" />
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          {label}
+        </p>
+      </div>
+      <p className={`mt-2 text-xl font-bold tabular-nums leading-tight ${valueTone}`}>
+        {value}
+      </p>
+      <p className="mt-0.5 text-[11px] text-gray-500">{sub}</p>
+    </Link>
   )
 }

@@ -78,6 +78,20 @@ const SOURCE_CHIP: Record<Source, string> = {
   external_pos: 'bg-indigo-50 text-indigo-700',
 }
 
+// Payment-type row tints. Same restrained colored-text pattern the
+// Source column uses, but the palette is deliberately disjoint from
+// both Source (gray / blue / indigo) and Status (green / red) so
+// Payment reads as its own scan axis:
+//   • Card  → purple — distinct from Source's blue/indigo
+//   • Cash  → orange — distinct from Status's green AND from the
+//                       amber Unpaid badge that can sit next to it
+//   • Other → neutral gray
+const PAYMENT_TEXT: Record<PaymentType, string> = {
+  card: 'text-purple-700',
+  cash: 'text-orange-700',
+  other: 'text-gray-700',
+}
+
 const STATUS_META: Record<OrderStatus, { label: string; chip: string; dot: string }> = {
   completed: { label: 'Completed', chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
   voided:    { label: 'Voided',    chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
@@ -195,10 +209,16 @@ export default function SalesClient({
 
   const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-  // Counts for the eyebrow / header strip — kept as scope-of-list
-  // info, not analytics.
+  // Scope-of-list counters and the dollar total for the current
+  // filter. Used by the orientation strip above the ledger. These
+  // are intentionally bounded to the current view (not the page,
+  // not the restaurant) so the strip reads as "what am I looking
+  // at?" — ledger truth, not analytics interpretation.
   const completedInView = visible.filter((o) => o.status === 'completed').length
   const voidedInView = visible.filter((o) => o.status === 'voided').length
+  const netTotal = visible
+    .filter((o) => o.status === 'completed')
+    .reduce((s, o) => s + o.total, 0)
 
   const subtitle = operatingMode === 'external_pos'
     ? 'Review imported orders from your connected POS and correct mistaken sales.'
@@ -224,47 +244,80 @@ export default function SalesClient({
       {/* 2. ACTIVITY                                                      */}
       {/* ================================================================ */}
       <section>
-        <div className="mb-4 flex items-center gap-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-900">
-            Recent activity
-          </p>
-          <span className="flex-1 h-px bg-gray-200/70" />
-          <p className="text-[11px] text-gray-500 tabular-nums">
-            {visible.length === 0
-              ? 'No orders'
-              : `${completedInView} completed${voidedInView > 0 ? ` · ${voidedInView} voided` : ''}`}
-          </p>
+        {/* ----- Orientation summary strip -----
+            Four ledger-scope cells: count in view, completed,
+            voided, and the dollar net of completed sales in the
+            current filter. Scope-of-list only — does not interpret,
+            does not trend, does not compare. Voided cell tints red
+            when there's anything to look at so the eye lands there
+            first without adding a separate alert. */}
+        <div className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
+            <LedgerStat
+              label="In view"
+              value={`${visible.length}`}
+              hint={`${visible.length === 1 ? 'order' : 'orders'} on this filter`}
+            />
+            <LedgerStat
+              label="Completed"
+              value={`${completedInView}`}
+              hint={completedInView === 0 ? 'none yet' : 'in current view'}
+            />
+            <LedgerStat
+              label="Voided"
+              value={`${voidedInView}`}
+              hint={voidedInView === 0 ? 'none' : 'in current view'}
+              tone={voidedInView > 0 ? 'warn' : 'neutral'}
+            />
+            <LedgerStat
+              label="Net total"
+              value={fmtMoney(netTotal)}
+              hint="completed sales"
+            />
+          </div>
         </div>
 
-        {/* Filter strip + scope counter */}
+        {/* ----- Workflow header / filter bar -----
+            Filter chips on the left as the natural starting control
+            cluster, active-scope counter on the right. The cluster
+            speaks for itself — no "View" label needed. */}
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white p-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            {availableFilters.map((f) => {
-              const active = filter === f
-              const count = f === 'all' ? orders.length : orders.filter((o) => o.source === f).length
-              const label =
-                f === 'all' ? 'All' :
-                f === 'manual' ? 'Manual' :
-                f === 'native_pos' ? 'POS' : 'External'
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => { setFilter(f); setPage(0) }}
-                  className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${
-                    active
-                      ? 'bg-gray-900 text-white shadow-sm'
-                      : 'text-gray-600 hover:bg-gray-100'
-                  }`}
-                >
-                  {label}
-                  <span className={`text-[10px] tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
-                    {count}
-                  </span>
-                </button>
-              )
-            })}
+              {availableFilters.map((f) => {
+                const active = filter === f
+                const count = f === 'all' ? orders.length : orders.filter((o) => o.source === f).length
+                const label =
+                  f === 'all' ? 'All' :
+                  f === 'manual' ? 'Manual' :
+                  f === 'native_pos' ? 'POS' : 'External'
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => { setFilter(f); setPage(0) }}
+                    className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${
+                      active
+                        ? 'bg-gray-900 text-white shadow-sm'
+                        : 'text-gray-600 hover:bg-gray-100'
+                    }`}
+                  >
+                    {label}
+                    <span className={`text-[10px] tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
+                      {count}
+                    </span>
+                  </button>
+                )
+              })}
           </div>
+          {visible.length > 0 && (
+            <p className="text-[11px] text-gray-500 tabular-nums">
+              Showing{' '}
+              <span className="font-semibold text-gray-700">
+                {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
+              </span>{' '}
+              of {visible.length}
+            </p>
+          )}
         </div>
 
         {/* Orders card.
@@ -303,30 +356,27 @@ export default function SalesClient({
                 </tbody>
               </table>
 
-              {/* Pager pinned at bottom for stable card height. */}
+              {/* Pager pinned at bottom for stable card height.
+                  Range readout lives in the workflow header above,
+                  so the footer just shows page position + nav. */}
               <div className="mt-auto border-t border-gray-100 px-6 py-3 flex items-center justify-between">
-                <p className="text-[11px] text-gray-500">
-                  {visible.length === 0
-                    ? '0 entries'
-                    : `${safePage * PAGE_SIZE + 1}–${Math.min((safePage + 1) * PAGE_SIZE, visible.length)} of ${visible.length}`}
+                <p className="text-[11px] text-gray-400 tabular-nums">
+                  Page {safePage + 1} of {pageCount}
                 </p>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={safePage === 0}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     ← Prev
                   </button>
-                  <span className="text-[11px] text-gray-400 px-1.5 tabular-nums">
-                    {safePage + 1} / {pageCount}
-                  </span>
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
                     disabled={safePage >= pageCount - 1}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     Next →
                   </button>
@@ -399,23 +449,44 @@ function OrderRow({
           : 'hover:bg-gray-50/70'
       }`}
     >
-      <td className={`px-6 py-3.5 whitespace-nowrap text-[13px] ${isVoided ? 'text-gray-400' : 'text-gray-700'}`}>
-        <div className="font-medium tabular-nums">{date.day}</div>
-        <div className="text-[11px] text-gray-400 tabular-nums">{date.time}</div>
+      {/* When — day on top, time muted underneath */}
+      <td className="px-6 py-4 whitespace-nowrap">
+        <div className={`text-[13px] font-semibold tabular-nums ${isVoided ? 'text-gray-400' : 'text-gray-800'}`}>
+          {date.day}
+        </div>
+        <div className="mt-0.5 text-[11px] text-gray-400 tabular-nums">{date.time}</div>
       </td>
-      <td className={`px-6 py-3.5 max-w-[280px] text-[13px] ${isVoided ? 'text-gray-400' : 'text-gray-800'}`}>
-        <p className="truncate">{fmtItemPreview(order.lineItems)}</p>
-        <p className="text-[11px] text-gray-400 tabular-nums">
+      {/* Items — primary title bumped to semibold, supporting meta
+          stays restrained so the row reads as a clear scannable
+          identity line + a quieter second line. */}
+      <td className="px-6 py-4 max-w-[280px]">
+        <p className={`text-sm font-semibold truncate ${
+          isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+        }`}>
+          {fmtItemPreview(order.lineItems)}
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-400 tabular-nums">
           {itemCount} {itemCount === 1 ? 'unit' : 'units'}
           {order.locationName ? <> · {order.locationName}</> : null}
         </p>
       </td>
-      <td className={`px-6 py-3.5 text-[13px] font-medium ${isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]}`}>
+      {/* Source — colored text, restraint over chrome */}
+      <td className={`px-6 py-4 text-[13px] font-medium ${
+        isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]
+      }`}>
         {SOURCE_LABEL[order.source]}
       </td>
-      <td className="px-6 py-3.5 text-[13px]">
+      {/* Payment — colored text per type (Card blue, Cash green,
+          Other neutral) so the column reads at a glance. Same
+          family pattern as Source: tone over chrome, no pill in
+          the row. */}
+      <td className="px-6 py-4 text-[13px]">
         <div className="flex items-center gap-2">
-          <span className={`capitalize ${isVoided ? 'text-gray-400' : 'text-gray-700'}`}>{order.paymentType}</span>
+          <span className={`capitalize font-medium ${
+            isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]
+          }`}>
+            {order.paymentType}
+          </span>
           {order.paymentStatus === 'unpaid' && !isVoided && (
             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
               Unpaid
@@ -423,14 +494,16 @@ function OrderRow({
           )}
         </div>
       </td>
-      <td className="px-6 py-3.5">
+      {/* Status — chip pattern, same in row and drawer */}
+      <td className="px-6 py-4">
         <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
           {status.label}
         </span>
       </td>
-      <td className={`px-6 py-3.5 font-mono tabular-nums text-right text-[13px] ${
-        isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-medium'
+      {/* Total — right-aligned mono for column alignment */}
+      <td className={`px-6 py-4 font-mono tabular-nums text-right text-sm ${
+        isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-semibold'
       }`}>
         {fmtMoney(order.total)}
       </td>
@@ -566,11 +639,16 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
         {/* ============================================================ */}
         <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
 
-          {/* Stats strip — family pattern (Total / Items / Lines) */}
+          {/* Stats strip — family pattern (Total / Items / Lines).
+              Total carries `prominent` so the dollar amount reads
+              as the lead number of the inspection without being
+              promoted back into the header. Items and Lines stay
+              at the standard cell scale. */}
           <div className="grid grid-cols-3 rounded-xl border border-gray-200 divide-x divide-gray-100 bg-white">
             <DrawerStatCell
               label="Total"
               value={fmtMoney(order.total)}
+              prominent
               valueClass={isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}
             />
             <DrawerStatCell
@@ -641,14 +719,19 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             </div>
             <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100">
               {order.lineItems.map((li) => (
-                <li key={li.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <li
+                  key={li.id}
+                  className="flex items-center justify-between gap-3 px-4 py-3"
+                >
                   <div className="min-w-0">
-                    <p className="text-xs font-medium text-gray-900 truncate">{li.name}</p>
-                    <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">
+                    <p className="text-[13px] font-semibold text-gray-900 truncate">
+                      {li.name}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
                       {fmtMoney(li.unitPrice)} × {li.quantity}
                     </p>
                   </div>
-                  <p className="text-sm font-semibold font-mono tabular-nums text-gray-900 flex-shrink-0">
+                  <p className="text-sm font-bold font-mono tabular-nums text-gray-900 flex-shrink-0">
                     {fmtMoney(li.totalPrice)}
                   </p>
                 </li>
@@ -707,6 +790,37 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
 }
 
 // ================================================================
+// LedgerStat — the ledger-scope summary cell used in the page's
+// orientation strip. Same family as the drawer stat cell but with
+// a `hint` line underneath the value (the orientation strip is
+// horizontal and the cells need to declare scope, not just label).
+// `tone="warn"` tints the value red — used by the Voided cell so
+// the eye lands on it first when there are voids to inspect.
+// ================================================================
+function LedgerStat({
+  label,
+  value,
+  hint,
+  tone = 'neutral',
+}: {
+  label: string
+  value: string
+  hint: string
+  tone?: 'neutral' | 'warn'
+}) {
+  const valueColor = tone === 'warn' ? 'text-red-700' : 'text-gray-900'
+  return (
+    <div className="px-5 py-3.5">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        {label}
+      </p>
+      <p className={`mt-1 text-[17px] font-bold tabular-nums ${valueColor}`}>{value}</p>
+      <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>
+    </div>
+  )
+}
+
+// ================================================================
 // Drawer-local primitives
 //
 // Match the family's stat-cell / meta-pair pattern exactly. The
@@ -718,18 +832,26 @@ function DrawerStatCell({
   label,
   value,
   muted = false,
+  prominent = false,
   valueClass,
 }: {
   label: string
   value: string
   muted?: boolean
+  prominent?: boolean
   valueClass?: string
 }) {
   const tone = valueClass ?? (muted ? 'text-gray-300' : 'text-gray-900')
   return (
     <div className="px-4 py-3">
       <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
-      <p className={`mt-1 text-base font-bold tabular-nums truncate font-mono ${tone}`}>{value}</p>
+      <p
+        className={`mt-1 font-bold tabular-nums truncate font-mono ${
+          prominent ? 'text-lg' : 'text-base'
+        } ${tone}`}
+      >
+        {value}
+      </p>
     </div>
   )
 }

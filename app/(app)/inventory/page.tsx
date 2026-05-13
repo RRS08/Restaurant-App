@@ -19,10 +19,12 @@ export default async function InventoryPage() {
     { data: recipeCounts },
     { data: restockOrders },
   ] = await Promise.all([
+    // Drop the active filter so the duplicate detection + manual
+    // merge drawer can see archived rows too. The page-level item
+    // list (table) re-filters to active before render below.
     supabase
       .from('inventory_items')
       .select('id, name, unit_of_measure, low_stock_threshold, active')
-      .eq('active', true)
       .order('name', { ascending: true }),
 
     supabase
@@ -33,9 +35,17 @@ export default async function InventoryPage() {
       `)
       .order('count_date', { ascending: false }),
 
+    // Order DESC + bump limit defensively. PostgREST defaults to a
+    // 1000-row page when no order is specified — if a dev DB ever
+    // accumulates more rows, the latest depletion transactions could
+    // silently drop out of this page and the estimated stock would
+    // stop reflecting them. Latest-first ordering guarantees we
+    // always see recent depletion first.
     supabase
       .from('inventory_transactions')
-      .select('inventory_item_id, quantity_change, transaction_datetime'),
+      .select('inventory_item_id, quantity_change, transaction_datetime')
+      .order('transaction_datetime', { ascending: false })
+      .limit(5000),
 
     supabase
       .from('inventory_transactions')
@@ -71,12 +81,24 @@ export default async function InventoryPage() {
     }
   }
 
-  // Post-count transaction sums
+  // Post-count transaction sums.
+  //
+  // Strict `>` was dropping post-count sales whose `transaction_datetime`
+  // shared a JS-millisecond with `count_date`. Two reasons that can
+  // happen even though both DB columns have microsecond precision:
+  //   1. JS `new Date(...)` truncates timestamptz precision to ms, so
+  //      distinct DB timestamps that differ only in microseconds compare
+  //      as equal in JS.
+  //   2. A baseline count followed immediately by a POS sale can land
+  //      within the same wall-clock millisecond during dev testing.
+  // `>=` is correct: a transaction recorded at or after the count
+  // timestamp is post-count by definition, and we never double-count
+  // the count itself (the count row isn't in `allTransactions`).
   const postCountSum = new Map<string, number>()
   for (const tx of allTransactions ?? []) {
     const count = latestCount.get(tx.inventory_item_id)
     if (!count) continue
-    if (new Date(tx.transaction_datetime) > new Date(count.date)) {
+    if (new Date(tx.transaction_datetime).getTime() >= new Date(count.date).getTime()) {
       postCountSum.set(tx.inventory_item_id, (postCountSum.get(tx.inventory_item_id) ?? 0) + Number(tx.quantity_change))
     }
   }
@@ -99,7 +121,9 @@ export default async function InventoryPage() {
     countCountMap.set(c.inventory_item_id, (countCountMap.get(c.inventory_item_id) ?? 0) + 1)
   }
 
-  const inventoryItems = (items ?? []).map((item) => {
+  // Table renders active items only — the duplicate detection and
+  // manual merge drawer use the broader (active+archived) list above.
+  const inventoryItems = (items ?? []).filter((i) => i.active).map((item) => {
     const count = latestCount.get(item.id)
     const txSum = postCountSum.get(item.id) ?? 0
     const threshold = Number(item.low_stock_threshold)
@@ -127,6 +151,95 @@ export default async function InventoryPage() {
       hasDependencies,
     }
   })
+
+  // Duplicate-name detection — broadened.
+  //
+  // Catches three cases:
+  //   (a) 2+ active items sharing a normalized name.
+  //   (b) 1 active + 1+ archived items sharing a name where the
+  //       archived row still has dependencies (counts / recipes /
+  //       transactions). The previous check missed (b), which is
+  //       what hides depletion when one duplicate has been archived
+  //       manually but its old recipe link or count is still alive.
+  //   (c) (skipped) all-archived groups — invisible, no impact.
+  //
+  // Dep checks reuse the maps already built above (recipeCountMap,
+  // txCountMap, countCountMap), all of which are keyed by
+  // inventory_item_id regardless of the item's active state.
+  const itemsHasDeps = (id: string): boolean =>
+    (recipeCountMap.get(id) ?? 0) > 0 ||
+    (txCountMap.get(id) ?? 0) > 0 ||
+    (countCountMap.get(id) ?? 0) > 0
+
+  const dupNameMap = new Map<string, {
+    displayName: string
+    activeCount: number
+    archivedCount: number
+    members: { id: string; active: boolean }[]
+  }>()
+  for (const item of items ?? []) {
+    const key = item.name.trim().toLowerCase()
+    let group = dupNameMap.get(key)
+    if (!group) {
+      group = { displayName: item.name.trim(), activeCount: 0, archivedCount: 0, members: [] }
+      dupNameMap.set(key, group)
+    }
+    if (item.active) group.activeCount += 1
+    else group.archivedCount += 1
+    group.members.push({ id: item.id, active: item.active })
+  }
+
+  const duplicateGroups = [...dupNameMap.values()]
+    .filter((g) => {
+      if (g.members.length < 2) return false
+      if (g.activeCount === 0) return false // invisible — nothing to nag about
+      if (g.activeCount >= 2) return true   // case (a)
+      // case (b): exactly one active — check whether any archived
+      // member still has live deps.
+      return g.members.some((m) => !m.active && itemsHasDeps(m.id))
+    })
+    .map((g) => ({ displayName: g.displayName, count: g.members.length }))
+
+  // All-item snapshot for the manual merge drawer (active + archived).
+  // Keeps the merge picker functional even when the auto-banner
+  // doesn't fire (e.g., the user has already archived one duplicate).
+  const mergeableItems = (items ?? []).map((item) => ({
+    id: item.id,
+    name: item.name,
+    active: item.active,
+  }))
+
+  // Per-item diagnostic — surfaces the exact numbers behind every
+  // estimated-stock value. If two inventory_items share a name (a
+  // common testing accident) both rows print, making the
+  // mapping-vs-counted-on-the-wrong-one case obvious. Greppable by
+  // `[inventory/page] stock`.
+  console.info('[inventory/page] stock totals', {
+    total_items: (items ?? []).length,
+    active_items: (items ?? []).filter((i) => i.active).length,
+    archived_items: (items ?? []).filter((i) => !i.active).length,
+    counts: (counts ?? []).length,
+    all_transactions: (allTransactions ?? []).length,
+    duplicate_groups: duplicateGroups.length,
+  })
+  for (const row of inventoryItems) {
+    const c = latestCount.get(row.id)
+    const txForItem = (allTransactions ?? []).filter((t) => t.inventory_item_id === row.id)
+    const postCountTxForItem = txForItem.filter((t) =>
+      c ? new Date(t.transaction_datetime).getTime() >= new Date(c.date).getTime() : false
+    )
+    console.info('[inventory/page] stock item', {
+      id: row.id,
+      name: row.name,
+      last_count_qty: c?.qty ?? null,
+      last_count_date: c?.date ?? null,
+      tx_total: txForItem.length,
+      tx_post_count: postCountTxForItem.length,
+      tx_post_count_sum: postCountSum.get(row.id) ?? 0,
+      estimated: row.estimated,
+      status: row.status,
+    })
+  }
 
   // Build the unified activity feed: transactions + counts (with
   // the earliest count per item tagged as "initial_count" so it
@@ -199,6 +312,8 @@ export default async function InventoryPage() {
       items={inventoryItems}
       transactions={activity}
       restockOrders={restockOrdersForClient}
+      duplicateGroups={duplicateGroups}
+      mergeableItems={mergeableItems}
     />
   )
 }

@@ -2,7 +2,8 @@
 
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
-import { getAuthContext, formatError } from '@/lib/auth'
+import { getAuthContext, formatError, logAudit } from '@/lib/auth'
+import type { AvailabilityOverride } from '@/lib/menu/availability'
 
 export async function createCategory(
   prevState: { error: string } | null,
@@ -140,5 +141,86 @@ export async function deleteMenuItem(
   }
 
   revalidatePath('/menu')
+  return null
+}
+
+// ----------------------------------------------------------------
+// setMenuItemAvailabilityOverride
+//
+// Owner/manager toggle for the manual override stored on menu_items.
+// Three valid values:
+//
+//   'none'           — system rules apply normally (auto-disable on
+//                      stock-out, otherwise sellable).
+//   'force_disabled' — item never appears as sellable in POS, even
+//                      when projection says healthy.
+//   'force_enabled'  — item stays sellable in POS even when
+//                      projection says out. System truth is preserved
+//                      on the menu drawer so the manager can see why
+//                      the override matters.
+//
+// Audit: every change is written to `audit_logs` with the before/after
+// override values. That log is the long-term home for the future
+// intelligence layer's stockout / re-enable timeline view.
+// ----------------------------------------------------------------
+const VALID_AVAILABILITY_OVERRIDES: AvailabilityOverride[] = [
+  'none',
+  'force_enabled',
+  'force_disabled',
+]
+
+export async function setMenuItemAvailabilityOverride(
+  prevState: { error: string } | null,
+  formData: FormData
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const itemId = (formData.get('item_id') as string | null)?.trim() ?? ''
+  const overrideRaw = (formData.get('override') as string | null)?.trim() ?? ''
+  if (!itemId) return { error: 'No item specified.' }
+  if (!(VALID_AVAILABILITY_OVERRIDES as string[]).includes(overrideRaw)) {
+    return { error: 'Invalid override value.' }
+  }
+  const override = overrideRaw as AvailabilityOverride
+
+  // Read the current value first so the audit row carries the
+  // before/after pair — useful for the future re-enable / stockout
+  // timeline view without joining through audit-log diffs.
+  const { data: existing } = await ctx.supabase
+    .from('menu_items')
+    .select('id, availability_override')
+    .eq('id', itemId)
+    .maybeSingle()
+  if (!existing) return { error: 'Item not found.' }
+
+  const previous = (existing.availability_override as AvailabilityOverride | null) ?? 'none'
+  if (previous === override) {
+    // No-op — don't touch timestamps or write an audit row for a
+    // click that didn't change anything.
+    return null
+  }
+
+  // When clearing the override, also clear the audit columns so the
+  // drawer doesn't keep showing a stale "set by X on Y" line.
+  const patch: Record<string, unknown> = { availability_override: override }
+  if (override === 'none') {
+    patch.availability_override_set_at = null
+    patch.availability_override_set_by = null
+  } else {
+    patch.availability_override_set_at = new Date().toISOString()
+    patch.availability_override_set_by = ctx.userId
+  }
+
+  const { error } = await ctx.supabase.from('menu_items').update(patch).eq('id', itemId)
+  if (error) return { error: formatError('availability override', error) }
+
+  await logAudit(ctx, null, 'set_menu_availability_override', 'menu_items', itemId, {
+    previous,
+    next: override,
+  })
+
+  revalidatePath('/menu')
+  revalidatePath('/pos')
   return null
 }

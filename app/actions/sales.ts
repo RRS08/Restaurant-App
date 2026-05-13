@@ -201,46 +201,134 @@ export async function createOrder(
     redirect(voidRedirect && voidRedirect.startsWith('/') ? voidRedirect : '/sales')
   }
 
-  const { data: recipeComponents } = inventoryActive
-    ? await ctx.supabase
-        .from('recipe_components')
-        .select('menu_item_id, inventory_item_id, quantity_required')
-        .in('menu_item_id', menuItemIds)
-    : { data: null }
+  // ----------------------------------------------------------------
+  // Depletion bridge — observable.
+  //
+  // The previous implementation could silently skip depletion in
+  // three different ways (inventory not activated, no recipe
+  // components found, INSERT error logged but not surfaced) — none
+  // of which left a trail on the order itself. The block below
+  // tracks every outcome and folds it into the order's audit_logs
+  // payload so "why didn't this sale deplete stock?" can be answered
+  // by reading one row instead of grepping server logs.
+  //
+  // No workflow change: the sale still succeeds if depletion fails;
+  // depletion is a side-effect, not a precondition.
+  // ----------------------------------------------------------------
+  type DepletionOutcome =
+    | 'skipped_inventory_not_active'
+    | 'no_recipe_components'
+    | 'no_usage_rows'
+    | 'wrote'
+    | 'insert_failed'
 
-  if (inventoryActive && recipeComponents && recipeComponents.length > 0) {
-    const usageRows: {
-      restaurant_id: string; location_id: string;
-      inventory_item_id: string; transaction_type: string; quantity_change: number
-    }[] = []
+  let depletionOutcome: DepletionOutcome = 'skipped_inventory_not_active'
+  let depletionRowsAttempted = 0
+  let depletionRecipeRowsFound = 0
+  let depletionInsertError: string | null = null
 
-    for (const oi of orderItemRows) {
-      for (const comp of recipeComponents.filter((rc) => rc.menu_item_id === oi.menu_item_id)) {
-        usageRows.push({
-          restaurant_id: ctx.restaurantId,
-          location_id: locationId,
-          inventory_item_id: comp.inventory_item_id,
-          transaction_type: 'usage',
-          quantity_change: -(Number(comp.quantity_required) * oi.quantity),
-        })
+  if (inventoryActive) {
+    const { data: recipeComponents, error: recipeError } = await ctx.supabase
+      .from('recipe_components')
+      .select('menu_item_id, inventory_item_id, quantity_required')
+      .in('menu_item_id', menuItemIds)
+
+    depletionRecipeRowsFound = recipeComponents?.length ?? 0
+
+    if (recipeError) {
+      console.error('[sales/createOrder] recipe_components lookup failed:', recipeError)
+      depletionOutcome = 'insert_failed'
+      depletionInsertError = recipeError.message
+    } else if (!recipeComponents || recipeComponents.length === 0) {
+      depletionOutcome = 'no_recipe_components'
+    } else {
+      const usageRows: {
+        restaurant_id: string; location_id: string
+        inventory_item_id: string; transaction_type: string
+        quantity_change: number; reference_note: string
+      }[] = []
+
+      for (const oi of orderItemRows) {
+        const comps = recipeComponents.filter((rc) => rc.menu_item_id === oi.menu_item_id)
+        for (const comp of comps) {
+          const required = Number(comp.quantity_required)
+          // Defensive: a 0 or invalid quantity_required would insert a
+          // no-op transaction. Skip rather than write noise — but flag
+          // it in the diagnostic so a misconfigured recipe is visible.
+          if (!Number.isFinite(required) || required <= 0) {
+            console.warn('[sales/createOrder] skipping recipe component with non-positive quantity_required', {
+              menu_item_id: comp.menu_item_id,
+              inventory_item_id: comp.inventory_item_id,
+              quantity_required: comp.quantity_required,
+            })
+            continue
+          }
+          usageRows.push({
+            restaurant_id: ctx.restaurantId,
+            location_id: locationId,
+            inventory_item_id: comp.inventory_item_id,
+            transaction_type: 'usage',
+            quantity_change: -(required * oi.quantity),
+            reference_note: `Order ${order.id}`,
+          })
+        }
       }
-    }
 
-    if (usageRows.length > 0) {
-      const { error: usageError } = await ctx.supabase
-        .from('inventory_transactions')
-        .insert(usageRows)
-      if (usageError) console.error('Inventory usage failed:', usageError)
+      depletionRowsAttempted = usageRows.length
+
+      if (usageRows.length === 0) {
+        depletionOutcome = 'no_usage_rows'
+      } else {
+        const { error: usageError } = await ctx.supabase
+          .from('inventory_transactions')
+          .insert(usageRows)
+        if (usageError) {
+          console.error('[sales/createOrder] inventory_transactions insert failed:', usageError)
+          depletionOutcome = 'insert_failed'
+          depletionInsertError = usageError.message
+        } else {
+          depletionOutcome = 'wrote'
+        }
+      }
     }
   }
 
-  // Audit
+  // Server-console diagnostic — easy to grep for "[sales/createOrder]"
+  // when investigating "why didn't X deplete stock?" cases.
+  // `recipe_rows_found` is the count returned by the .in() lookup —
+  // distinguishes "lookup query found nothing for these IDs" (mapping
+  // issue) from "lookup found rows but somehow none turned into usage
+  // rows" (defensive quantity guard hit).
+  console.info('[sales/createOrder] depletion', {
+    order_id: order.id,
+    source,
+    inventory_active: inventoryActive,
+    menu_item_ids: menuItemIds,
+    recipe_rows_found: depletionRecipeRowsFound,
+    outcome: depletionOutcome,
+    usage_rows_attempted: depletionRowsAttempted,
+    rows_written: depletionOutcome === 'wrote' ? depletionRowsAttempted : 0,
+    insert_error: depletionInsertError,
+  })
+
+  // Audit — depletion outcome rides on the order's audit row.
   await logAudit(ctx, locationId, 'create_order', 'orders', order.id, {
     total_amount: totalAmount, source, payment_type: paymentType, payment_status: paymentStatus, status: orderStatus,
+    depletion_outcome: depletionOutcome,
+    depletion_recipe_rows_found: depletionRecipeRowsFound,
+    depletion_rows_written: depletionOutcome === 'wrote' ? depletionRowsAttempted : 0,
+    depletion_insert_error: depletionInsertError,
   })
 
   revalidatePath('/sales')
   revalidatePath('/inventory')
+  // Menu and POS both read inventory stock + transactions to compute
+  // projected availability (and POS auto-disables on stock-out). A
+  // sale that writes a depletion transaction must invalidate those
+  // surfaces too, otherwise the new state shows up everywhere except
+  // where the manager actually looks for it.
+  revalidatePath('/menu')
+  revalidatePath('/pos')
   // Callers (e.g. /pos) can supply their own return target so the
   // POS surface stays on /pos after a sale instead of jumping away.
   const redirectTarget = (formData.get('redirect_to') as string | null)?.trim()

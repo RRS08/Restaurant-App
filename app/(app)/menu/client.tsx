@@ -38,12 +38,19 @@ import {
   createCategory,
   deleteMenuItem,
   deleteCategory,
+  setMenuItemAvailabilityOverride,
 } from '@/app/actions/menu'
 import {
   addRecipeComponent,
   removeRecipeComponent,
   createInlineInventoryItem,
 } from '@/app/actions/recipe'
+import {
+  shortAvailabilityChip,
+  type AvailabilityOverride,
+  type EffectiveSellability,
+  type ProjectionState,
+} from '@/lib/menu/availability'
 import MenuImportPanel from './import-panel'
 
 // ================================================================
@@ -58,6 +65,13 @@ interface RecipeEntry {
 interface MenuItem {
   id: string; name: string; currentPrice: number; active: boolean
   categoryId: string | null; source: string; recipe: RecipeEntry[]
+  // Availability foundation (computed in the page component).
+  override: AvailabilityOverride
+  overrideSetAt: string | null
+  projectedCount: number | null
+  projectionState: ProjectionState
+  effectiveSellability: EffectiveSellability
+  bottleneckInventoryItemName: string | null
 }
 interface InventoryItem { id: string; name: string; unitOfMeasure: string }
 interface ExternalConnection {
@@ -77,6 +91,10 @@ interface Props {
   locations?: { id: string; name: string }[]
   externalConnections?: ExternalConnection[]
   isDev?: boolean
+  /** Whether the inventory bridge is live. Drives whether the
+   *  drawer can surface honest projection counts vs. an "inventory
+   *  not active yet" note. */
+  inventoryActive?: boolean
 }
 
 type OperatingMode = 'native_pos' | 'external_pos' | null
@@ -113,6 +131,7 @@ export default function MenuClient({
   locations = [],
   externalConnections = [],
   isDev = false,
+  inventoryActive = false,
 }: Props) {
   const isExternal = operatingMode === 'external_pos'
 
@@ -224,6 +243,7 @@ export default function MenuClient({
           item={liveItem}
           sectionName={categories.find((c) => c.id === liveItem.categoryId)?.name ?? null}
           inventoryItems={inventoryItems}
+          inventoryActive={inventoryActive}
           onClose={() => setSelectedItemId(null)}
         />
       )}
@@ -415,12 +435,27 @@ function ItemCard({
     ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.15)]'
     : 'border-gray-200/80 hover:border-gray-300'
 
+  // Availability cue. Healthy items return null and the card stays
+  // visually quiet — no extra signals, matching the "do not surface
+  // projected count on healthy items" rule.
+  const availabilityCue = shortAvailabilityChip({
+    projectedCount: item.projectedCount,
+    projectionState: item.projectionState,
+    effectiveSellability: item.effectiveSellability,
+    bottleneckInventoryItemId: null,
+  })
+  // Cards visually dim when the item is unsellable for any reason
+  // (inactive, manually disabled, auto-disabled by a stock-out).
+  const unsellable = item.effectiveSellability === 'auto_disabled'
+    || item.effectiveSellability === 'manually_disabled'
+    || isInactive
+
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 transition-all duration-150 hover:shadow-md ${ringClass} ${isInactive ? 'opacity-60' : ''}`}
+      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-60' : ''}`}
     >
       <div className="flex items-start justify-between gap-2">
         <p
@@ -456,6 +491,19 @@ function ItemCard({
         {isInactive && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
             Inactive
+          </span>
+        )}
+        {availabilityCue && (
+          <span
+            className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+              availabilityCue.tone === 'red'
+                ? 'bg-red-50 text-red-700'
+                : availabilityCue.tone === 'amber'
+                  ? 'bg-amber-50 text-amber-700'
+                  : 'bg-gray-100 text-gray-600'
+            }`}
+          >
+            {availabilityCue.label}
           </span>
         )}
       </div>
@@ -601,11 +649,13 @@ function ItemDrawer({
   item,
   sectionName,
   inventoryItems,
+  inventoryActive,
   onClose,
 }: {
   item: MenuItem
   sectionName: string | null
   inventoryItems: InventoryItem[]
+  inventoryActive: boolean
   onClose: () => void
 }) {
   const [addState, addAction, addPending] = useActionState(addRecipeComponent, null)
@@ -625,36 +675,24 @@ function ItemDrawer({
   // every time the surface is closed so reopening always starts fresh.
   const [addOpen, setAddOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const [comboOpen, setComboOpen] = useState(false)
   const [selectedIngredient, setSelectedIngredient] = useState<InventoryItem | null>(null)
   const [creatingNew, setCreatingNew] = useState(false)
-  const comboRef = useRef<HTMLDivElement>(null)
 
-  // Auto-select ingredient after creation succeeds
+  // Auto-select ingredient after creation succeeds — lands the user
+  // straight on the confirm step (quantity + commit) without making
+  // them search again for the thing they just created.
   useEffect(() => {
     if (createState && 'item' in createState && createState.item) {
       const created = createState.item
       setSelectedIngredient({ id: created.id, name: created.name, unitOfMeasure: created.unitOfMeasure })
       setQuery(created.name)
       setCreatingNew(false)
-      setComboOpen(false)
     }
   }, [createState])
 
   const filtered = query.trim()
     ? available.filter((ii) => ii.name.toLowerCase().includes(query.toLowerCase()))
     : available
-
-  const exactMatch = available.some((ii) => ii.name.toLowerCase() === query.trim().toLowerCase())
-
-  // Outside-click closes combobox
-  useEffect(() => {
-    const handle = (e: MouseEvent) => {
-      if (comboRef.current && !comboRef.current.contains(e.target as Node)) setComboOpen(false)
-    }
-    document.addEventListener('mousedown', handle)
-    return () => document.removeEventListener('mousedown', handle)
-  }, [])
 
   // Esc + body-scroll lock — same pattern as Sales drawer.
   useEffect(() => {
@@ -670,16 +708,18 @@ function ItemDrawer({
     }
   }, [onClose])
 
+  // The add card is a small two-step inline workspace, not a floating
+  // autocomplete. Selecting an ingredient transitions to a confirm
+  // view (quantity + commit), so we don't echo the picked name back
+  // into `query` — that would flicker the search field on a screen
+  // the user has already left.
   const selectIngredient = (ii: InventoryItem) => {
     setSelectedIngredient(ii)
-    setQuery(ii.name)
-    setComboOpen(false)
     setCreatingNew(false)
   }
 
   const startCreate = () => {
     setCreatingNew(true)
-    setComboOpen(true) // keep dropdown context
     setSelectedIngredient(null)
   }
 
@@ -687,7 +727,6 @@ function ItemDrawer({
     setQuery('')
     setSelectedIngredient(null)
     setCreatingNew(false)
-    setComboOpen(false)
   }
 
   const closeAddSurface = () => {
@@ -821,98 +860,125 @@ function ItemDrawer({
               </p>
             )}
 
-            {/* Add-ingredient entry point.
-                At rest: a calm dashed-bordered "+ Add ingredient"
-                button that invites the action without surfacing the
-                full search/create UI. */}
+            {/* Add-ingredient interaction.
+                Default state is a quiet outlined "+ Add ingredient"
+                button. Clicking it reveals an inline 2-step add card
+                directly below the recipe list:
+                  • Step 1 — pick: search field + integrated results
+                    list + "+ Create new ingredient" row at the bottom.
+                  • Step 2 — confirm: selected ingredient summary +
+                    quantity input + Add / Cancel action row.
+                Create-new is a deliberate branch off step 1 that keeps
+                the user inside the same contained card. The results
+                list is part of the card (no detached floating dropdown). */}
             {!addOpen ? (
               <button
                 type="button"
                 onClick={() => setAddOpen(true)}
-                className="w-full rounded-lg border border-dashed border-gray-300 bg-white px-3 py-2.5 text-xs font-medium text-gray-700 hover:bg-gray-50 hover:border-gray-400 transition-colors"
+                className="w-full rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
               >
                 + Add ingredient
               </button>
             ) : (
-            // Reveal surface — search OR inline create.
-            // Lives on a single calm tinted shell across both modes;
-            // the previous version flipped background colors which
-            // made the area feel utility-y. Mode is now communicated
-            // by the header eyebrow text alone.
-            <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-3.5">
-              {/* Surface header: small eyebrow + Cancel.
-                  Cancel always closes the entire add surface — distinct
-                  from the in-create "Back" button which only steps from
-                  create mode back to search mode. */}
-              <div className="mb-2.5 flex items-center justify-between gap-3">
-                <p className={`text-[10px] font-semibold uppercase tracking-widest ${
-                  creatingNew ? 'text-blue-700' : 'text-gray-500'
-                }`}>
-                  {creatingNew ? 'New ingredient' : 'Add ingredient'}
-                </p>
-                <button
-                  type="button"
-                  onClick={closeAddSurface}
-                  className="text-[10px] font-medium text-gray-500 hover:text-gray-700 transition-colors"
-                >
-                  Cancel
-                </button>
-              </div>
-              {!creatingNew ? (
-                <>
-                  <form action={(fd) => addAction(fd)}>
-                    <input type="hidden" name="menu_item_id" value={item.id} />
-                    <input type="hidden" name="inventory_item_id" value={selectedIngredient?.id ?? ''} />
+              <div className="rounded-xl border border-gray-200 bg-gray-50/60 overflow-hidden">
 
-                    <div ref={comboRef} className="relative">
+                {/* Top row: eyebrow + Cancel (persistent escape).
+                    Cancel here always closes the entire add surface.
+                    The in-create "Back" button below is the step-back
+                    affordance and is distinct from this Cancel. */}
+                <div className="px-3.5 pt-3 pb-2 flex items-center justify-between gap-3">
+                  <p className={`text-[10px] font-semibold uppercase tracking-widest ${
+                    creatingNew ? 'text-blue-700' : 'text-gray-500'
+                  }`}>
+                    {creatingNew ? 'New ingredient' : 'Add ingredient'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={closeAddSurface}
+                    className="text-[10px] font-medium text-gray-500 hover:text-gray-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                {creatingNew ? (
+                  // ===== Create branch =====
+                  <form action={(fd) => createAction(fd)} className="px-3.5 pb-3.5">
+                    <input type="hidden" name="menu_item_id" value={item.id} />
+                    <input type="hidden" name="name" value={query.trim()} />
+
+                    <label className="block mb-2.5">
+                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                        Name
+                      </span>
                       <input
                         type="text"
                         value={query}
-                        onChange={(e) => {
-                          setQuery(e.target.value)
-                          setComboOpen(true)
-                          setSelectedIngredient(null)
-                        }}
-                        onFocus={() => setComboOpen(true)}
-                        placeholder="Search or create ingredient…"
+                        onChange={(e) => setQuery(e.target.value)}
+                        autoFocus
+                        placeholder="Ingredient name"
                         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                       />
+                    </label>
 
-                      {comboOpen && (
-                        <div className="absolute left-0 right-0 top-full mt-1 bg-white rounded-lg border border-gray-200 shadow-lg z-10 overflow-hidden">
-                          <div className="max-h-40 overflow-y-auto">
-                            {filtered.map((ii) => (
-                              <button
-                                key={ii.id}
-                                type="button"
-                                onClick={() => selectIngredient(ii)}
-                                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
-                              >
-                                {ii.name} <span className="text-gray-400 text-xs">({ii.unitOfMeasure})</span>
-                              </button>
-                            ))}
-                            {filtered.length === 0 && available.length > 0 && (
-                              <p className="px-3 py-2 text-xs text-gray-400">No matches</p>
-                            )}
-                            {filtered.length === 0 && available.length === 0 && (
-                              <p className="px-3 py-2 text-xs text-gray-400">All items already in recipe</p>
-                            )}
-                          </div>
-                          <button
-                            type="button"
-                            onClick={startCreate}
-                            className="w-full text-left px-3 py-2 text-sm text-blue-600 hover:bg-blue-50 transition-colors border-t border-gray-100"
-                          >
-                            {query.trim() && !exactMatch
-                              ? <span>+ Create <strong>&quot;{query.trim()}&quot;</strong></span>
-                              : '+ New ingredient'}
-                          </button>
-                        </div>
-                      )}
+                    <label className="block mb-3">
+                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                        Unit
+                      </span>
+                      <select
+                        name="unit_of_measure"
+                        defaultValue="units"
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                      >
+                        <option value="units">Units (each)</option>
+                        <option value="kg">Kilograms</option>
+                        <option value="lbs">Pounds</option>
+                        <option value="liters">Liters</option>
+                        <option value="oz">Ounces</option>
+                        <option value="gallons">Gallons</option>
+                        <option value="cases">Cases</option>
+                        <option value="bags">Bags</option>
+                      </select>
+                    </label>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="submit"
+                        disabled={createPending || !query.trim()}
+                        className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
+                      >
+                        {createPending ? 'Creating…' : 'Create ingredient'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCreatingNew(false)}
+                        className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Back
+                      </button>
+                    </div>
+                    {createState?.error && (
+                      <p className="text-[11px] text-red-600 mt-2">{createState.error}</p>
+                    )}
+                  </form>
+                ) : selectedIngredient ? (
+                  // ===== Step 2: confirm =====
+                  <form action={(fd) => addAction(fd)} className="px-3.5 pb-3.5">
+                    <input type="hidden" name="menu_item_id" value={item.id} />
+                    <input type="hidden" name="inventory_item_id" value={selectedIngredient.id} />
+
+                    {/* Selection summary — clear "this is what's being added" */}
+                    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 mb-3">
+                      <p className="text-sm font-medium text-gray-900 truncate">{selectedIngredient.name}</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">{selectedIngredient.unitOfMeasure}</p>
                     </div>
 
-                    {selectedIngredient && (
-                      <div className="flex gap-2 mt-2">
+                    {/* Quantity input — only after selection */}
+                    <label className="block mb-3">
+                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                        Quantity per dish
+                      </span>
+                      <div className="flex items-center gap-2">
                         <input
                           name="quantity_required"
                           type="number"
@@ -920,79 +986,90 @@ function ItemDrawer({
                           min="0.0001"
                           step="0.0001"
                           autoFocus
-                          placeholder="Qty"
-                          className="w-24 rounded-lg border border-gray-300 bg-white px-2.5 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                          placeholder="0.00"
+                          className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                         />
-                        <button
-                          type="submit"
-                          disabled={addPending}
-                          className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
-                        >
-                          {addPending ? 'Adding…' : `Add ${selectedIngredient.name}`}
-                        </button>
+                        <span className="text-xs text-gray-500 whitespace-nowrap">{selectedIngredient.unitOfMeasure}</span>
                       </div>
+                    </label>
+
+                    {/* Action row */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="submit"
+                        disabled={addPending}
+                        className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
+                      >
+                        {addPending ? 'Adding…' : 'Add ingredient'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={closeAddSurface}
+                        className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {addState?.error && (
+                      <p className="text-[11px] text-red-600 mt-2">{addState.error}</p>
                     )}
                   </form>
-                  {addState?.error && (
-                    <p className="text-[11px] text-red-600 mt-2">{addState.error}</p>
-                  )}
-                </>
-              ) : (
-                <form action={(fd) => createAction(fd)}>
-                  <input type="hidden" name="menu_item_id" value={item.id} />
-                  <input type="hidden" name="name" value={query.trim()} />
+                ) : (
+                  // ===== Step 1: pick =====
+                  <div className="px-3.5 pb-3.5">
+                    <input
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      autoFocus
+                      placeholder="Search ingredient..."
+                      className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                    />
 
-                  {/* The surface header above already announces
-                      "New ingredient", so the in-form eyebrow it used
-                      to repeat is intentionally omitted here. */}
-
-                  <input
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    autoFocus
-                    placeholder="Ingredient name"
-                    className="w-full rounded-lg border border-blue-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition mb-2"
-                  />
-
-                  <div className="flex gap-2">
-                    <select
-                      name="unit_of_measure"
-                      defaultValue="units"
-                      className="flex-1 rounded-lg border border-blue-300 bg-white px-2.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-                    >
-                      <option value="units">Units (each)</option>
-                      <option value="kg">Kilograms</option>
-                      <option value="lbs">Pounds</option>
-                      <option value="liters">Liters</option>
-                      <option value="oz">Ounces</option>
-                      <option value="gallons">Gallons</option>
-                      <option value="cases">Cases</option>
-                      <option value="bags">Bags</option>
-                    </select>
-                    <button
-                      type="submit"
-                      disabled={createPending || !query.trim()}
-                      className="px-4 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
-                    >
-                      {createPending ? '…' : 'Create'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCreatingNew(false)}
-                      className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-                    >
-                      Back
-                    </button>
+                    {/* Integrated results list — part of the same card,
+                        not a floating autocomplete. The "+ Create new
+                        ingredient" row is visually separated by a
+                        top border so the alternative path reads as a
+                        deliberate branch, not the default action. */}
+                    <div className="mt-2 rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <div className="max-h-44 overflow-y-auto divide-y divide-gray-100">
+                        {filtered.length > 0 ? (
+                          filtered.map((ii) => (
+                            <button
+                              key={ii.id}
+                              type="button"
+                              onClick={() => selectIngredient(ii)}
+                              className="w-full text-left px-3 py-2 text-sm text-gray-900 hover:bg-blue-50 transition-colors"
+                            >
+                              <span className="font-medium">{ii.name}</span>
+                              <span className="text-gray-400 text-xs ml-2">— {ii.unitOfMeasure}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <p className="px-3 py-2.5 text-xs text-gray-400">
+                            {available.length === 0 ? 'All items already in recipe.' : 'No matches.'}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={startCreate}
+                        className="w-full text-left px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors border-t border-gray-200"
+                      >
+                        + Create new ingredient
+                      </button>
+                    </div>
                   </div>
-                  {createState?.error && (
-                    <p className="text-[11px] text-red-600 mt-2">{createState.error}</p>
-                  )}
-                </form>
-              )}
-            </div>
+                )}
+              </div>
             )}
           </div>
+
+          {/* AVAILABILITY — projection state + manual override.
+              The drawer is the canonical place to understand and
+              steer item sellability. The card above only carries a
+              quiet chip; full audit context lives here. */}
+          <AvailabilitySection item={item} inventoryActive={inventoryActive} />
         </div>
 
         {/* ACTION ZONE — pinned footer with 2-step remove */}
@@ -1039,6 +1116,142 @@ function ItemDrawer({
         </div>
       </aside>
     </>
+  )
+}
+
+// ================================================================
+// AvailabilitySection — drawer's canonical availability surface.
+//
+// Reads the precomputed projection state on the menu item and lets
+// the manager set a manual override (none / force_enabled /
+// force_disabled). Designed to keep system truth visible even when
+// the override flips an item against it: the projection row stays
+// honest about "system says out" even while the override forces
+// the item enabled at POS.
+// ================================================================
+function AvailabilitySection({
+  item,
+  inventoryActive,
+}: {
+  item: MenuItem
+  inventoryActive: boolean
+}) {
+  const [state, action, pending] = useActionState(setMenuItemAvailabilityOverride, null)
+
+  // Map projection state to a small chip with calm tone. Healthy is
+  // intentionally green-quiet; the goal here is honest signal, not
+  // alerts.
+  const projectionChip = (() => {
+    switch (item.projectionState) {
+      case 'healthy':
+        return { label: 'Healthy', tone: 'green' as const }
+      case 'low':
+        return {
+          label: item.projectedCount !== null ? `Low · ${item.projectedCount} left` : 'Low',
+          tone: 'amber' as const,
+        }
+      case 'out':
+        return { label: 'Out of stock', tone: 'red' as const }
+      case 'unavailable_to_project':
+        return {
+          label: !inventoryActive ? 'Inventory not active' : !hasRecipe(item) ? 'Not inventory-backed' : 'Stock unknown',
+          tone: 'gray' as const,
+        }
+    }
+  })()
+
+  const projectionToneClass: Record<typeof projectionChip.tone, string> = {
+    green: 'bg-green-50 text-green-700',
+    amber: 'bg-amber-50 text-amber-700',
+    red: 'bg-red-50 text-red-700',
+    gray: 'bg-gray-100 text-gray-600',
+  }
+
+  // Sellability label — what POS will actually do.
+  const sellabilityLabel: Record<EffectiveSellability, string> = {
+    enabled: 'Sellable at POS',
+    inactive: 'Inactive (menu)',
+    auto_disabled: 'Auto-disabled · out of stock',
+    manually_disabled: 'Manually disabled',
+    manually_enabled: 'Manually enabled · override on',
+  }
+
+  const overrideOptions: { value: AvailabilityOverride; label: string; hint: string }[] = [
+    { value: 'none',           label: 'System default', hint: 'Auto-disable when out of stock.' },
+    { value: 'force_enabled',  label: 'Force enabled',  hint: 'Stay sellable even if system says out.' },
+    { value: 'force_disabled', label: 'Force disabled', hint: 'Hide from POS regardless of stock.' },
+  ]
+
+  return (
+    <div>
+      <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        Availability
+      </p>
+
+      {/* System truth — projection chip + bottleneck + sellability */}
+      <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-3 mb-3 space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[11px] text-gray-500">Projection</span>
+          <span className={`inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded ${projectionToneClass[projectionChip.tone]}`}>
+            {projectionChip.label}
+          </span>
+        </div>
+        {item.bottleneckInventoryItemName && (item.projectionState === 'low' || item.projectionState === 'out') && (
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[11px] text-gray-500">Limited by</span>
+            <span className="text-[11px] text-gray-700 truncate">{item.bottleneckInventoryItemName}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-100">
+          <span className="text-[11px] text-gray-500">POS sellability</span>
+          <span className="text-[11px] font-medium text-gray-800 truncate">
+            {sellabilityLabel[item.effectiveSellability]}
+          </span>
+        </div>
+      </div>
+
+      {/* Manual override controls — three-state pill group.
+          Each option submits the override action; the server clears
+          the audit timestamps when going back to 'none'. */}
+      <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
+          Manual override
+        </p>
+        <div className="grid grid-cols-3 gap-1.5">
+          {overrideOptions.map((opt) => {
+            const active = item.override === opt.value
+            return (
+              <form action={action} key={opt.value}>
+                <input type="hidden" name="item_id" value={item.id} />
+                <input type="hidden" name="override" value={opt.value} />
+                <button
+                  type="submit"
+                  disabled={pending || active}
+                  className={`w-full rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-colors ${
+                    active
+                      ? 'bg-gray-900 text-white border border-gray-900'
+                      : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 disabled:opacity-60'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              </form>
+            )
+          })}
+        </div>
+        <p className="mt-2 text-[10px] text-gray-500 leading-relaxed">
+          {overrideOptions.find((o) => o.value === item.override)?.hint}
+        </p>
+        {item.override !== 'none' && item.overrideSetAt && (
+          <p className="mt-1 text-[10px] text-gray-400">
+            Override active since {new Date(item.overrideSetAt).toLocaleString('en-US', {
+              month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+            })}
+          </p>
+        )}
+        {state?.error && <p className="mt-2 text-[11px] text-red-600">{state.error}</p>}
+      </div>
+    </div>
   )
 }
 

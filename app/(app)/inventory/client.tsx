@@ -9,7 +9,7 @@
 // count actions.
 // ----------------------------------------------------------------
 
-import { useState, useRef, useEffect, useMemo, useActionState } from 'react'
+import { useState, useRef, useEffect, useMemo, useActionState, useTransition } from 'react'
 import Link from 'next/link'
 import {
   updateThreshold,
@@ -24,6 +24,7 @@ import {
   updateRestockQuantity,
   placeAllDrafts,
 } from '@/app/actions/inventory'
+import { cleanupDuplicateInventoryItems, mergeInventoryItems } from '@/app/actions/inventory-cleanup'
 
 interface Item {
   id: string; name: string; unitOfMeasure: string; threshold: number
@@ -76,12 +77,23 @@ type DrawerState =
   | { mode: 'create-item' }
   | { mode: 'cart' }
   | { mode: 'orders' }
+  | { mode: 'merge-items' }
   | null
 
-export default function InventoryClient({ items, transactions, restockOrders }: {
+export default function InventoryClient({ items, transactions, restockOrders, duplicateGroups = [], mergeableItems = [] }: {
   items: Item[]
   transactions: Transaction[]
   restockOrders: RestockOrder[]
+  /** Active inventory items grouped by normalized name where >1 row
+   *  exists. When non-empty, render an in-page banner with a one-
+   *  click merge — the most common cause of "depletion writes exist
+   *  but stock movement isn't visible" is duplicate items, and the
+   *  user can resolve it without leaving the page. */
+  duplicateGroups?: { displayName: string; count: number }[]
+  /** Active + archived inventory items, used by the manual-merge
+   *  drawer's pickers. Always available, even when the auto-banner
+   *  doesn't fire (e.g., one duplicate was already archived). */
+  mergeableItems?: { id: string; name: string; active: boolean }[]
 }) {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
@@ -168,18 +180,45 @@ export default function InventoryClient({ items, transactions, restockOrders }: 
     <div className="max-w-[1400px]">
 
       {/* ---- HEADER — same shape as Finance / Staffing: strong   */}
-      {/*    title + one-line subtitle, mobile-only inline action. */}
+      {/*    title + one-line subtitle, mobile-only inline action.   */}
+      {/* `Merge items` is the always-visible escape hatch for       */}
+      {/*    duplicate cleanup when the banner doesn't fire — for     */}
+      {/*    example, when one of the duplicates is already archived */}
+      {/*    or the auto-detection's name-normalization missed them. */}
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
           <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Inventory</h1>
           <p className="mt-1.5 text-sm text-gray-500">Track stock health for ingredients and operational supplies.</p>
         </div>
-        {/* Mobile-only fallback — desktop uses the right-rail inline flow */}
-        <Link href="/inventory/new-item"
-          className="lg:hidden flex-shrink-0 inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors">
-          + New item
-        </Link>
+        <div className="flex-shrink-0 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setDrawer({ mode: 'merge-items' })}
+            className="text-[11px] font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline transition-colors"
+          >
+            Merge items
+          </button>
+          {/* Mobile-only fallback — desktop uses the right-rail inline flow */}
+          <Link href="/inventory/new-item"
+            className="lg:hidden inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors">
+            + New item
+          </Link>
+        </div>
       </div>
+
+      {/* Duplicate-name banner.
+          Renders when any item-name group has multiple rows and at
+          least one is active. Catches both 2+ active and the
+          1 active + archived-with-deps case (where depletion writes
+          land on one row while the count lives on another). Offers
+          two paths: one-click bulk merge, or pick canonical manually
+          via the merge drawer. */}
+      {duplicateGroups.length > 0 && (
+        <DuplicateMergeBanner
+          groups={duplicateGroups}
+          onPickManually={() => setDrawer({ mode: 'merge-items' })}
+        />
+      )}
 
       {items.length === 0 ? (
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-12 text-center">
@@ -375,6 +414,12 @@ export default function InventoryClient({ items, transactions, restockOrders }: 
           transactions={transactions}
           onClose={() => setDrawer(null)}
           onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
+        />
+      )}
+      {drawer?.mode === 'merge-items' && (
+        <MergeItemsDrawer
+          mergeableItems={mergeableItems}
+          onClose={() => setDrawer(null)}
         />
       )}
     </div>
@@ -1925,5 +1970,282 @@ function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[]
         </div>
       </div>
     </div>
+  )
+}
+
+// ================================================================
+// DuplicateMergeBanner — surfaces same-named active inventory items
+// and offers one-click resolution via cleanupDuplicateInventoryItems.
+// The merge action re-points recipe_components, inventory_counts,
+// and inventory_transactions to a single canonical row chosen by
+// most-deps-wins, so a click immediately makes prior depletion
+// writes land on the visible row.
+// ================================================================
+function DuplicateMergeBanner({
+  groups,
+  onPickManually,
+}: {
+  groups: { displayName: string; count: number }[]
+  onPickManually: () => void
+}) {
+  const [pending, startTransition] = useTransition()
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const handleMerge = () => {
+    setResult(null)
+    startTransition(async () => {
+      const res = await cleanupDuplicateInventoryItems()
+      if (res?.error) {
+        setResult({ ok: false, message: res.error })
+      } else {
+        const merged = (res as { merged?: number })?.merged ?? 0
+        setResult({
+          ok: true,
+          message:
+            merged > 0
+              ? `Merged ${merged} duplicate${merged === 1 ? '' : 's'}. Stock movement will now land on the canonical row.`
+              : 'No active duplicates found.',
+        })
+      }
+    })
+  }
+
+  // Compact preview — first three duplicate names, ellipsized if more.
+  const preview = groups
+    .slice(0, 3)
+    .map((g) => `${g.displayName} ×${g.count}`)
+    .join(', ')
+  const more = groups.length > 3 ? `, +${groups.length - 3} more` : ''
+
+  return (
+    <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+            Duplicate inventory items detected
+          </p>
+          <p className="mt-1 text-xs text-amber-800 leading-relaxed">
+            {groups.length} item name{groups.length === 1 ? ' has' : 's have'} more than one active row.
+            POS depletion is being written to one row while the count may be on another, so stock movement isn&apos;t showing
+            against the row you&apos;re looking at. Merge to consolidate them into a single canonical row.
+          </p>
+          <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">
+            {preview}{more}
+          </p>
+          {result && (
+            <p className={`mt-2 text-[11px] ${result.ok ? 'text-green-700' : 'text-red-700'}`}>
+              {result.message}
+            </p>
+          )}
+        </div>
+        <div className="flex-shrink-0 flex flex-col items-end gap-1.5">
+          <button
+            type="button"
+            onClick={handleMerge}
+            disabled={pending}
+            className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+          >
+            {pending ? 'Merging…' : 'Merge duplicates'}
+          </button>
+          <button
+            type="button"
+            onClick={onPickManually}
+            className="text-[11px] font-medium text-amber-700 hover:text-amber-800 underline-offset-2 hover:underline transition-colors"
+          >
+            Pick manually
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// MergeItemsDrawer — manual canonical/duplicate picker.
+//
+// Always available via the header "Merge items" link, even when the
+// auto-banner doesn't fire (one duplicate already archived, names
+// not exact matches, or the user just wants to consolidate two
+// items by hand). Calls `mergeInventoryItems(canonicalId, dupId)`
+// which re-points every dependent reference to the canonical row.
+//
+// The picker lists active + archived items so the user can resolve
+// active+archived pairs — the case where a previously-archived row
+// still carries the count or recipe link that splits depletion away
+// from the visible "Tequila" row.
+// ================================================================
+function MergeItemsDrawer({
+  mergeableItems,
+  onClose,
+}: {
+  mergeableItems: { id: string; name: string; active: boolean }[]
+  onClose: () => void
+}) {
+  const [canonicalId, setCanonicalId] = useState('')
+  const [duplicateId, setDuplicateId] = useState('')
+  const [pending, startTransition] = useTransition()
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  const handleMerge = () => {
+    setResult(null)
+    if (!canonicalId || !duplicateId) {
+      setResult({ ok: false, message: 'Pick both items before merging.' })
+      return
+    }
+    if (canonicalId === duplicateId) {
+      setResult({ ok: false, message: 'Canonical and duplicate must be different items.' })
+      return
+    }
+    startTransition(async () => {
+      const res = await mergeInventoryItems(canonicalId, duplicateId)
+      if (res.error) {
+        setResult({ ok: false, message: res.error })
+      } else {
+        setResult({ ok: true, message: res.message })
+        setCanonicalId('')
+        setDuplicateId('')
+      }
+    })
+  }
+
+  const canonical = mergeableItems.find((i) => i.id === canonicalId) ?? null
+  const duplicate = mergeableItems.find((i) => i.id === duplicateId) ?? null
+
+  // Sort: active first, then by name. Archived rows are still
+  // selectable but visually labeled so the user knows.
+  const sortedItems = [...mergeableItems].sort((a, b) => {
+    if (a.active !== b.active) return a.active ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
+      />
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+
+        {/* Header */}
+        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Inventory cleanup
+            </p>
+            <h2 className="mt-1 text-base font-bold text-gray-900">Merge inventory items</h2>
+            <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+              Re-points counts, recipe links, and stock transactions from the duplicate row to the canonical row, then removes the duplicate.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+          >
+            Close
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+              Canonical (the row to keep)
+            </label>
+            <select
+              value={canonicalId}
+              onChange={(e) => setCanonicalId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            >
+              <option value="">Select an item…</option>
+              {sortedItems.map((item) => (
+                <option key={item.id} value={item.id} disabled={item.id === duplicateId}>
+                  {item.name}{item.active ? '' : ' (archived)'}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+              Duplicate (merged into canonical)
+            </label>
+            <select
+              value={duplicateId}
+              onChange={(e) => setDuplicateId(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            >
+              <option value="">Select an item…</option>
+              {sortedItems.map((item) => (
+                <option key={item.id} value={item.id} disabled={item.id === canonicalId}>
+                  {item.name}{item.active ? '' : ' (archived)'}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Preview */}
+          {canonical && duplicate && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-2">
+                What will happen
+              </p>
+              <ul className="text-[12px] text-gray-700 space-y-1.5 leading-relaxed">
+                <li>
+                  Counts, recipe links, and stock transactions from{' '}
+                  <span className="font-semibold">{duplicate.name}{duplicate.active ? '' : ' (archived)'}</span> move onto{' '}
+                  <span className="font-semibold">{canonical.name}{canonical.active ? '' : ' (archived)'}</span>.
+                </li>
+                <li>
+                  Canonical is set to <span className="font-semibold">active</span> if it isn&apos;t already.
+                </li>
+                <li>
+                  Duplicate is removed (or archived if a hard delete is blocked).
+                </li>
+              </ul>
+            </div>
+          )}
+
+          {result && (
+            <p className={`text-[11px] leading-relaxed ${result.ok ? 'text-green-700' : 'text-red-700'}`}>
+              {result.message}
+            </p>
+          )}
+        </div>
+
+        {/* Footer action zone */}
+        <div className="border-t border-gray-200 bg-gray-50/40 px-6 py-4 flex-shrink-0 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleMerge}
+            disabled={pending || !canonicalId || !duplicateId || canonicalId === duplicateId}
+            className="flex-1 rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {pending ? 'Merging…' : 'Merge items'}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+          >
+            Cancel
+          </button>
+        </div>
+      </aside>
+    </>
   )
 }

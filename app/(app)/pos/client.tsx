@@ -18,9 +18,26 @@
 
 import { useState, useMemo, useActionState, useEffect, useRef } from 'react'
 import { createOrder } from '@/app/actions/sales'
+import {
+  isPosSellable,
+  type EffectiveSellability,
+  type ProjectionState,
+} from '@/lib/menu/availability'
 
 interface Category { id: string; name: string }
-interface Item { id: string; name: string; price: number; categoryId: string | null }
+interface Item {
+  id: string
+  name: string
+  price: number
+  categoryId: string | null
+  // Availability — drives whether the tile is clickable and which
+  // status cue (if any) appears on the button. `enabled` and
+  // `manually_enabled` are clickable; everything else is dimmed and
+  // unclickable, with a small status pill.
+  effectiveSellability: EffectiveSellability
+  projectedCount: number | null
+  projectionState: ProjectionState
+}
 interface CartLine { itemId: string; name: string; price: number; quantity: number }
 
 type PaymentType = 'cash' | 'card' | 'other'
@@ -166,17 +183,68 @@ export default function PosClient({
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-              {visibleItems.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => addItem(item)}
-                  className="group text-left rounded-xl border border-gray-200 bg-white shadow-sm p-4 hover:border-blue-300 hover:shadow-md active:scale-[.98] transition-all"
-                >
-                  <p className="text-sm font-semibold text-gray-900 line-clamp-2 min-h-[2.5rem]">{item.name}</p>
-                  <p className="mt-2 text-base font-bold text-blue-600 tabular-nums">{CURRENCY(item.price)}</p>
-                </button>
-              ))}
+              {visibleItems.map((item) => {
+                const sellable = isPosSellable(item.effectiveSellability)
+                // Status cue mirrors the menu card chip vocabulary so
+                // staff don't have to remember two languages. Healthy
+                // items show no cue; auto-disabled and manually-
+                // disabled items get an inline state pill.
+                const statusCue: { label: string; tone: 'red' | 'amber' | 'gray' } | null = (() => {
+                  if (item.effectiveSellability === 'auto_disabled') {
+                    return { label: 'Out', tone: 'red' }
+                  }
+                  if (item.effectiveSellability === 'manually_disabled') {
+                    return { label: 'Disabled', tone: 'gray' }
+                  }
+                  if (item.effectiveSellability === 'manually_enabled' && item.projectionState === 'out') {
+                    return { label: 'Out · Override', tone: 'amber' }
+                  }
+                  if (item.projectionState === 'low' && item.projectedCount !== null) {
+                    return { label: `Low · ${item.projectedCount}`, tone: 'amber' }
+                  }
+                  return null
+                })()
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={sellable ? () => addItem(item) : undefined}
+                    disabled={!sellable}
+                    aria-disabled={!sellable}
+                    className={`group text-left rounded-xl border bg-white shadow-sm p-4 transition-all ${
+                      sellable
+                        ? 'border-gray-200 hover:border-blue-300 hover:shadow-md active:scale-[.98]'
+                        : 'border-gray-200 opacity-60 cursor-not-allowed'
+                    }`}
+                  >
+                    <p className={`text-sm font-semibold line-clamp-2 min-h-[2.5rem] ${
+                      sellable ? 'text-gray-900' : 'text-gray-500'
+                    }`}>
+                      {item.name}
+                    </p>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <p className={`text-base font-bold tabular-nums ${
+                        sellable ? 'text-blue-600' : 'text-gray-400'
+                      }`}>
+                        {CURRENCY(item.price)}
+                      </p>
+                      {statusCue && (
+                        <span
+                          className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                            statusCue.tone === 'red'
+                              ? 'bg-red-50 text-red-700'
+                              : statusCue.tone === 'amber'
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-gray-100 text-gray-600'
+                          }`}
+                        >
+                          {statusCue.label}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>

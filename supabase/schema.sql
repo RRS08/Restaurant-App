@@ -1797,3 +1797,50 @@ create index if not exists orders_business_date_idx
 create index if not exists orders_voided_at_idx
   on public.orders (restaurant_id, voided_at desc)
   where voided_at is not null;
+
+
+-- ================================================================
+-- Menu availability foundation
+--
+-- Three columns on `menu_items` plus one foundation column on
+-- `inventory_items`. Today only the override columns are actually
+-- read by the UI; the rest are scaffolding for the future
+-- intelligence layer (sales-velocity + lead-time-aware thresholds).
+--
+--   menu_items.availability_override
+--     'none' | 'force_enabled' | 'force_disabled'.
+--     Drives effective POS sellability when the system would
+--     otherwise auto-disable an item, and lets a manager hard-disable
+--     an item that's still in stock.
+--
+--   menu_items.availability_override_set_at / set_by
+--     When and by whom the override was set. Lets the drawer surface
+--     "Override active since {date} by {user}" without a join to
+--     audit_logs. Auto-cleared when override goes back to 'none'.
+--
+--   inventory_items.replenishment_lead_days
+--     Foundation only. The future intelligence layer will combine
+--     this with sales velocity to compute a per-item low threshold
+--     ("expected consumption during lead time + safety buffer").
+--     Nothing in the live UI reads this column yet.
+--
+-- No new tables. Override events are written to the existing
+-- `audit_logs` table by the server action — that's the long-term
+-- home for stockout / re-enable / override timelines.
+-- ================================================================
+
+alter table public.menu_items
+  add column if not exists availability_override         text not null default 'none',
+  add column if not exists availability_override_set_at  timestamptz,
+  add column if not exists availability_override_set_by  uuid references auth.users(id) on delete set null;
+
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'menu_items_availability_override_check') then
+    alter table public.menu_items add constraint menu_items_availability_override_check
+      check (availability_override in ('none', 'force_enabled', 'force_disabled'));
+  end if;
+end $$;
+
+alter table public.inventory_items
+  add column if not exists replenishment_lead_days integer
+    check (replenishment_lead_days is null or replenishment_lead_days >= 0);

@@ -21,6 +21,11 @@
 import { createClient } from '@/lib/supabase/server'
 import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
+import { computeStockSnapshot } from '@/lib/inventory/stock'
+import {
+  computeAvailability,
+  type AvailabilityOverride,
+} from '@/lib/menu/availability'
 import MenuClient from './client'
 
 export default async function MenuPage() {
@@ -66,11 +71,54 @@ export default async function MenuPage() {
         external_store_id: string | null; last_menu_sync_at: string | null; last_error: string | null
       }> }]
 
+  // Defensive menu_items fetch.
+  // The availability_override / set_at columns are part of an
+  // additive migration that may not have been applied to every
+  // environment yet. Postgres returns error 42703 ("column does not
+  // exist") when those columns are missing; without this fallback,
+  // `items` collapses to `null` and the whole menu reads as empty.
+  // We try the rich select first and fall back to the base select if
+  // those columns are missing — items still render, override just
+  // defaults to 'none' for every row until the migration lands.
+  async function fetchMenuItems() {
+    const rich = await supabase
+      .from('menu_items')
+      .select('id, name, current_price, active, category_id, source, availability_override, availability_override_set_at')
+      .order('name', { ascending: true })
+    if (!rich.error) return { data: rich.data, hasOverrideColumns: true }
+
+    // 42703 = undefined column. Any other error: surface it via the
+    // console so a real failure (RLS, auth, etc.) doesn't disguise
+    // itself as a "schema not migrated yet" fallback.
+    if (rich.error.code !== '42703') {
+      console.error('[menu/page] menu_items select failed:', rich.error)
+    } else {
+      console.warn('[menu/page] availability_override columns missing — falling back to base select. Run the schema migration to enable overrides.')
+    }
+
+    const base = await supabase
+      .from('menu_items')
+      .select('id, name, current_price, active, category_id, source')
+      .order('name', { ascending: true })
+    if (base.error) {
+      console.error('[menu/page] menu_items base select failed:', base.error)
+      return { data: null as null | unknown[], hasOverrideColumns: false }
+    }
+    return { data: base.data, hasOverrideColumns: false }
+  }
+
+  // Promise.all preserves the result shape per entry — keeping
+  // recipe / inventory / setup as full results (not destructured)
+  // so we can surface query errors in the diagnostic log instead
+  // of silently swallowing them.
   const [
-    { data: categories },
-    { data: items },
-    { data: recipeComponents },
-    { data: inventoryItems },
+    categoriesRes,
+    itemsResult,
+    recipeRes,
+    inventoryRes,
+    setupRes,
+    countsRes,
+    transactionsRes,
   ] = await Promise.all([
     supabase
       .from('menu_categories')
@@ -78,10 +126,7 @@ export default async function MenuPage() {
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
 
-    supabase
-      .from('menu_items')
-      .select('id, name, current_price, active, category_id, source')
-      .order('name', { ascending: true }),
+    fetchMenuItems(),
 
     // All recipe components with inventory item name + unit
     supabase
@@ -95,7 +140,92 @@ export default async function MenuPage() {
       .select('id, name, unit_of_measure')
       .eq('active', true)
       .order('name', { ascending: true }),
+
+    // Inventory activation gate. Projection logic is skipped entirely
+    // when the bridge is not live so we never auto-disable items
+    // before a baseline exists.
+    supabase
+      .from('restaurant_setup_state')
+      .select('inventory_activated_at')
+      .maybeSingle(),
+
+    // Stock snapshot inputs. Same source rows the Inventory page uses.
+    supabase
+      .from('inventory_counts')
+      .select('inventory_item_id, quantity_on_hand, count_date'),
+
+    supabase
+      .from('inventory_transactions')
+      .select('inventory_item_id, quantity_change, transaction_datetime'),
   ])
+
+  const categories = categoriesRes.data
+  const recipeComponents = recipeRes.data
+  const inventoryItems = inventoryRes.data
+  const setupRow = setupRes.data
+  const invCounts = countsRes.data
+  const invTransactions = transactionsRes.data
+
+  // Surface errors that previously hid behind null `data`. RLS-zero
+  // rows are NOT errors, so this catches genuine failures only.
+  if (recipeRes.error) console.error('[menu/page] recipe_components select failed:', recipeRes.error)
+  if (inventoryRes.error) console.error('[menu/page] inventory_items select failed:', inventoryRes.error)
+  if (countsRes.error) console.error('[menu/page] inventory_counts select failed:', countsRes.error)
+  if (transactionsRes.error) console.error('[menu/page] inventory_transactions select failed:', transactionsRes.error)
+
+  const items = itemsResult.data as Array<{
+    id: string; name: string; current_price: number | string; active: boolean
+    category_id: string | null; source: string
+    availability_override?: string | null
+    availability_override_set_at?: string | null
+  }> | null
+
+  // Visibility logs for "everything went empty" failure modes.
+  // Greppable by `[menu/page] raw counts`.
+  //
+  // Diagnostic strategy:
+  //   • Counts at every layer (so we can see where the chain breaks).
+  //   • A direct ID-set intersection between the menu_items the app
+  //     resolved and the menu_item_id values referenced by
+  //     recipe_components — collapses "is RLS filtering one of the
+  //     two tables to a different restaurant" and "is there a
+  //     historical ID mismatch from a manual import" into one
+  //     unambiguous match_count signal.
+  //   • Three-id samples on both sides so a real mismatch is visible
+  //     at a glance in the server console.
+  //   • The app-resolved restaurant_id is included so it can be
+  //     compared against the restaurant_id of the rows visible to a
+  //     service-role query in the DB.
+  const itemIdSet = new Set((items ?? []).map((i) => i.id))
+  const recipeMenuItemIds = (recipeComponents ?? []).map((rc) => rc.menu_item_id as string)
+  const distinctRecipeMenuItemIds = new Set(recipeMenuItemIds)
+  const matchCount = [...distinctRecipeMenuItemIds].filter((id) => itemIdSet.has(id)).length
+
+  console.info('[menu/page] raw counts', {
+    user_id: user?.id ?? null,
+    restaurant_id_resolved: restaurantId,
+    categories: (categories ?? []).length,
+    menu_items: items?.length ?? 0,
+    recipe_components: (recipeComponents ?? []).length,
+    distinct_menu_items_with_recipe: distinctRecipeMenuItemIds.size,
+    match_count: matchCount,
+    inventory_items: (inventoryItems ?? []).length,
+    inventory_activated_at: setupRow?.inventory_activated_at ?? null,
+    overrideColumnsPresent: itemsResult.hasOverrideColumns,
+  })
+
+  // Sample-id comparison — only logs when there's something to
+  // compare AND the match is suspicious. Keeps the console quiet on
+  // healthy loads.
+  if ((items?.length ?? 0) > 0 && (recipeComponents ?? []).length > 0 && matchCount === 0) {
+    console.warn('[menu/page] menu_items ↔ recipe_components ID MISMATCH', {
+      sample_menu_item_ids: (items ?? []).slice(0, 5).map((i) => i.id),
+      sample_recipe_menu_item_ids: [...distinctRecipeMenuItemIds].slice(0, 5),
+    })
+  }
+
+  const inventoryActive = !!setupRow?.inventory_activated_at
+  const stockSnapshot = computeStockSnapshot(invCounts, invTransactions)
 
   // Build recipe map: menu_item_id → components[]
   const recipeMap = new Map<string, {
@@ -119,15 +249,67 @@ export default async function MenuPage() {
     recipeMap.get(rc.menu_item_id)!.push(entry)
   }
 
-  const menuItems = (items ?? []).map((item) => ({
-    id: item.id,
-    name: item.name,
-    currentPrice: Number(item.current_price),
-    active: item.active,
-    categoryId: item.category_id,
-    source: item.source,
-    recipe: recipeMap.get(item.id) ?? [],
-  }))
+  // Inventory item id → display name (for surfacing the bottleneck
+  // ingredient in the drawer's availability section).
+  const inventoryNameById = new Map<string, string>()
+  for (const ii of inventoryItems ?? []) {
+    inventoryNameById.set(ii.id, ii.name)
+  }
+  // Recipes can also reference inactive inventory items, which are
+  // filtered out of `inventoryItems`. Pull names from the recipe-join
+  // payload as a fallback so bottleneck display still works.
+  for (const rc of recipeComponents ?? []) {
+    if (!inventoryNameById.has(rc.inventory_item_id)) {
+      const inv = rc.inventory_items as unknown as { name: string } | null
+      if (inv?.name) inventoryNameById.set(rc.inventory_item_id, inv.name)
+    }
+  }
+
+  const menuItems = (items ?? []).map((item) => {
+    const recipe = recipeMap.get(item.id) ?? []
+    // `availability_override` may be undefined when the schema
+    // migration hasn't been applied; default to 'none' so projection
+    // still works and the drawer renders consistent state.
+    const override = ((item.availability_override ?? null) as string | null ?? 'none') as AvailabilityOverride
+    const availability = computeAvailability({
+      active: item.active,
+      recipe: recipe.map((r) => ({
+        inventoryItemId: r.inventoryItemId,
+        quantityRequired: r.quantityRequired,
+      })),
+      override,
+      inventoryActive,
+      stockByInventoryItemId: stockSnapshot.byInventoryItemId,
+    })
+
+    return {
+      id: item.id,
+      name: item.name,
+      currentPrice: Number(item.current_price),
+      active: item.active,
+      categoryId: item.category_id,
+      source: item.source,
+      recipe,
+      override,
+      overrideSetAt: (item.availability_override_set_at ?? null) as string | null,
+      projectedCount: availability.projectedCount,
+      projectionState: availability.projectionState,
+      effectiveSellability: availability.effectiveSellability,
+      bottleneckInventoryItemName: availability.bottleneckInventoryItemId
+        ? (inventoryNameById.get(availability.bottleneckInventoryItemId) ?? null)
+        : null,
+    }
+  })
+
+  // Cross-check: how many items the client will see as mapped.
+  // If this is 0 while `recipe_components` > 0, the bridge broke at
+  // attachment (e.g. ID mismatch). If both are 0, the DB has no
+  // mapping rows from the user's restaurant.
+  const itemsWithAttachedRecipe = menuItems.filter((m) => m.recipe.length > 0).length
+  console.info('[menu/page] final items to client:', {
+    total: menuItems.length,
+    items_with_attached_recipe: itemsWithAttachedRecipe,
+  })
 
   const externalConnections = (posConnections ?? []).map((c) => ({
     id: c.id,
@@ -156,6 +338,7 @@ export default async function MenuPage() {
       locations={locations ?? []}
       externalConnections={externalConnections}
       isDev={isDev}
+      inventoryActive={inventoryActive}
     />
   )
 }

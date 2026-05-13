@@ -12,7 +12,111 @@ import { revalidatePath } from 'next/cache'
 import { getAuthContext } from '@/lib/auth'
 
 // ================================================================
-// DUPLICATE MERGE
+// SINGLE-PAIR MANUAL MERGE
+//
+// Exposed for the Inventory page's manual merge drawer. The bulk
+// `cleanupDuplicateInventoryItems` below picks the canonical row by
+// score; this entry point lets the user pick both items explicitly,
+// which is the only safe path when:
+//   • one of the duplicates is already archived,
+//   • the items are not exact name matches but the user knows they
+//     should be one row, or
+//   • the bulk auto-canonical heuristic would pick the "wrong" row.
+//
+// Re-points every dependent reference (recipe_components,
+// inventory_counts, inventory_transactions) from `duplicateId` →
+// `canonicalId`, ensures the canonical is active, then deletes the
+// duplicate row (falls back to archive if delete is blocked).
+// ================================================================
+export async function mergeInventoryItems(
+  canonicalId: string,
+  duplicateId: string
+): Promise<{ error: string | null; message: string }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.', message: '' }
+
+  if (!canonicalId || !duplicateId) {
+    return { error: 'Both items must be selected.', message: '' }
+  }
+  if (canonicalId === duplicateId) {
+    return { error: 'Canonical and duplicate must be different items.', message: '' }
+  }
+
+  const { supabase, restaurantId } = ctx
+
+  // Verify both items exist in this restaurant. RLS would silently
+  // filter cross-tenant access, but an explicit lookup gives us a
+  // friendlier "not found" error and the names for the result message.
+  const { data: itemsFound, error: itemErr } = await supabase
+    .from('inventory_items')
+    .select('id, name, active')
+    .eq('restaurant_id', restaurantId)
+    .in('id', [canonicalId, duplicateId])
+
+  if (itemErr) return { error: itemErr.message, message: '' }
+  if (!itemsFound || itemsFound.length !== 2) {
+    return { error: 'One or both items could not be found in this restaurant.', message: '' }
+  }
+
+  const canonical = itemsFound.find((i) => i.id === canonicalId)!
+  const duplicate = itemsFound.find((i) => i.id === duplicateId)!
+
+  // Ensure canonical is active — a merge implies "this is the row we
+  // keep using," so reactivate if the user picked an archived one.
+  if (!canonical.active) {
+    await supabase.from('inventory_items').update({ active: true }).eq('id', canonical.id)
+  }
+
+  // Re-point recipe_components. The unique(menu_item_id,
+  // inventory_item_id) constraint means we need to delete-conflicting
+  // rows instead of update-conflicting them.
+  const { data: dupRc } = await supabase
+    .from('recipe_components').select('id, menu_item_id').eq('inventory_item_id', duplicate.id)
+  const { data: canonRc } = await supabase
+    .from('recipe_components').select('menu_item_id').eq('inventory_item_id', canonical.id)
+  const canonMenuIds = new Set((canonRc ?? []).map((r) => r.menu_item_id))
+
+  for (const rc of dupRc ?? []) {
+    if (canonMenuIds.has(rc.menu_item_id)) {
+      await supabase.from('recipe_components').delete().eq('id', rc.id)
+    } else {
+      await supabase.from('recipe_components').update({ inventory_item_id: canonical.id }).eq('id', rc.id)
+    }
+  }
+
+  // Re-point counts + transactions wholesale (no unique constraints).
+  await supabase.from('inventory_counts').update({ inventory_item_id: canonical.id }).eq('inventory_item_id', duplicate.id)
+  await supabase.from('inventory_transactions').update({ inventory_item_id: canonical.id }).eq('inventory_item_id', duplicate.id)
+
+  // Try to delete the duplicate; fall back to archive if blocked
+  // (matches the bulk action's safety pattern).
+  let finalNote = 'deleted'
+  const { error: delError } = await supabase.from('inventory_items').delete().eq('id', duplicate.id)
+  if (delError) {
+    await supabase.from('inventory_items').update({ active: false }).eq('id', duplicate.id)
+    finalNote = `archived (delete blocked: ${delError.message})`
+  } else {
+    const { data: stillExists } = await supabase
+      .from('inventory_items').select('id').eq('id', duplicate.id).maybeSingle()
+    if (stillExists) {
+      await supabase.from('inventory_items').update({ active: false }).eq('id', duplicate.id)
+      finalNote = 'archived (delete silently blocked)'
+    }
+  }
+
+  revalidatePath('/inventory')
+  revalidatePath('/menu')
+  revalidatePath('/pos')
+  revalidatePath('/dashboard')
+
+  return {
+    error: null,
+    message: `Merged "${duplicate.name}" into "${canonical.name}" — duplicate ${finalNote}.`,
+  }
+}
+
+// ================================================================
+// DUPLICATE MERGE (BULK)
 // ================================================================
 
 export async function cleanupDuplicateInventoryItems() {
@@ -40,20 +144,56 @@ export async function cleanupDuplicateInventoryItems() {
     groups.get(key)!.push(item)
   }
 
-  // Find groups with more than one ACTIVE item — those are unresolved duplicates.
-  // Groups with 1 active + N archived are already resolved from a prior merge.
-  const unresolvedGroups = [...groups.entries()].filter(
-    ([, items]) => items.filter((i) => i.active).length > 1
+  // Unresolved duplicates fall into two cases:
+  //   (a) 2+ active items sharing a name (classic case).
+  //   (b) 1 active + 1+ archived items sharing a name where the
+  //       archived row still has dependencies (counts / recipe links
+  //       / transactions). The previous filter (active > 1) missed
+  //       (b) entirely — that's the most common "depletion writes
+  //       exist in the DB but the visible row doesn't move" case.
+  //
+  // We probe deps via head:true counts so we don't pull row bodies.
+  async function hasDeps(itemId: string): Promise<boolean> {
+    const [{ count: rc }, { count: ic }, { count: it }] = await Promise.all([
+      supabase.from('recipe_components').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
+      supabase.from('inventory_counts').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
+      supabase.from('inventory_transactions').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
+    ])
+    return (rc ?? 0) + (ic ?? 0) + (it ?? 0) > 0
+  }
+
+  const candidateGroups = [...groups.entries()].filter(
+    ([, items]) => items.length > 1 && items.some((i) => i.active)
   )
 
-  const resolvedArchived = [...groups.entries()].filter(
-    ([, items]) => items.filter((i) => i.active).length === 1 && items.filter((i) => !i.active).length > 0
-  ).length
+  const unresolvedGroups: typeof candidateGroups = []
+  let resolvedArchived = 0
+  for (const entry of candidateGroups) {
+    const [, items] = entry
+    const activeCount = items.filter((i) => i.active).length
+    if (activeCount >= 2) {
+      unresolvedGroups.push(entry)
+      continue
+    }
+    // 1 active + N archived — check whether any archived row still
+    // carries dependencies. If yes, unresolved. If no, it's already-
+    // merged residue and we just count it for the message.
+    const archived = items.filter((i) => !i.active)
+    let anyArchivedHasDeps = false
+    for (const a of archived) {
+      if (await hasDeps(a.id)) { anyArchivedHasDeps = true; break }
+    }
+    if (anyArchivedHasDeps) {
+      unresolvedGroups.push(entry)
+    } else {
+      resolvedArchived += 1
+    }
+  }
 
   if (unresolvedGroups.length === 0) {
     const msg = resolvedArchived > 0
-      ? `No active duplicates found. ${resolvedArchived} previously merged group${resolvedArchived > 1 ? 's' : ''} already archived.`
-      : 'No active duplicates found.'
+      ? `No unresolved duplicates found. ${resolvedArchived} previously merged group${resolvedArchived > 1 ? 's' : ''} already archived.`
+      : 'No unresolved duplicates found.'
     return { error: null, merged: 0, message: msg }
   }
 

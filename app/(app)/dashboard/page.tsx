@@ -1,10 +1,21 @@
 // ----------------------------------------------------------------
-// Dashboard V2  →  /dashboard
+// Dashboard  →  /dashboard
 //
-// Operational command surface for a restaurant manager.
-// Answers: what needs attention? Are we ready to operate?
+// Today's Operations — the daily command center for the restaurant
+// operating system. Answers: what's happening today, what needs
+// attention, what's stable, what action should happen next, and
+// which pillar should I enter.
 //
-// NOT a finance page. NOT a reporting dashboard.
+// NOT Analytics (no pattern interpretation).
+// NOT Finance  (no money interpretation).
+// NOT Sales    (no ledger review).
+// NOT Staffing (no scheduling work).
+// NOT Inventory (no stock management workflow).
+//
+// Dashboard only summarizes operating state and routes the user
+// toward action. Honest about partial setup — reads from the
+// shared readiness model so it never pretends a pillar is fully
+// live when it isn't.
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
@@ -66,6 +77,8 @@ export default async function DashboardPage() {
     { data: upcomingShifts },
     { data: periodExpenses },
     { data: todayOrders },
+    { data: latestExpenseRow },
+    { data: latestInventoryTxRow },
   ] = await Promise.all([
     supabase
       .from('orders')
@@ -99,9 +112,13 @@ export default async function DashboardPage() {
       .select('id')
       .eq('active', true),
 
+    // Current-week shifts. Selecting more fields than the count
+    // alone needs so the Today's Rhythm selected-day summary can
+    // look up "first scheduled shift on day X" without a second
+    // round-trip.
     supabase
       .from('shifts')
-      .select('id, start_time')
+      .select('id, employee_id, role, start_time, end_time, employees ( name )')
       .gte('start_time', monday.toISOString())
       .lt('start_time', sundayEnd.toISOString()),
 
@@ -132,6 +149,27 @@ export default async function DashboardPage() {
       .eq('status', 'completed')
       .gte('created_at', todayStart.toISOString())
       .lt('created_at', todayEnd.toISOString()),
+
+    // 12. Latest single expense — for the Recent Movement card.
+    //     Compact pulse, not an expense feed.
+    supabase
+      .from('expenses')
+      .select('id, amount, expense_date')
+      .order('expense_date', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+
+    // 13. Latest single inventory transaction — for Recent Movement.
+    //     The dashboard's bulk `inventoryTx` query above is unordered
+    //     and capped at PostgREST's default page size, so we can't
+    //     reliably read "most recent" from it. A small targeted query
+    //     keeps the pulse honest.
+    supabase
+      .from('inventory_transactions')
+      .select('quantity_change, transaction_datetime, inventory_items ( name )')
+      .order('transaction_datetime', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   // ---- Metrics ----
@@ -193,49 +231,103 @@ export default async function DashboardPage() {
   const expenseCount30d = (periodExpenses ?? []).length
   const expenseTotal30d = (periodExpenses ?? []).reduce((sum, e) => sum + Number(e.amount), 0)
 
-  // ---- Sales by day chart ----
-  const salesByDay: { label: string; value: number }[] = []
+  // ---- Per-day aggregations, aligned to the current Mon–Sun week
+  //
+  // Both arrays share the same 7 dates so the Today's Rhythm chart,
+  // the interactive shift strip, and the selected-day summary all
+  // index the same data. The rolling "last 7 days" sales metric
+  // stays available separately as `salesLast7Days` /
+  // `ordersLast7Days` above. Future days in the current week (e.g.,
+  // Sat/Sun before they happen) naturally show zero — accurate,
+  // not faked.
+  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+
+  const salesByDay: { label: string; value: number; orders: number; date: string }[] = []
+  const shiftsByDay: { label: string; value: number; employees: number; date: string }[] = []
+
   for (let i = 0; i < 7; i++) {
-    const d = new Date(sevenDaysAgo)
-    d.setDate(sevenDaysAgo.getDate() + i)
-    const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short' })
-    const dayTotal = (weekOrders ?? [])
-      .filter((o) => {
-        const od = new Date(o.created_at)
-        return od.getFullYear() === d.getFullYear() && od.getMonth() === d.getMonth() && od.getDate() === d.getDate()
-      })
-      .reduce((sum, o) => sum + Number(o.total_amount), 0)
-    salesByDay.push({ label: dayLabel, value: Math.round(dayTotal * 100) / 100 })
+    const d = new Date(monday)
+    d.setDate(monday.getDate() + i)
+
+    const dayOrdersForSales = (weekOrders ?? []).filter((o) =>
+      sameDay(new Date(o.created_at), d),
+    )
+    const dayRevenue = dayOrdersForSales.reduce((s, o) => s + Number(o.total_amount), 0)
+
+    const dayShifts = (weekShifts ?? []).filter((s) =>
+      sameDay(new Date(s.start_time), d),
+    )
+    const distinctEmployees = new Set(dayShifts.map((s) => s.employee_id)).size
+
+    salesByDay.push({
+      label: dayLabels[i],
+      value: Math.round(dayRevenue * 100) / 100,
+      orders: dayOrdersForSales.length,
+      date: d.toISOString(),
+    })
+    shiftsByDay.push({
+      label: dayLabels[i],
+      value: dayShifts.length,
+      employees: distinctEmployees,
+      date: d.toISOString(),
+    })
   }
 
-  // ---- Shifts by day chart (current week) ----
-  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-  const shiftsByDay: { label: string; value: number }[] = dayLabels.map((label, i) => {
-    const dayDate = new Date(monday)
-    dayDate.setDate(monday.getDate() + i)
-    const count = (weekShifts ?? []).filter((s) => {
-      const sd = new Date(s.start_time)
-      return sd.getFullYear() === dayDate.getFullYear() && sd.getMonth() === dayDate.getMonth() && sd.getDate() === dayDate.getDate()
-    }).length
-    return { label, value: count }
+  // Flat list of current-week shifts the client uses to look up
+  // "first scheduled shift on day X" for the selected-day summary.
+  const weekShiftDetails = (weekShifts ?? []).map((s) => ({
+    id: s.id,
+    employeeName:
+      (s.employees as unknown as { name: string } | null)?.name ?? '—',
+    role: s.role,
+    startTime: s.start_time,
+    endTime: s.end_time,
+  }))
+
+  // Note: the standalone alerts/notification-bell list used to live
+  // here. It's been removed — the unified `Needs Attention` queue
+  // in the Dashboard client is now the single operational triage
+  // surface, sourcing its rows from the same underlying state
+  // (inventory counts, staffing, readiness, etc.) so there's no
+  // longer a duplicate alert system competing with it.
+
+  const firstName = profile?.full_name?.split(' ')[0] ?? null
+
+  // Truthful render-time stamp. Server-rendered at request time, so
+  // it accurately answers "when did this view become this view?".
+  // Reloading the page bumps it; the client renders it as-is.
+  const renderedAt = now.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
   })
 
-  // ---- Structured alerts (typed for the bell) ----
-  const alerts: { label: string; type: 'critical' | 'warning' | 'info' }[] = []
-  if (outOfStockCount > 0)
-    alerts.push({ label: `${outOfStockCount} item${outOfStockCount > 1 ? 's' : ''} out of stock`, type: 'critical' })
-  if (lowStockCount > 0)
-    alerts.push({ label: `${lowStockCount} item${lowStockCount > 1 ? 's' : ''} running low`, type: 'warning' })
-  if (noCountCount > 0)
-    alerts.push({ label: `${noCountCount} item${noCountCount > 1 ? 's' : ''} never counted`, type: 'info' })
-  if (employeeCount === 0)
-    alerts.push({ label: 'No active employees yet', type: 'warning' })
-  if (shiftsToday === 0)
-    alerts.push({ label: 'No shifts scheduled for today', type: 'warning' })
-  if (ordersLast7Days === 0)
-    alerts.push({ label: 'No sales in the last 7 days', type: 'info' })
+  // ---- Recent Movement data ----
+  const latestExpense = latestExpenseRow
+    ? {
+        amount: Number(latestExpenseRow.amount),
+        date: latestExpenseRow.expense_date as string,
+      }
+    : null
 
-  const firstName = profile?.full_name?.split(' ')[0]
+  const latestInventoryMovement = latestInventoryTxRow
+    ? {
+        itemName:
+          (latestInventoryTxRow.inventory_items as unknown as { name: string } | null)?.name ?? '—',
+        quantityChange: Number(latestInventoryTxRow.quantity_change),
+        datetime: latestInventoryTxRow.transaction_datetime as string,
+      }
+    : null
+
+  const latestSale = (recentOrders ?? [])[0]
+    ? {
+        amount: Number((recentOrders ?? [])[0].total_amount),
+        datetime: (recentOrders ?? [])[0].created_at as string,
+      }
+    : null
 
   // Readiness-aware context — surfaces honest pillar states to the
   // dashboard client so it can show small "inactive / partial"
@@ -259,7 +351,8 @@ export default async function DashboardPage() {
 
   return (
     <DashboardClient
-      greeting={firstName ? `Welcome back, ${firstName}` : 'Dashboard'}
+      firstName={firstName}
+      renderedAt={renderedAt}
       readiness={readinessPillars}
       bankConnectedUnsynced={bankConnectedUnsynced}
       inventoryWriteLive={inventoryWriteLive}
@@ -269,13 +362,8 @@ export default async function DashboardPage() {
       finance={{ expenseCount30d, expenseTotal30d }}
       salesByDay={salesByDay}
       shiftsByDay={shiftsByDay}
+      weekShiftDetails={weekShiftDetails}
       watchlist={watchlist}
-      recentOrders={(recentOrders ?? []).map((o) => ({
-        id: o.id,
-        totalAmount: Number(o.total_amount),
-        createdAt: o.created_at,
-        locationName: (o.locations as unknown as { name: string } | null)?.name ?? null,
-      }))}
       upcomingShifts={(upcomingShifts ?? []).map((s) => ({
         id: s.id,
         employeeName: (s.employees as unknown as { name: string } | null)?.name ?? '—',
@@ -283,7 +371,9 @@ export default async function DashboardPage() {
         startTime: s.start_time,
         endTime: s.end_time,
       }))}
-      alerts={alerts}
+      latestSale={latestSale}
+      latestExpense={latestExpense}
+      latestInventoryMovement={latestInventoryMovement}
     />
   )
 }

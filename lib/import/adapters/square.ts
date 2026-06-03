@@ -212,7 +212,19 @@ interface SquareItemObject extends SquareCatalogObjectBase {
   type: 'ITEM'
   item_data?: {
     name?: string
+    /** Legacy single-category reference. Deprecated in Square's
+     *  2023-10 API and returns null for items created via the
+     *  current Square dashboard — we still read it for older
+     *  catalogs that haven't been migrated. */
     category_id?: string
+    /** Current category reference (array of { id, ordinal? }).
+     *  Items created in the current Square dashboard populate this
+     *  but leave `category_id` null, which silently broke our
+     *  category-to-item link before this field was added. */
+    categories?: { id?: string; ordinal?: number }[]
+    /** Reporting/tax-only category. Used as a last-resort fallback
+     *  when neither `categories` nor `category_id` are populated. */
+    reporting_category?: { id?: string }
     variations?: SquareItemVariationObject[]
   }
 }
@@ -313,10 +325,30 @@ function normalizeSquareCatalog(
     if (!itemName) continue
 
     // Category id is optional; items with no category fall through
-    // to the shared "Imported · Uncategorized" bucket via the ingest pipeline.
-    const categoryExternalId = data.category_id && categoriesById.has(data.category_id)
-      ? data.category_id
-      : null
+    // to the shared "Imported · Uncategorized" bucket via the ingest
+    // pipeline.
+    //
+    // Resolution order matches the way Square's API has evolved:
+    //   1. `categories[0].id` — the current field; items created in
+    //      the modern Square dashboard populate this and leave the
+    //      legacy field null.
+    //   2. `category_id` — the legacy single-category field; still
+    //      populated on older catalogs that haven't been migrated.
+    //   3. `reporting_category.id` — last-resort fallback for items
+    //      that only carry a tax/reporting category. Better than
+    //      dumping them in Uncategorized when at least one category
+    //      hint exists.
+    //
+    // Each candidate is gated on `categoriesById.has(...)` so we
+    // never join to an unknown id (e.g., a deleted Square category).
+    const candidateCategoryIds: string[] = []
+    const firstFromArray = data.categories?.find((c) => !!c?.id)?.id
+    if (firstFromArray) candidateCategoryIds.push(firstFromArray)
+    if (data.category_id) candidateCategoryIds.push(data.category_id)
+    if (data.reporting_category?.id) candidateCategoryIds.push(data.reporting_category.id)
+
+    const categoryExternalId =
+      candidateCategoryIds.find((id) => categoriesById.has(id)) ?? null
 
     const variations = (data.variations ?? []).filter(
       (v) => v && v.type === 'ITEM_VARIATION' && !v.is_deleted

@@ -1476,6 +1476,15 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
       subtitle="Rename, retime, or delete this block."
       onClose={onClose}
     >
+      {/* Sibling delete form — lives OUTSIDE the edit form so we
+          don't nest <form> elements (HTML disallows it and React
+          warns about hydration). The Confirm-delete button below
+          binds to this form by id via `form="staffing-delete-block"`,
+          which keeps the delete action wired without nesting. */}
+      <form id="staffing-delete-block" action={delAction}>
+        <input type="hidden" name="section_id" value={section.id} />
+      </form>
+
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="section_id" value={section.id} />
         <DrawerBody>
@@ -1533,12 +1542,9 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                   ? 'No shifts are using this block.'
                   : `Shifts won't be deleted — they'll surface on the Custom lane.`}
               </p>
-              {/* Sibling form for the delete action; submit button
-                  binds to it via `form="..."` to keep us out of
-                  nested-form territory. */}
-              <form id="staffing-delete-block" action={delAction}>
-                <input type="hidden" name="section_id" value={section.id} />
-              </form>
+              {/* Submit button binds to the sibling delete form
+                  defined above the edit form, via `form="..."` —
+                  keeps us out of nested-form territory. */}
               <div className="mt-2.5 flex items-center gap-2">
                 <button
                   form="staffing-delete-block"

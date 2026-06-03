@@ -101,11 +101,50 @@ export async function ingestMenu({
   }
 
   // ---- Upsert categories ----
+  //
+  // Three-step lookup so newly-imported items naturally home into
+  // the manager's existing categories when the names line up:
+  //
+  //   1. ID match — `(external_provider, external_id)` already
+  //      links this Square category to a local category from a
+  //      previous sync. Refresh metadata and move on.
+  //
+  //   2. Name match — no ID link yet, but a local category with
+  //      the same name exists and isn't claimed by another source.
+  //      "Adopt" it by backfilling external_provider + external_id
+  //      so future syncs follow the fast ID path. The local name
+  //      stays untouched (manager's preference wins on display).
+  //
+  //   3. Create — no match anywhere. Insert a new Square-named
+  //      category tagged `source = 'imported'` so the menu mapping
+  //      drawer (Phase B) can spot it as "needs assignment".
+  //
+  // Name matching is case-insensitive and trimmed. Categories
+  // already bound to a different external_provider are ineligible
+  // for adoption to keep multi-source restaurants safe.
+  //
+  // Sort order: newly-created categories from path #3 land *below*
+  // the manager's existing categories on the menu page, so an
+  // import never visually pushes their existing layout down. We
+  // query the current max sort_order once, then hand out the next
+  // available values to each create-path category in import order.
+  // Adopted categories keep the manager's sort_order untouched.
+  const { data: maxSortRow } = await supabase
+    .from('menu_categories')
+    .select('sort_order')
+    .eq('restaurant_id', restaurantId)
+    .order('sort_order', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const baseSort = Number(maxSortRow?.sort_order ?? 0)
+  let nextImportedSort = baseSort + 1000
+
   const categoryIdByExternalId = new Map<string, string>()
   let categoriesUpserted = 0
 
   for (const cat of menu.categories) {
-    const { data: existing } = await supabase
+    // 1. ID match
+    const { data: idMatch } = await supabase
       .from('menu_categories')
       .select('id')
       .eq('restaurant_id', restaurantId)
@@ -113,35 +152,78 @@ export async function ingestMenu({
       .eq('external_id', cat.externalId)
       .limit(1)
 
-    if (existing && existing.length > 0) {
+    if (idMatch && idMatch.length > 0) {
+      // Re-sync: refresh the name only. The local sort_order is
+      // preserved — the manager (or a prior adopt) owns where the
+      // category appears in the menu, and we don't want subsequent
+      // syncs reshuffling that order.
       await supabase
         .from('menu_categories')
-        .update({ name: cat.name, sort_order: cat.sortOrder ?? 0 })
-        .eq('id', existing[0].id)
-      categoryIdByExternalId.set(cat.externalId, existing[0].id)
-    } else {
-      const { data: inserted, error: catErr } = await supabase
+        .update({ name: cat.name })
+        .eq('id', idMatch[0].id)
+      categoryIdByExternalId.set(cat.externalId, idMatch[0].id)
+      categoriesUpserted++
+      continue
+    }
+
+    // 2. Name match (case-insensitive trimmed)
+    const trimmedName = cat.name.trim()
+    const { data: nameMatches } = await supabase
+      .from('menu_categories')
+      .select('id, name, external_provider')
+      .eq('restaurant_id', restaurantId)
+      .is('external_provider', null)
+      .ilike('name', trimmedName)
+
+    const adoptable = (nameMatches ?? []).find(
+      (m) => (m.name as string).trim().toLowerCase() === trimmedName.toLowerCase(),
+    )
+
+    if (adoptable) {
+      // Adopt: bind this local category to Square without touching
+      // the display name or sort order. Source stays whatever the
+      // manager had (e.g., 'manual') so we can still tell user-
+      // owned categories from auto-created ones downstream.
+      await supabase
         .from('menu_categories')
-        .insert({
-          restaurant_id: restaurantId,
-          name: cat.name,
-          sort_order: cat.sortOrder ?? 0,
-          source: 'imported',
+        .update({
           external_provider: sourceId,
           external_id: cat.externalId,
         })
-        .select('id')
-        .single()
-      if (!catErr && inserted) {
-        categoryIdByExternalId.set(cat.externalId, inserted.id)
-      }
+        .eq('id', adoptable.id)
+      categoryIdByExternalId.set(cat.externalId, adoptable.id as string)
+      categoriesUpserted++
+      continue
+    }
+
+    // 3. Create — no local match. Sort_order is pushed past the
+    // manager's existing categories so the new auto-imported
+    // category lands at the bottom of the menu, not interleaved
+    // with the layout they already had.
+    const { data: inserted, error: catErr } = await supabase
+      .from('menu_categories')
+      .insert({
+        restaurant_id: restaurantId,
+        name: cat.name,
+        sort_order: nextImportedSort,
+        source: 'imported',
+        external_provider: sourceId,
+        external_id: cat.externalId,
+      })
+      .select('id')
+      .single()
+    nextImportedSort += 10
+    if (!catErr && inserted) {
+      categoryIdByExternalId.set(cat.externalId, inserted.id)
     }
     categoriesUpserted++
   }
 
   // ---- Upsert items ----
   // IMPORTANT: we never wipe `recipe_components`. Updates only touch
-  // name/price/category/active so manual mapping work is preserved.
+  // name/price/category so manual mapping work is preserved. The
+  // `active` column is owned by the local app once a row exists —
+  // see the rationale below.
   let itemsUpserted = 0
 
   for (const item of menu.items) {
@@ -158,16 +240,28 @@ export async function ingestMenu({
       .limit(1)
 
     if (existing && existing.length > 0) {
+      // Re-sync: refresh provider-owned fields only. The `active`
+      // column is intentionally NOT touched here — once a manager
+      // has activated an imported item locally (via the menu
+      // mapping drawer), an upstream Square change shouldn't yank
+      // it back to inactive. Source truth lives upstream for
+      // identity (name/price/category), local truth lives here for
+      // operational state (active / recipe).
       await supabase
         .from('menu_items')
         .update({
           name: item.name,
           current_price: item.price,
           category_id: categoryId,
-          active: item.active,
         })
         .eq('id', existing[0].id)
     } else {
+      // First-time insert: explicitly inactive. New imports go into
+      // a "pending review" bucket where the manager must categorize
+      // + recipe + activate before the item starts taking sales or
+      // depleting inventory. This is what gates the menu-mapping
+      // drawer's workflow and what keeps imports from silently
+      // landing on the live menu.
       await supabase
         .from('menu_items')
         .insert({
@@ -175,7 +269,7 @@ export async function ingestMenu({
           name: item.name,
           current_price: item.price,
           category_id: categoryId,
-          active: item.active,
+          active: false,
           source: 'imported',
           external_provider: sourceId,
           external_id: item.externalId,

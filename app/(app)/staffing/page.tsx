@@ -131,6 +131,66 @@ export default async function StaffingPage() {
   ])
 
   // ----------------------------------------------------------------
+  // Self-healing dedupe of shift_sections.
+  //
+  // The lazy backfill below has a small race window: if two requests
+  // both see zero rows before either inserts, both seed the starter
+  // set and the restaurant ends up with duplicate blocks (same
+  // name/area/hours, different ids). The "+ Block" button also has
+  // no name-collision check on the server, so manual duplicates can
+  // exist too.
+  //
+  // We dedupe defensively at page-load time: group by the
+  // shape signature (name + area + start + end), keep the section
+  // with the lowest sort_order as canonical, reassign any shifts
+  // pointing at the duplicates onto the canonical section, then
+  // delete the duplicate rows. Mutation only fires when duplicates
+  // actually exist — the no-dup steady-state is a single in-memory
+  // pass with no DB writes.
+  // ----------------------------------------------------------------
+  let sections = sectionsData ?? []
+
+  if (sections.length > 1) {
+    type SectionRow = typeof sections[number]
+    const groups = new Map<string, SectionRow[]>()
+    for (const s of sections) {
+      const key = `${s.name}|${s.area}|${s.default_start_hour}|${s.default_end_hour}`
+      const arr = groups.get(key) ?? []
+      arr.push(s)
+      groups.set(key, arr)
+    }
+    const duplicateGroups = Array.from(groups.values()).filter((g) => g.length > 1)
+
+    if (duplicateGroups.length > 0) {
+      for (const group of duplicateGroups) {
+        const sorted = [...group].sort((a, b) => a.sort_order - b.sort_order)
+        const canonical = sorted[0]
+        const duplicateIds = sorted.slice(1).map((s) => s.id)
+
+        // Reassign any shifts that point at duplicates to the
+        // canonical section — preserves the schedule the user
+        // already built before deletion.
+        await supabase
+          .from('shifts')
+          .update({ section_id: canonical.id })
+          .in('section_id', duplicateIds)
+
+        await supabase
+          .from('shift_sections')
+          .delete()
+          .in('id', duplicateIds)
+      }
+
+      // Re-fetch after cleanup so the client renders the deduped set.
+      const { data: cleaned } = await supabase
+        .from('shift_sections')
+        .select('id, name, role, area, default_start_hour, default_end_hour, sort_order')
+        .order('sort_order')
+      sections = cleaned ?? []
+    }
+  }
+
+  // ----------------------------------------------------------------
   // Lazy shift-section backfill.
   //
   // shift_sections were never seeded by onboarding (the schema
@@ -141,9 +201,10 @@ export default async function StaffingPage() {
   //
   // Idempotent: only runs when the SELECT returned zero rows. If
   // the manager has any custom block, this is skipped — we never
-  // overwrite. One visit fixes the restaurant permanently.
+  // overwrite. One visit fixes the restaurant permanently. If a
+  // race ever inserts twice anyway, the dedupe above heals it on
+  // the next page load.
   // ----------------------------------------------------------------
-  let sections = sectionsData ?? []
   if (sections.length === 0) {
     // Resolve restaurant_id from config if we have it, else from
     // user_roles. Mirrors the role-backfill resolution above.

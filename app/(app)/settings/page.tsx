@@ -3,6 +3,12 @@ import CleanupButton from './cleanup-button'
 import ReadinessPanel from './readiness-panel'
 import DevTools from './dev-tools'
 import BankCard from './bank-card'
+// Square integration deliberately not mounted in this pivot —
+// `square-card.tsx`, `square-client.tsx`, and `app/actions/square.ts`
+// remain in the repo and can be re-mounted by re-adding this import
+// + the corresponding section below. Clover is the active sandbox
+// surface for the current testing phase.
+import CloverCard from './clover-card'
 import { createClient } from '@/lib/supabase/server'
 import { computeReadiness, type ReadinessSnapshot } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
@@ -82,6 +88,19 @@ export default async function SettingsPage() {
             Bank sync
           </h2>
           <BankCard restaurantId={restaurantId} />
+        </section>
+      )}
+
+      {/* External POS integrations — owner-only. Currently testing
+          against Clover sandbox (stronger sandbox + cleaner catalog
+          API than Square). Square is staged in the repo and can be
+          re-mounted as a sibling card when needed. */}
+      {isOwner && restaurantId && (
+        <section className="mb-10">
+          <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
+            External POS integrations
+          </h2>
+          <CloverCard restaurantId={restaurantId} />
         </section>
       )}
 

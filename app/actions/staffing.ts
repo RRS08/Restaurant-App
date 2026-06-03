@@ -104,6 +104,25 @@ export async function createShiftSection(
   if (typeof end === 'object') return end
   if (end === start) return { error: 'End hour must differ from start hour.' }
 
+  // Same-shape duplicate guard — block the manager from creating a
+  // second block with identical (name, area, start, end) for the
+  // same restaurant. The "+ Block" flow had no such check, which
+  // let duplicates leak in and produced ghost empty rows on the
+  // board. We compare by the same shape signature the page-load
+  // dedupe uses, so both sides agree on what "same block" means.
+  const { data: existingMatch } = await ctx.supabase
+    .from('shift_sections')
+    .select('id')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('name', name)
+    .eq('area', area)
+    .eq('default_start_hour', start)
+    .eq('default_end_hour', end)
+    .maybeSingle()
+  if (existingMatch) {
+    return { error: 'A block with the same name, house, and hours already exists.' }
+  }
+
   // Append at the end of the existing sort order so newly created
   // blocks land at the bottom of the board, never reshuffling the
   // manager's existing ordering.

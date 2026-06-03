@@ -37,6 +37,7 @@ import {
   createMenuItemInSection,
   createCategory,
   deleteMenuItem,
+  setMenuItemActive,
   deleteCategory,
   setMenuItemAvailabilityOverride,
 } from '@/app/actions/menu'
@@ -64,7 +65,13 @@ interface RecipeEntry {
 }
 interface MenuItem {
   id: string; name: string; currentPrice: number; active: boolean
-  categoryId: string | null; source: string; recipe: RecipeEntry[]
+  categoryId: string | null; source: string
+  /** When set, the item was imported from this external POS provider
+   *  (e.g., 'clover', 'square'). The drawer uses this to clarify
+   *  that our local `active` toggle controls our records only —
+   *  actual availability for sale is managed in the external POS. */
+  externalProvider: string | null
+  recipe: RecipeEntry[]
   // Availability foundation (computed in the page component).
   override: AvailabilityOverride
   overrideSetAt: string | null
@@ -101,6 +108,21 @@ type OperatingMode = 'native_pos' | 'external_pos' | null
 
 function isImportedSource(source: string): boolean {
   return source !== 'manual' && source.length > 0
+}
+
+// Display-cased provider name for UI hints. We trust the values the
+// import pipeline writes (square / clover / toast / mock / csv /
+// custom_json) and fall back to the raw string for anything else.
+function capitalizeProvider(provider: string): string {
+  const named: Record<string, string> = {
+    square: 'Square',
+    clover: 'Clover',
+    toast: 'Toast',
+    mock: 'Mock',
+    csv: 'CSV',
+    custom_json: 'Custom JSON',
+  }
+  return named[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)
 }
 
 // Single source of truth for "is this menu item mapped to inventory?"
@@ -670,6 +692,7 @@ function ItemDrawer({
   const [addState, addAction, addPending] = useActionState(addRecipeComponent, null)
   const [createState, createAction, createPending] = useActionState(createInlineInventoryItem, null)
   const [deleteState, deleteAction, deletePending] = useActionState(deleteMenuItem, null)
+  const [activeState, activeAction, activePending] = useActionState(setMenuItemActive, null)
   const [removeMode, setRemoveMode] = useState(false)
 
   const usedIds = new Set(item.recipe.map((r) => r.inventoryItemId))
@@ -815,12 +838,51 @@ function ItemDrawer({
           </p>
         </div>
 
-        {/* Inactive ribbon — same pattern as Sales' voided stamp. */}
+        {/* Inactive ribbon — same pattern as Sales' voided stamp.
+            Includes the inline Activate button so promoting an item
+            after building its recipe is a single-click operation
+            from the ribbon (which is the natural eye-catch when an
+            inactive item is opened). */}
         {!item.active && (
-          <div className="border-b border-amber-200/60 bg-amber-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-            <p className="text-[11px] text-amber-700">
-              Inactive · this item won&apos;t appear at the POS until it&apos;s reactivated.
+          <div className="border-b border-amber-200/60 bg-amber-50/40 px-6 py-2.5 flex items-center gap-3 flex-shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
+            <p className="text-[11px] text-amber-700 flex-1 leading-relaxed">
+              Inactive · this item won&apos;t appear at the POS until it&apos;s
+              activated.
+            </p>
+            <form action={activeAction}>
+              <input type="hidden" name="item_id" value={item.id} />
+              <input type="hidden" name="active" value="true" />
+              <button
+                type="submit"
+                disabled={activePending}
+                className="rounded-md bg-amber-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-amber-700 disabled:opacity-60 transition-colors whitespace-nowrap"
+              >
+                {activePending ? 'Activating…' : 'Activate'}
+              </button>
+            </form>
+          </div>
+        )}
+        {activeState?.error && !item.active && (
+          <div className="border-b border-red-200/60 bg-red-50/60 px-6 py-2 flex-shrink-0">
+            <p className="text-[11px] text-red-700">{activeState.error}</p>
+          </div>
+        )}
+
+        {/* External-provider scope ribbon. For Square/Clover/etc.
+            items, our active/inactive controls visibility in OUR
+            records and OUR analytics only. The external POS owns
+            "is this actually sellable right now?" — that decision
+            still lives in their dashboard. We surface this here so
+            a manager doesn't deactivate something locally and
+            assume Square has stopped accepting orders for it. */}
+        {item.externalProvider && (
+          <div className="border-b border-blue-200/60 bg-blue-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            <p className="text-[11px] text-blue-700 leading-relaxed">
+              Imported from {capitalizeProvider(item.externalProvider)} · local-only
+              controls. Manage availability for sale in the{' '}
+              {capitalizeProvider(item.externalProvider)} dashboard.
             </p>
           </div>
         )}
@@ -1093,6 +1155,37 @@ function ItemDrawer({
         {/* ACTION ZONE — pinned footer with 2-step remove */}
         <div className="border-t border-gray-200 bg-gray-50/40 px-6 py-5 flex-shrink-0">
           <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">Manage</p>
+          {/* Deactivate card — paired with the inline Activate
+              button in the inactive ribbon at the top of the
+              drawer. Shown only when the item is currently active.
+              Lives next to Remove because it's the same "wind this
+              item down" cluster, but it's non-destructive (the row
+              and recipes stay; only the active flag flips). */}
+          {item.active && (
+            <div className="rounded-xl border border-gray-200 bg-white p-4 mb-4">
+              <p className="text-xs font-semibold text-gray-900">Deactivate this item</p>
+              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+                Hides the item from the POS strip and analytics filters. The recipe and
+                ingredient links stay intact, so reactivating later picks up where you
+                left off.
+              </p>
+              <form action={activeAction} className="mt-4">
+                <input type="hidden" name="item_id" value={item.id} />
+                <input type="hidden" name="active" value="false" />
+                <button
+                  type="submit"
+                  disabled={activePending}
+                  className="w-full rounded-lg border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 hover:border-amber-300 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
+                >
+                  {activePending ? 'Deactivating…' : 'Deactivate this item'}
+                </button>
+              </form>
+              {activeState?.error && (
+                <p className="mt-2 text-[11px] text-red-700">{activeState.error}</p>
+              )}
+            </div>
+          )}
+
           <div className="rounded-xl border border-gray-200 bg-white p-4">
             <p className="text-xs font-semibold text-gray-900">Remove this item</p>
             <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">

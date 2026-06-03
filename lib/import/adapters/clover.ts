@@ -315,11 +315,18 @@ function parseCloverOrders(payload: CloverOrdersResponse): NormalizedOrder[] {
     if (typeof ms !== 'number') continue
     const postedAt = new Date(ms).toISOString()
 
-    const totalCents = typeof o.total === 'number' ? o.total : 0
-    const totalAmount = totalCents / 100
-
     const lineItems = foldLineItems(o.lineItems?.elements)
     if (lineItems.length === 0) continue // skip orders with no items — nothing meaningful to import
+
+    // Prefer Clover's own order total when it's populated. Clover
+    // only fills `order.total` once the order has transitioned to a
+    // closed state — any order still in "open" reports total=0 even
+    // when it has paid line items attached. Sum line items as the
+    // fallback so the synced sale records the actual revenue rather
+    // than a $0 row that breaks the Finance and Dashboard surfaces.
+    const declaredTotal = typeof o.total === 'number' ? o.total / 100 : 0
+    const lineItemsTotal = lineItems.reduce((sum, li) => sum + li.totalPrice, 0)
+    const totalAmount = declaredTotal > 0 ? declaredTotal : lineItemsTotal
 
     // Pilot V1 treats every synced order as completed. Clover has
     // richer lifecycle (open/locked/paid) but the shared pipeline
@@ -474,11 +481,22 @@ export const cloverSourceAdapter: SourceAdapter = {
     // normalized independently through parseCloverOrders and flattened
     // into a single array — the shared ingest pipeline doesn't care
     // how many pages we pulled, only the final normalized list.
+    //
+    // URL encoding nuance:
+    //   • The `>=` operator inside `filter=` MUST be percent-encoded.
+    //     Sent raw, Clover's URL parser treats the `>` as malformed
+    //     and silently returns `elements: []` (HTTP 200, zero rows)
+    //     instead of an error — a long debugging trap.
+    //   • The `,` separator in `expand=` MUST stay raw. Some Clover
+    //     deployments reject `%2C` here and again return empty
+    //     elements. So we encode the filter VALUE only and leave the
+    //     rest as literal query parameters.
+    const encodedFilter = encodeURIComponent(`modifiedTime>=${sinceMs}`)
     return fetchPaginated<CloverOrdersResponse, NormalizedOrder>(
       ctx,
       (offset) =>
         `${base_url}/v3/merchants/${merchant_id}/orders` +
-        `?filter=modifiedTime>=${sinceMs}` +
+        `?filter=${encodedFilter}` +
         `&expand=lineItems,payments` +
         `&limit=${PAGE_SIZE}` +
         `&offset=${offset}`,

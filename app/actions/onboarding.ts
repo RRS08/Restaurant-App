@@ -313,13 +313,24 @@ export async function completeOnboarding(
     }, { onConflict: 'restaurant_id' })
   if (staffErr) return { error: formatError('staffing config', staffErr) }
 
-  // 6. Starter menu categories
-  const starter = STARTER_MENU_SECTIONS[parsed.businessType]
-  const toInsert = starter.map((name, i) => ({
-    restaurant_id: restaurant.id, name, sort_order: i + 1, source: 'manual' as const,
-  }))
-  if (toInsert.length > 0) {
-    await admin.from('menu_categories').insert(toInsert)
+  // 6. Starter menu categories — only for Native POS users.
+  //
+  // External POS users will get their menu structure from their
+  // first Square/Clover sync; pre-creating business-type defaults
+  // here would just produce duplicate categories ("Beverages" from
+  // our defaults next to "Beverages" from Square) and force them
+  // through a merge UX they shouldn't need. We still captured
+  // `business_type` above so the data is there if a later flow
+  // needs it (e.g., the rare "External POS arrives without
+  // categories" edge case).
+  if (operatingMode === 'native_pos') {
+    const starter = STARTER_MENU_SECTIONS[parsed.businessType]
+    const toInsert = starter.map((name, i) => ({
+      restaurant_id: restaurant.id, name, sort_order: i + 1, source: 'manual' as const,
+    }))
+    if (toInsert.length > 0) {
+      await admin.from('menu_categories').insert(toInsert)
+    }
   }
 
   // 7. Starter shift sections (the schedule grid's rows). Without

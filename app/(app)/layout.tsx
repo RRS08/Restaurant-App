@@ -21,6 +21,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/sidebar'
+import { getOperatingMode } from '@/lib/readiness'
+import { isDevEmail } from '@/lib/dev'
 
 export default async function AppLayout({
   children,
@@ -56,7 +58,7 @@ export default async function AppLayout({
   // ---- Fetch display data for the sidebar ----
   // We run these two queries at the same time using Promise.all.
   // This is faster than running them one after another.
-  const [{ data: profile }, { data: restaurant }] = await Promise.all([
+  const [{ data: profile }, { data: restaurant }, operatingMode] = await Promise.all([
     supabase
       .from('profiles')
       .select('full_name')
@@ -67,7 +69,13 @@ export default async function AppLayout({
       .select('name')
       .eq('id', userRole.restaurant_id)
       .single(),
+    getOperatingMode(supabase, userRole.restaurant_id),
   ])
+
+  // Dev accounts override mode-based gating so the testing workflow
+  // can see both Native POS and External POS surfaces regardless of
+  // the restaurant's actual operating mode.
+  const isDev = isDevEmail(user.email)
 
   // ---- Render the shell ----
   return (
@@ -83,6 +91,8 @@ export default async function AppLayout({
         restaurantName={restaurant?.name ?? 'My Restaurant'}
         userFullName={profile?.full_name ?? null}
         userEmail={user.email ?? ''}
+        operatingMode={operatingMode}
+        isDev={isDev}
       />
 
       {/*

@@ -83,7 +83,7 @@ export default async function MenuPage() {
   async function fetchMenuItems() {
     const rich = await supabase
       .from('menu_items')
-      .select('id, name, current_price, active, category_id, source, availability_override, availability_override_set_at')
+      .select('id, name, current_price, active, category_id, source, external_provider, availability_override, availability_override_set_at')
       .order('name', { ascending: true })
     if (!rich.error) return { data: rich.data, hasOverrideColumns: true }
 
@@ -98,7 +98,7 @@ export default async function MenuPage() {
 
     const base = await supabase
       .from('menu_items')
-      .select('id, name, current_price, active, category_id, source')
+      .select('id, name, current_price, active, category_id, source, external_provider')
       .order('name', { ascending: true })
     if (base.error) {
       console.error('[menu/page] menu_items base select failed:', base.error)
@@ -122,7 +122,7 @@ export default async function MenuPage() {
   ] = await Promise.all([
     supabase
       .from('menu_categories')
-      .select('id, name, sort_order')
+      .select('id, name, sort_order, source')
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
 
@@ -176,6 +176,9 @@ export default async function MenuPage() {
   const items = itemsResult.data as Array<{
     id: string; name: string; current_price: number | string; active: boolean
     category_id: string | null; source: string
+    /** Provider tag for items imported from an external POS — drives
+     *  the "local-only" hint on the Menu drawer. */
+    external_provider?: string | null
     availability_override?: string | null
     availability_override_set_at?: string | null
   }> | null
@@ -289,6 +292,12 @@ export default async function MenuPage() {
       active: item.active,
       categoryId: item.category_id,
       source: item.source,
+      // null for native items; 'square' / 'clover' / etc. for items
+      // imported from an external POS. The drawer uses this to
+      // explain that our `active` toggle is local-only — the actual
+      // "stop selling" decision lives in the external POS dashboard.
+      externalProvider:
+        (item.external_provider ?? null) as string | null,
       recipe,
       override,
       overrideSetAt: (item.availability_override_set_at ?? null) as string | null,
@@ -321,9 +330,24 @@ export default async function MenuPage() {
     lastError: c.last_error,
   }))
 
+  // ---- Empty-category filter ----
+  // Drop auto-imported categories that have zero items — those are
+  // noise from an external POS sync the manager hasn't engaged with.
+  // User-created (or adopted) empty categories stay visible so the
+  // manager can add items to them. A category is considered "auto-
+  // imported" when `source = 'imported'`; adopted categories keep
+  // the manager's original source (typically 'manual' or NULL).
+  const categoryIdsWithItems = new Set(
+    menuItems.map((i) => i.categoryId).filter((id): id is string => !!id),
+  )
+  const visibleCategories = (categories ?? []).filter((c) => {
+    if (categoryIdsWithItems.has(c.id)) return true
+    return c.source !== 'imported'
+  })
+
   return (
     <MenuClient
-      categories={(categories ?? []).map((c) => ({
+      categories={visibleCategories.map((c) => ({
         id: c.id,
         name: c.name,
         sortOrder: c.sort_order,

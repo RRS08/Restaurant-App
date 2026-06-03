@@ -106,13 +106,30 @@ interface SidebarProps {
   restaurantName: string
   userFullName: string | null
   userEmail: string
+  /** Restaurant's onboarding-time choice. Native POS users use our
+   *  in-app POS; External POS users ring up sales in Square/Clover
+   *  and don't need our POS surface at all. */
+  operatingMode: 'native_pos' | 'external_pos' | null
+  /** Dev override — when true, every link is shown regardless of
+   *  mode so the testing workflow can hit both surfaces. */
+  isDev: boolean
 }
 
 export default function Sidebar({
   restaurantName,
   userFullName,
   userEmail,
+  operatingMode,
+  isDev,
 }: SidebarProps) {
+  // Mode-driven filter. Only the POS link is mode-sensitive today;
+  // we hide it for external_pos users (their selling happens in
+  // Square/Clover). Dev accounts see everything.
+  const visibleNavItems = navItems.filter((item) => {
+    if (isDev) return true
+    if (item.href === '/pos' && operatingMode === 'external_pos') return false
+    return true
+  })
   // usePathname() returns the current URL path, e.g. "/dashboard"
   // We use it to compare against each nav item's href.
   const pathname = usePathname()
@@ -138,7 +155,7 @@ export default function Sidebar({
 
       {/* ---- Middle: Navigation links ---- */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           // Determine if this link is the currently active page.
           // startsWith handles sub-pages too:
           //   pathname "/menu/new-item" starts with "/menu" → Menu is active

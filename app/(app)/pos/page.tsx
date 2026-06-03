@@ -103,7 +103,7 @@ export default async function PosPage() {
       .select('inventory_item_id, quantity_change, transaction_datetime'),
   ])
 
-  const categories = categoriesRes.data
+  const allCategories = categoriesRes.data
   const recipeComponents = recipeRes.data
   const setupRow = setupRes.data
   const invCounts = countsRes.data
@@ -125,7 +125,7 @@ export default async function PosPage() {
 
   console.info('[pos/page] raw counts', {
     user_id: user?.id ?? null,
-    categories: (categories ?? []).length,
+    categories: (allCategories ?? []).length,
     active_menu_items: items?.length ?? 0,
     recipe_components: (recipeComponents ?? []).length,
     distinct_menu_items_with_recipe: distinctRecipeMenuItemIds.size,
@@ -153,6 +153,21 @@ export default async function PosPage() {
     })
     recipeByMenuItem.set(rc.menu_item_id, list)
   }
+
+  // ---- Empty-category filter ----
+  // The POS strip should never advertise a category a cashier can't
+  // actually sell from. Drop categories with no active menu items.
+  // `items` here is already restricted to active items
+  // (fetchActiveMenuItems), so presence in items implies the
+  // category is sellable.
+  const categoryIdsWithActiveItems = new Set(
+    (items ?? [])
+      .map((i) => i.category_id)
+      .filter((id): id is string => !!id),
+  )
+  const categories = (allCategories ?? []).filter((c) =>
+    categoryIdsWithActiveItems.has(c.id),
+  )
 
   return (
     <PosClient

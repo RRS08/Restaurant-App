@@ -32,6 +32,7 @@ import {
   importCustomJsonMenu,
   importCustomJsonOrders,
 } from '@/app/actions/pos-import'
+import { resetExternalPosData } from '@/app/actions/external-pos-reset'
 import {
   PILLAR_KEYS,
   VALID_PILLAR_STATES,
@@ -96,6 +97,7 @@ export default function DevTools({
   const [disconnectState, disconnectAction, disconnectPending]  = useActionState(disconnectExternalPos, null)
   const [menuSyncState, menuSyncAction, menuSyncPending]        = useActionState(syncExternalPosMenu, null)
   const [ordersSyncState, ordersSyncAction, ordersSyncPending]  = useActionState(syncExternalPosOrders, null)
+  const [resetState, resetAction, resetPending]                 = useActionState(resetExternalPosData, null)
   const [csvMenuState, csvMenuAction, csvMenuPending]           = useActionState(importCsvMenu, null)
   const [csvOrdersState, csvOrdersAction, csvOrdersPending]     = useActionState(importCsvOrders, null)
   const [jsonMenuState, jsonMenuAction, jsonMenuPending]        = useActionState(importCustomJsonMenu, null)
@@ -355,6 +357,54 @@ export default function DevTools({
           {ordersSyncState && 'error' in ordersSyncState && <p className="text-[11px] text-red-600">Orders: {ordersSyncState.error}</p>}
           {disconnectState && 'ok' in disconnectState && <p className="text-[11px] text-gray-500">{disconnectState.message}</p>}
           {disconnectState && 'error' in disconnectState && <p className="text-[11px] text-red-600">{disconnectState.error}</p>}
+        </div>
+
+        {/* ------------- Reset imported data (any provider) -------------
+            For wiping leftover data from a provider whose Settings card
+            isn't currently mounted (e.g., legacy Square data after the
+            Clover pivot), or for clean-slating any provider before a
+            fresh test run. Same action that powers the Clover card's
+            Reset button, just provider-picker driven so the same lever
+            works for square / toast / mock / csv / custom_json too.
+
+            Adopted user categories are unbound rather than deleted —
+            their rows survive even if you reset the provider that
+            adopted them. Historical inventory_transactions are kept. */}
+        <div className="mt-4 pt-4 border-t border-gray-100">
+          <p className="text-[11px] font-semibold text-gray-700 mb-1">Reset imported data</p>
+          <p className="text-[10px] text-gray-500 leading-relaxed mb-2 max-w-md">
+            Wipes connection rows + imported categories + imported items + imported
+            orders for the chosen provider. Adopted categories are unbound rather than
+            deleted. Not reversible. Useful for clearing leftover Square data after the
+            Clover pivot.
+          </p>
+          <form action={resetAction} className="flex flex-wrap items-center gap-2">
+            <select
+              name="provider"
+              defaultValue="square"
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-[11px] font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="square">square</option>
+              <option value="clover">clover</option>
+              <option value="toast">toast</option>
+              <option value="mock">mock</option>
+              <option value="csv">csv</option>
+              <option value="custom_json">custom_json</option>
+            </select>
+            <button
+              type="submit"
+              disabled={resetPending}
+              className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
+            >
+              {resetPending ? 'Resetting…' : 'Reset selected provider'}
+            </button>
+          </form>
+          {resetState && 'ok' in resetState && (
+            <p className="mt-1.5 text-[11px] text-emerald-700 leading-relaxed">{resetState.message}</p>
+          )}
+          {resetState && 'error' in resetState && (
+            <p className="mt-1.5 text-[11px] text-red-600">{resetState.error}</p>
+          )}
         </div>
       </div>
 

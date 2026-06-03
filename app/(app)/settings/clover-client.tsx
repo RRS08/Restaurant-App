@@ -18,11 +18,14 @@ import {
   saveCloverConfig,
   testCloverConnection,
   disconnectClover,
+  createCloverTestOrder,
+  diagnoseCloverOrders,
 } from '@/app/actions/clover'
 import {
   syncExternalPosMenu,
   syncExternalPosOrders,
 } from '@/app/actions/pos-import'
+import { resetExternalPosData } from '@/app/actions/external-pos-reset'
 
 interface PendingItem {
   id: string
@@ -36,6 +39,45 @@ interface PendingItem {
    *  already sits in the right home and only needs recipe + activate. */
   needsAssignment: boolean
 }
+
+interface ImportedItem {
+  id: string
+  name: string
+  price: number
+  active: boolean
+  externalId: string
+  categoryName: string
+}
+
+type TestOrderResult =
+  | { error: string; orderId?: string; lineItemIds?: string[] }
+  | {
+      ok: true
+      message: string
+      orderId: string
+      lineItemIds: string[]
+      unitsAdded: number
+      totalAmount: number
+      paymentId: string | null
+      tenderUsed: string | null
+      paid: boolean
+      environment: 'sandbox' | 'production'
+    }
+
+type DiagnosticProbe = {
+  label: string
+  url: string
+  status: number
+  elementCount: number
+  firstOrderIds: string[]
+  bodyPreview?: string
+  contentType?: string
+  errorBody?: string
+}
+
+type DiagnoseResult =
+  | { error: string }
+  | { ok: true; probes: DiagnosticProbe[] }
 
 type ConfiguredState = {
   configured: true
@@ -56,11 +98,15 @@ export default function CloverClient({
   locationName,
   initial,
   pendingItems,
+  isDev,
+  importedItems,
 }: {
   locationId: string
   locationName: string
   initial: InitialState
   pendingItems: PendingItem[]
+  isDev: boolean
+  importedItems: ImportedItem[]
 }) {
   const [mode, setMode] = useState<'view' | 'edit'>(
     initial.configured ? 'view' : 'edit',
@@ -80,15 +126,34 @@ export default function CloverClient({
     syncExternalPosOrders,
     null,
   )
+  const [resetState, resetAction, resetPending] = useActionState(
+    resetExternalPosData,
+    null,
+  )
+  const [testOrderState, testOrderAction, testOrderPending] = useActionState(
+    createCloverTestOrder,
+    null,
+  )
+  const [diagnoseState, diagnoseAction, diagnosePending] = useActionState(
+    diagnoseCloverOrders,
+    null,
+  )
 
   // Flip back to view mode after a successful save.
   if (saveState && 'ok' in saveState && saveState.ok && mode === 'edit' && initial.configured) {
     queueMicrotask(() => setMode('view'))
   }
 
+  // Effective mode for rendering. When the underlying connection
+  // doesn't exist, force the form regardless of the local `mode`
+  // state — otherwise a disconnect-while-in-view-mode leaves a
+  // mode='view' / configured=false combination that matches neither
+  // render branch and produces a blank card body.
+  const effectiveMode: 'view' | 'edit' = initial.configured ? mode : 'edit'
+
   return (
     <div className="space-y-4">
-      {mode === 'view' && initial.configured && (
+      {effectiveMode === 'view' && initial.configured && (
         <ConfiguredSummary
           locationName={locationName}
           state={initial}
@@ -105,12 +170,34 @@ export default function CloverClient({
           ordersSyncAction={ordersSyncAction}
           ordersSyncPending={ordersSyncPending}
           ordersSyncState={ordersSyncState}
+          resetAction={resetAction}
+          resetPending={resetPending}
+          resetState={resetState}
           pendingItems={pendingItems}
           locationId={locationId}
         />
       )}
 
-      {mode === 'edit' && (
+      {/* Dev-only test-order creator. Renders as a sibling of the
+          configured summary so it always sits at the bottom of the
+          card when active. Gated on isDev AND initial.configured —
+          the server action re-checks both, so this is just visibility.
+          Lives here (not inside ConfiguredSummary) to avoid passing
+          another batch of props through the summary component. */}
+      {isDev && initial.configured && effectiveMode === 'view' && (
+        <TestOrderPanel
+          locationId={locationId}
+          importedItems={importedItems}
+          action={testOrderAction}
+          pending={testOrderPending}
+          state={testOrderState}
+          diagnoseAction={diagnoseAction}
+          diagnosePending={diagnosePending}
+          diagnoseState={diagnoseState}
+        />
+      )}
+
+      {effectiveMode === 'edit' && (
         <ConfigForm
           locationId={locationId}
           locationName={locationName}
@@ -144,6 +231,9 @@ function ConfiguredSummary({
   ordersSyncAction,
   ordersSyncPending,
   ordersSyncState,
+  resetAction,
+  resetPending,
+  resetState,
   pendingItems,
   locationId,
 }: {
@@ -162,10 +252,14 @@ function ConfiguredSummary({
   ordersSyncAction: (formData: FormData) => void
   ordersSyncPending: boolean
   ordersSyncState: SyncResult | null
+  resetAction: (formData: FormData) => void
+  resetPending: boolean
+  resetState: { error: string } | { ok: true; message: string } | null
   pendingItems: PendingItem[]
   locationId: string
 }) {
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
 
   return (
     <>
@@ -299,6 +393,66 @@ function ConfiguredSummary({
       {disconnectState && 'error' in disconnectState && (
         <p className="text-xs text-red-700">{disconnectState.error}</p>
       )}
+
+      {/* Reset all imported data — destructive dev tool.
+          Disconnect removes only the credentials; this also wipes
+          imported categories, items, and orders so the next sync
+          starts from a clean slate. Adopted user categories (the
+          name-match ones) get unbound rather than deleted. */}
+      <div className="mt-3 pt-3 border-t border-gray-100">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">
+          Dev: reset Clover data
+        </p>
+        <p className="text-[11px] text-gray-500 leading-relaxed max-w-prose mb-2">
+          Removes the Clover connection AND everything imported through it: auto-created
+          categories, all Clover-tagged menu items, and all Clover-sourced orders.
+          Categories the ingest adopted by name match are kept (just unbound). Useful
+          before switching sandboxes or pivoting providers. Not reversible.
+        </p>
+        {!confirmReset ? (
+          <button
+            type="button"
+            onClick={() => setConfirmReset(true)}
+            className="rounded-md border border-red-200 bg-white px-3.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-50 transition-colors"
+          >
+            Reset all Clover data…
+          </button>
+        ) : (
+          <form action={resetAction} className="inline-flex items-center gap-2">
+            <input type="hidden" name="provider" value="clover" />
+            <button
+              type="submit"
+              disabled={resetPending}
+              className="rounded-md border border-red-300 bg-red-50 px-3.5 py-2 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60 transition-colors"
+            >
+              {resetPending ? 'Resetting…' : 'Yes, wipe all Clover data'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmReset(false)}
+              className="text-xs text-gray-500 hover:text-gray-700"
+            >
+              Cancel
+            </button>
+          </form>
+        )}
+        {resetState && (
+          <div
+            className={`mt-2 rounded-md px-3 py-2 text-xs ${
+              'ok' in resetState
+                ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                : 'bg-red-50 border border-red-200 text-red-800'
+            }`}
+          >
+            <p className="font-semibold">
+              {'ok' in resetState ? 'Reset complete' : 'Reset failed'}
+            </p>
+            <p className="mt-0.5 leading-relaxed">
+              {'ok' in resetState ? resetState.message : resetState.error}
+            </p>
+          </div>
+        )}
+      </div>
     </>
   )
 }
@@ -423,6 +577,291 @@ function SyncResultRow({
 }
 
 // ================================================================
+// TestOrderPanel — dev-only Clover sandbox order creator
+//
+// Pick an imported Clover menu item, set quantity, click create.
+// The server action POSTs to Clover's /v3/merchants/{mid}/orders +
+// /line_items endpoints — no internal sale rows are written here.
+// The internal sale only appears after the operator clicks
+// "Sync orders now" and the existing import pipeline runs.
+// ================================================================
+function TestOrderPanel({
+  locationId,
+  importedItems,
+  action,
+  pending,
+  state,
+  diagnoseAction,
+  diagnosePending,
+  diagnoseState,
+}: {
+  locationId: string
+  importedItems: ImportedItem[]
+  action: (formData: FormData) => void
+  pending: boolean
+  state: TestOrderResult | null
+  diagnoseAction: (formData: FormData) => void
+  diagnosePending: boolean
+  diagnoseState: DiagnoseResult | null
+}) {
+  const fmtMoney = (n: number) =>
+    `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+
+  if (importedItems.length === 0) {
+    return (
+      <div className="rounded-md border border-dashed border-gray-300 bg-gray-50/40 px-4 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          Dev: create Clover test order
+        </p>
+        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+          Import some Clover items first (click <span className="font-semibold">Sync menu now</span>
+          {' '}above). Once items are in the menu you can use this panel to push a test order
+          back into Clover for the import pipeline to pick up on the next{' '}
+          <span className="font-semibold">Sync orders now</span>.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-md border border-dashed border-gray-300 bg-gray-50/40 px-4 py-3">
+      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        Dev: create Clover test order
+      </p>
+      <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-prose">
+        Creates a <span className="font-semibold">paid</span> itemized order in Clover
+        Sandbox (does <span className="font-semibold">not</span> write an internal sale).
+        Picks a cash tender on the merchant, closes the order with a full-amount payment,
+        and returns Clover&apos;s IDs. Then click{' '}
+        <span className="font-semibold">Sync orders now</span> above to import the
+        completed sale through the normal pipeline — Sales / Inventory / Finance /
+        Dashboard will update via the existing path.
+      </p>
+
+      <form action={action} className="mt-3 flex flex-wrap items-end gap-2">
+        <input type="hidden" name="location_id" value={locationId} />
+
+        <div className="flex flex-col gap-1 min-w-[260px] flex-1">
+          <label
+            htmlFor="cl-test-item"
+            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
+          >
+            Clover-imported item
+          </label>
+          <select
+            id="cl-test-item"
+            name="menu_item_id"
+            required
+            defaultValue={importedItems[0]?.id ?? ''}
+            className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+          >
+            {importedItems.map((it) => (
+              <option key={it.id} value={it.id}>
+                {it.name} · {fmtMoney(it.price)} · {it.categoryName}
+                {it.active ? '' : ' · inactive'}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1 w-20">
+          <label
+            htmlFor="cl-test-qty"
+            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
+          >
+            Quantity
+          </label>
+          <input
+            id="cl-test-qty"
+            name="quantity"
+            type="number"
+            min={1}
+            max={50}
+            defaultValue={1}
+            required
+            className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={pending}
+          className="rounded-md bg-gray-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+        >
+          {pending ? 'Creating in Clover…' : 'Create Clover test order'}
+        </button>
+      </form>
+
+      {state && (
+        <div
+          className={`mt-3 rounded-md px-3 py-2 text-xs ${
+            'ok' in state
+              ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border border-red-200 text-red-800'
+          }`}
+        >
+          {'ok' in state ? (
+            <>
+              <p className="font-semibold">Paid order created in Clover</p>
+              <p className="mt-0.5 leading-relaxed">{state.message}</p>
+              <dl className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2 text-[10px]">
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Order ID
+                  </dt>
+                  <dd className="font-mono text-emerald-900 truncate">{state.orderId}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Line items
+                  </dt>
+                  <dd className="font-mono text-emerald-900">{state.unitsAdded}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Total
+                  </dt>
+                  <dd className="font-mono text-emerald-900">{fmtMoney(state.totalAmount)}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Tender
+                  </dt>
+                  <dd className="font-mono text-emerald-900 truncate">{state.tenderUsed ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Payment ID
+                  </dt>
+                  <dd className="font-mono text-emerald-900 truncate">{state.paymentId ?? '—'}</dd>
+                </div>
+                <div>
+                  <dt className="font-semibold uppercase tracking-widest text-emerald-700/80">
+                    Environment
+                  </dt>
+                  <dd className="font-mono text-emerald-900">{state.environment}</dd>
+                </div>
+              </dl>
+              {state.lineItemIds.length > 0 && (
+                <p className="mt-2 text-[10px] text-emerald-700/80 break-all">
+                  Line item IDs: {state.lineItemIds.join(', ')}
+                </p>
+              )}
+            </>
+          ) : (
+            <>
+              <p className="font-semibold">Could not create test order</p>
+              <p className="mt-0.5 leading-relaxed">{state.error}</p>
+              {/* Partial-success surfacing — when the action got
+                  far enough to create the order or some line items
+                  before failing, show those IDs so the operator can
+                  clean up or debug in Clover. */}
+              {(state.orderId || (state.lineItemIds && state.lineItemIds.length > 0)) && (
+                <dl className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                  {state.orderId && (
+                    <div>
+                      <dt className="font-semibold uppercase tracking-widest text-red-700/80">
+                        Order ID (still open in Clover)
+                      </dt>
+                      <dd className="font-mono text-red-900 truncate">{state.orderId}</dd>
+                    </div>
+                  )}
+                  {state.lineItemIds && state.lineItemIds.length > 0 && (
+                    <div>
+                      <dt className="font-semibold uppercase tracking-widest text-red-700/80">
+                        Line items attached
+                      </dt>
+                      <dd className="font-mono text-red-900">{state.lineItemIds.length}</dd>
+                    </div>
+                  )}
+                </dl>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Diagnostic — only useful when the regular sync returns 0
+          but you know paid orders exist in Clover. Hits the orders
+          endpoint three ways and reports raw counts so we can see
+          if the issue is encoding, the time window, or token scope. */}
+      <div className="mt-3 pt-3 border-t border-dashed border-gray-300">
+        <form action={diagnoseAction}>
+          <input type="hidden" name="location_id" value={locationId} />
+          <button
+            type="submit"
+            disabled={diagnosePending}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+          >
+            {diagnosePending ? 'Probing Clover…' : 'Diagnose orders fetch'}
+          </button>
+        </form>
+        {diagnoseState && 'error' in diagnoseState && (
+          <p className="mt-2 text-[11px] text-red-700">{diagnoseState.error}</p>
+        )}
+        {diagnoseState && 'ok' in diagnoseState && (
+          <div className="mt-2 space-y-2">
+            {diagnoseState.probes.map((p, i) => {
+              const ok = p.status >= 200 && p.status < 300
+              return (
+                <div
+                  key={i}
+                  className={`rounded-md px-3 py-2 text-[11px] ${
+                    ok
+                      ? p.elementCount > 0
+                        ? 'bg-emerald-50 border border-emerald-200'
+                        : 'bg-amber-50 border border-amber-200'
+                      : 'bg-red-50 border border-red-200'
+                  }`}
+                >
+                  <p className="font-semibold uppercase tracking-widest text-gray-700 text-[10px]">
+                    {p.label}
+                  </p>
+                  <p className="mt-0.5 font-mono break-all text-gray-600 text-[10px]">
+                    {p.url}
+                  </p>
+                  <p className="mt-1 tabular-nums">
+                    HTTP <span className="font-bold">{p.status}</span> · elements:{' '}
+                    <span className="font-bold">{p.elementCount}</span>
+                    {p.contentType && (
+                      <> · <span className="font-mono text-[10px]">{p.contentType}</span></>
+                    )}
+                    {p.firstOrderIds.length > 0 && (
+                      <> · first IDs: <span className="font-mono">{p.firstOrderIds.join(', ')}</span></>
+                    )}
+                  </p>
+                  {p.bodyPreview && (
+                    <details className="mt-1.5">
+                      <summary className="cursor-pointer text-[10px] font-semibold text-gray-600 hover:text-gray-900">
+                        Raw response body ({p.bodyPreview.length} chars)
+                      </summary>
+                      <pre className="mt-1 whitespace-pre-wrap break-all bg-white/60 border border-gray-200 rounded px-2 py-1.5 font-mono text-[10px] text-gray-700 max-h-48 overflow-auto">
+                        {p.bodyPreview}
+                      </pre>
+                    </details>
+                  )}
+                  {p.errorBody && !p.bodyPreview && (
+                    <p className="mt-1 text-red-700 break-words text-[10px]">{p.errorBody}</p>
+                  )}
+                </div>
+              )
+            })}
+            <p className="text-[10px] text-gray-500 leading-relaxed">
+              <span className="font-semibold">How to read this:</span>{' '}
+              Probes 1–3 hit the orders LIST endpoint with progressively
+              more filtering. Probe 4 explicitly asks for paid/locked orders.
+              Probe 5 swaps Bearer auth for the legacy X-Auth-Token header.
+              Click <span className="font-mono">Raw response body</span> on any
+              probe to see exactly what Clover returned.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
 // ConfigForm
 // ================================================================
 function ConfigForm({
@@ -474,7 +913,7 @@ function ConfigForm({
       <Field
         label="Merchant ID"
         htmlFor="cl-merchant-id"
-        hint="The Clover merchant identifier — found at the top of the Clover dashboard URL or in Account & Setup."
+        hint="Not the merchant display name. It's the alphanumeric chunk in your Clover dashboard URL after /m/ — e.g., in sandbox.dev.clover.com/setupapp/m/VNE7RQ4TK9EW1/api-tokens the merchant ID is VNE7RQ4TK9EW1."
       >
         <input
           id="cl-merchant-id"
@@ -482,7 +921,7 @@ function ConfigForm({
           type="text"
           required
           defaultValue={initial.configured ? initial.merchantId : ''}
-          placeholder="ABCD1234EFGH5"
+          placeholder="VNE7RQ4TK9EW1"
           className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
         />
       </Field>

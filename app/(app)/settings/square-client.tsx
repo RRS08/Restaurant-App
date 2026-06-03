@@ -101,9 +101,16 @@ export default function SquareClient({
     queueMicrotask(() => setMode('view'))
   }
 
+  // Effective mode for rendering. When the underlying connection
+  // doesn't exist, force the form regardless of the local `mode`
+  // state — otherwise a disconnect-while-in-view-mode leaves a
+  // mode='view' / configured=false combination that matches neither
+  // render branch and produces a blank card body.
+  const effectiveMode: 'view' | 'edit' = initial.configured ? mode : 'edit'
+
   return (
     <div className="space-y-4">
-      {mode === 'view' && initial.configured && (
+      {effectiveMode === 'view' && initial.configured && (
         <ConfiguredSummary
           locationName={locationName}
           state={initial}
@@ -125,7 +132,7 @@ export default function SquareClient({
         />
       )}
 
-      {mode === 'edit' && (
+      {effectiveMode === 'edit' && (
         <ConfigForm
           locationId={locationId}
           locationName={locationName}

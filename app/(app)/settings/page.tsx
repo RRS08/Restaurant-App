@@ -10,7 +10,7 @@ import BankCard from './bank-card'
 // surface for the current testing phase.
 import CloverCard from './clover-card'
 import { createClient } from '@/lib/supabase/server'
-import { computeReadiness, type ReadinessSnapshot } from '@/lib/readiness'
+import { computeReadiness, getOperatingMode, type ReadinessSnapshot } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
 
 export default async function SettingsPage() {
@@ -21,6 +21,7 @@ export default async function SettingsPage() {
   let isDev = false
   let isOwner = false
   let restaurantId: string | null = null
+  let operatingMode: 'native_pos' | 'external_pos' | null = null
   let locations: { id: string; name: string }[] = []
   let posConnections: Array<{
     id: string; location_id: string; provider: string; active: boolean
@@ -39,6 +40,7 @@ export default async function SettingsPage() {
       restaurantId = role.restaurant_id
       isOwner = role.role === 'owner'
       readiness = await computeReadiness(supabase, role.restaurant_id)
+      operatingMode = await getOperatingMode(supabase, role.restaurant_id)
 
       if (isDev) {
         const [{ data: locs }, { data: conns }] = await Promise.all([
@@ -91,16 +93,16 @@ export default async function SettingsPage() {
         </section>
       )}
 
-      {/* External POS integrations — owner-only. Currently testing
-          against Clover sandbox (stronger sandbox + cleaner catalog
-          API than Square). Square is staged in the repo and can be
-          re-mounted as a sibling card when needed. */}
-      {isOwner && restaurantId && (
+      {/* External POS integrations — owner-only AND mode-gated.
+          Native POS restaurants have no reason to see this surface;
+          they sell in our app. Dev accounts override the gate so
+          the testing workflow can hit both flows. */}
+      {isOwner && restaurantId && (isDev || operatingMode === 'external_pos') && (
         <section className="mb-10">
           <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
             External POS integrations
           </h2>
-          <CloverCard restaurantId={restaurantId} />
+          <CloverCard restaurantId={restaurantId} isDev={isDev} />
         </section>
       )}
 

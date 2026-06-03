@@ -169,6 +169,59 @@ const VALID_AVAILABILITY_OVERRIDES: AvailabilityOverride[] = [
   'force_disabled',
 ]
 
+// ----------------------------------------------------------------
+// setMenuItemActive — flip a menu item's `active` flag.
+//
+// Sits alongside `setMenuItemAvailabilityOverride` (which manages the
+// per-shift "out of stock / force on" runtime override) and the
+// recipe-builder actions. This action manages the more permanent
+// "is this item part of the menu at all?" flag:
+//
+//   • For Native POS users, `active` directly gates POS strip
+//     visibility — inactive items don't appear at the till.
+//   • For External POS users, `active` is records-local (depletion
+//     and sales ingestion don't gate on it; the external POS owns
+//     the actual "sellable now" decision in their own dashboard).
+//
+// Imported items land with `active = false` so the manager has an
+// explicit "promote" step after building the recipe. That promotion
+// flows through here.
+//
+// Any restaurant member can flip this — same access scope as the
+// recipe builder and the rest of menu CRUD. Restaurant-scoped via
+// explicit restaurant_id filter (RLS would block cross-tenant
+// writes too, but the filter is defense in depth).
+// ----------------------------------------------------------------
+export async function setMenuItemActive(
+  prevState: { error: string } | null,
+  formData: FormData,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const itemId = (formData.get('item_id') as string | null)?.trim() ?? ''
+  const activeRaw = (formData.get('active') as string | null)?.trim() ?? ''
+  if (!itemId) return { error: 'No item specified.' }
+  if (activeRaw !== 'true' && activeRaw !== 'false') {
+    return { error: 'Invalid active value.' }
+  }
+  const active = activeRaw === 'true'
+
+  const { error } = await ctx.supabase
+    .from('menu_items')
+    .update({ active })
+    .eq('id', itemId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('menu item', error) }
+
+  // POS strip + Menu page both read from menu_items; both need to
+  // reflect the flag change immediately.
+  revalidatePath('/menu')
+  revalidatePath('/pos')
+  return null
+}
+
 export async function setMenuItemAvailabilityOverride(
   prevState: { error: string } | null,
   formData: FormData

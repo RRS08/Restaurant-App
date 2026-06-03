@@ -1844,3 +1844,89 @@ end $$;
 alter table public.inventory_items
   add column if not exists replenishment_lead_days integer
     check (replenishment_lead_days is null or replenishment_lead_days >= 0);
+
+
+-- ================================================================
+-- MIGRATION: DELETE policies for menu_categories / menu_items /
+-- orders / order_items
+--
+-- Reason: the original RLS setup gave these tables SELECT / INSERT /
+-- (sometimes) UPDATE policies but no DELETE policy. Under Postgres
+-- RLS, "no policy" = denied — so any DELETE silently no-ops with
+-- zero rows affected and no error.
+--
+-- Until now this was fine because no end-user flow deleted these
+-- rows directly (orders are soft-voided, menu items are archived,
+-- categories are reorderable but not deletable). But the external
+-- POS reset action (`app/actions/external-pos-reset.ts`) needs to
+-- hard-delete:
+--   • orders the integration synced     (provider-scoped)
+--   • menu_items the integration imported (provider-scoped)
+--   • menu_categories the ingest auto-created
+--   • order_items belonging to or referencing the above
+--
+-- And without DELETE policies, the cascade chain breaks: the orders
+-- DELETE silently no-ops, the cascade-to-order_items never fires,
+-- and the subsequent menu_items DELETE trips the
+-- `order_items.menu_item_id` ON DELETE RESTRICT FK.
+--
+-- Pattern matches every other table that exposes a DELETE policy
+-- (inventory_items, expenses, shifts, etc.): scope by restaurant_id
+-- through `my_restaurant_id()`. Owner-only enforcement happens at
+-- the server-action layer via `requireRestaurantOwner`, same way
+-- those other tables work — the DB policy is the "who can see this
+-- row" gate, not the "who should be allowed to delete it" gate.
+-- ================================================================
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'menu_categories'
+      and policyname = 'Users can delete their menu categories'
+  ) then
+    create policy "Users can delete their menu categories"
+      on public.menu_categories for delete
+      using (restaurant_id = public.my_restaurant_id());
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'menu_items'
+      and policyname = 'Users can delete their menu items'
+  ) then
+    create policy "Users can delete their menu items"
+      on public.menu_items for delete
+      using (restaurant_id = public.my_restaurant_id());
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'orders'
+      and policyname = 'Users can delete their orders'
+  ) then
+    create policy "Users can delete their orders"
+      on public.orders for delete
+      using (restaurant_id = public.my_restaurant_id());
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'order_items'
+      and policyname = 'Users can delete their order items'
+  ) then
+    create policy "Users can delete their order items"
+      on public.order_items for delete
+      using (
+        order_id in (
+          select id from public.orders
+          where restaurant_id = public.my_restaurant_id()
+        )
+      );
+  end if;
+end $$;

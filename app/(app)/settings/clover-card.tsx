@@ -29,7 +29,17 @@ interface ConnectionRow {
   last_error: string | null
 }
 
-export default async function CloverCard({ restaurantId }: { restaurantId: string }) {
+export default async function CloverCard({
+  restaurantId,
+  isDev = false,
+}: {
+  restaurantId: string
+  /** Dev override flag. When true, the client renders the dev-only
+   *  test-order creator below the regular controls. The server
+   *  action also re-checks this server-side, so a hand-rolled
+   *  request from a non-dev account is still rejected. */
+  isDev?: boolean
+}) {
   const supabase = await createClient()
 
   // V1: target the restaurant's default/first location, same shape
@@ -91,6 +101,33 @@ export default async function CloverCard({ restaurantId }: { restaurantId: strin
       needsAssignment: cat?.source === 'imported',
     }
   })
+
+  // Dev-only: list of imported Clover menu_items the test-order
+  // creator can target. We need external_id (the Clover catalog id
+  // we'll send in the line_items payload) plus enough labeling for
+  // a readable dropdown. Only loaded when isDev + configured to
+  // keep the production query path cheap.
+  const { data: importedItemRows } =
+    isDev && isConfigured
+      ? await supabase
+          .from('menu_items')
+          .select('id, name, current_price, active, external_id, menu_categories ( name )')
+          .eq('restaurant_id', restaurantId)
+          .eq('external_provider', 'clover')
+          .not('external_id', 'is', null)
+          .order('active', { ascending: false })
+          .order('name', { ascending: true })
+      : { data: null }
+
+  const importedItems = (importedItemRows ?? []).map((r) => ({
+    id: r.id as string,
+    name: r.name as string,
+    price: Number(r.current_price ?? 0),
+    active: Boolean(r.active),
+    externalId: (r.external_id as string | null) ?? '',
+    categoryName:
+      (r.menu_categories as unknown as { name: string } | null)?.name ?? 'Uncategorized',
+  }))
 
   const creds = connection?.provider_credentials ?? null
   const initialState = isConfigured
@@ -159,6 +196,8 @@ export default async function CloverCard({ restaurantId }: { restaurantId: strin
         locationName={firstLoc.name}
         initial={initialState}
         pendingItems={pendingItems}
+        isDev={isDev}
+        importedItems={importedItems}
       />
     </div>
   )

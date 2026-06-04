@@ -18,6 +18,7 @@ export default async function InventoryPage() {
     { data: recentTransactions },
     { data: recipeCounts },
     { data: restockOrders },
+    { data: closedRestockOrders },
   ] = await Promise.all([
     // Drop the active filter so the duplicate detection + manual
     // merge drawer can see archived rows too. The page-level item
@@ -57,20 +58,56 @@ export default async function InventoryPage() {
       .order('transaction_datetime', { ascending: false })
       .limit(20),
 
-    // Count recipe links per inventory item
+    // Count recipe links per inventory item AND surface the linked
+    // menu_items so the item drawer can render "Used in menu items"
+    // without a second round-trip. The join is cheap — recipe_components
+    // is small relative to orders/transactions, and we already pay for
+    // the fetch to count links.
     supabase
       .from('recipe_components')
-      .select('inventory_item_id'),
+      .select(`
+        inventory_item_id,
+        quantity_required,
+        menu_items ( id, name, active )
+      `),
 
-    // Active restock orders (draft + ordered) — received and canceled
-    // are terminal and don't surface in the workspace's active list.
-    // The drawer filters this by item; the page-level fetch is one
-    // round-trip for all open orders.
+    // Active restock orders (draft + ordered) — drives the cart's
+    // staging area and the Pending Orders section of the Restock
+    // Orders drawer.
     supabase
       .from('restock_orders')
-      .select('id, inventory_item_id, quantity, vendor, expected_cost, notes, status, ordered_at, created_at')
+      .select('id, inventory_item_id, quantity, vendor, expected_cost, expected_date, notes, status, ordered_at, created_at')
       .in('status', ['draft', 'ordered'])
       .order('created_at', { ascending: false }),
+
+    // Closed restock orders — `received` and `canceled` lines that
+    // were actually placed (ordered_at IS NOT NULL). Powers:
+    //   • The Closed Orders section in the Restock Orders drawer.
+    //   • Partial-receipt detection for Pending Orders — a still-
+    //     ordered line whose batch (shared ordered_at) has sibling
+    //     `received` rows here is the "Partially received" state.
+    //
+    // received_quantity is joined off the linked inventory_transaction
+    // so the drawer can render "Ordered 10 · Received 7" without a
+    // second round-trip. Canceled lines carry no transaction; their
+    // received_quantity is null and the drawer reads them as
+    // "Closed short."
+    //
+    // Limited to the most recent 300 closed lines — generous enough
+    // to cover real-world partial-receipt spans and to populate the
+    // Closed Orders preview, but bounded so the payload stays small
+    // as historical activity accumulates.
+    supabase
+      .from('restock_orders')
+      .select(`
+        id, inventory_item_id, quantity, vendor, expected_cost, expected_date, notes,
+        status, ordered_at, received_at, canceled_at, created_at,
+        received_transaction:inventory_transactions!received_transaction_id ( quantity_change )
+      `)
+      .in('status', ['received', 'canceled'])
+      .not('ordered_at', 'is', null)
+      .order('ordered_at', { ascending: false })
+      .limit(300),
   ])
 
   // Latest count per item
@@ -107,6 +144,27 @@ export default async function InventoryPage() {
   const recipeCountMap = new Map<string, number>()
   for (const rc of recipeCounts ?? []) {
     recipeCountMap.set(rc.inventory_item_id, (recipeCountMap.get(rc.inventory_item_id) ?? 0) + 1)
+  }
+
+  // Mapped menu items per inventory item — surfaces "Used in menu
+  // items" inside the drawer. We filter inactive menu_items out so
+  // the drawer doesn't list archived dishes as "active dependents".
+  // Sorted by menu item name for predictable display.
+  type MenuItemDep = { menuItemId: string; menuItemName: string; quantityRequired: number }
+  const menuItemDepsMap = new Map<string, MenuItemDep[]>()
+  for (const rc of recipeCounts ?? []) {
+    const mi = rc.menu_items as unknown as { id: string; name: string; active: boolean } | null
+    if (!mi || !mi.active) continue
+    const list = menuItemDepsMap.get(rc.inventory_item_id) ?? []
+    list.push({
+      menuItemId: mi.id,
+      menuItemName: mi.name,
+      quantityRequired: Number(rc.quantity_required ?? 0),
+    })
+    menuItemDepsMap.set(rc.inventory_item_id, list)
+  }
+  for (const deps of menuItemDepsMap.values()) {
+    deps.sort((a, b) => a.menuItemName.localeCompare(b.menuItemName))
   }
 
   // Transaction count per item (for delete safety check display)
@@ -149,6 +207,7 @@ export default async function InventoryPage() {
       status,
       recipeLinks,
       hasDependencies,
+      menuItems: menuItemDepsMap.get(item.id) ?? [],
     }
   })
 
@@ -314,26 +373,59 @@ export default async function InventoryPage() {
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 20)
 
-  // Shape restock orders for the client. Only active states are
-  // fetched above (draft + ordered) so this is the workspace-active
-  // list ready to drop straight into the drawer.
+  // Shape active restock orders for the client (draft + ordered).
+  // These drive the Cart's staging area and Pending Orders.
   const restockOrdersForClient = (restockOrders ?? []).map((o) => ({
     id: o.id,
     inventoryItemId: o.inventory_item_id,
     quantity: Number(o.quantity),
     vendor: o.vendor as string | null,
     expectedCost: o.expected_cost !== null && o.expected_cost !== undefined ? Number(o.expected_cost) : null,
+    expectedDate: (o.expected_date as string | null) ?? null,
     notes: o.notes as string | null,
     status: o.status as 'draft' | 'ordered',
     orderedAt: (o.ordered_at as string | null) ?? null,
+    receivedAt: null,
+    canceledAt: null,
+    receivedQuantity: null,
     createdAt: o.created_at as string,
   }))
+
+  // Shape closed restock orders for the client (received + canceled
+  // with ordered_at set). The Restock Orders drawer uses these for:
+  //   • Closed Orders section (rendered as one card per batch).
+  //   • Partial-receipt detection — a pending batch whose ordered_at
+  //     matches a received sibling here is "Partially received".
+  //
+  // receivedQuantity is read off the linked inventory_transaction's
+  // quantity_change. Canceled lines (closed short, or canceled at
+  // draft time then somehow re-promoted) carry null — the drawer
+  // renders that as "Closed short."
+  const closedRestockOrdersForClient = (closedRestockOrders ?? []).map((o) => {
+    const tx = (o.received_transaction as unknown as { quantity_change: number } | null)
+    return {
+      id: o.id,
+      inventoryItemId: o.inventory_item_id,
+      quantity: Number(o.quantity),
+      vendor: o.vendor as string | null,
+      expectedCost: o.expected_cost !== null && o.expected_cost !== undefined ? Number(o.expected_cost) : null,
+      expectedDate: (o.expected_date as string | null) ?? null,
+      notes: o.notes as string | null,
+      status: o.status as 'received' | 'canceled',
+      orderedAt: (o.ordered_at as string | null) ?? null,
+      receivedAt: (o.received_at as string | null) ?? null,
+      canceledAt: (o.canceled_at as string | null) ?? null,
+      receivedQuantity: tx ? Number(tx.quantity_change) : null,
+      createdAt: o.created_at as string,
+    }
+  })
 
   return (
     <InventoryClient
       items={inventoryItems}
       transactions={activity}
       restockOrders={restockOrdersForClient}
+      closedRestockOrders={closedRestockOrdersForClient}
       duplicateGroups={duplicateGroups}
       mergeableItems={mergeableItems}
       archivedInRecipes={archivedInRecipes}

@@ -33,6 +33,7 @@
 // ----------------------------------------------------------------
 
 import { useState, useRef, useEffect, useActionState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import {
   createMenuItemInSection,
   createCategory,
@@ -180,6 +181,36 @@ export default function MenuClient({
   useEffect(() => {
     if (selectedItemId && !items.find((i) => i.id === selectedItemId)) setSelectedItemId(null)
   }, [items, selectedItemId])
+
+  // URL-driven selection. Other pages (notably the Inventory item
+  // drawer's "Used in menu items" section) link here with
+  // `?item=<menuItemId>` and expect that item's drawer to open
+  // automatically. We hydrate selectedItemId once on mount when a
+  // valid item id is present, then scroll the matching ItemCard
+  // into view so the manager lands on the right object.
+  //
+  // A ref guards against re-firing the effect on subsequent renders
+  // (e.g., when the user closes the drawer manually but the URL
+  // param still hangs around). After hydration the URL param is
+  // ignored; closing the drawer is closing the drawer.
+  const searchParams = useSearchParams()
+  const hydratedFromUrl = useRef(false)
+  useEffect(() => {
+    if (hydratedFromUrl.current) return
+    const itemFromUrl = searchParams.get('item')
+    if (!itemFromUrl) return
+    if (!items.find((i) => i.id === itemFromUrl)) return
+    hydratedFromUrl.current = true
+    setSelectedItemId(itemFromUrl)
+    // Scroll the matching card into view after the next paint so the
+    // selected ring is visible. ID is stable: `menu-item-<id>` is
+    // applied to each ItemCard button.
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`menu-item-${itemFromUrl}`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }, 80)
+    return () => window.clearTimeout(t)
+  }, [searchParams, items])
 
   return (
     <div className="max-w-[1200px]">
@@ -475,6 +506,11 @@ function ItemCard({
 
   return (
     <button
+      // Stable DOM id so external surfaces (e.g. the Inventory item
+      // drawer's "Used in menu items" links via /menu?item=<id>) can
+      // call scrollIntoView after the menu page hydrates the
+      // selection from the URL.
+      id={`menu-item-${item.id}`}
       type="button"
       onClick={onClick}
       aria-pressed={selected}

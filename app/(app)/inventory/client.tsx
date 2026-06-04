@@ -17,19 +17,31 @@ import {
   deleteInventoryItem,
   createInventoryCount,
   createInventoryItem,
-  createRestockOrder,
   quickAddToOrder,
   markRestockReceived,
   cancelRestockOrder,
+  closeRestockBatch,
   updateRestockQuantity,
-  placeAllDrafts,
+  placeRestockTicket,
 } from '@/app/actions/inventory'
 import { cleanupDuplicateInventoryItems, mergeInventoryItems, runInventoryIntegrityChecks } from '@/app/actions/inventory-cleanup'
+
+interface MenuItemDep {
+  menuItemId: string
+  menuItemName: string
+  /** Recipe-required amount per menu-item sale, in this inventory
+   *  item's unit. Comes from recipe_components.quantity_required. */
+  quantityRequired: number
+}
 
 interface Item {
   id: string; name: string; unitOfMeasure: string; threshold: number
   estimated: number | null; lastCount: number | null; status: 'no_count' | 'out' | 'low' | 'ok'
   recipeLinks: number; hasDependencies: boolean
+  /** Active menu items whose recipes consume this inventory item.
+   *  Sorted alphabetically by menu item name. Drives the "Used in
+   *  menu items" card inside the item drawer. */
+  menuItems: MenuItemDep[]
 }
 
 interface Transaction {
@@ -42,17 +54,40 @@ interface Transaction {
   date: string
 }
 
-// Active restock orders only — received/canceled are terminal and
-// don't surface in the drawer's working list.
+// Unified restock-order row. Status is the full 4-state lifecycle so
+// the same shape can carry both active workspace lines (draft/
+// ordered) and recently closed lines (received/canceled) into the
+// Restock Orders drawer.
+//
+// `quantity` is the ORDERED amount — never overwritten. It's the
+// "intent" truth: what the manager committed to the vendor.
+// `receivedQuantity` is the actual received amount, read off the
+// linked inventory_transaction at fetch time. Together they preserve
+// "ordered 10 · received 7" without mutating the original row.
+//
+// receivedAt / canceledAt distinguish the two closed sub-states:
+//   received  → goods arrived, stock moved
+//   canceled  → didn't come; closed short (multi-line batch) or
+//               canceled from draft (cart-side).
 interface RestockOrder {
   id: string
   inventoryItemId: string
   quantity: number
   vendor: string | null
   expectedCost: number | null
+  /** Optional expected delivery date (yyyy-mm-dd). Annotation only —
+   *  never gates the receipt; stock still moves only when the
+   *  manager explicitly confirms received quantities. */
+  expectedDate: string | null
   notes: string | null
-  status: 'draft' | 'ordered'
+  status: 'draft' | 'ordered' | 'received' | 'canceled'
   orderedAt: string | null
+  receivedAt: string | null
+  canceledAt: string | null
+  /** Actual received quantity (read from the linked inventory
+   *  transaction). null for non-received lines. Distinct from
+   *  `quantity`, which is the ordered intent. */
+  receivedQuantity: number | null
   createdAt: string
 }
 
@@ -64,7 +99,7 @@ const STATUS = {
 } as const
 
 const STATUS_ORDER: Record<Item['status'], number> = { out: 0, low: 1, no_count: 2, ok: 3 }
-type Filter = 'all' | 'out' | 'low' | 'no_count'
+type Filter = 'all' | 'out' | 'low' | 'no_count' | 'ok'
 
 const PAGE_SIZE = 12
 const ACTIVITY_LIMIT = 8
@@ -80,10 +115,14 @@ type DrawerState =
   | { mode: 'merge-items' }
   | null
 
-export default function InventoryClient({ items, transactions, restockOrders, duplicateGroups = [], mergeableItems = [], archivedInRecipes = [] }: {
+export default function InventoryClient({ items, transactions, restockOrders, closedRestockOrders = [], duplicateGroups = [], mergeableItems = [], archivedInRecipes = [] }: {
   items: Item[]
   transactions: Transaction[]
   restockOrders: RestockOrder[]
+  /** Closed restock orders (received + canceled with ordered_at).
+   *  Powers the Closed Orders section of the Restock Orders drawer
+   *  and partial-receipt detection for Pending Orders. */
+  closedRestockOrders?: RestockOrder[]
   /** Active inventory items grouped by normalized name where >1 row
    *  exists. When non-empty, render an in-page banner with a one-
    *  click merge — the most common cause of "depletion writes exist
@@ -120,6 +159,7 @@ export default function InventoryClient({ items, transactions, restockOrders, du
     out: items.filter((i) => i.status === 'out').length,
     low: items.filter((i) => i.status === 'low').length,
     no_count: items.filter((i) => i.status === 'no_count').length,
+    ok: items.filter((i) => i.status === 'ok').length,
     total: items.length,
   }), [items])
 
@@ -286,12 +326,13 @@ export default function InventoryClient({ items, transactions, restockOrders, du
             <button
               type="button"
               onClick={() => setDrawer({ mode: 'orders' })}
+              title="Restock orders awaiting receipt"
               className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
-              Orders
+              Restock orders
               {orderedOrders.length > 0 && (
                 <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold px-1">
                   {orderedOrders.length}
@@ -302,12 +343,13 @@ export default function InventoryClient({ items, transactions, restockOrders, du
             <button
               type="button"
               onClick={() => setDrawer({ mode: 'cart' })}
+              title="Items staged for your next restock order"
               className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
-              Cart
+              Restock cart
               {draftOrders.length > 0 && (
                 <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold px-1">
                   {draftOrders.length}
@@ -316,36 +358,47 @@ export default function InventoryClient({ items, transactions, restockOrders, du
             </button>
           </div>
 
-          {/* ---- ITEM LIST ----
-              Full-width central surface. Card header band carries
-              the section eyebrow + title on the left and the
-              filter chips on the right — visually aligned under
-              the page-level + Item / Orders / Cart actions above.
-              No column headers; each row is self-contained. */}
+          {/* ---- STOCK HEALTH CARD ----
+              Card header now hosts the status filter pills on the
+              right so the filters read as controls for THIS list
+              rather than a standalone status strip. On narrow
+              widths the title/subtitle block keeps its line height
+              and the pills wrap below within the same header
+              padding. "Showing N of M · Clear filters" still lives
+              below when a filter or search is active. */}
           <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-            <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Stock</p>
-                <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Replenishment discovery</h2>
+            <div className="border-b border-gray-100 px-6 py-3">
+              <div className="flex items-center justify-between gap-4 flex-wrap">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Inventory</p>
+                  <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-0.5">Stock Health</h2>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Items sorted by urgency — out, low, uncounted, then healthy.
+                  </p>
+                </div>
+                <StockStatusStrip
+                  counts={counts}
+                  filter={filter}
+                  onFilter={setFilter}
+                />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <SummaryChip tone="red"    label="Out"      value={counts.out}      active={filter === 'out'}      onClick={() => setFilter(filter === 'out' ? 'all' : 'out')} />
-                <SummaryChip tone="amber"  label="Low"      value={counts.low}      active={filter === 'low'}      onClick={() => setFilter(filter === 'low' ? 'all' : 'low')} />
-                <SummaryChip tone="gray"   label="No count" value={counts.no_count} active={filter === 'no_count'} onClick={() => setFilter(filter === 'no_count' ? 'all' : 'no_count')} />
-                <SummaryChip tone="blue"   label="All"      value={counts.total}    active={filter === 'all'}      onClick={() => setFilter('all')} />
-                {(filter !== 'all' || query.length > 0) && (
+              {(filter !== 'all' || query.length > 0) && (
+                <div className="mt-3 flex items-center gap-2">
+                  <span className="text-[11px] text-gray-500 tabular-nums">
+                    Showing <span className="font-semibold text-gray-700">{filteredItems.length}</span> of <span className="font-semibold text-gray-700">{counts.total}</span>
+                  </span>
                   <button
                     type="button"
                     onClick={() => { setFilter('all'); setQuery('') }}
-                    className="ml-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                    className="text-xs font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
                   >
-                    Clear
+                    Clear filters
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
-            <table className="w-full text-sm">
+            <table className="w-full text-sm mt-2">
               <tbody className="divide-y divide-gray-100">
                 {pageItems.length === 0 ? (
                   <tr>
@@ -426,8 +479,8 @@ export default function InventoryClient({ items, transactions, restockOrders, du
       {drawer?.mode === 'orders' && (
         <OrdersDrawer
           ordered={orderedOrders}
+          closed={closedRestockOrders}
           itemsById={itemsById}
-          transactions={transactions}
           onClose={() => setDrawer(null)}
           onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
         />
@@ -443,127 +496,76 @@ export default function InventoryClient({ items, transactions, restockOrders, du
 }
 
 // ----------------------------------------------------------------
-// SummaryChip — clickable status summary that doubles as a filter.
-// Active state is visually obvious via a filled tone + ring.
+// StockStatusStrip — compact filter row above the Stock Health
+// list. Five pills: All / Out / Low / No count / OK. Selected pill
+// uses the dark active-filter style shared with the rest of the
+// app (Sales source filter, etc.); unselected pills carry a small
+// status dot so the four health buckets stay recognizable at a
+// glance. The Restock Cart card that used to live here was
+// duplicative with the toolbar's Restock cart button — pulled out
+// so the strip reads strictly as "filter the list", not as KPIs.
 // ----------------------------------------------------------------
-function SummaryChip({ tone, label, value, active, onClick }: {
-  tone: 'red' | 'amber' | 'gray' | 'blue'
-  label: string
-  value: number
-  active: boolean
-  onClick: () => void
+function StockStatusStrip({
+  counts,
+  filter,
+  onFilter,
+}: {
+  counts: { out: number; low: number; no_count: number; ok: number; total: number }
+  filter: Filter
+  onFilter: (f: Filter) => void
 }) {
-  const palette = {
-    red:   { dot: 'bg-red-500',   activeBg: 'bg-red-50 border-red-300 ring-red-200',       idleText: 'text-red-700',   activeText: 'text-red-800' },
-    amber: { dot: 'bg-amber-500', activeBg: 'bg-amber-50 border-amber-300 ring-amber-200', idleText: 'text-amber-700', activeText: 'text-amber-800' },
-    gray:  { dot: 'bg-gray-400',  activeBg: 'bg-gray-100 border-gray-300 ring-gray-200',   idleText: 'text-gray-600',  activeText: 'text-gray-800' },
-    blue:  { dot: 'bg-blue-500',  activeBg: 'bg-blue-50 border-blue-300 ring-blue-200',    idleText: 'text-gray-600',  activeText: 'text-blue-800' },
-  }[tone]
+  // `dot` is the status palette shared with ItemRow's left stripe
+  // (red Out, amber Low, gray No count, emerald OK). `All` is the
+  // neutral reset filter and intentionally has no dot.
+  const pills: Array<{
+    key: Filter
+    label: string
+    value: number
+    dot: string | null
+  }> = [
+    { key: 'all',      label: 'All',      value: counts.total,    dot: null            },
+    { key: 'out',      label: 'Out',      value: counts.out,      dot: 'bg-red-500'    },
+    { key: 'low',      label: 'Low',      value: counts.low,      dot: 'bg-amber-500'  },
+    { key: 'no_count', label: 'No count', value: counts.no_count, dot: 'bg-gray-400'   },
+    { key: 'ok',       label: 'OK',       value: counts.ok,       dot: 'bg-emerald-500' },
+  ]
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`group inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-semibold transition-all ${
-        active
-          ? `${palette.activeBg} ring-2 shadow-sm ${palette.activeText}`
-          : `bg-white border-gray-200 ${palette.idleText} hover:border-gray-300 hover:bg-gray-50`
-      }`}
+    <div
+      className="flex flex-wrap items-center gap-1.5"
+      role="group"
+      aria-label="Filter stock by status"
     >
-      <span className={`w-2 h-2 rounded-full ${palette.dot}`} />
-      <span>{label}</span>
-      <span className={`text-sm font-bold tabular-nums ${active ? palette.activeText : 'text-gray-900'}`}>{value}</span>
-    </button>
-  )
-}
-
-// ----------------------------------------------------------------
-// ThresholdStat — compact stat cell for the top summary grid.
-// Displays as a small value with an Edit affordance; clicking Edit
-// swaps the value in place for an inline input. Save only appears
-// when the value is dirty; auto-collapses on success.
-// ----------------------------------------------------------------
-function ThresholdStat({ value, onChange, onSave, dirty, saving, saved, unit, editing, onEditingChange }: {
-  value: string
-  onChange: (v: string) => void
-  onSave: () => void
-  dirty: boolean
-  saving: boolean
-  saved: boolean
-  unit: string
-  editing: boolean
-  onEditingChange: (editing: boolean) => void
-}) {
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => { if (editing) inputRef.current?.focus() }, [editing])
-  useEffect(() => { if (saved) onEditingChange(false) }, [saved, onEditingChange])
-
-  if (editing) {
-    // Extremely minimal inline editor — no card frame, no eyebrow.
-    // Reads as a quick settings tweak, visually quiet.
-    return (
-      <div className="rounded-xl bg-amber-50/60 border border-amber-100 p-3 flex items-center gap-1.5">
-        <div className="relative flex-1 min-w-0">
-          <input
-            ref={inputRef}
-            type="number"
-            min="0"
-            step="0.01"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            className="w-full bg-transparent border-0 border-b border-amber-300 px-0 py-1 pr-8 text-base font-mono font-bold tabular-nums text-amber-900 focus:outline-none focus:border-amber-500"
-          />
-          <span className="absolute right-1 bottom-1 text-[10px] text-amber-600/70">{unit}</span>
-        </div>
-        <button
-          type="button"
-          onClick={onSave}
-          disabled={!dirty || saving}
-          aria-label="Save threshold"
-          className="text-amber-700 hover:text-amber-900 disabled:opacity-30 disabled:cursor-not-allowed p-1 transition-colors"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          onClick={() => onEditingChange(false)}
-          aria-label="Cancel"
-          className="text-gray-400 hover:text-gray-600 p-1"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-    )
-  }
-
-  // Display mode — compact stat with Edit pinned bottom-right
-  return (
-    <div className="relative rounded-xl bg-amber-50/60 border border-amber-100 p-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">Threshold</p>
-      <div className="mt-1 flex items-baseline gap-1">
-        <span className="text-xl font-bold font-mono tabular-nums text-amber-900">
-          {parseFloat(value || '0').toFixed(2)}
-        </span>
-        <span className="text-[10px] text-amber-600/70">{unit}</span>
-      </div>
-      <div className="absolute bottom-1.5 right-2 flex items-center gap-1.5">
-        {saved ? (
-          <span className="text-[10px] font-semibold text-green-600">Saved ✓</span>
-        ) : (
+      {pills.map((p) => {
+        const isActive = filter === p.key
+        return (
           <button
+            key={p.key}
             type="button"
-            onClick={() => onEditingChange(true)}
-            className="text-[10px] font-semibold text-amber-700 hover:text-amber-900 uppercase tracking-wide"
+            onClick={() => onFilter(p.key)}
+            aria-pressed={isActive}
+            className={`inline-flex items-center gap-1.5 h-8 rounded-md px-3 text-xs font-semibold transition-colors ${
+              isActive
+                ? 'bg-gray-900 text-white border border-gray-900'
+                : 'bg-white border border-gray-200/80 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
+            }`}
           >
-            Edit
+            {/* Dot only renders on the unselected state — on the
+                dark active background the small color disc reads
+                muddy, and the selected label + count already carry
+                enough signal on their own. */}
+            {p.dot && !isActive && (
+              <span className={`w-1.5 h-1.5 rounded-full ${p.dot}`} aria-hidden />
+            )}
+            <span>{p.label}</span>
+            <span
+              className={`tabular-nums ${isActive ? 'text-white/70' : 'text-gray-500'}`}
+            >
+              {p.value}
+            </span>
           </button>
-        )}
-      </div>
+        )
+      })}
     </div>
   )
 }
@@ -627,9 +629,31 @@ function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
 }
 
 // ----------------------------------------------------------------
-// CartDrawer — the shopping cart. Lists draft restock_orders for
-// the whole restaurant. Place order at the bottom flips them all
-// to 'ordered' (placeAllDrafts).
+// CartDrawer — vendor-ticket builder.
+//
+// The drawer is no longer "place every staged item as one order."
+// It's an interactive surface where the manager builds one vendor
+// ticket at a time: select items from the staging area, assemble
+// them into the active ticket, capture ticket-level vendor / total
+// / date / notes, then commit. Items not added to the ticket stay
+// staged so the manager can build a separate ticket for a different
+// vendor next.
+//
+// Hierarchy:
+//   Staging Area         → all currently-staged drafts not yet
+//                          assigned to the active ticket. Each item
+//                          card is draggable + click-to-select for
+//                          a11y/fallback.
+//   Active Vendor Ticket → working ticket: vendor field, drop zone,
+//                          ticket items list, total / date / notes,
+//                          Create order ticket commit.
+//
+// State lives in the drawer; nothing about which drafts are in the
+// ticket vs. staging is persisted server-side until the manager
+// hits Create. On Create, placeRestockTicket flips the selected
+// drafts to 'ordered' with shared vendor/date/notes and an equally-
+// split expected_cost so the existing receipt-time Finance bridge
+// reconciles to the entered ticket total.
 // ----------------------------------------------------------------
 function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
   drafts: RestockOrder[]
@@ -637,15 +661,116 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
   onClose: () => void
   onInspectItem: (itemId: string) => void
 }) {
-  const draftCost = drafts.reduce((s, o) => s + (o.expectedCost ?? 0), 0)
+  // Active ticket membership — Set of draft ids currently in the
+  // ticket. Drafts not in this set stay in the staging area.
+  const [ticketItemIds, setTicketItemIds] = useState<Set<string>>(new Set())
+  // Click-to-select fallback for the staging side — accessible
+  // alternative to drag/drop, also handles touch devices where
+  // native HTML5 drag is awkward.
+  const [selectedStagingId, setSelectedStagingId] = useState<string | null>(null)
+  // Drag-over visual feedback on the ticket drop zone.
+  const [dragOverTicket, setDragOverTicket] = useState(false)
+  // Vendor lives in state (drives the ticket title and the Create
+  // button's enabled state); the rest of the ticket fields are
+  // uncontrolled refs since their values don't affect any other
+  // render.
+  const [vendor, setVendor] = useState('')
+  const totalRef = useRef<HTMLInputElement>(null)
+  const dateRef = useRef<HTMLInputElement>(null)
+  const notesRef = useRef<HTMLInputElement>(null)
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  // Drafts that disappear server-side (cancelled, or placed in
+  // another ticket window via revalidation) should fall out of the
+  // active ticket membership Set automatically so the UI never
+  // references stale ids.
+  const stagingItems = drafts.filter((d) => !ticketItemIds.has(d.id))
+  const ticketItems = drafts.filter((d) => ticketItemIds.has(d.id))
+
+  const moveToTicket = (id: string) => {
+    setTicketItemIds((prev) => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+    if (selectedStagingId === id) setSelectedStagingId(null)
+  }
+  const moveBackToStaging = (id: string) => {
+    setTicketItemIds((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
+  // Native HTML5 drag/drop. The draft id rides in the dataTransfer
+  // text/plain payload — simplest cross-browser contract. The drop
+  // target preventDefaults dragover so drop fires; without that
+  // most browsers reject the drop silently.
+  const onDragStart = (e: React.DragEvent, id: string) => {
+    e.dataTransfer.setData('text/plain', id)
+    e.dataTransfer.effectAllowed = 'move'
+  }
+  const onTicketDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (!dragOverTicket) setDragOverTicket(true)
+  }
+  const onTicketDragLeave = (e: React.DragEvent) => {
+    // Only clear when the cursor genuinely leaves the drop region —
+    // child element hover/leave cycles would otherwise flash the
+    // state off and on rapidly.
+    if (e.currentTarget === e.target) setDragOverTicket(false)
+  }
+  const onTicketDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    const id = e.dataTransfer.getData('text/plain')
+    setDragOverTicket(false)
+    if (id && drafts.some((d) => d.id === id)) moveToTicket(id)
+  }
+
+  const onCreateTicket = () => {
+    setError(null)
+    if (ticketItems.length === 0) {
+      setError('Add at least one item to the ticket.')
+      return
+    }
+    if (!vendor.trim()) {
+      setError('Add a vendor before creating the order ticket.')
+      return
+    }
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.set('order_ids', Array.from(ticketItemIds).join(','))
+      fd.set('vendor', vendor.trim())
+      fd.set('expected_total', totalRef.current?.value.trim() ?? '')
+      fd.set('expected_date', dateRef.current?.value.trim() ?? '')
+      fd.set('notes', notesRef.current?.value.trim() ?? '')
+      const result = await placeRestockTicket(null, fd)
+      if (result?.error) {
+        setError(result.error)
+        return
+      }
+      // Success: clear ticket membership and reset form. The placed
+      // drafts will fall out of `drafts` on the next revalidation;
+      // remaining staged items appear in the staging area.
+      setTicketItemIds(new Set())
+      setVendor('')
+      if (totalRef.current) totalRef.current.value = ''
+      if (dateRef.current) dateRef.current.value = ''
+      if (notesRef.current) notesRef.current.value = ''
+    })
+  }
+
   return (
     <DrawerShell
       eyebrow="Replenishment"
-      title="Cart"
-      subtitle="Items staged for your next replenishment order."
+      title="Restock Cart"
+      subtitle="Build vendor order tickets from staged items."
       onClose={onClose}
     >
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
         {drafts.length === 0 ? (
           <div className="text-center py-10">
             <div className="mx-auto w-10 h-10 rounded-full bg-gray-100 text-gray-400 flex items-center justify-center mb-3">
@@ -653,105 +778,2102 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
             </div>
-            <p className="text-sm font-semibold text-gray-900">Your cart is empty</p>
-            <p className="mx-auto mt-1.5 max-w-[280px] text-xs text-gray-500 leading-relaxed">
-              Add items from the inventory list to start building your next replenishment order. Stock only updates once you mark an order received.
+            <p className="text-sm font-semibold text-gray-900">Restock cart is empty.</p>
+            <p className="mx-auto mt-1.5 max-w-[300px] text-xs text-gray-500 leading-relaxed">
+              Add low or out items from Stock Health to start building a vendor ticket.
             </p>
           </div>
         ) : (
-          <ul className="space-y-2">
-            {drafts.map((order) => (
-              <CartLineItem
-                key={order.id}
-                order={order}
-                item={itemsById.get(order.inventoryItemId)}
-                editable
-                onInspect={() => onInspectItem(order.inventoryItemId)}
-              />
-            ))}
-          </ul>
+          <>
+            <StagingArea
+              items={stagingItems}
+              itemsById={itemsById}
+              selectedId={selectedStagingId}
+              onSelect={setSelectedStagingId}
+              onMoveToTicket={moveToTicket}
+              onDragStart={onDragStart}
+              ticketHasItems={ticketItems.length > 0}
+            />
+
+            <ActiveTicketCard
+              items={ticketItems}
+              itemsById={itemsById}
+              vendor={vendor}
+              setVendor={setVendor}
+              totalRef={totalRef}
+              dateRef={dateRef}
+              notesRef={notesRef}
+              onMoveBack={moveBackToStaging}
+              onDragOver={onTicketDragOver}
+              onDragLeave={onTicketDragLeave}
+              onDrop={onTicketDrop}
+              dragOverTicket={dragOverTicket}
+              selectedStagingId={selectedStagingId}
+              onAddSelected={() => {
+                if (selectedStagingId) moveToTicket(selectedStagingId)
+              }}
+              onCreateTicket={onCreateTicket}
+              pending={pending}
+              error={error}
+            />
+          </>
         )}
       </div>
-
-      {drafts.length > 0 && (
-        <div className="flex-shrink-0 border-t border-gray-100 px-6 py-4 bg-white">
-          <div className="flex items-center justify-between text-xs text-gray-600 mb-3">
-            <span>
-              {drafts.length} {drafts.length === 1 ? 'item' : 'items'}
-            </span>
-            {draftCost > 0 && (
-              <span className="tabular-nums font-medium text-gray-900">
-                ~${draftCost.toFixed(2)} <span className="text-gray-400 font-normal">expected total</span>
-              </span>
-            )}
-          </div>
-          <PlaceOrderButton draftCount={drafts.length} />
-        </div>
-      )}
     </DrawerShell>
   )
 }
 
 // ----------------------------------------------------------------
-// OrdersDrawer — placed orders awaiting receipt + recent inventory
-// movement. Receipt is the commit that bumps stock; activity
-// surfaces past receipts and other movements at a glance.
+// StagingArea — top section of the cart showing all drafts not yet
+// assigned to the active vendor ticket. Each item is a draggable
+// card that also supports click-to-select for accessibility and
+// touch ergonomics.
 // ----------------------------------------------------------------
-function OrdersDrawer({ ordered, itemsById, transactions, onClose, onInspectItem }: {
-  ordered: RestockOrder[]
+function StagingArea({
+  items,
+  itemsById,
+  selectedId,
+  onSelect,
+  onMoveToTicket,
+  onDragStart,
+  ticketHasItems,
+}: {
+  items: RestockOrder[]
   itemsById: Map<string, Item>
-  transactions: Transaction[]
-  onClose: () => void
-  onInspectItem: (itemId: string) => void
+  selectedId: string | null
+  onSelect: (id: string | null) => void
+  onMoveToTicket: (id: string) => void
+  onDragStart: (e: React.DragEvent, id: string) => void
+  ticketHasItems: boolean
 }) {
   return (
-    <DrawerShell
-      eyebrow="Replenishment"
-      title="Orders"
-      subtitle="Placed orders awaiting receipt and recent movement."
-      onClose={onClose}
+    // Soft blue top accent puts the Staging Area in the same color
+    // family as the Active Ticket, but a step lighter (200 vs 300)
+    // so the two cards read as "soft / waiting" vs "active / now."
+    // Both belong to the same workflow; the saturation delta marks
+    // the role.
+    <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-gray-900">Staging area</p>
+          <p className="mt-0.5 text-[10.5px] text-gray-500">
+            Items waiting to be assigned to a vendor ticket.
+          </p>
+        </div>
+        {items.length > 0 && (
+          // Soft blue pill — same family as the Active Ticket's
+          // "N items" pill but a step lighter. The blue-300 dot
+          // signals "in the workflow" without competing with the
+          // ticket's stronger blue-500 dot.
+          <span className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
+            <span className="w-1 h-1 rounded-full bg-blue-300" />
+            {items.length === 1 ? '1 waiting' : `${items.length} waiting`}
+          </span>
+        )}
+      </div>
+
+      {items.length === 0 ? (
+        <p className="px-4 py-3 text-[10.5px] text-gray-400 leading-relaxed">
+          {ticketHasItems
+            ? 'All staged items are on the active ticket below.'
+            : 'Nothing waiting. Add items from Stock Health.'}
+        </p>
+      ) : (
+        // Bounded tray. When more than 3 items are staged, the
+        // list scrolls internally so the Active Ticket below stays
+        // visible without being pushed off-screen. Below the
+        // threshold, no max-height constraint applies — the card
+        // sizes to its content and reads as a natural list.
+        //
+        // Scrollbar styling (when overflow is active):
+        //   • Firefox: scrollbar-width:thin + slate-300 thumb.
+        //   • WebKit/Chromium: 6px wide thumb, slate-300 rounded
+        //     pill, transparent track, slate-400 on hover.
+        //   • A faint inset bottom shadow gives a soft "more
+        //     below" depth cue without a hard cut line.
+        //
+        // overflow-y-auto preserves native scroll for mouse wheel,
+        // trackpad, and touch — and the browser's drag auto-scroll
+        // means a dragged item can scroll the list during drag.
+        <div
+          className={
+            items.length > 3
+              ? 'max-h-[300px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-slate-400 shadow-[inset_0_-6px_8px_-8px_rgba(15,23,42,0.06)]'
+              : ''
+          }
+        >
+          <ul className="p-2 space-y-1.5">
+            {items.map((order) => (
+              <StagingItemCard
+                key={order.id}
+                order={order}
+                item={itemsById.get(order.inventoryItemId)}
+                selected={selectedId === order.id}
+                onSelect={() => onSelect(selectedId === order.id ? null : order.id)}
+                onMoveToTicket={() => onMoveToTicket(order.id)}
+                onDragStart={(e) => onDragStart(e, order.id)}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// StagingItemCard — single draggable staging row.
+//
+// Four affordances:
+//   1. Drag handle (entire card is draggable into the ticket drop
+//      zone).
+//   2. Click to select/deselect — drives the "Add to ticket" button
+//      that appears in the qty row and the "Add selected to ticket"
+//      affordance on the ActiveTicketCard.
+//   3. Inline qty stepper (+/-) — optimistic local state, fires
+//      updateRestockQuantity on each click via useTransition.
+//      Clamped at 0.01 to match the server's "quantity > 0" check.
+//   4. Remove × — fires cancelRestockOrder, drops the draft.
+//
+// Selected state uses the soft blue accent ring; selection
+// auto-clears when the row is moved into the ticket.
+// ----------------------------------------------------------------
+function StagingItemCard({
+  order,
+  item,
+  selected,
+  onSelect,
+  onMoveToTicket,
+  onDragStart,
+}: {
+  order: RestockOrder
+  item: Item | undefined
+  selected: boolean
+  onSelect: () => void
+  onMoveToTicket: () => void
+  onDragStart: (e: React.DragEvent) => void
+}) {
+  const unit = item?.unitOfMeasure ?? ''
+  const recipeSubtitle = item?.recipeLinks
+    ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
+    : 'Standalone item'
+
+  // String-based input draft. Lets the manager type partial values
+  // like "1." or transient empties without snapping back on each
+  // keystroke; we parse + clamp + commit on blur or Enter. Re-syncs
+  // from order.quantity when the server confirms an update.
+  const [inputDraft, setInputDraft] = useState(order.quantity.toString())
+  useEffect(() => {
+    setInputDraft(order.quantity.toString())
+  }, [order.quantity])
+
+  const [qtyPending, startQtyTransition] = useTransition()
+  const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
+
+  // Current visible value — falls back to order.quantity when the
+  // input is mid-edit / empty. Drives disabled-state for the
+  // decrement button.
+  const currentParsed = parseFloat(inputDraft)
+  const displayQty =
+    Number.isFinite(currentParsed) && currentParsed > 0 ? currentParsed : order.quantity
+
+  const commitToServer = (next: number) => {
+    const clamped = Math.max(0.01, Math.round(next * 100) / 100)
+    setInputDraft(clamped.toString())
+    if (clamped === order.quantity) return
+    startQtyTransition(async () => {
+      const fd = new FormData()
+      fd.set('order_id', order.id)
+      fd.set('quantity', clamped.toString())
+      await updateRestockQuantity(null, fd)
+    })
+  }
+
+  const onInputBlur = () => {
+    const parsed = parseFloat(inputDraft)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      // Revert invalid / empty input back to the server-confirmed
+      // quantity rather than silently committing 0.
+      setInputDraft(order.quantity.toString())
+      return
+    }
+    commitToServer(parsed)
+  }
+
+  return (
+    <li
+      draggable
+      onDragStart={(e) => {
+        // Guard: don't initiate a card drag when the manager is
+        // interacting with form controls (the stepper region). The
+        // stepper container is tagged `data-no-drag`; we check
+        // whether the dragstart originated inside it and bail.
+        if ((e.target as HTMLElement).closest('[data-no-drag]')) {
+          e.preventDefault()
+          return
+        }
+        onDragStart(e)
+      }}
+      onClick={onSelect}
+      className={`group rounded-lg border bg-white p-3 transition-all cursor-grab active:cursor-grabbing ${
+        selected
+          ? 'border-blue-300 bg-blue-50/40 shadow-[0_0_0_2px_rgba(59,130,246,0.15)]'
+          : 'border-gray-200 hover:border-gray-300 hover:shadow-[0_2px_4px_rgba(15,23,42,0.04)]'
+      }`}
     >
-      <div className="flex-1 overflow-y-auto">
-        {/* AWAITING RECEIPT */}
-        <div className="px-6 py-5">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">Awaiting receipt</p>
-            {ordered.length > 0 && (
-              <span className="text-[10px] text-gray-400">{ordered.length} {ordered.length === 1 ? 'line' : 'lines'}</span>
-            )}
-          </div>
-          {ordered.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center">
-              <p className="text-xs font-medium text-gray-700">No placed orders</p>
-              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                When you place a draft order from the cart, items waiting for receipt will appear here.
-              </p>
-            </div>
-          ) : (
-            <ul className="space-y-2">
-              {ordered.map((order) => (
-                <CartLineItem
+      {/* Header — item identity (read-only) + Remove ×. The name
+          is a plain div, NOT a button: the cart is for assembling
+          the order, not for inspecting items. Manager inspects an
+          item from Stock Health. */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-gray-900 truncate">
+            {item?.name ?? '—'}
+          </p>
+          <p className="text-[11px] text-gray-500 truncate mt-0.5">{recipeSubtitle}</p>
+        </div>
+
+        <form action={cancelAction} className="flex-shrink-0 -mr-1 -mt-1" onClick={(e) => e.stopPropagation()}>
+          <input type="hidden" name="order_id" value={order.id} />
+          <button
+            type="submit"
+            disabled={cancelPending}
+            aria-label="Remove from staging"
+            title="Remove from staging"
+            className="text-gray-300 hover:text-red-600 transition-colors p-1 disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </form>
+      </div>
+
+      {/* Bottom row — qty stepper with an editable number input,
+          unit glued to its right edge, and (when selected) Add to
+          ticket pinned to the far right. The whole region is
+          `data-no-drag` so dragging or clicking inside the stepper
+          doesn't trigger card drag or selection toggle. */}
+      <div
+        data-no-drag
+        className="mt-2.5 flex items-center gap-2"
+        onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="inline-flex items-stretch rounded-md border border-gray-300 bg-white overflow-hidden">
+          <button
+            type="button"
+            onClick={() => commitToServer(displayQty - 1)}
+            disabled={qtyPending || displayQty <= 0.01}
+            aria-label="Decrease staged quantity"
+            className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
+            </svg>
+          </button>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={inputDraft}
+            onChange={(e) => setInputDraft(e.target.value)}
+            onBlur={onInputBlur}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                (e.target as HTMLInputElement).blur()
+              }
+            }}
+            disabled={qtyPending}
+            aria-label="Staged quantity"
+            className="h-7 w-14 text-center text-sm font-mono font-semibold tabular-nums text-gray-900 border-x border-gray-300 focus:outline-none focus:bg-blue-50/40 disabled:opacity-50 appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
+          />
+          <button
+            type="button"
+            onClick={() => commitToServer(displayQty + 1)}
+            disabled={qtyPending}
+            aria-label="Increase staged quantity"
+            className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
+        </div>
+        <span className="text-[11px] font-medium text-gray-600 flex-shrink-0">{unit}</span>
+
+        {selected && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onMoveToTicket()
+            }}
+            className="ml-auto flex-shrink-0 rounded-md bg-blue-600 px-2.5 py-1 text-[10.5px] font-semibold text-white hover:bg-blue-700 transition-colors"
+          >
+            Add to ticket
+          </button>
+        )}
+      </div>
+
+      {(cancelState?.error) && (
+        <p className="mt-1.5 text-[10px] text-red-600">{cancelState.error}</p>
+      )}
+    </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// ActiveTicketCard — working vendor ticket. The drop zone accepts
+// staged items via drag, plus a click-driven fallback through the
+// "Add selected to ticket" button when a staging row is selected.
+// Vendor / total / date / notes are ticket-level — the manager
+// captures the supplier order once, not per item. Create order
+// ticket fires placeRestockTicket, which atomically flips the
+// included drafts to 'ordered' with shared metadata and a per-line
+// cost split that aggregates back to the entered ticket total.
+// ----------------------------------------------------------------
+function ActiveTicketCard({
+  items,
+  itemsById,
+  vendor,
+  setVendor,
+  totalRef,
+  dateRef,
+  notesRef,
+  onMoveBack,
+  onDragOver,
+  onDragLeave,
+  onDrop,
+  dragOverTicket,
+  selectedStagingId,
+  onAddSelected,
+  onCreateTicket,
+  pending,
+  error,
+}: {
+  items: RestockOrder[]
+  itemsById: Map<string, Item>
+  vendor: string
+  setVendor: (v: string) => void
+  totalRef: React.RefObject<HTMLInputElement | null>
+  dateRef: React.RefObject<HTMLInputElement | null>
+  notesRef: React.RefObject<HTMLInputElement | null>
+  onMoveBack: (id: string) => void
+  onDragOver: (e: React.DragEvent) => void
+  onDragLeave: (e: React.DragEvent) => void
+  onDrop: (e: React.DragEvent) => void
+  dragOverTicket: boolean
+  selectedStagingId: string | null
+  onAddSelected: () => void
+  onCreateTicket: () => void
+  pending: boolean
+  error: string | null
+}) {
+  const hasItems = items.length > 0
+  const canCreate = hasItems && vendor.trim().length > 0 && !pending
+  const title = vendor.trim() ? `${vendor.trim()} ticket` : 'Active ticket'
+  const ctaLabel = pending
+    ? 'Creating…'
+    : vendor.trim()
+      ? `Create ${vendor.trim()} order ticket`
+      : 'Create order ticket'
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-300 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-gray-900 truncate">{title}</p>
+          <p className="mt-0.5 text-[10.5px] text-gray-500">
+            Build one vendor order from staged items.
+          </p>
+        </div>
+        <span className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+          <span className="w-1 h-1 rounded-full bg-blue-500" />
+          {items.length === 1 ? '1 item' : `${items.length} items`}
+        </span>
+      </div>
+
+      {/* Vendor — required for Create. Controlled so the ticket
+          title above and the CTA below stay in sync as the manager
+          types. */}
+      <div className="px-4 py-2.5 border-b border-gray-100">
+        <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
+          Vendor / source
+        </label>
+        <input
+          type="text"
+          value={vendor}
+          onChange={(e) => setVendor(e.target.value)}
+          placeholder="HEB, US Foods, Walmart…"
+          className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+        />
+      </div>
+
+      {/* Drop zone + ticket items. Dashed-blue treatment when
+          dragging makes the target unmistakable; empty state nudges
+          toward the click fallback when nothing is being dragged. */}
+      <div className="px-4 py-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1.5">
+          Ticket items
+        </p>
+        <div
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          onDrop={onDrop}
+          className={`rounded-lg transition-colors ${
+            dragOverTicket
+              ? 'border-2 border-dashed border-blue-400 bg-blue-50/50'
+              : hasItems
+                ? 'border border-gray-200 bg-gray-50/40'
+                : 'border border-dashed border-gray-300 bg-gray-50/30'
+          }`}
+        >
+          {hasItems ? (
+            <ul className="p-1.5 space-y-1">
+              {items.map((order) => (
+                <TicketItemRow
                   key={order.id}
                   order={order}
                   item={itemsById.get(order.inventoryItemId)}
-                  showReceiveAction
-                  onInspect={() => onInspectItem(order.inventoryItemId)}
+                  onMoveBack={() => onMoveBack(order.id)}
                 />
               ))}
             </ul>
+          ) : (
+            <p className={`px-4 py-3.5 text-center text-[11px] leading-relaxed ${
+              dragOverTicket ? 'text-blue-700 font-medium' : 'text-gray-500'
+            }`}>
+              {dragOverTicket
+                ? 'Drop to add to the ticket.'
+                : selectedStagingId
+                  ? 'Drop here, or click Add selected below.'
+                  : 'Drag staged items here, or select one and add it.'}
+            </p>
           )}
         </div>
 
-        {/* RECENT ACTIVITY — global movement feed kept accessible
-            here instead of a permanent rail card. */}
-        {transactions.length > 0 && (
-          <div className="px-6 pb-6">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-3">Recent activity</p>
-            <ActivityFeed transactions={transactions} />
+        {selectedStagingId && (
+          <button
+            type="button"
+            onClick={onAddSelected}
+            className="mt-1.5 w-full rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition-colors"
+          >
+            + Add selected to ticket
+          </button>
+        )}
+      </div>
+
+      {/* Ticket-level metadata. Total + date on one row, notes on
+          its own. All optional; no per-item price. */}
+      <div className="px-4 py-2.5 border-t border-gray-100 space-y-2">
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
+              Expected total
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
+              <input
+                ref={totalRef}
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="0.00"
+                className="h-9 w-full rounded-md border border-gray-200 bg-white pl-6 pr-3 text-sm font-mono tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
+              Expected date
+            </label>
+            <input
+              ref={dateRef}
+              type="date"
+              className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
+            Notes
+          </label>
+          <input
+            ref={notesRef}
+            type="text"
+            placeholder="Confirm with vendor"
+            className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+          />
+        </div>
+      </div>
+
+      {error && (
+        <p className="px-4 pb-2 text-[11px] text-red-600">{error}</p>
+      )}
+
+      {/* Create commit. Disabled until both vendor and items are in
+          place. Stock and Finance update on receipt. */}
+      <div className="px-4 py-3 border-t border-gray-100 bg-white">
+        <button
+          type="button"
+          onClick={onCreateTicket}
+          disabled={!canCreate}
+          className="w-full rounded-md bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {ctaLabel}
+        </button>
+        <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed text-center">
+          Stock and Finance update on receipt.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// TicketItemRow — compact assigned-to-ticket row inside the active
+// ticket drop zone. Shows the item identity and its quantity; the
+// ← affordance moves it back to staging without canceling the
+// underlying draft.
+// ----------------------------------------------------------------
+function TicketItemRow({
+  order,
+  item,
+  onMoveBack,
+}: {
+  order: RestockOrder
+  item: Item | undefined
+  onMoveBack: () => void
+}) {
+  const unit = item?.unitOfMeasure ?? ''
+  return (
+    <li className="flex items-center justify-between gap-2 rounded-md bg-white border border-gray-200 px-2.5 py-1.5">
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium text-gray-900 truncate">{item?.name ?? '—'}</p>
+        <p className="text-[10px] text-gray-500 tabular-nums">
+          {order.quantity.toFixed(order.quantity % 1 === 0 ? 0 : 2)} {unit}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onMoveBack}
+        title="Move back to staging"
+        aria-label="Move back to staging"
+        className="flex-shrink-0 text-gray-400 hover:text-blue-700 p-1 transition-colors"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+        </svg>
+      </button>
+    </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// OrdersDrawer — order-lifecycle surface for placed restock orders.
+// Two sections only:
+//
+//   1. Pending Orders — batches with at least one ordered line that
+//      still needs receiving. Includes "Awaiting receipt" (nothing
+//      received yet) and "Partially received" (some lines done, some
+//      still pending).
+//   2. Closed Orders — recently completed batches (all lines either
+//      received or canceled-short). Read-only preview.
+//
+// The drawer is for tracking + receiving + closing. Order CREATION
+// happens in the Restock Cart; this drawer never re-builds tickets.
+// ----------------------------------------------------------------
+type OrderLifecycle = 'pending' | 'partial' | 'closed'
+
+function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
+  ordered: RestockOrder[]
+  closed: RestockOrder[]
+  itemsById: Map<string, Item>
+  onClose: () => void
+  onInspectItem: (itemId: string) => void
+}) {
+  // Group lines into batches by `orderedAt`, then split the pending
+  // bucket by whether any sibling has already been received. That
+  // mirrors the lifecycle the manager actually browses:
+  //   • pending  → nothing received yet (Awaiting receipt)
+  //   • partial  → some received, some still ordered
+  //   • closed   → nothing ordered remaining
+  //
+  // splitRestockBatches still returns the binary pending/closed
+  // split (its only job is "does this batch still have an ordered
+  // line?"). We then bucket the pending side here in one cheap pass.
+  const { pendingBatches, closedBatches } = useMemo(
+    () => splitRestockBatches(ordered, closed),
+    [ordered, closed],
+  )
+  const awaitingBatches = useMemo(
+    () => pendingBatches.filter((b) => !b.lines.some((l) => l.status === 'received')),
+    [pendingBatches],
+  )
+  const partialBatches = useMemo(
+    () => pendingBatches.filter((b) => b.lines.some((l) => l.status === 'received')),
+    [pendingBatches],
+  )
+
+  // Lifecycle filter — single selected tab at a time. Defaults to
+  // Pending so the manager lands on the most-actionable bucket.
+  // Empty buckets still render their empty state rather than being
+  // disabled — easier for the manager to see the zero rather than
+  // wonder why a tab is greyed out.
+  const [tab, setTab] = useState<OrderLifecycle>('pending')
+
+  // Closed Orders pagination — 6 per page. Closed orders are the
+  // "review" surface; six gives the manager enough recent receipts
+  // to glance at one screenful before paginating. Matches the
+  // Recent Movement pagination idiom from the Inventory item drawer.
+  const CLOSED_PAGE_SIZE = 6
+  const [closedPage, setClosedPage] = useState(1)
+  const closedTotalPages = Math.max(1, Math.ceil(closedBatches.length / CLOSED_PAGE_SIZE))
+  const safeClosedPage = Math.min(closedPage, closedTotalPages)
+  const closedStart = (safeClosedPage - 1) * CLOSED_PAGE_SIZE
+  const visibleClosed = closedBatches.slice(closedStart, closedStart + CLOSED_PAGE_SIZE)
+
+  // Only one OrderBatchCard expanded at a time. The lift keeps the
+  // drawer focused on a single receive flow — opening Receive on
+  // batch B auto-collapses batch A. Tab change clears the expanded
+  // key so a stale id from another bucket can't haunt the new tab.
+  const [expandedKey, setExpandedKey] = useState<string | null>(null)
+  useEffect(() => { setExpandedKey(null) }, [tab])
+
+  const filters: Array<{ key: OrderLifecycle; label: string; count: number }> = [
+    { key: 'pending', label: 'Pending', count: awaitingBatches.length },
+    { key: 'partial', label: 'Partial', count: partialBatches.length },
+    { key: 'closed',  label: 'Closed',  count: closedBatches.length  },
+  ]
+
+  return (
+    <DrawerShell
+      eyebrow="Replenishment"
+      title="Restock Orders"
+      subtitle="Track restock tickets through receiving."
+      onClose={onClose}
+    >
+      {/* LIFECYCLE FILTER ROW — black-active pill style, same family
+          as Stock Health filters. One selection at a time. The count
+          inline keeps the bucket sizes legible without a separate
+          eyebrow row. */}
+      <div className="flex-shrink-0 px-6 pt-4 pb-3 border-b border-gray-100">
+        <div className="flex items-center gap-1.5" role="group" aria-label="Filter by lifecycle">
+          {filters.map((f) => {
+            const isActive = tab === f.key
+            return (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setTab(f.key)}
+                aria-pressed={isActive}
+                className={`inline-flex items-center gap-1.5 h-8 rounded-md px-3 text-xs font-semibold transition-colors ${
+                  isActive
+                    ? 'bg-gray-900 text-white border border-gray-900'
+                    : 'bg-white border border-gray-200/80 text-gray-700 hover:bg-gray-50 hover:border-gray-300'
+                }`}
+              >
+                <span>{f.label}</span>
+                <span className={`tabular-nums ${isActive ? 'text-white/70' : 'text-gray-500'}`}>
+                  {f.count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {tab === 'pending' && (
+          <div className="px-6 py-5">
+            {awaitingBatches.length === 0 ? (
+              <EmptyLifecycle
+                title="No pending orders."
+                body="New restock tickets will appear here until something is received."
+              />
+            ) : (
+              <ul className="space-y-3">
+                {awaitingBatches.map((batch) => (
+                  <OrderBatchCard
+                    key={batch.key}
+                    batch={batch}
+                    itemsById={itemsById}
+                    onInspectItem={onInspectItem}
+                    mode="awaiting"
+                    isExpanded={expandedKey === batch.key}
+                    onToggleExpand={(open) =>
+                      setExpandedKey(open ? batch.key : null)
+                    }
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {tab === 'partial' && (
+          <div className="px-6 py-5">
+            {partialBatches.length === 0 ? (
+              <EmptyLifecycle
+                title="No partially received orders."
+                body="Orders appear here when only part of a delivery has arrived."
+              />
+            ) : (
+              <ul className="space-y-3">
+                {partialBatches.map((batch) => (
+                  <OrderBatchCard
+                    key={batch.key}
+                    batch={batch}
+                    itemsById={itemsById}
+                    onInspectItem={onInspectItem}
+                    mode="partial"
+                    isExpanded={expandedKey === batch.key}
+                    onToggleExpand={(open) =>
+                      setExpandedKey(open ? batch.key : null)
+                    }
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {tab === 'closed' && (
+          <div className="px-6 py-5">
+            {closedBatches.length === 0 ? (
+              <EmptyLifecycle
+                title="No closed orders yet."
+                body="Closed tickets will appear here after receiving is complete."
+              />
+            ) : (
+              <>
+                <ul className="space-y-3">
+                  {visibleClosed.map((batch) => (
+                    <ClosedOrderCard
+                      key={batch.key}
+                      batch={batch}
+                      itemsById={itemsById}
+                    />
+                  ))}
+                </ul>
+                {closedBatches.length > CLOSED_PAGE_SIZE && (
+                  <div className="mt-3 flex items-center justify-between">
+                    <p className="text-[10px] text-gray-500 tabular-nums">
+                      Showing{' '}
+                      <span className="font-semibold text-gray-700">
+                        {closedStart + 1}–{Math.min(closedStart + CLOSED_PAGE_SIZE, closedBatches.length)}
+                      </span>{' '}
+                      of <span className="font-semibold text-gray-700">{closedBatches.length}</span>
+                    </p>
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setClosedPage((p) => Math.max(1, p - 1))}
+                        disabled={safeClosedPage === 1}
+                        aria-label="Previous closed orders"
+                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ←
+                      </button>
+                      <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+                        {safeClosedPage} / {closedTotalPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setClosedPage((p) => Math.min(closedTotalPages, p + 1))}
+                        disabled={safeClosedPage === closedTotalPages}
+                        aria-label="Next closed orders"
+                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
     </DrawerShell>
+  )
+}
+
+// ----------------------------------------------------------------
+// EmptyLifecycle — shared compact empty-state block for each tab.
+// Single border-dashed card, two lines of copy, no center alignment
+// chrome so it reads as "section has nothing yet" instead of
+// "alert." Identical visual treatment per tab — the title + body
+// vary by lifecycle.
+// ----------------------------------------------------------------
+function EmptyLifecycle({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/60 px-4 py-5 text-center">
+      <p className="text-xs font-medium text-gray-700">{title}</p>
+      <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">{body}</p>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// Restock batches — group lines into the order tickets that produced
+// them. placeRestockTicket / placeAllDrafts flip every selected
+// draft to `ordered` in one DB update, so every line of a batch
+// carries an identical `ordered_at` timestamp. That's the natural
+// batch identity. Lines without `orderedAt` (drafts received via the
+// fast-receipt path) fall back to their own id so they render as
+// distinct single-line batches.
+//
+// A batch's `lines` array can mix statuses: ordered + received +
+// canceled all coexist while the manager works through a partial
+// delivery. The batch-state derivation (awaiting / partial /
+// closed) reads off this mix.
+// ----------------------------------------------------------------
+type RestockBatch = {
+  key: string
+  orderedAt: string | null
+  lines: RestockOrder[]
+  vendorList: string[]
+  totalExpectedCost: number | null
+  soonestExpectedDate: string | null
+}
+
+// Split all active + closed lines into:
+//   • pendingBatches — at least one line is still `ordered`
+//   • closedBatches  — every line is `received` or `canceled`
+//
+// Partial-receipt batches (some lines done, some still ordered)
+// land in `pendingBatches` so the manager can keep working through
+// them; their card derives "Partially received" from the mix.
+function splitRestockBatches(
+  active: RestockOrder[],
+  closed: RestockOrder[],
+): { pendingBatches: RestockBatch[]; closedBatches: RestockBatch[] } {
+  const groups = new Map<string, RestockOrder[]>()
+  for (const o of [...active, ...closed]) {
+    const key = o.orderedAt ?? `solo:${o.id}`
+    const list = groups.get(key) ?? []
+    list.push(o)
+    groups.set(key, list)
+  }
+
+  const pendingBatches: RestockBatch[] = []
+  const closedBatches: RestockBatch[] = []
+
+  for (const [key, lines] of groups) {
+    // Vendor mix — unique, order-of-first-appearance, omit blanks.
+    const seenVendors = new Set<string>()
+    const vendorList: string[] = []
+    for (const l of lines) {
+      const v = (l.vendor ?? '').trim()
+      if (v && !seenVendors.has(v)) {
+        seenVendors.add(v)
+        vendorList.push(v)
+      }
+    }
+
+    // Sum expected cost only if every line that has one rolls up,
+    // otherwise show null so the UI omits the figure gracefully —
+    // a partial total would mislead. Summation runs in integer
+    // cents to avoid float-drift: a 1000.00 ticket split into
+    // 333.34/333.33/333.33 must read back as 1000.00, not 999.99
+    // or 1000.0000000001.
+    const everyLineHasCost = lines.every((l) => l.expectedCost !== null)
+    const totalExpectedCost = everyLineHasCost
+      ? lines.reduce(
+          (cents, l) => cents + Math.round((l.expectedCost ?? 0) * 100),
+          0,
+        ) / 100
+      : null
+
+    // Soonest expected date across lines. Ignore nulls.
+    const dates = lines.map((l) => l.expectedDate).filter((d): d is string => !!d)
+    const soonestExpectedDate = dates.length > 0
+      ? dates.sort()[0]
+      : null
+
+    const batch: RestockBatch = {
+      key,
+      orderedAt: lines[0].orderedAt,
+      lines,
+      vendorList,
+      totalExpectedCost,
+      soonestExpectedDate,
+    }
+
+    const hasPending = lines.some((l) => l.status === 'ordered')
+    if (hasPending) pendingBatches.push(batch)
+    else closedBatches.push(batch)
+  }
+
+  // Pending: newest first (the most recent placement is the most
+  // top-of-mind). Closed: most recently finalized first (the latest
+  // close decision is what the manager wants to verify).
+  pendingBatches.sort((a, b) => {
+    const ta = a.orderedAt ? new Date(a.orderedAt).getTime() : 0
+    const tb = b.orderedAt ? new Date(b.orderedAt).getTime() : 0
+    return tb - ta
+  })
+  closedBatches.sort((a, b) => {
+    const ta = closeStamp(a)
+    const tb = closeStamp(b)
+    return tb - ta
+  })
+
+  return { pendingBatches, closedBatches }
+}
+
+// Latest close timestamp across a batch's lines. Prefers receivedAt
+// (the "real" close moment for received lines), falls back to
+// canceledAt, then orderedAt. Drives Closed Orders sort order.
+function closeStamp(batch: RestockBatch): number {
+  let max = 0
+  for (const l of batch.lines) {
+    const t = l.receivedAt
+      ? new Date(l.receivedAt).getTime()
+      : l.canceledAt
+        ? new Date(l.canceledAt).getTime()
+        : l.orderedAt
+          ? new Date(l.orderedAt).getTime()
+          : 0
+    if (t > max) max = t
+  }
+  return max
+}
+
+// ----------------------------------------------------------------
+// OrderBatchCard — one card per pending restock batch. Surfaces
+// the batch lifecycle state at a glance (Awaiting receipt vs
+// Partially received), shows the item mix, and houses the receive
+// flow.
+//
+// Receive flow supports three outcomes:
+//   1. Receive all remaining lines (the typical case) — every line
+//      flips to `received`, batch moves to Closed Orders.
+//   2. Receive some, keep batch open — selected lines flip to
+//      `received`, unchecked lines stay `ordered`, batch stays in
+//      Pending Orders and reads as "Partially received."
+//   3. Receive some, close batch short — selected lines flip to
+//      `received`, unchecked lines flip to `canceled` (closed
+//      short), batch moves to Closed Orders.
+//
+// Per-line semantics:
+//   - Checkbox: include this line in this receipt round.
+//   - Quantity input: defaults to ordered qty; partial-line receipt
+//     (received 7 of 10) is a single keystroke. The stock movement
+//     uses the ENTERED value, not the ordered qty.
+//   - The ordered quantity is never overwritten — it stays on the
+//     row as the "intent" truth. The actual received amount lives
+//     on the linked inventory_transaction.
+//
+// Lines already received in earlier rounds (partially-received
+// batches) render read-only with their captured received quantity.
+// ----------------------------------------------------------------
+function OrderBatchCard({
+  batch,
+  itemsById,
+  onInspectItem,
+  mode,
+  isExpanded,
+  onToggleExpand,
+}: {
+  batch: RestockBatch
+  itemsById: Map<string, Item>
+  onInspectItem: (itemId: string) => void
+  /** Drives the collapsed-view layout:
+   *    'awaiting' → comma-joined item names, single Receive button
+   *    'partial'  → split Still open / Received subsections,
+   *                 Continue receiving button
+   *  The expanded receive panel is identical for both — it reads
+   *  off line statuses, not the mode prop. */
+  mode: 'awaiting' | 'partial'
+  /** Controlled expand. Lifted to the drawer so only one card is
+   *  open at a time; opening this card collapses any other open
+   *  card automatically. */
+  isExpanded: boolean
+  onToggleExpand: (open: boolean) => void
+}) {
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  // Confirmed-total input. Defaults to the expected ticket total
+  // (sum of per-line expected_cost). Manager can adjust before
+  // closing. Sent on every receive call; the server re-distributes
+  // across siblings and updates the Finance row in place when it
+  // differs from the current value.
+  const initialConfirmedTotal = batch.totalExpectedCost !== null && batch.totalExpectedCost > 0
+    ? batch.totalExpectedCost.toFixed(2)
+    : ''
+  const [confirmedTotalDraft, setConfirmedTotalDraft] = useState(initialConfirmedTotal)
+
+  // Lines still needing a decision in this batch.
+  const orderedLines = batch.lines.filter((l) => l.status === 'ordered')
+  // Lines that were received in earlier rounds (siblings of the
+  // still-pending lines via shared ordered_at). Drives the
+  // "Partially received" status pill + the read-only stat in the
+  // receive panel.
+  const earlierReceivedLines = batch.lines.filter((l) => l.status === 'received')
+  // Lines already canceled (closed short) in earlier rounds.
+  const earlierCanceledLines = batch.lines.filter((l) => l.status === 'canceled')
+
+  const isPartial = earlierReceivedLines.length > 0
+
+  // Per-line UI state — checkbox + quantity input, only meaningful
+  // for the still-`ordered` lines. Seeded to "include + ordered qty"
+  // so the typical case (everything arrived as expected) is a single
+  // button click.
+  const [includedIds, setIncludedIds] = useState<Set<string>>(
+    () => new Set(orderedLines.map((l) => l.id)),
+  )
+  const [receivedQtys, setReceivedQtys] = useState<Record<string, string>>(
+    () => Object.fromEntries(orderedLines.map((l) => [l.id, l.quantity.toString()])),
+  )
+  // Session-local "just received in this expand" tracker. Lets the
+  // panel show the green checkmark as each line completes without
+  // waiting for the revalidation round-trip.
+  const [receivedInSession, setReceivedInSession] = useState<Set<string>>(() => new Set())
+
+  const includedLines = orderedLines.filter(
+    (l) => includedIds.has(l.id) && !receivedInSession.has(l.id),
+  )
+  const skippedLines = orderedLines.filter(
+    (l) => !includedIds.has(l.id) && !receivedInSession.has(l.id),
+  )
+
+  const placedLabel = batch.orderedAt
+    ? formatBatchTimestamp(batch.orderedAt)
+    : 'Order awaiting receipt'
+
+  // The receive commit. `closeShort` controls what happens to the
+  // unchecked lines:
+  //   true  → cancel them so the batch closes
+  //   false → leave them as `ordered` so the batch stays pending
+  // Both paths receive the checked lines at their entered quantity.
+  const onConfirm = (closeShort: boolean) => {
+    setError(null)
+    if (includedLines.length === 0 && !closeShort) {
+      setError('Select at least one line to receive, or use "Receive & close" to short-close the order.')
+      return
+    }
+    startTransition(async () => {
+      // Phase 1: receive each included line in turn. Stops on the
+      // first error so the manager doesn't end up with a partially
+      // applied multi-line receipt that's hard to reason about.
+      for (const line of includedLines) {
+        const raw = receivedQtys[line.id] ?? line.quantity.toString()
+        const parsed = parseFloat(raw)
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          const name = itemsById.get(line.inventoryItemId)?.name ?? 'Item'
+          setError(`${name}: received quantity must be greater than zero.`)
+          return
+        }
+        const fd = new FormData()
+        fd.set('order_id', line.id)
+        fd.set('received_quantity', raw)
+        // Ticket-level confirmed total — the server uses this as
+        // the Finance amount and re-distributes across siblings'
+        // expected_cost. Empty → server falls back to the prior
+        // sibling-sum behavior.
+        if (confirmedTotalDraft.trim() !== '') {
+          fd.set('confirmed_total', confirmedTotalDraft.trim())
+        }
+        const result = await markRestockReceived(null, fd)
+        if (result?.error) {
+          const name = itemsById.get(line.inventoryItemId)?.name ?? 'Item'
+          setError(`${name}: ${result.error}`)
+          return
+        }
+        setReceivedInSession((s) => new Set(s).add(line.id))
+      }
+
+      // Phase 2: if close-short was requested, cancel any still-
+      // ordered skipped lines in one server round-trip. Lines that
+      // have already received this session are skipped; the batch
+      // is now closing because nothing pending remains.
+      if (closeShort && skippedLines.length > 0) {
+        const fd = new FormData()
+        fd.set('order_ids', skippedLines.map((l) => l.id).join(','))
+        const result = await closeRestockBatch(null, fd)
+        if (result?.error) {
+          setError(result.error)
+          return
+        }
+      }
+
+      onToggleExpand(false)
+    })
+  }
+
+  // Title reads the vendor when present so the card immediately
+  // identifies who the order is from. Falls back to "Restock order"
+  // when no vendor was captured (legacy data, or the cart's vendor
+  // field was left blank before commit).
+  const itemCount = batch.lines.length
+  const primaryVendor = batch.vendorList[0] ?? null
+  const titleText = primaryVendor ? `${primaryVendor} order` : 'Restock order'
+  const vendorOverflow = batch.vendorList.length > 1 ? ` +${batch.vendorList.length - 1}` : ''
+
+  // Item preview — up to 3 lines shown directly in the collapsed
+  // card so the manager can verify "what's in this order" without
+  // expanding. Layout adapts when the batch is partially received:
+  // already-received lines show "X / Y received", still-ordered
+  // show "Y ordered".
+  const PREVIEW_LIMIT = 3
+  const previewLines = batch.lines.slice(0, PREVIEW_LIMIT)
+  const previewOverflow = batch.lines.length - previewLines.length
+
+  // Visual semantics: amber for awaiting, blue for partially
+  // received. Closed-out lines coexist; the batch's top-edge accent
+  // reflects the dominant state ("still waiting on something").
+  const topAccent = isPartial ? 'border-t-blue-200' : 'border-t-amber-200'
+  const pillBg = isPartial ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
+  const pillDot = isPartial ? 'bg-blue-500' : 'bg-amber-500'
+  const pillLabel = isPartial ? 'Partially received' : 'Awaiting receipt'
+  const buttonLabel = isPartial ? 'Continue receiving' : 'Receive order'
+  const expandedHeader = isPartial
+    ? primaryVendor ? `Continue receiving ${primaryVendor} order` : 'Continue receiving'
+    : primaryVendor ? `Receive ${primaryVendor} order` : 'Confirm received quantities'
+
+  // Partial-progress meta line (collapsed view): "X of Y items
+  // received" so the lifecycle is legible without expanding.
+  const partialProgress = isPartial
+    ? `${earlierReceivedLines.length} of ${itemCount} items received`
+    : null
+
+  // Comma-joined item-name preview for the awaiting card. Quantities
+  // are deferred to the receive panel where they're actionable.
+  const previewNames = previewLines
+    .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
+    .join(', ')
+  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} more` : ''
+
+  // Partial-card subsections — "Still open" lists the lines still
+  // awaiting receipt, "Received" lists what already came in. Both
+  // capped at a small preview so the card stays compact; the full
+  // detail lives in the expanded receive panel.
+  const STILL_OPEN_PREVIEW = 3
+  const RECEIVED_PREVIEW   = 3
+  const stillOpenPreview     = orderedLines.slice(0, STILL_OPEN_PREVIEW)
+  const stillOpenOverflow    = orderedLines.length - stillOpenPreview.length
+  const receivedPreview      = earlierReceivedLines.slice(0, RECEIVED_PREVIEW)
+  const receivedOverflow     = earlierReceivedLines.length - receivedPreview.length
+
+  return (
+    <li className={`rounded-xl border border-gray-200/80 border-t-2 ${topAccent} bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden`}>
+      {/* COLLAPSED HEADER — branches by mode:
+            • awaiting → single comma-joined item-name preview line
+            • partial  → Still open (comma-joined names) + Received
+                         (per-line with received/ordered) sections
+          Both variants drop the "Placed at …" line in favor of a
+          combined `{N items} · Expected {date} · ~${total}` line,
+          per the polish spec. */}
+      {!isExpanded && (
+        <div className="px-4 py-3.5">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-sm font-semibold text-gray-900 truncate">
+              {titleText}
+              {vendorOverflow && <span className="text-gray-400 font-normal text-[11px]">{vendorOverflow}</span>}
+            </p>
+            <span className={`flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillBg}`}>
+              <span className={`w-1 h-1 rounded-full ${pillDot}`} />
+              {pillLabel}
+            </span>
+          </div>
+          {/* Single combined meta line: items + expected date +
+              expected total. Drops the "Placed today, 12:10 AM"
+              prefix; placement time is internal state, not what the
+              manager is deciding on. */}
+          <p className="mt-0.5 text-[11px] text-gray-500">
+            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            {batch.soonestExpectedDate && (
+              <>
+                <span className="text-gray-300 mx-1">·</span>
+                <span>Expected {formatRestockDate(batch.soonestExpectedDate)}</span>
+              </>
+            )}
+            {batch.totalExpectedCost !== null && batch.totalExpectedCost > 0 && (
+              <>
+                <span className="text-gray-300 mx-1">·</span>
+                <span className="tabular-nums">~${batch.totalExpectedCost.toFixed(2)}</span>
+              </>
+            )}
+          </p>
+          {partialProgress && (
+            <p className="mt-0.5 text-[11px] text-blue-700 font-medium">{partialProgress}</p>
+          )}
+
+          {/* Preview — awaiting variant: comma-joined names. */}
+          {mode === 'awaiting' && previewNames.length > 0 && (
+            <p className="mt-2 text-[11px] text-gray-700 truncate">
+              {previewNames}
+              {previewSuffix && <span className="text-gray-400">{previewSuffix}</span>}
+            </p>
+          )}
+
+          {/* Preview — partial variant: Still open (comma-joined
+              names, no quantities) + Received (per-line with
+              received / ordered). The split is preserved as a
+              quick mental model of "what's left vs what arrived";
+              the open-items names alone keep the card light. */}
+          {mode === 'partial' && (
+            <div className="mt-2.5 space-y-2.5">
+              {stillOpenPreview.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">Still open</p>
+                  <p className="mt-1 text-[11px] text-gray-700 truncate">
+                    {stillOpenPreview
+                      .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
+                      .join(', ')}
+                    {stillOpenOverflow > 0 && (
+                      <span className="text-gray-400"> + {stillOpenOverflow} more</span>
+                    )}
+                  </p>
+                </div>
+              )}
+              {receivedPreview.length > 0 && (
+                <div>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">Received</p>
+                  <div className="mt-1 space-y-0.5">
+                    {receivedPreview.map((line) => {
+                      const item = itemsById.get(line.inventoryItemId)
+                      const unit = item?.unitOfMeasure ?? ''
+                      const recv = line.receivedQuantity ?? line.quantity
+                      const recvStr = recv.toFixed(recv % 1 === 0 ? 0 : 2)
+                      const orderedStr = line.quantity.toFixed(line.quantity % 1 === 0 ? 0 : 2)
+                      return (
+                        <p key={line.id} className="text-[11px] text-gray-700 truncate tabular-nums">
+                          <span className="font-medium text-gray-900">{item?.name ?? '—'}</span>
+                          <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit} received</span>
+                        </p>
+                      )
+                    })}
+                    {receivedOverflow > 0 && (
+                      <p className="text-[10.5px] text-gray-400">+ {receivedOverflow} more</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => onToggleExpand(true)}
+            className="mt-3 w-full rounded-md bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
+          >
+            {buttonLabel}
+          </button>
+        </div>
+      )}
+
+      {/* RECEIVE PANEL — polished receiving workflow.
+            • Subtle blue top accent signals "active mode."
+            • Header restates identity (vendor + pill + meta).
+            • No standing "Confirm received quantities / Stock
+              updates only…" helper — the panel structure speaks.
+            • Lines are flat divider rows. Item names are plain
+              text (not links). Inputs are −/n/+ steppers, matching
+              the staging-area control language.
+            • Already-received lines under their own quiet eyebrow.
+            • Order-level Confirmed total field above the actions.
+            • Two-button close decision unchanged behaviorally. */}
+      {isExpanded && (
+        <ReceivePanelBody
+          batch={batch}
+          itemsById={itemsById}
+          orderedLines={orderedLines}
+          earlierReceivedLines={earlierReceivedLines}
+          earlierCanceledLines={earlierCanceledLines}
+          receivedInSession={receivedInSession}
+          includedIds={includedIds}
+          setIncludedIds={setIncludedIds}
+          receivedQtys={receivedQtys}
+          setReceivedQtys={setReceivedQtys}
+          confirmedTotalDraft={confirmedTotalDraft}
+          setConfirmedTotalDraft={setConfirmedTotalDraft}
+          pending={pending}
+          error={error}
+          skippedLines={skippedLines}
+          titleText={titleText}
+          vendorOverflow={vendorOverflow}
+          pillBg={pillBg}
+          pillDot={pillDot}
+          pillLabel={pillLabel}
+          itemCount={itemCount}
+          partialProgress={partialProgress}
+          onConfirm={onConfirm}
+          onCancel={() => {
+            onToggleExpand(false)
+            setError(null)
+          }}
+        />
+      )}
+    </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// ReceivePanelBody — the expanded receive workflow rendered inside
+// an OrderBatchCard. Extracted from OrderBatchCard so the JSX tree
+// stays readable. Pure presentation + per-line state wiring; the
+// receive/close actions are still owned by OrderBatchCard.
+//
+// Visual model:
+//   1. Header        → vendor + pill + meta line
+//   2. Open items    → eyebrow + per-line stepper rows
+//   3. Already       → eyebrow + compact done rows (when partial)
+//   4. Closed short  → quiet text rows (when previously short)
+//   5. Confirmed     → order-level total input
+//   6. Actions       → keep-open / close-order / cancel
+// ----------------------------------------------------------------
+function ReceivePanelBody({
+  batch,
+  itemsById,
+  orderedLines,
+  earlierReceivedLines,
+  earlierCanceledLines,
+  receivedInSession,
+  includedIds,
+  setIncludedIds,
+  receivedQtys,
+  setReceivedQtys,
+  confirmedTotalDraft,
+  setConfirmedTotalDraft,
+  pending,
+  error,
+  skippedLines,
+  titleText,
+  vendorOverflow,
+  pillBg,
+  pillDot,
+  pillLabel,
+  itemCount,
+  partialProgress,
+  onConfirm,
+  onCancel,
+}: {
+  batch: RestockBatch
+  itemsById: Map<string, Item>
+  orderedLines: RestockOrder[]
+  earlierReceivedLines: RestockOrder[]
+  earlierCanceledLines: RestockOrder[]
+  receivedInSession: Set<string>
+  includedIds: Set<string>
+  setIncludedIds: React.Dispatch<React.SetStateAction<Set<string>>>
+  receivedQtys: Record<string, string>
+  setReceivedQtys: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  confirmedTotalDraft: string
+  setConfirmedTotalDraft: React.Dispatch<React.SetStateAction<string>>
+  pending: boolean
+  error: string | null
+  skippedLines: RestockOrder[]
+  titleText: string
+  vendorOverflow: string
+  pillBg: string
+  pillDot: string
+  pillLabel: string
+  itemCount: number
+  partialProgress: string | null
+  onConfirm: (closeShort: boolean) => void
+  onCancel: () => void
+}) {
+  return (
+    <div className="border-t-2 border-t-blue-300 bg-white">
+      {/* HEADER — identity always visible at top of the panel. */}
+      <div className="px-4 py-3 border-b border-gray-100">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-semibold text-gray-900 truncate">
+            {titleText}
+            {vendorOverflow && <span className="text-gray-400 font-normal text-[11px]">{vendorOverflow}</span>}
+          </p>
+          <span className={`flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillBg}`}>
+            <span className={`w-1 h-1 rounded-full ${pillDot}`} />
+            {pillLabel}
+          </span>
+        </div>
+        <p className="mt-0.5 text-[11px] text-gray-500">
+          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          {batch.soonestExpectedDate && (
+            <>
+              <span className="text-gray-300 mx-1">·</span>
+              <span>Expected {formatRestockDate(batch.soonestExpectedDate)}</span>
+            </>
+          )}
+          {batch.totalExpectedCost !== null && batch.totalExpectedCost > 0 && (
+            <>
+              <span className="text-gray-300 mx-1">·</span>
+              <span className="tabular-nums">~${batch.totalExpectedCost.toFixed(2)}</span>
+            </>
+          )}
+        </p>
+        {partialProgress && (
+          <p className="mt-0.5 text-[11px] text-blue-700 font-medium">{partialProgress}</p>
+        )}
+      </div>
+
+      {/* OPEN ITEMS — eyebrow + per-line stepper rows. */}
+      {orderedLines.length > 0 && (
+        <>
+          <div className="px-4 pt-3 pb-1">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              Open items
+            </p>
+          </div>
+          <ul className="px-4 pb-3 space-y-3">
+            {orderedLines.map((line) => (
+              <OpenLineRow
+                key={line.id}
+                line={line}
+                item={itemsById.get(line.inventoryItemId)}
+                isReceivedInSession={receivedInSession.has(line.id)}
+                isIncluded={includedIds.has(line.id)}
+                raw={receivedQtys[line.id] ?? line.quantity.toString()}
+                pending={pending}
+                onToggleSkip={() => {
+                  setIncludedIds((s) => {
+                    const next = new Set(s)
+                    if (next.has(line.id)) next.delete(line.id)
+                    else next.add(line.id)
+                    return next
+                  })
+                }}
+                onChangeQty={(value) =>
+                  setReceivedQtys((m) => ({ ...m, [line.id]: value }))
+                }
+                onStepQty={(delta) => {
+                  setReceivedQtys((m) => {
+                    const curr = parseFloat(m[line.id] ?? line.quantity.toString())
+                    const base = Number.isFinite(curr) && curr > 0 ? curr : line.quantity
+                    const next = Math.max(0.01, Math.round((base + delta) * 100) / 100)
+                    return { ...m, [line.id]: next.toString() }
+                  })
+                }}
+              />
+            ))}
+          </ul>
+        </>
+      )}
+
+      {/* ALREADY RECEIVED — partial-receipt siblings. */}
+      {earlierReceivedLines.length > 0 && (
+        <>
+          <div className="px-4 pt-2 pb-1 border-t border-gray-100">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              Already received
+            </p>
+          </div>
+          <ul className="px-4 pb-3 pt-1 space-y-1">
+            {earlierReceivedLines.map((line) => {
+              const item = itemsById.get(line.inventoryItemId)
+              const unit = item?.unitOfMeasure ?? ''
+              const recv = line.receivedQuantity ?? line.quantity
+              const recvStr = recv.toFixed(recv % 1 === 0 ? 0 : 2)
+              const orderedStr = line.quantity.toFixed(line.quantity % 1 === 0 ? 0 : 2)
+              return (
+                <li
+                  key={line.id}
+                  className="flex items-center gap-2 text-[11px] tabular-nums"
+                >
+                  <svg className="w-3 h-3 text-emerald-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  <p className="text-gray-700 truncate flex-1 min-w-0">
+                    <span className="font-medium text-gray-900">{item?.name ?? '—'}</span>
+                    <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit}</span>
+                  </p>
+                  <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">Done</span>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
+
+      {/* CLOSED SHORT — quiet rows when prior rounds short-closed
+          some lines. Rare; muted single-line text. */}
+      {earlierCanceledLines.length > 0 && (
+        <>
+          <div className="px-4 pt-2 pb-1 border-t border-gray-100">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              Closed short
+            </p>
+          </div>
+          <ul className="px-4 pb-3 pt-1 space-y-1">
+            {earlierCanceledLines.map((line) => {
+              const item = itemsById.get(line.inventoryItemId)
+              const unit = item?.unitOfMeasure ?? ''
+              const orderedStr = line.quantity.toFixed(line.quantity % 1 === 0 ? 0 : 2)
+              return (
+                <li key={line.id} className="text-[11px] text-gray-500 truncate">
+                  <span className="font-medium text-gray-700">{item?.name ?? '—'}</span>
+                  <span> · {orderedStr} {unit} ordered · not received</span>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
+
+      {/* CONFIRMED TOTAL — order-level cost confirmation. Default
+          to the expected ticket total; edit before close. Server
+          uses this as the Finance amount and re-distributes across
+          sibling expected_cost shares. */}
+      <div className="px-4 pt-3 pb-3 border-t border-gray-100">
+        <label className="block">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+            Confirmed total
+          </span>
+          <div className="relative mt-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={confirmedTotalDraft}
+              onChange={(e) => setConfirmedTotalDraft(e.target.value)}
+              disabled={pending}
+              placeholder="0.00"
+              aria-label="Confirmed order total"
+              className="h-9 w-full rounded-md border border-gray-200 bg-white pl-6 pr-3 text-sm font-mono font-semibold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition disabled:opacity-60"
+            />
+          </div>
+          <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
+            Used for inventory spend when the order closes.
+          </p>
+        </label>
+      </div>
+
+      {error && (
+        <p className="px-4 pb-2 text-[11px] text-red-600">{error}</p>
+      )}
+
+      {/* CLOSE DECISION — two buttons when skipped lines exist; one
+          primary button otherwise. Cancel sits below as quiet text. */}
+      <div className="border-t border-gray-100 px-4 py-3">
+        {skippedLines.length > 0 ? (
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onConfirm(false)}
+              disabled={pending}
+              className="h-9 rounded-md border border-gray-200 bg-white px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+            >
+              {pending ? 'Working…' : 'Receive · keep open'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onConfirm(true)}
+              disabled={pending}
+              className="h-9 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+            >
+              {pending ? 'Working…' : 'Receive · close order'}
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onConfirm(true)}
+            disabled={pending}
+            className="w-full h-9 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+          >
+            {pending ? 'Working…' : 'Receive · close order'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={pending}
+          className="mt-1.5 w-full h-7 text-[11px] font-medium text-gray-500 hover:text-gray-700 disabled:opacity-60 transition-colors"
+        >
+          Cancel
+        </button>
+        {skippedLines.length > 0 && (
+          <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed text-center">
+            Keep open leaves skipped lines pending. Close order cancels them.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// OpenLineRow — one open item in the receive panel.
+//   • Plain-text name (no link styling, no underline, no pointer
+//     cursor). Spec: "should look like a label, not a navigation
+//     action."
+//   • Compact metadata line: "Ordered X · Received so far 0".
+//   • −/n/+ stepper matching the staging-area quantity control.
+//   • Inline Remaining on the right, colored by completeness.
+//   • Skipped → muted single-line "Skipped for now" + Include link.
+//   • Just-received in session → compact green Done row.
+// ----------------------------------------------------------------
+function OpenLineRow({
+  line,
+  item,
+  isReceivedInSession,
+  isIncluded,
+  raw,
+  pending,
+  onToggleSkip,
+  onChangeQty,
+  onStepQty,
+}: {
+  line: RestockOrder
+  item: Item | undefined
+  isReceivedInSession: boolean
+  isIncluded: boolean
+  raw: string
+  pending: boolean
+  onToggleSkip: () => void
+  onChangeQty: (value: string) => void
+  onStepQty: (delta: number) => void
+}) {
+  const unit = item?.unitOfMeasure ?? ''
+  const name = item?.name ?? '—'
+  const orderedStr = line.quantity.toFixed(line.quantity % 1 === 0 ? 0 : 2)
+
+  // Just-received this session — quiet green confirmation row.
+  if (isReceivedInSession) {
+    const recvStr = raw
+    return (
+      <li className="flex items-center gap-2 text-[11px] tabular-nums">
+        <svg className="w-3 h-3 text-emerald-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+        </svg>
+        <p className="text-gray-700 truncate flex-1 min-w-0">
+          <span className="font-medium text-gray-900">{name}</span>
+          <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit}</span>
+        </p>
+        <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">Done</span>
+      </li>
+    )
+  }
+
+  // Skipped — single muted line + Include text link.
+  if (!isIncluded) {
+    return (
+      <li className="flex items-center gap-2">
+        <p className="text-[11px] text-gray-500 truncate flex-1 min-w-0">
+          <span className="font-medium text-gray-700">{name}</span>
+          <span> · Skipped for now</span>
+        </p>
+        <button
+          type="button"
+          onClick={onToggleSkip}
+          disabled={pending}
+          className="flex-shrink-0 text-[10px] font-medium text-blue-700 hover:text-blue-800 underline-offset-2 hover:underline transition-colors disabled:opacity-50"
+        >
+          Include
+        </button>
+      </li>
+    )
+  }
+
+  // Active receiving line.
+  const parsed = parseFloat(raw)
+  const receivingNow = Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+  const remainingRaw = line.quantity - receivingNow
+  const remaining = Math.max(0, remainingRaw)
+  const overReceiving = remainingRaw < 0
+  const isComplete = remaining === 0 && !overReceiving
+  const remainingStr = remaining.toFixed(remaining % 1 === 0 ? 0 : 2)
+
+  return (
+    <li>
+      {/* Plain-text name + quiet Skip text link. */}
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-semibold text-gray-900 truncate flex-1 min-w-0">
+          {name}
+        </p>
+        <button
+          type="button"
+          onClick={onToggleSkip}
+          disabled={pending}
+          className="flex-shrink-0 text-[10px] font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline transition-colors disabled:opacity-50"
+        >
+          Skip
+        </button>
+      </div>
+
+      {/* Metadata line — muted Ordered + Received so far. */}
+      <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+        Ordered{' '}
+        <span className="font-mono font-semibold text-gray-700">{orderedStr} {unit}</span>
+        <span className="text-gray-300 mx-1.5">·</span>
+        Received so far{' '}
+        <span className="font-mono font-semibold text-gray-700">0 {unit}</span>
+      </p>
+
+      {/* Stepper + Remaining inline. */}
+      <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500">Receiving now</span>
+          <div className="inline-flex items-stretch rounded-md border border-gray-300 bg-white overflow-hidden">
+            <button
+              type="button"
+              onClick={() => onStepQty(-1)}
+              disabled={pending}
+              aria-label={`Decrease receiving for ${name}`}
+              className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
+              </svg>
+            </button>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={raw}
+              onChange={(e) => onChangeQty(e.target.value)}
+              disabled={pending}
+              aria-label={`Receiving now for ${name}`}
+              className="h-7 w-14 text-center text-sm font-mono font-semibold tabular-nums text-gray-900 border-x border-gray-300 focus:outline-none focus:bg-blue-50/40 disabled:opacity-60 appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
+            />
+            <button
+              type="button"
+              onClick={() => onStepQty(1)}
+              disabled={pending}
+              aria-label={`Increase receiving for ${name}`}
+              className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          </div>
+          <span className="text-[11px] text-gray-500">{unit}</span>
+        </div>
+        <p className="text-[11px] tabular-nums">
+          <span className="text-gray-500">Remaining </span>
+          <span className={`font-mono font-semibold ${
+            overReceiving
+              ? 'text-amber-700'
+              : isComplete
+                ? 'text-emerald-700'
+                : 'text-gray-700'
+          }`}>
+            {remainingStr} {unit}
+          </span>
+        </p>
+      </div>
+
+      {overReceiving && (
+        <p className="mt-1 text-[10px] text-amber-700">
+          Receiving more than ordered.
+        </p>
+      )}
+    </li>
+  )
+}
+
+// Render a batch's `ordered_at` timestamp as a short, scannable
+// label. Uses today/yesterday for recent batches so the eye can
+// pattern-match the freshness without parsing a full date.
+function formatBatchTimestamp(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const sameDay = d.toDateString() === now.toDateString()
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+  const isYesterday = d.toDateString() === yesterday.toDateString()
+  if (sameDay) {
+    return `today, ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+  if (isYesterday) {
+    return `yesterday, ${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// ----------------------------------------------------------------
+// ClosedOrderCard — one card per closed restock batch. Read-only at
+// pilot scope: the batch has finalized, the manager is here to
+// verify what shipped vs what was short.
+//
+// Click the card to expand. Collapsed view: vendor title, status
+// pill, "Closed today · 2 items · $82.00", per-line preview (up to
+// 4 lines), "+ N more" tail.
+//
+// Expanded view: full timestamp, final recorded spend, status
+// summary (Closed complete vs Closed short), every line with
+// Ordered / Received / Short stats, and a one-line Finance note.
+// No reopen, no edit, no delete — closed orders are immutable.
+//
+// Three close sub-states share this card:
+//   • All lines received           → "Closed complete", green
+//   • Mixed received + canceled    → "Closed short", green pill
+//                                     (some receipts hit stock)
+//   • All lines canceled-short     → "Closed short", neutral pill
+// ----------------------------------------------------------------
+function ClosedOrderCard({
+  batch,
+  itemsById,
+}: {
+  batch: RestockBatch
+  itemsById: Map<string, Item>
+}) {
+  const [expanded, setExpanded] = useState(false)
+
+  const receivedLines = batch.lines.filter((l) => l.status === 'received')
+  const canceledLines = batch.lines.filter((l) => l.status === 'canceled')
+  const allReceived = receivedLines.length > 0 && canceledLines.length === 0
+  const allCanceled = receivedLines.length === 0 && canceledLines.length > 0
+
+  // Vendor-first title — same convention as pending batches so the
+  // family of cards reads consistently.
+  const primaryVendor = batch.vendorList[0] ?? null
+  const titleText = primaryVendor ? `${primaryVendor} order` : 'Restock order'
+  const vendorOverflow = batch.vendorList.length > 1 ? ` +${batch.vendorList.length - 1}` : ''
+
+  // Status pill semantics:
+  //   • Pure all-canceled batch → neutral "Closed" (no receipts hit
+  //     stock or Finance — the green tone would mislead).
+  //   • Mixed or all-received   → emerald "Closed" (the close
+  //     decision finalized stock movement).
+  const pillBg = allCanceled ? 'bg-gray-100 text-gray-600' : 'bg-emerald-50 text-emerald-700'
+  const pillDot = allCanceled ? 'bg-gray-400' : 'bg-emerald-500'
+
+  // Close-completeness label for the expanded summary line.
+  //   complete → every ordered line landed in stock at the ordered
+  //              quantity (no shortages)
+  //   short    → at least one line either short-received or
+  //              canceled-short
+  const isOrderComplete =
+    !allCanceled &&
+    canceledLines.length === 0 &&
+    receivedLines.every((l) => {
+      const recv = l.receivedQuantity ?? l.quantity
+      return recv >= l.quantity
+    })
+  const closeStatusLabel = isOrderComplete ? 'Closed complete' : 'Closed short'
+
+  // Close timestamp — most recent received_at across the batch
+  // (falls back to canceled_at for all-canceled batches). Drives
+  // the "Closed today / Closed Jun 4" subtitle. The Math.max over
+  // an empty list would return -Infinity, so we guard with a
+  // sentinel before calling; closed batches always have at least
+  // one terminal-state line, so the guard is defensive.
+  const closedAt = batch.lines.length === 0 ? 0 : Math.max(
+    ...batch.lines.map((l) => {
+      if (l.receivedAt) return new Date(l.receivedAt).getTime()
+      if (l.canceledAt) return new Date(l.canceledAt).getTime()
+      return 0
+    }),
+  )
+  const closedLabel = closedAt > 0 ? formatBatchTimestamp(new Date(closedAt).toISOString()) : null
+
+  // Final recorded spend — sum of expected_cost across RECEIVED
+  // lines only (canceled lines never fired the Finance bridge). This
+  // is what actually hit Finance for this order. Summation runs in
+  // integer cents so a $1000.00 ticket split into 333.34/333.33/
+  // 333.33 reads back exactly $1000.00 rather than $999.99 from
+  // truncation or $1000.0000000001 from float drift.
+  const finalSpend = receivedLines.reduce(
+    (cents, l) => cents + Math.round((l.expectedCost ?? 0) * 100),
+    0,
+  ) / 100
+  const hasSpend = receivedLines.some((l) => l.expectedCost !== null && (l.expectedCost ?? 0) > 0)
+
+  // Comma-joined item-name preview for the collapsed card. Closed
+  // orders read as quiet history; the names alone are enough at a
+  // glance — exact ordered/received quantities belong in the
+  // expanded details.
+  const PREVIEW_LIMIT = 4
+  const previewLines = batch.lines.slice(0, PREVIEW_LIMIT)
+  const previewOverflow = batch.lines.length - previewLines.length
+  const previewNames = previewLines
+    .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
+    .join(', ')
+  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} more` : ''
+
+  return (
+    <li className="rounded-xl border border-gray-200/80 border-t-2 border-t-emerald-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      {/* Clickable collapsed card. Polish: spend leads the meta line
+          (it's the most-scanned figure on a receipt), names are a
+          single comma-joined string (not a stack of lines), and the
+          expand affordance is a single quiet text link at the
+          bottom right. */}
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-label={expanded ? 'Collapse closed order details' : 'Expand closed order details'}
+        className="w-full text-left px-4 py-3.5 hover:bg-gray-50/60 transition-colors"
+      >
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-semibold text-gray-900 truncate flex-1 min-w-0">
+            {titleText}
+            {vendorOverflow && <span className="text-gray-400 font-normal text-[11px]">{vendorOverflow}</span>}
+          </p>
+          <span className={`flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillBg}`}>
+            <span className={`w-1 h-1 rounded-full ${pillDot}`} />
+            Closed
+          </span>
+        </div>
+        <p className="mt-0.5 text-[11px] text-gray-500">
+          {hasSpend && (
+            <>
+              <span className="text-gray-700 tabular-nums font-medium">${finalSpend.toFixed(2)}</span>
+              <span className="text-gray-300 mx-1">·</span>
+            </>
+          )}
+          {batch.lines.length} {batch.lines.length === 1 ? 'item' : 'items'}
+          {closedLabel && (
+            <>
+              <span className="text-gray-300 mx-1">·</span>
+              <span>Closed {closedLabel}</span>
+            </>
+          )}
+        </p>
+        {allCanceled && (
+          <p className="mt-0.5 text-[10.5px] text-gray-400">
+            No items received — closed short.
+          </p>
+        )}
+        {!allReceived && !allCanceled && (
+          <p className="mt-0.5 text-[10.5px] text-gray-500">
+            {receivedLines.length} received · {canceledLines.length} closed short
+          </p>
+        )}
+
+        {!expanded && previewNames.length > 0 && (
+          <p className="mt-2 text-[11px] text-gray-700 truncate">
+            {previewNames}
+            {previewSuffix && <span className="text-gray-400">{previewSuffix}</span>}
+          </p>
+        )}
+
+        {/* Expand affordance — single quiet chevron link. */}
+        <div className="mt-2 flex items-center justify-end">
+          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-400">
+            {expanded ? 'Hide details' : 'View details'}
+            <svg
+              className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          </span>
+        </div>
+      </button>
+
+      {/* EXPANDED DETAIL — receipt-style read-only review.
+            Three breathing-room sections, separated by light
+            dividers:
+              1. ORDER SUMMARY    → closed-at, status, final total
+              2. RECEIVED ITEMS   → per-item card with 3-col stat
+              3. FINANCE          → single calm note
+            No dots, no inline-string density, no nested admin
+            tables. Each item gets a name row + 3-column stat block
+            that reads at a glance. */}
+      {expanded && (
+        <div className="border-t border-gray-100 bg-white">
+          {/* 1. ORDER SUMMARY — eyebrow + breathing stack. */}
+          <div className="px-5 pt-4 pb-4">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+              Order Summary
+            </p>
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-gray-700">
+                {closedLabel ? `Closed ${closedLabel}` : 'Closed'}
+              </p>
+              <p className="text-xs text-gray-700">
+                <span className="text-gray-500">Status: </span>
+                <span className={`font-semibold ${isOrderComplete ? 'text-emerald-700' : 'text-gray-700'}`}>
+                  {closeStatusLabel}
+                </span>
+              </p>
+              {hasSpend && (
+                <p className="text-xs text-gray-700">
+                  <span className="text-gray-500">Final recorded total: </span>
+                  <span className="font-semibold tabular-nums">${finalSpend.toFixed(2)}</span>
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* 2. RECEIVED ITEMS — name row + 3-col stat grid. */}
+          <div className="px-5 pt-3 pb-1 border-t border-gray-100">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+              {allCanceled ? 'Order Items' : 'Received Items'}
+            </p>
+          </div>
+          <ul className="px-5 pb-4 pt-2 space-y-3">
+            {batch.lines.map((line) => {
+              const item = itemsById.get(line.inventoryItemId)
+              const unit = item?.unitOfMeasure ?? ''
+              const ordered = line.quantity
+              const received = line.status === 'received' ? (line.receivedQuantity ?? line.quantity) : 0
+              const shortAmt = Math.max(0, ordered - received)
+              const orderedStr = ordered.toFixed(ordered % 1 === 0 ? 0 : 2)
+              const receivedStr = received.toFixed(received % 1 === 0 ? 0 : 2)
+              const shortStr = shortAmt.toFixed(shortAmt % 1 === 0 ? 0 : 2)
+
+              // Color semantics per spec:
+              //   • Received → green when positive, gray when zero
+              //   • Short    → amber only when > 0, gray when 0
+              //   • Ordered  → always neutral gray (it's just the
+              //                intent figure, no good/bad)
+              const receivedColor = received > 0 ? 'text-emerald-700' : 'text-gray-400'
+              const shortColor = shortAmt > 0 ? 'text-amber-700' : 'text-gray-400'
+
+              return (
+                <li key={line.id}>
+                  <p className="text-xs font-semibold text-gray-900 truncate">
+                    {item?.name ?? '—'}
+                  </p>
+                  <div className="mt-1.5 grid grid-cols-3 gap-2">
+                    <ClosedStat label="Ordered" value={`${orderedStr} ${unit}`} valueColor="text-gray-700" />
+                    <ClosedStat label="Received" value={`${receivedStr} ${unit}`} valueColor={receivedColor} />
+                    <ClosedStat label="Short" value={`${shortStr} ${unit}`} valueColor={shortColor} />
+                  </div>
+                  {line.status === 'canceled' && (
+                    <p className="mt-1 text-[10px] text-gray-500">Closed short — not received.</p>
+                  )}
+                </li>
+              )
+            })}
+          </ul>
+
+          {/* 3. FINANCE — calm one-liner. No reconciliation surface;
+              final-total adjustment + bank verification are deferred
+              for pilot. */}
+          <div className="px-5 pt-3 pb-4 border-t border-gray-100">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Finance</p>
+            <p className="mt-2 text-[11px] text-gray-600 leading-relaxed">
+              {hasSpend
+                ? 'Inventory spend recorded from this ticket.'
+                : 'No inventory spend recorded for this ticket.'}
+            </p>
+          </div>
+        </div>
+      )}
+    </li>
+  )
+}
+
+// ----------------------------------------------------------------
+// ClosedStat — one cell of the 3-column "Ordered / Received / Short"
+// stat block inside the expanded Closed Order card. Compact label
+// above (small uppercase) and the value below (mono, tabular).
+// valueColor lets the caller tint the value semantically without
+// re-implementing the layout per use.
+// ----------------------------------------------------------------
+function ClosedStat({ label, value, valueColor }: { label: string; value: string; valueColor: string }) {
+  return (
+    <div>
+      <p className="text-[9.5px] font-semibold uppercase tracking-[0.12em] text-gray-400">
+        {label}
+      </p>
+      <p className={`mt-0.5 text-[11px] font-mono font-semibold tabular-nums ${valueColor}`}>
+        {value}
+      </p>
+    </div>
   )
 }
 
@@ -851,135 +2973,6 @@ function CreateItemDrawer({ onClose }: { onClose: () => void }) {
   )
 }
 
-// ----------------------------------------------------------------
-// CartLineItem — single line in the OrderBuilderCard.
-//
-// editable=true (draft mode):
-//   - inline qty editor (saves via updateRestockQuantity)
-//   - remove × button (cancels the draft via cancelRestockOrder)
-//
-// showReceiveAction=true (ordered mode):
-//   - "Mark received" button (markRestockReceived → stock bump)
-//   - cancel × is also available as a quiet escape hatch
-//
-// The line title links into the drawer for full inspection / edit
-// of vendor, cost, notes — keeping this row compact.
-// ----------------------------------------------------------------
-function CartLineItem({ order, item, editable, showReceiveAction, onInspect }: {
-  order: RestockOrder
-  item: Item | undefined
-  editable?: boolean
-  showReceiveAction?: boolean
-  onInspect: () => void
-}) {
-  const [qtyState, qtyAction, qtyPending] = useActionState(updateRestockQuantity, null)
-  const [recvState, recvAction, recvPending] = useActionState(markRestockReceived, null)
-  const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
-
-  const unit = item?.unitOfMeasure ?? ''
-  const error = qtyState?.error ?? recvState?.error ?? cancelState?.error
-
-  return (
-    <li className="rounded-lg border border-gray-200 bg-white px-3 py-2">
-      <div className="flex items-start justify-between gap-2">
-        <button
-          type="button"
-          onClick={onInspect}
-          className="text-left min-w-0 flex-1 group/title"
-        >
-          <p className="text-xs font-semibold text-gray-900 truncate group-hover/title:text-blue-700 transition-colors">
-            {item?.name ?? '—'}
-          </p>
-          <p className="text-[10px] text-gray-400 truncate mt-0.5">
-            {[order.vendor, order.expectedCost !== null ? `~$${order.expectedCost.toFixed(2)}` : null]
-              .filter(Boolean).join(' · ') || (item?.recipeLinks ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}` : 'Standalone')}
-          </p>
-        </button>
-
-        <form action={cancelAction} className="flex-shrink-0">
-          <input type="hidden" name="order_id" value={order.id} />
-          <button
-            type="submit"
-            disabled={cancelPending}
-            aria-label="Remove from order"
-            className="text-gray-300 hover:text-red-600 transition-colors p-0.5 disabled:opacity-50"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </form>
-      </div>
-
-      {/* Editable mode: inline qty editor that auto-saves on blur/
-          submit. Read-only mode in ordered: just a quantity readout
-          plus the receive button. */}
-      <div className="mt-2 flex items-center gap-2">
-        {editable ? (
-          <form action={qtyAction} className="flex items-center gap-1.5">
-            <input type="hidden" name="order_id" value={order.id} />
-            <input
-              name="quantity"
-              type="number"
-              min="0.01"
-              step="0.01"
-              defaultValue={order.quantity}
-              disabled={qtyPending}
-              className="h-7 w-20 rounded-md border border-gray-200 bg-white px-2 text-xs font-mono tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition disabled:opacity-60"
-            />
-            <span className="text-[10px] text-gray-400">{unit}</span>
-            <button
-              type="submit"
-              disabled={qtyPending}
-              className="text-[10px] font-semibold text-gray-500 hover:text-gray-900 disabled:opacity-50"
-            >
-              {qtyPending ? 'Saving…' : 'Update'}
-            </button>
-          </form>
-        ) : (
-          <p className="text-xs font-mono font-semibold text-gray-900 tabular-nums flex-1">
-            {order.quantity.toFixed(order.quantity % 1 === 0 ? 0 : 2)} <span className="text-[10px] text-gray-400 font-sans font-normal">{unit}</span>
-          </p>
-        )}
-
-        {showReceiveAction && (
-          <form action={recvAction} className="ml-auto">
-            <input type="hidden" name="order_id" value={order.id} />
-            <button
-              type="submit"
-              disabled={recvPending}
-              className="rounded-md bg-gray-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
-            >
-              {recvPending ? 'Receiving…' : 'Mark received'}
-            </button>
-          </form>
-        )}
-      </div>
-
-      {error && <p className="mt-1.5 text-[10px] text-red-600">{error}</p>}
-    </li>
-  )
-}
-
-// ----------------------------------------------------------------
-// PlaceOrderButton — bulk-flip drafts → ordered. The dark commit
-// at the bottom of the cart's draft section.
-// ----------------------------------------------------------------
-function PlaceOrderButton({ draftCount }: { draftCount: number }) {
-  const [state, action, pending] = useActionState(placeAllDrafts, null)
-  return (
-    <form action={action}>
-      <button
-        type="submit"
-        disabled={pending || draftCount === 0}
-        className="w-full rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-      >
-        {pending ? 'Placing…' : `Place order · ${draftCount} ${draftCount === 1 ? 'item' : 'items'}`}
-      </button>
-      {state?.error && <p className="mt-1.5 text-[10px] text-red-600">{state.error}</p>}
-    </form>
-  )
-}
 
 // ----------------------------------------------------------------
 // Default restock quantity for a quick-add. Uses the threshold as
@@ -990,6 +2983,17 @@ function PlaceOrderButton({ draftCount }: { draftCount: number }) {
 function defaultRestockQty(item: Item): number {
   const t = item.threshold || 1
   return Math.max(t, 1)
+}
+
+// Render a yyyy-mm-dd date as a short, locale-friendly label
+// ("Jun 5"). Strips time-zone ambiguity by treating the value as a
+// plain calendar date — the database column is `date`, not
+// `timestamptz`, so we never want time-zone math here.
+function formatRestockDate(yyyymmdd: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(yyyymmdd)
+  if (!m) return yyyymmdd
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 // ----------------------------------------------------------------
@@ -1014,9 +3018,24 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
   selected: boolean
   onOpen: () => void
 }) {
+  // Display-clamped stock. The manager-facing UI never surfaces
+  // negative values — they're confusing in the action context
+  // ("if I receive 20 oz, do I land at 20 or 16?"). Internally
+  // item.estimated stays raw so the depletion-vs-count drift
+  // remains available for future accuracy intelligence; visually
+  // we clamp at zero everywhere on this page.
+  const displayEstimated = item.estimated !== null
+    ? Math.max(0, item.estimated)
+    : null
+  const isOverdrawn = item.estimated !== null && item.estimated < 0
+
+  // Stock-value color comes off the display value, not the raw
+  // estimate. 0 reads red (out), low reads amber, healthy stays
+  // gray-900. The red color carries the urgency; the negative sign
+  // is gone from the surface.
   const stockColor =
-    item.estimated === null ? 'text-gray-300'
-      : item.estimated <= 0 ? 'text-red-600'
+    displayEstimated === null ? 'text-gray-300'
+      : displayEstimated === 0 ? 'text-red-600'
         : item.status === 'low' ? 'text-amber-700'
           : 'text-gray-900'
   const typeLabel = item.recipeLinks > 0
@@ -1051,13 +3070,14 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
       onClick={onOpen}
       className={`group cursor-pointer transition-all ${
         selected
-          // Selected: stronger blue tint + 2px blue inset ring at
-          // 30% alpha gives clear "this row is open in the drawer"
-          // recognition without going loud.
+          // Selected: blue tint + 2px blue inset ring so the row
+          // open in the drawer is unmistakable.
           ? 'bg-blue-50 shadow-[inset_0_0_0_2px_rgba(59,130,246,0.30)]'
-          // Hover: full gray-50 (was /80) + a soft 1px gray inset
-          // line so the row reads as a discrete inspectable object
-          // when the cursor lands on it. Subtle but present.
+          // Calm neutral baseline. Urgency comes from the stock
+          // number, the status text, the left stripe, and the
+          // filter pills — not from the row background. Hover lifts
+          // the row gently with a tiny inset line so it reads as a
+          // discrete inspectable object.
           : 'hover:bg-gray-50 hover:shadow-[inset_0_0_0_1px_rgba(15,23,42,0.04)]'
       }`}
     >
@@ -1077,7 +3097,7 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
             <span>{typeLabel}</span>
             <span className="text-gray-300 mx-1.5">·</span>
             <span>
-              Threshold{' '}
+              Reorder at{' '}
               <span className="font-mono tabular-nums text-gray-600">
                 {item.threshold.toFixed(2)}
               </span>{' '}
@@ -1093,10 +3113,13 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
           as one decision zone rather than three independent
           columns. */}
       <td className="pl-2 pr-1.5 py-4 text-right whitespace-nowrap">
-        {item.estimated !== null ? (
-          <span className="inline-flex items-baseline gap-1 font-mono">
+        {displayEstimated !== null ? (
+          <span
+            className="inline-flex items-baseline gap-1 font-mono"
+            title={isOverdrawn ? 'Usage has passed the last count. Receiving will reset this item from zero.' : undefined}
+          >
             <span className={`text-base font-bold tabular-nums ${stockColor}`}>
-              {item.estimated.toFixed(2)}
+              {displayEstimated.toFixed(2)}
             </span>
             <span className="text-[10px] font-medium text-gray-400">{item.unitOfMeasure}</span>
           </span>
@@ -1112,24 +3135,28 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
         </span>
       </td>
 
-      {/* Cart icon — final action in the right cluster. The button
-          picks up emphasis from the row hover via group-hover, so
-          the action affordance brightens together with the row —
-          one signal, two surfaces. */}
+      {/* Restock action — compact neutral affordance on every row.
+          The earlier "urgent rows get a dark filled button" pass
+          was rolled back: urgency is communicated by the stock
+          number, status text, and left stripe; the action stays
+          calm so the page reads as operational rather than alarmed.
+          The "In cart · qty" state is preserved for staged drafts. */}
       <td className="pl-1.5 pr-4 py-4 text-right" onClick={(e) => e.stopPropagation()}>
         {draftLine ? (
           <button
             type="button"
             onClick={onOpen}
-            title={`In cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
-            aria-label="In cart"
-            className="relative inline-flex items-center justify-center w-8 h-8 rounded-md bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 group-hover:border-blue-300 transition-colors"
+            title={`In restock cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
+            aria-label={`In restock cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
+            className="inline-flex items-center gap-1.5 h-8 rounded-md bg-blue-50 border border-blue-200 text-blue-700 px-2 hover:bg-blue-100 group-hover:border-blue-300 transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
-            <span className="absolute -top-1 -right-1 inline-flex items-center justify-center min-w-[14px] h-[14px] rounded-full bg-blue-600 text-white text-[9px] font-bold px-0.5 leading-none">
-              {Math.floor(draftLine.quantity)}
+            <span className="text-[10px] font-semibold tabular-nums">
+              In cart · {draftLine.quantity % 1 === 0
+                ? draftLine.quantity.toFixed(0)
+                : draftLine.quantity.toFixed(2)}
             </span>
           </button>
         ) : (
@@ -1138,8 +3165,8 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
             <input type="hidden" name="quantity" value={defaultRestockQty(item)} />
             <button
               type="submit"
-              title="Add to cart"
-              aria-label="Add to cart"
+              title="Add to restock"
+              aria-label="Add to restock"
               className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-900 hover:border-gray-300 group-hover:border-gray-300 group-hover:text-gray-700 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1151,6 +3178,27 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
       </td>
     </tr>
   )
+}
+
+// Surface restock receipts as "Restock received · {vendor}" rather
+// than the generic "Purchase · Restock received · {vendor}" the raw
+// transaction type would produce. markRestockReceived stamps the
+// reference_note with a stable `Restock received` prefix; when we
+// see that on a `purchase` transaction we promote the prefix into
+// the label and pass the vendor remainder through as the note. Any
+// other purchase transaction keeps its generic label, so manual
+// non-restock receipts still read normally.
+function receiptAdjustedLabel(
+  type: string,
+  defaultLabel: string,
+  note: string | null,
+): { label: string; note: string | null } {
+  if (type !== 'purchase' || !note) return { label: defaultLabel, note }
+  const trimmed = note.trim()
+  if (!trimmed.startsWith('Restock received')) return { label: defaultLabel, note }
+  // Strip the leading "Restock received" + optional " · " separator
+  const remainder = trimmed.slice('Restock received'.length).replace(/^\s*[·\-—]\s*/, '').trim()
+  return { label: 'Restock received', note: remainder.length > 0 ? remainder : null }
 }
 
 // ----------------------------------------------------------------
@@ -1187,6 +3235,7 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
             : tx.qty < 0 ? 'text-red-600'
             : 'text-gray-600'
           const qtyPrefix = style.showSign && tx.qty > 0 ? '+' : ''
+          const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note)
           return (
             <li key={tx.id} className="flex items-center gap-3 px-5 py-2.5">
               <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${style.bg} ${style.text}`}>
@@ -1195,8 +3244,8 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-gray-700 truncate">
                   <span className="font-medium text-gray-900">{tx.itemName}</span>
-                  <span className={`${isInitial ? 'text-emerald-700 font-semibold' : 'text-gray-400'}`}> · {style.label}</span>
-                  {tx.note && <span className="text-gray-400"> · {tx.note}</span>}
+                  <span className={`${isInitial ? 'text-emerald-700 font-semibold' : 'text-gray-400'}`}> · {label}</span>
+                  {note && <span className="text-gray-400"> · {note}</span>}
                 </p>
               </div>
               <span className={`text-xs font-mono font-semibold tabular-nums ${qtyClass}`}>
@@ -1220,23 +3269,33 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
 // because the row already lives inside that item's workspace.
 // ----------------------------------------------------------------
 function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
-  // Same style map ActivityFeed uses, kept here so the per-item
-  // list stays consistent with the global feed below it.
+  // Style map shared with ActivityFeed below so per-item and
+  // global feeds stay visually consistent.
+  //
+  // Color semantics:
+  //   purchase  → green   (positive stock movement, e.g. restock received)
+  //   waste     → red     (negative stock movement, manual discard)
+  //   usage     → red     (negative stock movement, sales depletion —
+  //                        same direction as waste; the label
+  //                        distinguishes the cause)
+  //   count     → slate   (neutral correction event)
+  //   initial   → emerald (the founding event that started tracking)
   const styleFor: Record<string, { bg: string; text: string; glyph: string; label: string; showSign: boolean }> = {
     purchase:      { bg: 'bg-green-50',   text: 'text-green-700',   glyph: '+', label: 'Purchase',      showSign: true  },
     waste:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: 'Waste',         showSign: true  },
-    usage:         { bg: 'bg-blue-50',    text: 'text-blue-700',    glyph: '−', label: 'Usage',         showSign: true  },
-    count:         { bg: 'bg-gray-100',   text: 'text-gray-600',    glyph: '◉', label: 'Count',         showSign: false },
+    usage:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: 'Usage',         showSign: true  },
+    count:         { bg: 'bg-slate-100',  text: 'text-slate-600',   glyph: '◉', label: 'Count',         showSign: false },
     initial_count: { bg: 'bg-emerald-50', text: 'text-emerald-700', glyph: '✦', label: 'Initial count', showSign: false },
   }
-  const style = styleFor[tx.type] ?? { bg: 'bg-gray-100', text: 'text-gray-600', glyph: '·', label: tx.type, showSign: false }
+  const style = styleFor[tx.type] ?? { bg: 'bg-slate-100', text: 'text-slate-600', glyph: '·', label: tx.type, showSign: false }
   const isInitial = tx.type === 'initial_count'
   const qtyClass = !style.showSign
-    ? (isInitial ? 'text-emerald-700' : 'text-gray-600')
+    ? (isInitial ? 'text-emerald-700' : 'text-slate-600')
     : tx.qty > 0 ? 'text-green-700'
       : tx.qty < 0 ? 'text-red-600'
-        : 'text-gray-600'
+        : 'text-slate-600'
   const qtyPrefix = style.showSign && tx.qty > 0 ? '+' : ''
+  const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note)
 
   return (
     <li className="flex items-center gap-2 px-3 py-2">
@@ -1244,8 +3303,8 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
         {style.glyph}
       </span>
       <p className="text-[11px] text-gray-700 truncate flex-1 min-w-0">
-        <span className={isInitial ? 'text-emerald-700 font-semibold' : 'text-gray-700 font-medium'}>{style.label}</span>
-        {tx.note && <span className="text-gray-400"> · {tx.note}</span>}
+        <span className={isInitial ? 'text-emerald-700 font-semibold' : 'text-gray-700 font-medium'}>{label}</span>
+        {note && <span className="text-gray-400"> · {note}</span>}
       </p>
       <span className={`text-[11px] font-mono font-semibold tabular-nums ${qtyClass}`}>
         {qtyPrefix}{tx.qty.toFixed(2)}
@@ -1259,160 +3318,69 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
 }
 
 // ----------------------------------------------------------------
-// CreateRestockForm — inline form to create a draft restock order.
+// RestockOrderRow — staged item card inside the item drawer's
+// Replenish section. Two flavors:
 //
-// Lives inside the Replenishment section; collapses on success via
-// the same pending → done detection used by Staffing's drawers.
-// Required: quantity. Optional: vendor, expected_cost, notes.
-// ----------------------------------------------------------------
-function CreateRestockForm({ item, onClose }: { item: Item; onClose: () => void }) {
-  const [state, action, pending] = useActionState(createRestockOrder, null)
-
-  // Auto-collapse on a successful create — same convention every
-  // staffing/finance drawer uses.
-  const wasPendingRef = useRef(false)
-  useEffect(() => {
-    if (wasPendingRef.current && !pending) {
-      const errored = !!state && 'error' in state && !!state.error
-      if (!errored) onClose()
-    }
-    wasPendingRef.current = pending
-  }, [pending, state, onClose])
-
-  return (
-    <form action={action} className="rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-2.5">
-      <input type="hidden" name="inventory_item_id" value={item.id} />
-
-      {/* Quantity is the only required field. Unit is rendered as a
-          suffix to match how the count form below shows units. */}
-      <div>
-        <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">Quantity</label>
-        <div className="relative">
-          <input
-            name="quantity"
-            type="number"
-            min="0.01"
-            step="0.01"
-            required
-            autoFocus
-            placeholder="0.00"
-            className="h-9 w-full rounded-md border border-gray-200 bg-white pl-3 pr-12 text-sm font-mono tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          />
-          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-gray-400">{item.unitOfMeasure}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <div>
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">Vendor <span className="text-gray-400 font-normal normal-case tracking-normal">· optional</span></label>
-          <input
-            name="vendor"
-            type="text"
-            placeholder="US Foods"
-            className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          />
-        </div>
-        <div>
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">Expected $ <span className="text-gray-400 font-normal normal-case tracking-normal">· optional</span></label>
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
-            <input
-              name="expected_cost"
-              type="number"
-              min="0"
-              step="0.01"
-              placeholder="0.00"
-              className="h-9 w-full rounded-md border border-gray-200 bg-white pl-6 pr-3 text-sm font-mono tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">Notes <span className="text-gray-400 font-normal normal-case tracking-normal">· optional</span></label>
-        <input
-          name="notes"
-          type="text"
-          placeholder="e.g. Confirm delivery date with vendor"
-          className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-        />
-      </div>
-
-      {state?.error && (
-        <p className="text-[11px] text-red-600">{state.error}</p>
-      )}
-
-      <p className="text-[10px] text-gray-400 leading-relaxed">
-        Creating an order does not change stock. Stock updates when the order is marked received.
-      </p>
-
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onClose}
-          className="flex-1 rounded-md border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={pending}
-          className="flex-1 rounded-md bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
-        >
-          {pending ? 'Creating…' : 'Create draft'}
-        </button>
-      </div>
-    </form>
-  )
-}
-
-// ----------------------------------------------------------------
-// RestockOrderRow — single line inside the drawer's Replenishment
-// section. Two flavors:
-//
-//   draft   → status pill, qty + vendor/cost detail, Cancel.
-//             Placement (draft → ordered) happens in the rail
-//             cart's bulk Place order action — not here.
-//   ordered → status pill, readonly summary, "Mark received"
-//             (the dark commit that bumps stock), Cancel.
+//   draft   → "Staged" pill, qty stat, vendor/cost/date subtitle,
+//             Cancel link. Bridging copy reminds the manager this
+//             will move when the next restock order is created;
+//             placement itself happens in the cart's bulk action.
+//   ordered → "Awaiting receipt" pill, qty stat, "Mark received"
+//             dark commit + Cancel link. Mark received hits the
+//             same server action the batched receive panel uses,
+//             so partial receipt isn't supported here — full
+//             received qty is recorded.
 // ----------------------------------------------------------------
 function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string }) {
   const [receivedState, receivedAction, receivedPending] = useActionState(markRestockReceived, null)
   const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
 
   const isDraft = order.status === 'draft'
-  const statusLabel = isDraft ? 'Draft' : 'Ordered'
+  const statusLabel = isDraft ? 'Staged' : 'Awaiting receipt'
   const statusClass = isDraft
     ? 'bg-gray-100 text-gray-700'
-    : 'bg-blue-50 text-blue-700'
-  const statusDot = isDraft ? 'bg-gray-400' : 'bg-blue-500'
+    : 'bg-amber-50 text-amber-700'
+  const statusDot = isDraft ? 'bg-gray-400' : 'bg-amber-500'
+
+  const detailParts = [
+    order.vendor,
+    order.expectedCost !== null ? `~$${order.expectedCost.toFixed(2)}` : null,
+    order.expectedDate ? `Expected ${formatRestockDate(order.expectedDate)}` : null,
+    order.notes,
+  ].filter(Boolean)
+  const detailLine = detailParts.length > 0
+    ? detailParts.join(' · ')
+    : 'No vendor or cost recorded'
 
   const error = receivedState?.error ?? cancelState?.error
 
   return (
-    <li className="rounded-lg border border-gray-200 bg-white px-3 py-2.5">
-      <div className="flex items-center justify-between gap-2 mb-1.5">
-        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusClass}`}>
-          <span className={`w-1 h-1 rounded-full ${statusDot}`} />
-          {statusLabel}
-        </span>
-        <p className="text-xs font-mono font-semibold text-gray-900 tabular-nums">
-          {order.quantity.toFixed(2)} <span className="text-[10px] text-gray-400 font-sans font-normal">{unit}</span>
-        </p>
+    <li className="rounded-lg border border-gray-200 bg-white px-3.5 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${statusClass}`}>
+            <span className={`w-1 h-1 rounded-full ${statusDot}`} />
+            {statusLabel}
+          </span>
+          <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed truncate">
+            {detailLine}
+          </p>
+        </div>
+        <div className="text-right flex-shrink-0">
+          <p className="text-[10px] uppercase tracking-wide text-gray-400">
+            {isDraft ? 'Staged qty' : 'Ordered'}
+          </p>
+          <p className="mt-0.5 text-base font-semibold font-mono tabular-nums text-gray-900">
+            {order.quantity.toFixed(2)}
+            <span className="ml-1 text-[10px] font-sans font-normal text-gray-400">{unit}</span>
+          </p>
+        </div>
       </div>
 
-      <p className="text-[11px] text-gray-500 leading-relaxed">
-        {[
-          order.vendor,
-          order.expectedCost !== null ? `~$${order.expectedCost.toFixed(2)}` : null,
-          order.notes,
-        ].filter(Boolean).join(' · ') || 'No vendor or cost recorded'}
-      </p>
-
-      <div className="mt-2.5 flex items-center gap-2">
+      <div className="mt-3 flex items-center gap-2">
         {isDraft ? (
-          <p className="flex-1 text-[10px] text-gray-400">
-            Place from the order builder when ready.
+          <p className="flex-1 text-[10px] text-gray-400 leading-relaxed">
+            Moves with your next restock order.
           </p>
         ) : (
           <form action={receivedAction} className="flex-1">
@@ -1432,9 +3400,9 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
           <button
             type="submit"
             disabled={cancelPending}
-            className="text-[11px] font-medium text-red-600 hover:text-red-700 disabled:opacity-60 px-1"
+            className="text-[11px] font-medium text-gray-500 hover:text-red-600 disabled:opacity-60 px-1 transition-colors"
           >
-            {cancelPending ? '…' : 'Cancel'}
+            {cancelPending ? '…' : 'Remove'}
           </button>
         </form>
       </div>
@@ -1627,18 +3595,41 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
     ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
     : 'Standalone item — not linked to any recipe'
 
-  // Item-scoped movement — last 5 transactions for THIS item.
-  // Pulled from the page-level activity feed so the rail doesn't
-  // need its own fetch.
-  const itemMovement = transactions
-    .filter((tx) => tx.inventoryItemId === item.id)
-    .slice(0, 5)
+  // Item-scoped movement — all transactions for THIS item that the
+  // page-level feed surfaced (capped at 20 server-side). The drawer
+  // paginates this list 5 at a time so Recent Movement stays
+  // compact even on chatty items. movementPage resets to 1 when
+  // the manager switches inspected items.
+  const allItemMovement = transactions.filter(
+    (tx) => tx.inventoryItemId === item.id,
+  )
+  const MOVEMENT_PAGE_SIZE = 5
+  const totalMovementPages = Math.max(
+    1,
+    Math.ceil(allItemMovement.length / MOVEMENT_PAGE_SIZE),
+  )
+  const [movementPage, setMovementPage] = useState(1)
+  useEffect(() => {
+    setMovementPage(1)
+  }, [item.id])
+  const safeMovementPage = Math.min(movementPage, totalMovementPages)
+  const movementStart = (safeMovementPage - 1) * MOVEMENT_PAGE_SIZE
+  const visibleMovement = allItemMovement.slice(
+    movementStart,
+    movementStart + MOVEMENT_PAGE_SIZE,
+  )
 
-  // Below-threshold gap drives the Stock overview card's headline.
-  const belowThresholdBy =
-    item.estimated !== null && item.estimated < item.threshold
-      ? item.threshold - item.estimated
-      : null
+  // Display-clamped stock — manager-facing surfaces never show
+  // negative values. The raw item.estimated can still be negative
+  // (depletion drift past the last count) and the page-level
+  // calculation still computes it that way for future intelligence,
+  // but visually we clamp at zero here too. `isOverdrawn` drives
+  // the one drift note inside the Stock Status card; no other
+  // surface in the drawer repeats it.
+  const displayEstimated = item.estimated !== null
+    ? Math.max(0, item.estimated)
+    : null
+  const isOverdrawn = item.estimated !== null && item.estimated < 0
 
   return (
     <>
@@ -1680,165 +3671,267 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
         </header>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          {/* ---- 3-STAT GRID — current stock, threshold, unit.
-                 Mirrors the mockup's stat band; these are the
-                 numbers a manager checks first. Threshold is
-                 click-to-edit via ThresholdStat. */}
-          <div className="grid grid-cols-3 gap-2.5">
-            <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Current stock</p>
-              <div className="mt-1 flex items-baseline gap-1">
-                <span className={`text-base font-semibold font-mono tabular-nums ${
-                  item.estimated === null ? 'text-gray-300'
-                    : item.estimated <= 0 ? 'text-red-600'
+          {/* ---- STOCK STATUS — compact 3-column card. Three stats
+                 across (Current stock | Reorder at | Last count)
+                 with status pill in the card header. Update stock
+                 count is merged inline as a collapsed <details>
+                 inside the same card so stock truth + correction
+                 sit in one band. A status-tinted 2px top border
+                 echoes the status pill so the card reads its
+                 bucket at a glance without tinting the body. */}
+          <div className={`rounded-xl border border-gray-200/80 ${
+            item.status === 'out' ? 'border-t-2 border-t-red-300'
+              : item.status === 'low' ? 'border-t-2 border-t-amber-300'
+                : item.status === 'ok' ? 'border-t-2 border-t-emerald-300'
+                  : ''
+          } bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden`}>
+            <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold text-gray-900">Stock Status</p>
+              <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
+                <span className={`w-1 h-1 rounded-full ${st.dot}`} />
+                {st.label}
+              </span>
+            </div>
+
+            {/* X | X | X stat row — Current stock, Reorder at,
+                Last count. Each cell holds an uppercase eyebrow
+                + a mono numeric value. Reorder at carries the
+                inline Edit affordance for the threshold; Last
+                count has a tiny "Manual" sub-line. */}
+            <div className="px-4 py-3 grid grid-cols-3 gap-3">
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">Current stock</p>
+                <p className={`mt-1 text-base font-semibold font-mono tabular-nums ${
+                  displayEstimated === null ? 'text-gray-300'
+                    : displayEstimated === 0 ? 'text-red-600'
                       : item.status === 'low' ? 'text-amber-700'
                         : 'text-gray-900'
                 }`}>
-                  {item.estimated !== null ? item.estimated.toFixed(2) : '—'}
-                </span>
-                <span className="text-[10px] text-gray-400">{item.unitOfMeasure}</span>
+                  {displayEstimated !== null ? displayEstimated.toFixed(2) : '—'}
+                  <span className="ml-1 text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span>
+                </p>
               </div>
-            </div>
-            <ThresholdStat
-              value={threshold}
-              onChange={setThreshold}
-              onSave={saveThreshold}
-              dirty={thresholdDirty}
-              saving={thresholdSaving}
-              saved={thresholdSaved}
-              unit={item.unitOfMeasure}
-              editing={thresholdEditing}
-              onEditingChange={setThresholdEditing}
-            />
-            <div className="rounded-lg bg-gray-50 border border-gray-100 p-3">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500">Unit</p>
-              <p className="mt-1 text-base font-semibold text-gray-900 truncate">{item.unitOfMeasure}</p>
-            </div>
-          </div>
-
-          {/* ---- STOCK OVERVIEW — narrative on stock health,
-                 last count, counting method. Replaces a generic
-                 "Stock" eyebrow with a card the mockup calls out
-                 explicitly. */}
-          <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <p className="text-xs font-semibold text-gray-900 mb-2.5">Stock overview</p>
-            <div className="grid grid-cols-2 gap-3 text-[11px]">
               <div>
-                {belowThresholdBy !== null ? (
-                  <>
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400">Below threshold by</p>
-                    <p className="text-base font-bold font-mono tabular-nums text-red-600 mt-0.5">
-                      {belowThresholdBy.toFixed(2)} {item.unitOfMeasure}
-                    </p>
-                    <p className="text-[10px] text-gray-500 leading-relaxed mt-1">
-                      Reorder soon to avoid stockouts.
-                    </p>
-                  </>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">Reorder at</p>
+                {thresholdEditing ? (
+                  <div className="mt-1 flex items-center gap-1">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={threshold}
+                      onChange={(e) => setThreshold(e.target.value)}
+                      autoFocus
+                      className="w-16 h-7 rounded-md border border-gray-200 bg-white px-1.5 text-xs font-mono font-semibold tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await saveThreshold()
+                        setThresholdEditing(false)
+                      }}
+                      disabled={!thresholdDirty || thresholdSaving}
+                      className="text-[10px] font-semibold text-gray-700 hover:text-gray-900 disabled:opacity-40"
+                    >
+                      {thresholdSaving ? '…' : 'Save'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setThreshold(item.threshold.toString())
+                        setThresholdEditing(false)
+                      }}
+                      className="text-[10px] font-medium text-gray-400 hover:text-gray-600"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 ) : (
-                  <>
-                    <p className="text-[10px] uppercase tracking-wide text-gray-400">Health</p>
-                    <p className="text-sm font-semibold text-gray-900 mt-0.5">
-                      {item.status === 'no_count' ? 'No count yet' : 'Above threshold'}
-                    </p>
-                    <p className="text-[10px] text-gray-500 leading-relaxed mt-1">
-                      {item.status === 'no_count'
-                        ? 'Record a first count to start tracking.'
-                        : 'Stock is comfortably above the reorder line.'}
-                    </p>
-                  </>
+                  <p className="mt-1 text-base font-semibold font-mono tabular-nums text-gray-900">
+                    {item.threshold.toFixed(2)}
+                    <span className="ml-1 text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span>
+                    {thresholdSaved ? (
+                      <span className="ml-1.5 text-[10px] font-semibold text-emerald-600 font-sans">✓</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setThresholdEditing(true)}
+                        className="ml-1.5 text-[10px] font-semibold text-gray-500 hover:text-gray-900 font-sans"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </p>
                 )}
               </div>
-              <div className="space-y-2.5">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400">Last count</p>
-                  <p className="text-xs font-medium text-gray-900 mt-0.5">
-                    {hasCount
-                      ? `${item.lastCount!.toFixed(2)} ${item.unitOfMeasure}`
-                      : 'No count recorded'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wide text-gray-400">Counting method</p>
-                  <p className="text-xs font-medium text-gray-900 mt-0.5">Manual</p>
-                </div>
+              <div>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">Last count</p>
+                <p className="mt-1 text-base font-semibold font-mono tabular-nums text-gray-900">
+                  {hasCount
+                    ? <>{item.lastCount!.toFixed(2)} <span className="text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span></>
+                    : <span className="text-gray-400 font-sans font-normal text-xs">—</span>}
+                </p>
+                {hasCount && (
+                  <p className="mt-0.5 text-[10px] text-gray-400">Manual</p>
+                )}
               </div>
             </div>
+
+            {/* Update stock count — inline collapsed action inside
+                the same card. Reads as a secondary correction
+                affordance below the stock truth row. A small
+                "Adjust" pill on the right makes the row read as
+                actionable; the chevron beside it tells you whether
+                it's open. Strengthened hover state so the row
+                itself feels touchable without making it loud. */}
+            <details className="group border-t border-gray-100">
+              <summary className="px-4 py-2.5 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors list-none">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-gray-900">{countCtaLabel}</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {hasCount ? 'Adjust the quantity on hand' : 'Record the first physical count'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {/* "Adjust" pill picks up a soft blue accent so it
+                      reads as a workflow affordance, not a neutral
+                      chip. When open, the pill swaps to a quiet gray
+                      "Close" because the action is no longer to act
+                      — it's to dismiss. */}
+                  <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wide text-blue-700 group-hover:text-blue-800 bg-blue-50 group-hover:bg-blue-100 px-1.5 py-0.5 rounded transition-colors group-open:hidden">
+                    Adjust
+                  </span>
+                  <span className="hidden group-open:inline-flex items-center text-[10px] font-semibold uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
+                    Close
+                  </span>
+                  <svg className="w-3.5 h-3.5 text-gray-500 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </summary>
+              <form action={countAction} className="border-t border-gray-100 px-4 py-3 space-y-2 bg-gray-50/40">
+                <input type="hidden" name="inventory_item_id" value={item.id} />
+                <div className="relative">
+                  <input
+                    name="quantity_on_hand"
+                    type="number"
+                    required
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 pr-12 text-sm font-mono font-semibold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-medium text-gray-400">{item.unitOfMeasure}</span>
+                </div>
+                <button
+                  type="submit"
+                  disabled={countPending}
+                  className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+                >
+                  {countPending ? 'Saving…' : 'Save count'}
+                </button>
+                {countState?.error && (
+                  <p className="text-[11px] text-red-600">{countState.error}</p>
+                )}
+              </form>
+            </details>
           </div>
 
-          {/* ---- RECENT ACTIVITY — item-scoped movement. */}
-          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-            <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-900">Recent activity</p>
-              <span className="text-[10px] text-gray-400">
-                {itemMovement.length === 0 ? 'No movement' : `Last ${itemMovement.length}`}
-              </span>
-            </div>
-            {itemMovement.length === 0 ? (
-              <p className="px-4 py-5 text-center text-[11px] text-gray-400">
-                Counts and transactions for this item will surface here.
-              </p>
-            ) : (
-              <ul className="divide-y divide-gray-50">
-                {itemMovement.map((tx) => (
-                  <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} />
-                ))}
-              </ul>
-            )}
-          </div>
+          {/* ---- USED IN MENU ITEMS — read-only dependency context.
+                 Sits right after Stock Status so the manager sees
+                 stock truth, then immediately understands what is
+                 affected if the item runs out. Recipe data comes
+                 from recipe_components (server-fetched and joined
+                 to active menu_items in page.tsx). Empty state is
+                 compact; long lists collapse to a "+N more" tail. */}
+          <UsedInMenuItemsCard item={item} />
 
-          {/* ---- REPLENISH — Add to cart with quantity stepper +
-                 active order lines + detail form. The mockup's
-                 shopping-cart-oriented section. */}
+          {/* ---- RESTOCK ITEM — quantity-only add-to-cart surface.
+                 The drawer no longer collects vendor / cost / date /
+                 notes — those move to the Restock Cart drawer where
+                 the manager finalizes the order before committing.
+                 Keeps the item drawer focused on "how much do we
+                 need." */}
           <ReplenishSection
             item={item}
             orders={restockOrders}
           />
 
-          {/* ---- UPDATE COUNT — kept available but compact; the
-                 mockup deemphasizes counting in favor of replenish,
-                 so this lives near the bottom rather than at the
-                 top of the drawer. */}
-          <details className="group rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-            <summary className="px-4 py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors list-none">
-              <div>
-                <p className="text-xs font-semibold text-gray-900">{countCtaLabel}</p>
-                <p className="text-[11px] text-gray-500 mt-0.5">
-                  {hasCount ? 'Adjust the quantity on hand' : 'Record the first physical count'}
-                </p>
-              </div>
-              <svg className="w-4 h-4 text-gray-400 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-            </summary>
-            <form action={countAction} className="border-t border-gray-100 px-4 py-3 space-y-2">
-              <input type="hidden" name="inventory_item_id" value={item.id} />
-              <div className="relative">
-                <input
-                  name="quantity_on_hand"
-                  type="number"
-                  required
-                  min="0"
-                  step="0.01"
-                  placeholder="0.00"
-                  className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 pr-14 text-sm font-mono font-semibold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-medium text-gray-400">{item.unitOfMeasure}</span>
-              </div>
-              <button
-                type="submit"
-                disabled={countPending}
-                className="w-full h-10 rounded-lg bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
-              >
-                {countPending ? 'Saving…' : 'Save count'}
-              </button>
-              {countState?.error && (
-                <p className="text-[11px] text-red-600">{countState.error}</p>
-              )}
-            </form>
-          </details>
+          {/* ---- RECENT MOVEMENT — item-scoped feed of counts and
+                 depletion/receipt transactions. Paginated 3 at a
+                 time so the drawer doesn't grow on chatty items.
+                 Header right-edge shows total count; footer arrows
+                 + "page X of N" appear only when more than one
+                 page exists. Same Prev/Next idiom as the main
+                 list's pagination. */}
+          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+            <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
+              <p className="text-xs font-semibold text-gray-900">Recent movement</p>
+              <span className="text-[10px] text-gray-400 tabular-nums">
+                {allItemMovement.length === 0
+                  ? 'No movement yet'
+                  : `${allItemMovement.length} ${allItemMovement.length === 1 ? 'movement' : 'movements'}`}
+              </span>
+            </div>
+            {allItemMovement.length === 0 ? (
+              <p className="px-4 py-2.5 text-[10.5px] text-gray-400 leading-relaxed">
+                Counts, sales usage, and received orders will appear here.
+              </p>
+            ) : (
+              <>
+                {/* Stable min-height when pagination is active. Each
+                    ItemMovementRow is ~37px tall (py-2 + small icon
+                    + single line text + divider). Reserving 5 rows
+                    of space (~185px) keeps the drawer from jumping
+                    when the user steps onto a partial last page.
+                    Single-page items don't get the reservation —
+                    they keep their natural compact height. */}
+                <ul
+                  className={`divide-y divide-gray-50 ${
+                    allItemMovement.length > MOVEMENT_PAGE_SIZE ? 'min-h-[185px]' : ''
+                  }`}
+                >
+                  {visibleMovement.map((tx) => (
+                    <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} />
+                  ))}
+                </ul>
+                {allItemMovement.length > MOVEMENT_PAGE_SIZE && (
+                  <div className="border-t border-gray-100 px-4 py-2 flex items-center justify-between">
+                    <p className="text-[10px] text-gray-500 tabular-nums">
+                      Showing <span className="font-semibold text-gray-700">{movementStart + 1}–{Math.min(movementStart + MOVEMENT_PAGE_SIZE, allItemMovement.length)}</span> of <span className="font-semibold text-gray-700">{allItemMovement.length}</span>
+                    </p>
+                    <div className="inline-flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setMovementPage((p) => Math.max(1, p - 1))}
+                        disabled={safeMovementPage === 1}
+                        aria-label="Previous movements"
+                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        ←
+                      </button>
+                      <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+                        {safeMovementPage} / {totalMovementPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMovementPage((p) => Math.min(totalMovementPages, p + 1))}
+                        disabled={safeMovementPage === totalMovementPages}
+                        aria-label="Next movements"
+                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
 
-          {/* ---- DESTRUCTIVE SECTION — archive + delete moved
-                 here from the row's old kebab menu. */}
+          {/* ---- MANAGE ITEM — archive + delete pinned at the
+                 bottom. Visually quiet by design; destructive
+                 actions never compete with the primary lifecycle. */}
           <ItemDestructiveSection item={item} />
         </div>
       </aside>
@@ -1847,156 +3940,305 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
 }
 
 // ----------------------------------------------------------------
-// ReplenishSection — replaces the prior ReplenishmentSection with
-// a shopping-cart-style "Add to cart" surface as the primary
-// interaction. Active drafts/ordered for THIS item are shown above
-// the stepper; the stepper drives quickAddToOrder for quantity-only
-// adds, and a "Add details" toggle reveals the full CreateRestockForm
-// when the manager wants vendor / cost / notes.
+// UsedInMenuItemsCard — read-only "what depends on this item"
+// surface in the item drawer. Lists active menu_items whose
+// recipe_components reference this inventory_item, with the
+// quantity_required per sale shown when non-zero. Each entry
+// links to /menu?item=<id> — the Menu page hydrates that param
+// on mount, opens the right-side drawer for that specific item,
+// and scrolls the matching card into view. So clicking
+// "Margarita" here lands the manager looking at Margarita's
+// drawer, not the generic Menu page.
 // ----------------------------------------------------------------
-function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[] }) {
-  const [qty, setQty] = useState<number>(defaultRestockQty(item))
-  const [showDetails, setShowDetails] = useState(false)
-  const drafts = orders.filter((o) => o.status === 'draft')
-  const ordered = orders.filter((o) => o.status === 'ordered')
+const USED_IN_VISIBLE_LIMIT = 5
 
-  const projectedAfterAdd =
-    item.estimated !== null ? item.estimated + qty : qty
-
-  // Step controls: increment by 1 for whole-unit items, 0.5 for
-  // fractional. We don't track fractional preference per item, so
-  // use 1 by default and let manual entry handle decimals.
-  const step = 1
-  const dec = () => setQty((n) => Math.max(step, Math.round((n - step) * 100) / 100))
-  const inc = () => setQty((n) => Math.round((n + step) * 100) / 100)
+function UsedInMenuItemsCard({ item }: { item: Item }) {
+  const deps = item.menuItems
+  const visible = deps.slice(0, USED_IN_VISIBLE_LIMIT)
+  const overflowCount = deps.length - visible.length
 
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-      <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
-        <p className="text-xs font-semibold text-gray-900">Replenish</p>
-        {(drafts.length > 0 || ordered.length > 0) && (
-          <span className="text-[10px] text-gray-400">
-            {drafts.length > 0 && `${drafts.length} draft${drafts.length === 1 ? '' : 's'}`}
-            {drafts.length > 0 && ordered.length > 0 && ' · '}
-            {ordered.length > 0 && `${ordered.length} placed`}
+      <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-gray-900">Used in menu items</p>
+        {deps.length > 0 && (
+          <span className="text-[10px] text-gray-400 tabular-nums">
+            {deps.length === 1 ? '1 item' : `${deps.length} items`}
           </span>
         )}
       </div>
 
-      <div className="px-4 py-4 space-y-3">
-        {/* Active orders for THIS item — drafts first, then ordered.
-            Each line carries its own actions (cancel, mark received). */}
-        {drafts.length > 0 && (
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-1.5">In your cart</p>
-            <ul className="space-y-2">
-              {drafts.map((order) => (
-                <RestockOrderRow key={order.id} order={order} unit={item.unitOfMeasure} />
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {ordered.length > 0 && (
-          <div>
-            <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-1.5">Awaiting receipt</p>
-            <ul className="space-y-2">
-              {ordered.map((order) => (
-                <RestockOrderRow key={order.id} order={order} unit={item.unitOfMeasure} />
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {/* Add-to-cart stepper + primary commit. */}
-        <div className={drafts.length > 0 || ordered.length > 0 ? 'pt-3 border-t border-gray-100' : ''}>
-          <p className="text-[10px] font-medium uppercase tracking-wide text-gray-400 mb-2">Add to cart</p>
-
-          {/* Stepper row: - [qty input] + [unit readout] */}
-          <div className="flex items-center gap-2">
-            <div className="inline-flex items-stretch rounded-lg border border-gray-200 bg-white overflow-hidden flex-1 max-w-[200px]">
-              <button
-                type="button"
-                onClick={dec}
-                className="px-3 text-gray-500 hover:bg-gray-50 transition-colors"
-                aria-label="Decrease quantity"
+      {deps.length === 0 ? (
+        <p className="px-4 py-2.5 text-[10.5px] text-gray-400 leading-relaxed">
+          No mapped menu items yet.
+        </p>
+      ) : (
+        <ul className="divide-y divide-gray-50">
+          {visible.map((m) => (
+            <li key={m.menuItemId}>
+              <Link
+                href={`/menu?item=${m.menuItemId}`}
+                className="group/menu px-4 py-2 flex items-center justify-between gap-3 hover:bg-blue-50/40 transition-colors"
               >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
-                </svg>
-              </button>
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={qty}
-                onChange={(e) => {
-                  const n = parseFloat(e.target.value)
-                  if (Number.isFinite(n) && n > 0) setQty(n)
-                }}
-                className="flex-1 min-w-0 text-center text-sm font-mono font-semibold tabular-nums border-x border-gray-200 focus:outline-none focus:bg-blue-50/40"
-                aria-label="Quantity"
-              />
-              <button
-                type="button"
-                onClick={inc}
-                className="px-3 text-gray-500 hover:bg-gray-50 transition-colors"
-                aria-label="Increase quantity"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                </svg>
-              </button>
-            </div>
-            <span className="text-xs text-gray-500">{item.unitOfMeasure}</span>
-          </div>
-
-          {/* Projection line — keeps the manager honest about what
-              this add will do to stock once received. */}
-          <p className="mt-2 text-[11px] text-gray-500">
-            Est. after receipt:{' '}
-            <span className="font-mono tabular-nums font-medium text-gray-900">
-              {projectedAfterAdd.toFixed(2)} {item.unitOfMeasure}
-            </span>
-          </p>
-
-          {/* Add to cart — primary commit. quickAddToOrder takes
-              just qty + item id so this stays a one-click add. */}
-          <form action={quickAddToOrder} className="mt-3">
-            <input type="hidden" name="inventory_item_id" value={item.id} />
-            <input type="hidden" name="quantity" value={qty} />
-            <button
-              type="submit"
-              disabled={qty <= 0}
-              className="w-full h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors inline-flex items-center justify-center gap-1.5"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              Add to cart
-            </button>
-          </form>
-
-          {/* Detail form — vendor + expected cost + notes. Same
-              CreateRestockForm we had before, just gated behind a
-              text-link toggle so the simple add stays simple. */}
-          {!showDetails ? (
-            <button
-              type="button"
-              onClick={() => setShowDetails(true)}
-              className="mt-2.5 w-full text-center text-[11px] font-medium text-gray-500 hover:text-gray-700"
-            >
-              + Add details (vendor, expected cost, notes)
-            </button>
-          ) : (
-            <div className="mt-3">
-              <CreateRestockForm
-                item={item}
-                onClose={() => setShowDetails(false)}
-              />
-            </div>
+                {/* Row title sits a hair smaller and lighter than
+                    the section header so the eye can tell at a
+                    glance which line is the header. Hover applies
+                    a soft blue wash, lifts the title to blue-700,
+                    and tints the chevron — three small signals
+                    that together say "click to navigate." Usage
+                    amount stays muted as secondary data. */}
+                <p className="text-[11px] text-gray-700 truncate group-hover/menu:text-blue-700 transition-colors">
+                  {m.menuItemName}
+                </p>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {m.quantityRequired > 0 && (
+                    <p className="text-[10px] text-gray-500 tabular-nums">
+                      Uses <span className="font-mono">{m.quantityRequired.toFixed(2)}</span> {item.unitOfMeasure}
+                    </p>
+                  )}
+                  <svg
+                    className="w-3 h-3 text-gray-300 group-hover/menu:text-blue-500 transition-colors"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2.5}
+                    aria-hidden
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </div>
+              </Link>
+            </li>
+          ))}
+          {overflowCount > 0 && (
+            <li className="px-4 py-2 text-[10.5px] text-gray-400">
+              +{overflowCount} more
+            </li>
           )}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// ReplenishSection — drawer entry point that swaps between the
+// stage-or-add states based on whether this item already has a
+// draft restock_orders row. When staged: StagedItemCard takes
+// over with Update/Remove. When not staged: RestockItemCard with
+// Add. Either way the card is quantity-only — vendor / cost /
+// date / notes live exclusively in the Restock Cart drawer.
+//
+// Multiple drafts for the same item are unusual (each Add creates
+// a fresh draft, but the staged-state UI nudges the manager
+// toward Update instead). When multiples exist, the first is
+// driven by the card and the rest are surfaced as a quiet
+// "+N more" tail.
+// ----------------------------------------------------------------
+function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[] }) {
+  const drafts = orders.filter((o) => o.status === 'draft')
+  if (drafts.length > 0) {
+    return (
+      <StagedItemCard
+        item={item}
+        draft={drafts[0]}
+        extraStagedCount={drafts.length - 1}
+      />
+    )
+  }
+  return <RestockItemCard item={item} />
+}
+
+// Compact quantity stepper — shared chrome for both the staged
+// and unstaged restock card. h-8 / text-sm / tight padding so it
+// reads as an operational input, not a checkout widget.
+function CompactQtyStepper({
+  qty,
+  setQty,
+  unit,
+  label,
+}: {
+  qty: number
+  setQty: (next: number) => void
+  unit: string
+  label: string
+}) {
+  const step = 1
+  const dec = () => setQty(Math.max(step, Math.round((qty - step) * 100) / 100))
+  const inc = () => setQty(Math.round((qty + step) * 100) / 100)
+  return (
+    <div>
+      <p className="text-[10px] font-medium uppercase tracking-wide text-gray-500 mb-1">{label}</p>
+      <div className="flex items-center gap-2">
+        <div className="inline-flex items-stretch rounded-md border border-gray-200 bg-white overflow-hidden flex-1 max-w-[180px]">
+          <button
+            type="button"
+            onClick={dec}
+            className="px-2.5 text-gray-500 hover:bg-gray-50 transition-colors"
+            aria-label="Decrease quantity"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
+            </svg>
+          </button>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            value={qty}
+            onChange={(e) => {
+              const n = parseFloat(e.target.value)
+              if (Number.isFinite(n) && n > 0) setQty(n)
+            }}
+            className="h-8 flex-1 min-w-0 text-center text-sm font-mono font-semibold tabular-nums border-x border-gray-200 focus:outline-none focus:bg-blue-50/40"
+            aria-label="Quantity"
+          />
+          <button
+            type="button"
+            onClick={inc}
+            className="px-2.5 text-gray-500 hover:bg-gray-50 transition-colors"
+            aria-label="Increase quantity"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+          </button>
         </div>
+        <span className="text-xs text-gray-500">{unit}</span>
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// RestockItemCard — quantity-only "Add to restock" card shown
+// when no draft exists for this item. Stripped down: header +
+// compact stepper + dark commit. No "After receipt" projection,
+// no helper copy about cart details. The drawer's role is to
+// stage a quantity; everything else is the cart's job.
+// ----------------------------------------------------------------
+function RestockItemCard({ item }: { item: Item }) {
+  const [qty, setQty] = useState<number>(defaultRestockQty(item))
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-2.5">
+        <p className="text-xs font-semibold text-gray-900">Restock item</p>
+        <p className="mt-0.5 text-[10.5px] text-gray-500 leading-relaxed">
+          Add this item to the next restock cart.
+        </p>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label="Quantity" />
+        <form action={quickAddToOrder}>
+          <input type="hidden" name="inventory_item_id" value={item.id} />
+          <input type="hidden" name="quantity" value={qty} />
+          <button
+            type="submit"
+            disabled={qty <= 0}
+            className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
+          >
+            Add to restock
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// StagedItemCard — replaces RestockItemCard when this item is
+// already staged in the cart. Reads "Staged for restock · In
+// cart" in the header, shows the current staged quantity as a
+// hero stat, and the stepper drives updateRestockQuantity so
+// the same draft row is mutated rather than a fresh duplicate
+// row being created. A quiet "Remove from cart" link below
+// cancels the draft via cancelRestockOrder.
+//
+// Stepper is seeded with the current staged quantity so a
+// single-click Update is a no-op affordance and the manager
+// only types when actually changing the amount.
+// ----------------------------------------------------------------
+function StagedItemCard({
+  item,
+  draft,
+  extraStagedCount,
+}: {
+  item: Item
+  draft: RestockOrder
+  extraStagedCount: number
+}) {
+  const [qty, setQty] = useState<number>(draft.quantity)
+  const [updateState, updateAction, updatePending] = useActionState(updateRestockQuantity, null)
+  const [removeState, removeAction, removePending] = useActionState(cancelRestockOrder, null)
+
+  // Keep the stepper in sync when the draft is updated server-side
+  // (e.g., the manager edits qty from the cart drawer instead).
+  useEffect(() => {
+    setQty(draft.quantity)
+  }, [draft.quantity])
+
+  const error = updateState?.error ?? removeState?.error
+  const isDirty = qty !== draft.quantity
+
+  return (
+    // Soft blue top accent marks the workflow state — the card is
+    // not just inventory data, it's something staged for action.
+    // Matches the "In cart" pill in the header so the two color
+    // signals reinforce each other.
+    <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-300 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-2.5 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold text-gray-900">Staged for restock</p>
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
+          <span className="w-1 h-1 rounded-full bg-blue-500" />
+          In cart
+        </span>
+      </div>
+
+      <div className="px-4 py-3 space-y-3">
+        {/* Hero stat — current staged quantity. Reads as the
+            object-of-attention; the stepper below is the editor. */}
+        <div>
+          <p className="text-[10px] uppercase tracking-wide text-gray-400">Staged quantity</p>
+          <p className="mt-0.5 text-lg font-semibold font-mono tabular-nums text-gray-900">
+            {draft.quantity.toFixed(2)}
+            <span className="ml-1 text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span>
+          </p>
+        </div>
+
+        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label="Adjust quantity" />
+
+        <form action={updateAction}>
+          <input type="hidden" name="order_id" value={draft.id} />
+          <input type="hidden" name="quantity" value={qty} />
+          <button
+            type="submit"
+            disabled={updatePending || qty <= 0 || !isDirty}
+            className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
+          >
+            {updatePending ? 'Updating…' : 'Update staged quantity'}
+          </button>
+        </form>
+
+        <form action={removeAction} className="text-center">
+          <input type="hidden" name="order_id" value={draft.id} />
+          <button
+            type="submit"
+            disabled={removePending}
+            className="text-[11px] font-medium text-gray-500 hover:text-red-600 disabled:opacity-60 transition-colors"
+          >
+            {removePending ? '…' : 'Remove from cart'}
+          </button>
+        </form>
+
+        {extraStagedCount > 0 && (
+          <p className="text-[10px] text-gray-400 leading-relaxed text-center">
+            +{extraStagedCount} more staged {extraStagedCount === 1 ? 'line' : 'lines'} for this item in the Restock cart.
+          </p>
+        )}
+
+        {error && (
+          <p className="text-[11px] text-red-600">{error}</p>
+        )}
       </div>
     </div>
   )

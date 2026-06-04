@@ -1930,3 +1930,18 @@ do $$ begin
       );
   end if;
 end $$;
+
+
+-- ================================================================
+-- MIGRATION: restock_orders.expected_date
+--
+-- Optional date the manager expects the order to arrive. Pure
+-- annotation — never gates the stock movement. Stock still only
+-- updates when the manager explicitly confirms receipt via
+-- markRestockReceived, regardless of whether expected_date has
+-- passed or not. Nullable because most pilot restocks won't carry
+-- a delivery date.
+-- ================================================================
+
+alter table public.restock_orders
+  add column if not exists expected_date date;

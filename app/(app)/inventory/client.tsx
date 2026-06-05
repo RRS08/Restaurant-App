@@ -370,8 +370,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             <div className="border-b border-gray-100 px-6 py-3">
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="min-w-0">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">Inventory</p>
-                  <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-0.5">Stock Health</h2>
+                  <h2 className="text-sm font-semibold tracking-tight text-gray-900">Stock Health</h2>
                   <p className="text-[11px] text-gray-500 mt-0.5">
                     Items sorted by urgency — out, low, uncounted, then healthy.
                   </p>
@@ -423,27 +422,29 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             </table>
 
             {filteredItems.length > PAGE_SIZE && (
-              <div className="border-t border-gray-100 px-6 py-3 flex items-center justify-between">
-                <p className="text-[11px] text-gray-500">
-                  Showing <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> of <span className="font-semibold text-gray-700">{filteredItems.length}</span> items
+              <div className="border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
+                <p className="text-[10px] text-gray-500 tabular-nums">
+                  Showing <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> of <span className="font-semibold text-gray-700">{filteredItems.length}</span>
                 </p>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={safePage === 1}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Previous items"
+                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     ←
                   </button>
-                  <span className="text-[11px] text-gray-500 px-2 tabular-nums">
+                  <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
                     {safePage} / {totalPages}
                   </span>
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={safePage === totalPages}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Next items"
+                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     →
                   </button>
@@ -785,16 +786,11 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
           </div>
         ) : (
           <>
-            <StagingArea
-              items={stagingItems}
-              itemsById={itemsById}
-              selectedId={selectedStagingId}
-              onSelect={setSelectedStagingId}
-              onMoveToTicket={moveToTicket}
-              onDragStart={onDragStart}
-              ticketHasItems={ticketItems.length > 0}
-            />
-
+            {/* Hierarchy: Active Ticket on top (the surface the
+                manager is composing), Staging Area below (the pool
+                they're drawing from). The staged items page-break
+                after 3 so a long bench never pushes the ticket up
+                or scrolls the cart. */}
             <ActiveTicketCard
               items={ticketItems}
               itemsById={itemsById}
@@ -815,6 +811,16 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
               onCreateTicket={onCreateTicket}
               pending={pending}
               error={error}
+            />
+
+            <StagingArea
+              items={stagingItems}
+              itemsById={itemsById}
+              selectedId={selectedStagingId}
+              onSelect={setSelectedStagingId}
+              onMoveToTicket={moveToTicket}
+              onDragStart={onDragStart}
+              ticketHasItems={ticketItems.length > 0}
             />
           </>
         )}
@@ -875,30 +881,20 @@ function StagingArea({
       {items.length === 0 ? (
         <p className="px-4 py-3 text-[10.5px] text-gray-400 leading-relaxed">
           {ticketHasItems
-            ? 'All staged items are on the active ticket below.'
+            ? 'All staged items are on the active ticket above.'
             : 'Nothing waiting. Add items from Stock Health.'}
         </p>
       ) : (
-        // Bounded tray. When more than 3 items are staged, the
-        // list scrolls internally so the Active Ticket below stays
-        // visible without being pushed off-screen. Below the
-        // threshold, no max-height constraint applies — the card
-        // sizes to its content and reads as a natural list.
-        //
-        // Scrollbar styling (when overflow is active):
-        //   • Firefox: scrollbar-width:thin + slate-300 thumb.
-        //   • WebKit/Chromium: 6px wide thumb, slate-300 rounded
-        //     pill, transparent track, slate-400 on hover.
-        //   • A faint inset bottom shadow gives a soft "more
-        //     below" depth cue without a hard cut line.
-        //
-        // overflow-y-auto preserves native scroll for mouse wheel,
-        // trackpad, and touch — and the browser's drag auto-scroll
-        // means a dragged item can scroll the list during drag.
+        // Bounded scrollable tray. Above 3 items the list scrolls
+        // internally so the Active Ticket above stays anchored.
+        // Minimal scrollbar styling — thin slate-300 thumb on both
+        // Firefox and Chromium, no track, no chrome bar. Below the
+        // threshold no max-height applies and the card sizes
+        // naturally to its content.
         <div
           className={
             items.length > 3
-              ? 'max-h-[300px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-slate-400 shadow-[inset_0_-6px_8px_-8px_rgba(15,23,42,0.06)]'
+              ? 'max-h-[300px] overflow-y-auto [scrollbar-width:thin] [scrollbar-color:#cbd5e1_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-slate-300 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:hover:bg-slate-400'
               : ''
           }
         >
@@ -1423,16 +1419,31 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
   // wonder why a tab is greyed out.
   const [tab, setTab] = useState<OrderLifecycle>('pending')
 
-  // Closed Orders pagination — 6 per page. Closed orders are the
-  // "review" surface; six gives the manager enough recent receipts
-  // to glance at one screenful before paginating. Matches the
-  // Recent Movement pagination idiom from the Inventory item drawer.
-  const CLOSED_PAGE_SIZE = 6
-  const [closedPage, setClosedPage] = useState(1)
-  const closedTotalPages = Math.max(1, Math.ceil(closedBatches.length / CLOSED_PAGE_SIZE))
-  const safeClosedPage = Math.min(closedPage, closedTotalPages)
-  const closedStart = (safeClosedPage - 1) * CLOSED_PAGE_SIZE
-  const visibleClosed = closedBatches.slice(closedStart, closedStart + CLOSED_PAGE_SIZE)
+  // Per-tab pagination — 6 tickets per page across all three
+  // lifecycles. Each tab carries its own page state so switching
+  // back to a tab preserves position (the user's "where I left
+  // off" is per lifecycle). The pagination footer pattern matches
+  // the Recent Movement pagination idiom from the Inventory item
+  // drawer.
+  const TAB_PAGE_SIZE = 6
+  const [pendingPage, setPendingPage] = useState(1)
+  const [partialPage, setPartialPage] = useState(1)
+  const [closedPage,  setClosedPage]  = useState(1)
+
+  // Slice helpers — pure function over (list, page) → visible slice.
+  // Returns the start index too so the footer can render
+  // "Showing N–M of T" without re-derivation.
+  function slicePage<T>(list: T[], page: number): {
+    visible: T[]; safePage: number; totalPages: number; start: number
+  } {
+    const totalPages = Math.max(1, Math.ceil(list.length / TAB_PAGE_SIZE))
+    const safePage = Math.min(page, totalPages)
+    const start = (safePage - 1) * TAB_PAGE_SIZE
+    return { visible: list.slice(start, start + TAB_PAGE_SIZE), safePage, totalPages, start }
+  }
+  const pendingSlice = slicePage(awaitingBatches, pendingPage)
+  const partialSlice = slicePage(partialBatches,  partialPage)
+  const closedSlice  = slicePage(closedBatches,   closedPage)
 
   // Only one OrderBatchCard expanded at a time. The lift keeps the
   // drawer focused on a single receive flow — opening Receive on
@@ -1493,21 +1504,35 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                 body="New restock tickets will appear here until something is received."
               />
             ) : (
-              <ul className="space-y-3">
-                {awaitingBatches.map((batch) => (
-                  <OrderBatchCard
-                    key={batch.key}
-                    batch={batch}
-                    itemsById={itemsById}
-                    onInspectItem={onInspectItem}
-                    mode="awaiting"
-                    isExpanded={expandedKey === batch.key}
-                    onToggleExpand={(open) =>
-                      setExpandedKey(open ? batch.key : null)
-                    }
+              <>
+                <ul className="space-y-3">
+                  {pendingSlice.visible.map((batch) => (
+                    <OrderBatchCard
+                      key={batch.key}
+                      batch={batch}
+                      itemsById={itemsById}
+                      onInspectItem={onInspectItem}
+                      mode="awaiting"
+                      isExpanded={expandedKey === batch.key}
+                      onToggleExpand={(open) =>
+                        setExpandedKey(open ? batch.key : null)
+                      }
+                    />
+                  ))}
+                </ul>
+                {awaitingBatches.length > TAB_PAGE_SIZE && (
+                  <PaginationFooter
+                    start={pendingSlice.start}
+                    pageSize={TAB_PAGE_SIZE}
+                    total={awaitingBatches.length}
+                    safePage={pendingSlice.safePage}
+                    totalPages={pendingSlice.totalPages}
+                    onPrev={() => setPendingPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setPendingPage((p) => Math.min(pendingSlice.totalPages, p + 1))}
+                    ariaContext="pending orders"
                   />
-                ))}
-              </ul>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1520,21 +1545,35 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                 body="Orders appear here when only part of a delivery has arrived."
               />
             ) : (
-              <ul className="space-y-3">
-                {partialBatches.map((batch) => (
-                  <OrderBatchCard
-                    key={batch.key}
-                    batch={batch}
-                    itemsById={itemsById}
-                    onInspectItem={onInspectItem}
-                    mode="partial"
-                    isExpanded={expandedKey === batch.key}
-                    onToggleExpand={(open) =>
-                      setExpandedKey(open ? batch.key : null)
-                    }
+              <>
+                <ul className="space-y-3">
+                  {partialSlice.visible.map((batch) => (
+                    <OrderBatchCard
+                      key={batch.key}
+                      batch={batch}
+                      itemsById={itemsById}
+                      onInspectItem={onInspectItem}
+                      mode="partial"
+                      isExpanded={expandedKey === batch.key}
+                      onToggleExpand={(open) =>
+                        setExpandedKey(open ? batch.key : null)
+                      }
+                    />
+                  ))}
+                </ul>
+                {partialBatches.length > TAB_PAGE_SIZE && (
+                  <PaginationFooter
+                    start={partialSlice.start}
+                    pageSize={TAB_PAGE_SIZE}
+                    total={partialBatches.length}
+                    safePage={partialSlice.safePage}
+                    totalPages={partialSlice.totalPages}
+                    onPrev={() => setPartialPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setPartialPage((p) => Math.min(partialSlice.totalPages, p + 1))}
+                    ariaContext="partially received orders"
                   />
-                ))}
-              </ul>
+                )}
+              </>
             )}
           </div>
         )}
@@ -1549,7 +1588,7 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
             ) : (
               <>
                 <ul className="space-y-3">
-                  {visibleClosed.map((batch) => (
+                  {closedSlice.visible.map((batch) => (
                     <ClosedOrderCard
                       key={batch.key}
                       batch={batch}
@@ -1557,39 +1596,17 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                     />
                   ))}
                 </ul>
-                {closedBatches.length > CLOSED_PAGE_SIZE && (
-                  <div className="mt-3 flex items-center justify-between">
-                    <p className="text-[10px] text-gray-500 tabular-nums">
-                      Showing{' '}
-                      <span className="font-semibold text-gray-700">
-                        {closedStart + 1}–{Math.min(closedStart + CLOSED_PAGE_SIZE, closedBatches.length)}
-                      </span>{' '}
-                      of <span className="font-semibold text-gray-700">{closedBatches.length}</span>
-                    </p>
-                    <div className="inline-flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setClosedPage((p) => Math.max(1, p - 1))}
-                        disabled={safeClosedPage === 1}
-                        aria-label="Previous closed orders"
-                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                      >
-                        ←
-                      </button>
-                      <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
-                        {safeClosedPage} / {closedTotalPages}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setClosedPage((p) => Math.min(closedTotalPages, p + 1))}
-                        disabled={safeClosedPage === closedTotalPages}
-                        aria-label="Next closed orders"
-                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                      >
-                        →
-                      </button>
-                    </div>
-                  </div>
+                {closedBatches.length > TAB_PAGE_SIZE && (
+                  <PaginationFooter
+                    start={closedSlice.start}
+                    pageSize={TAB_PAGE_SIZE}
+                    total={closedBatches.length}
+                    safePage={closedSlice.safePage}
+                    totalPages={closedSlice.totalPages}
+                    onPrev={() => setClosedPage((p) => Math.max(1, p - 1))}
+                    onNext={() => setClosedPage((p) => Math.min(closedSlice.totalPages, p + 1))}
+                    ariaContext="closed orders"
+                  />
                 )}
               </>
             )}
@@ -1597,6 +1614,60 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
         )}
       </div>
     </DrawerShell>
+  )
+}
+
+// ----------------------------------------------------------------
+// PaginationFooter — shared compact footer used by all three
+// lifecycle tabs. Renders "Showing N–M of T" on the left and
+// ← page X / Y → arrows on the right. Only shows up when there's
+// more than one page; callers gate the render with `totalPages > 1`.
+// ----------------------------------------------------------------
+function PaginationFooter({
+  start, pageSize, total, safePage, totalPages, onPrev, onNext, ariaContext,
+}: {
+  start: number
+  pageSize: number
+  total: number
+  safePage: number
+  totalPages: number
+  onPrev: () => void
+  onNext: () => void
+  ariaContext: string
+}) {
+  return (
+    <div className="mt-3 flex items-center justify-between">
+      <p className="text-[10px] text-gray-500 tabular-nums">
+        Showing{' '}
+        <span className="font-semibold text-gray-700">
+          {start + 1}–{Math.min(start + pageSize, total)}
+        </span>{' '}
+        of <span className="font-semibold text-gray-700">{total}</span>
+      </p>
+      <div className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={onPrev}
+          disabled={safePage === 1}
+          aria-label={`Previous ${ariaContext}`}
+          className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          ←
+        </button>
+        <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+          {safePage} / {totalPages}
+        </span>
+        <button
+          type="button"
+          onClick={onNext}
+          disabled={safePage === totalPages}
+          aria-label={`Next ${ariaContext}`}
+          className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          →
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -3643,7 +3714,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
             recipe-linked ingredients and standalone supplies. */}
         <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-500">Inventory item</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Inventory item</p>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
@@ -4292,13 +4363,12 @@ function DuplicateMergeBanner({
     <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+          <p className="text-xs font-semibold text-amber-900">
             Duplicate inventory items detected
           </p>
           <p className="mt-1 text-xs text-amber-800 leading-relaxed">
             {groups.length} item name{groups.length === 1 ? ' has' : 's have'} more than one active row.
-            POS depletion is being written to one row while the count may be on another, so stock movement isn&apos;t showing
-            against the row you&apos;re looking at. Merge to consolidate them into a single canonical row.
+            Stock movement may not show against the row you&apos;re looking at. Merge to consolidate.
           </p>
           <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">
             {preview}{more}
@@ -4369,13 +4439,12 @@ function ArchivedInRecipesBanner({ names }: { names: string[] }) {
     <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-amber-700">
+          <p className="text-xs font-semibold text-amber-900">
             Archived items still used in active recipes
           </p>
           <p className="mt-1 text-xs text-amber-800 leading-relaxed">
             {names.length} archived inventory item{names.length === 1 ? '' : 's'} {names.length === 1 ? 'is' : 'are'} still
-            referenced by active recipes. POS depletion is being written to {names.length === 1 ? 'that row' : 'those rows'} — which the Inventory page
-            doesn&apos;t render — so stock movement disappears from view. Reactivate to make movement visible again.
+            referenced by active recipes, so stock movement is disappearing from the list. Reactivate to bring {names.length === 1 ? 'it' : 'them'} back.
           </p>
           <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">{preview}{more}</p>
           {result && (

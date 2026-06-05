@@ -501,21 +501,21 @@ export default function DashboardClient(props: Props) {
       <div className="mb-5 pb-4 border-b border-gray-100 flex items-end justify-between gap-4 flex-wrap">
         <div>
           {firstName && (
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
-              Welcome back · {firstName}
+            <p className="text-[11px] text-gray-500 mb-1">
+              Welcome back, {firstName}
             </p>
           )}
-          <h1 className="text-2xl font-bold text-gray-900 leading-tight">
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">
             Today&apos;s Operations
           </h1>
-          <p className="mt-1.5 text-sm text-gray-500 leading-relaxed max-w-2xl">
-            A daily command center for sales, staffing, inventory, and finance.
+          <p className="mt-1.5 text-sm text-gray-500">
+            A quick read on sales, stock, staffing, and finance.
           </p>
         </div>
         {/* Truthful render-time stamp. Not live — accurate as of the
             request that produced this view. */}
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 tabular-nums">
-          Today&apos;s view · Updated {renderedAt}
+        <p className="text-[11px] text-gray-500 tabular-nums">
+          Updated {renderedAt}
         </p>
       </div>
 
@@ -614,13 +614,13 @@ export default function DashboardClient(props: Props) {
             is now a 7-tile horizontal strip (was a bar chart) so
             empty days don't carry chart chrome. Today's tile is
             highlighted dark to anchor the eye to "now". */}
-        <div className="xl:col-span-3 rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+        <div className="xl:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
           <div className="border-b border-gray-100 px-5 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Today&apos;s rhythm
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Recent sales movement and scheduled coverage for the week.
+              Sales movement and scheduled coverage this week.
             </p>
           </div>
           <div className="px-5 pt-3 pb-3">
@@ -667,14 +667,14 @@ export default function DashboardClient(props: Props) {
             a count pill that's the same visual class as the daily
             status strip's pills, so this surface anchors as the
             page's triage anchor rather than a generic side list. */}
-        <div className="xl:col-span-2 rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+        <div className="xl:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
           <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
                 Needs attention
               </p>
               <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                Operational triage queue for today.
+                What to look at next.
               </p>
             </div>
             {attention.length > 0 && (
@@ -717,7 +717,7 @@ export default function DashboardClient(props: Props) {
                       aria-hidden="true"
                     />
                     <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
                         {item.pillar}
                       </p>
                       <p className="mt-0.5 text-[13px] font-semibold text-gray-900 leading-snug">
@@ -730,10 +730,10 @@ export default function DashboardClient(props: Props) {
                       )}
                     </div>
                     {/* Explicit action affordance — a small text
-                        button rather than a lone arrow. Blue is the
-                        family accent for accent/action; weight stays
-                        restrained so the row never reads alarmist. */}
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-blue-700 group-hover:text-blue-900 transition-colors flex-shrink-0 mt-0.5 whitespace-nowrap">
+                        link rather than a lone arrow. Blue is the
+                        family accent for action; sentence-case +
+                        medium weight keeps the row calm. */}
+                    <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 mt-0.5 whitespace-nowrap">
                       Review →
                     </span>
                   </Link>
@@ -754,7 +754,7 @@ export default function DashboardClient(props: Props) {
         {/* Daily readiness — system-driven, not a to-do list. Broader
             than "opening" since the dashboard plays a daily role
             beyond morning workflows. */}
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Daily readiness
@@ -783,7 +783,7 @@ export default function DashboardClient(props: Props) {
         </div>
 
         {/* Next up — next scheduled operational event */}
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Next up
@@ -824,7 +824,7 @@ export default function DashboardClient(props: Props) {
         </div>
 
         {/* Recent movement — proof the system is alive */}
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
               Recent movement
@@ -859,6 +859,35 @@ export default function DashboardClient(props: Props) {
           </ul>
         </div>
 
+      </div>
+
+      {/* ============================================================ */}
+      {/* 4. QUICK ACTIONS — secondary strip below the supporting row. */}
+      {/* Manual expense entry used to live as a dominant card on the */}
+      {/* Finance page; it now lives in a Finance drawer reachable    */}
+      {/* either from there or from this Dashboard quick action.      */}
+      {/* ?log=1 deep-links into the Log Expense drawer on load.      */}
+      {/* ============================================================ */}
+      <div className="mt-4">
+        <Link
+          href="/finance?log=1"
+          className="block rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-gray-300 hover:shadow-[0_4px_12px_-4px_rgba(15,23,42,0.08)] transition-all p-4 group"
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Quick action
+              </p>
+              <p className="mt-1 text-sm font-semibold text-gray-900">Add manual expense</p>
+              <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
+                Record a cash purchase, owner-paid expense, or one-off correction.
+              </p>
+            </div>
+            <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 whitespace-nowrap">
+              Open form →
+            </span>
+          </div>
+        </Link>
       </div>
     </div>
   )
@@ -915,10 +944,10 @@ function DailyStatusCard({
   return (
     <Link
       href={href}
-      className={`rounded-xl border border-gray-200 bg-white p-4 hover:border-gray-300 hover:shadow-sm transition-colors block ${accent}`}
+      className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 hover:border-gray-300 hover:shadow-md transition-all block ${accent}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
           {label}
         </p>
         <span

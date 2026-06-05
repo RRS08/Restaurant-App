@@ -1945,3 +1945,66 @@ end $$;
 
 alter table public.restock_orders
   add column if not exists expected_date date;
+
+
+-- ================================================================
+-- MIGRATION: bank_transactions review/settlement state (Bank Review V1)
+--
+-- Finance V3 introduces a settlement assistant — managers review
+-- bank transactions one at a time and decide whether each row
+-- belongs to the business (settle as Revenue / Inventory / Labor /
+-- Operating), is personal (ignore), or should be revisited later
+-- (not_a_match). Until then a row stays 'unreviewed'.
+--
+-- Four new columns, all nullable except `review_state` (defaults
+-- to 'unreviewed' on existing rows so the migration is safe):
+--
+--   review_state        unreviewed (default) | settled | ignored
+--                       | not_a_match
+--   settled_kind        when review_state='settled': revenue
+--                       | inventory | labor | operating
+--   settled_expense_id  optional FK to expenses(id) when the
+--                       settlement maps to an existing Finance
+--                       expense row (avoids double-counting)
+--   settled_at          audit timestamp
+--
+-- Finance aggregations exclude rows with review_state='ignored'
+-- so personal/owner-transfer activity stops polluting business
+-- totals. A separate verified-totals split (Verified vs Tracked)
+-- is deferred to a later pass; this migration only adds the
+-- schema affordance.
+-- ================================================================
+
+alter table public.bank_transactions
+  add column if not exists review_state text not null default 'unreviewed';
+
+alter table public.bank_transactions
+  add column if not exists settled_kind text;
+
+alter table public.bank_transactions
+  add column if not exists settled_expense_id uuid
+    references public.expenses(id) on delete set null;
+
+alter table public.bank_transactions
+  add column if not exists settled_at timestamptz;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'bank_transactions_review_state_check'
+  ) then
+    alter table public.bank_transactions add constraint bank_transactions_review_state_check
+      check (review_state in ('unreviewed', 'settled', 'ignored', 'not_a_match'));
+  end if;
+end $$;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'bank_transactions_settled_kind_check'
+  ) then
+    alter table public.bank_transactions add constraint bank_transactions_settled_kind_check
+      check (settled_kind is null or settled_kind in ('revenue', 'inventory', 'labor', 'operating'));
+  end if;
+end $$;
+
+create index if not exists bank_transactions_review_state_idx
+  on public.bank_transactions (restaurant_id, review_state);

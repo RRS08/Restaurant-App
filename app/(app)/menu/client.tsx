@@ -159,10 +159,10 @@ export default function MenuClient({
   const isExternal = operatingMode === 'external_pos'
 
   const subtitle = isExternal
-    ? 'Review imported items and adjust the menu surface your guests see.'
+    ? 'Review imported items and shape the menu your guests see.'
     : operatingMode === 'native_pos'
-      ? 'Build the menu your in-app POS reads from. Sections group items, ingredients map them to inventory.'
-      : 'Organize your sections and items here. Ingredients map each item back to inventory.'
+      ? 'Build the menu your in-app POS reads from.'
+      : 'Manage sections, items, and recipe links.'
 
   const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [addItemTo, setAddItemTo] = useState<string | null>(null)
@@ -330,7 +330,7 @@ function EmptyMenuState({ onAddSection }: { onAddSection: () => void }) {
     <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white px-6 py-16 text-center">
       <p className="text-sm font-semibold text-gray-700">No menu sections yet</p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
-        Sections group items the way you want them to appear at the POS. Add your first one to start building.
+        Sections group items the way they appear at the POS. Add one to start.
       </p>
       <button
         type="button"
@@ -379,11 +379,11 @@ function SectionBlock({
           local action — repeating it across every section header read
           too heavy. */}
       <div className="mb-4 flex items-center gap-3">
-        <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-700 whitespace-nowrap">
+        <h2 className="text-sm font-semibold tracking-tight text-gray-900 whitespace-nowrap">
           {category.name}
         </h2>
         <span className="flex-1 h-px bg-gray-200/70" />
-        <p className="text-[11px] text-gray-400 tabular-nums whitespace-nowrap">
+        <p className="text-[11px] text-gray-500 tabular-nums whitespace-nowrap">
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </p>
         {!removeMode ? (
@@ -614,7 +614,7 @@ function AddSectionForm({ onClose }: { onClose: () => void }) {
   const [state, action, pending] = useActionState(createCategory, null)
   return (
     <form action={(fd) => { action(fd); if (!state?.error) onClose() }} className="space-y-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">New section</p>
+      <p className="text-xs font-semibold text-gray-900">New section</p>
       <input
         name="name"
         type="text"
@@ -651,7 +651,7 @@ function AddItemForm({ categoryId, onClose }: { categoryId: string; onClose: () 
   const [state, action, pending] = useActionState(createMenuItemInSection, null)
   return (
     <form action={(fd) => { action(fd); if (!state?.error) onClose() }} className="space-y-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">New item</p>
+      <p className="text-xs font-semibold text-gray-900">New item</p>
       <input type="hidden" name="category_id" value={categoryId} />
       <input
         name="name"
@@ -842,19 +842,19 @@ function ItemDrawer({
             ingredients. */}
         <div className="border-b border-gray-100 px-6 py-5 flex-shrink-0">
           <div className="flex items-start justify-between gap-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">
               Menu item{sectionName ? <> · {sectionName}</> : null}
             </p>
             <button
               type="button"
               onClick={onClose}
-              className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors -mt-1 -mr-1"
+              className="flex-shrink-0 rounded-lg border border-gray-200/80 px-2 py-1 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors -mt-1 -mr-1"
             >
               Close
             </button>
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-bold text-gray-900 truncate">{item.name}</h2>
+            <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
             <span
               className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                 item.active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
@@ -945,7 +945,7 @@ function ItemDrawer({
             </p>
 
             {item.recipe.length > 0 && (
-              <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100 mb-3 overflow-hidden">
+              <ul className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] divide-y divide-gray-100 mb-3 overflow-hidden">
                 {item.recipe.map((rc) => (
                   <li key={rc.id} className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-gray-50/60">
                     <div className="min-w-0">
@@ -972,7 +972,7 @@ function ItemDrawer({
 
             {item.recipe.length === 0 && !addOpen && (
               <p className="mb-3 text-xs text-gray-500 leading-relaxed">
-                No ingredients yet. Mapping inventory items lets stock deplete automatically when this dish sells.
+                No ingredients yet. Map inventory to deplete stock when this sells.
               </p>
             )}
 
@@ -1024,7 +1024,7 @@ function ItemDrawer({
                     <input type="hidden" name="name" value={query.trim()} />
 
                     <label className="block mb-2.5">
-                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                      <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
                         Name
                       </span>
                       <input
@@ -1038,7 +1038,7 @@ function ItemDrawer({
                     </label>
 
                     <label className="block mb-3">
-                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                      <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
                         Unit
                       </span>
                       <select
@@ -1084,14 +1084,14 @@ function ItemDrawer({
                     <input type="hidden" name="inventory_item_id" value={selectedIngredient.id} />
 
                     {/* Selection summary — clear "this is what's being added" */}
-                    <div className="rounded-lg border border-gray-200 bg-white px-3 py-2.5 mb-3">
+                    <div className="rounded-lg border border-gray-200/80 bg-white px-3 py-2.5 mb-3">
                       <p className="text-sm font-medium text-gray-900 truncate">{selectedIngredient.name}</p>
                       <p className="text-[11px] text-gray-500 mt-0.5">{selectedIngredient.unitOfMeasure}</p>
                     </div>
 
                     {/* Quantity input — only after selection */}
                     <label className="block mb-3">
-                      <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1.5">
+                      <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
                         Quantity per dish
                       </span>
                       <div className="flex items-center gap-2">
@@ -1147,7 +1147,7 @@ function ItemDrawer({
                         ingredient" row is visually separated by a
                         top border so the alternative path reads as a
                         deliberate branch, not the default action. */}
-                    <div className="mt-2 rounded-lg border border-gray-200 bg-white overflow-hidden">
+                    <div className="mt-2 rounded-lg border border-gray-200/80 bg-white overflow-hidden">
                       <div className="max-h-44 overflow-y-auto divide-y divide-gray-100">
                         {filtered.length > 0 ? (
                           filtered.map((ii) => (
@@ -1198,12 +1198,10 @@ function ItemDrawer({
               item down" cluster, but it's non-destructive (the row
               and recipes stay; only the active flag flips). */}
           {item.active && (
-            <div className="rounded-xl border border-gray-200 bg-white p-4 mb-4">
+            <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 mb-4">
               <p className="text-xs font-semibold text-gray-900">Deactivate this item</p>
               <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                Hides the item from the POS strip and analytics filters. The recipe and
-                ingredient links stay intact, so reactivating later picks up where you
-                left off.
+                Hides the item from POS and analytics. Recipe links stay intact for when you reactivate.
               </p>
               <form action={activeAction} className="mt-4">
                 <input type="hidden" name="item_id" value={item.id} />
@@ -1222,11 +1220,10 @@ function ItemDrawer({
             </div>
           )}
 
-          <div className="rounded-xl border border-gray-200 bg-white p-4">
+          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4">
             <p className="text-xs font-semibold text-gray-900">Remove this item</p>
             <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-              Removes the item from the menu surface and clears its ingredient links. Historical orders that
-              referenced it stay intact in the Sales ledger.
+              Removes the item and clears its ingredient links. Past orders stay in the Sales ledger.
             </p>
             {!removeMode ? (
               <button
@@ -1345,7 +1342,7 @@ function AvailabilitySection({
           Two key/value rows + an optional bottleneck row. POS
           sellability is the bottom line and gets a thin top border
           to read as the conclusion drawn from the projection above. */}
-      <div className="rounded-xl border border-gray-200 bg-white px-3.5 py-3 mb-3">
+      <div className="rounded-xl border border-gray-200/80 bg-white px-3.5 py-3 mb-3">
         <div className="flex items-center justify-between gap-3 py-1">
           <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Projection</span>
           <span className={`inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded ${projectionToneClass[projectionChip.tone]}`}>

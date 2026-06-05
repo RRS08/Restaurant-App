@@ -250,8 +250,8 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
     return activeHouse === 'foh' ? isFohRole(s.role) : !isFohRole(s.role)
   })
   const subtitle = isUnified
-    ? "This week's schedule and assignments."
-    : 'Plan shifts by house · drag from the bench onto the board.'
+    ? 'Plan the week and track labor coverage.'
+    : 'Plan the week by house — drag from the bench to assign.'
 
   return (
     <div className="max-w-[1400px]">
@@ -367,8 +367,8 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* Header band */}
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Schedule</p>
-            <p className="mt-0.5 text-xs text-gray-500 truncate">{weekLabel}</p>
+            <h2 className="text-sm font-semibold tracking-tight text-gray-900">Schedule</h2>
+            <p className="mt-0.5 text-[11px] text-gray-500 truncate">{weekLabel}</p>
           </div>
           <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
@@ -379,7 +379,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* Day headers */}
         <div className="grid grid-cols-[110px_repeat(7,1fr)] border-b border-gray-100 bg-gray-50/40">
           <div className="px-3 py-2.5 border-r border-gray-100">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-400">Block</p>
+            <p className="text-[11px] font-medium text-gray-500">Block</p>
           </div>
           {weekDays.map((day, i) => {
             const isToday = sameDay(day, new Date())
@@ -388,7 +388,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                 key={i}
                 className={`px-1 py-2.5 text-center border-l border-gray-100 ${isToday ? tone.soft : ''}`}
               >
-                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">{DAYS[i]}</p>
+                <p className={`text-[11px] font-medium ${isToday ? tone.todayText : 'text-gray-500'}`}>{DAYS[i]}</p>
                 <p className={`text-sm font-semibold tabular-nums ${isToday ? tone.todayText : 'text-gray-900'}`}>{day.getDate()}</p>
               </div>
             )
@@ -529,9 +529,9 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             <div key={role}>
               <div className="bg-gray-50/80 border-b border-gray-100 px-3 py-2 flex items-center gap-2">
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-                <p className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${tone.text}`}>{role}</p>
-                <p className="text-[10px] text-gray-400">·</p>
-                <p className="text-[10px] text-gray-500">{group.length} block{group.length === 1 ? '' : 's'}</p>
+                <p className={`text-[11px] font-semibold ${tone.text}`}>{role}</p>
+                <span className="text-gray-300 text-[11px]">·</span>
+                <p className="text-[11px] text-gray-500">{group.length} block{group.length === 1 ? '' : 's'}</p>
               </div>
               {group.map(renderSectionRow)}
             </div>
@@ -553,7 +553,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
           <div className="grid grid-cols-[110px_repeat(7,1fr)] border-t border-gray-100">
             <div className="px-3 py-3 flex flex-col justify-center border-r border-gray-100 bg-gray-50/40">
               <p className="text-xs font-semibold text-gray-700 leading-tight">Custom</p>
-              <p className="text-[10px] text-gray-400 mt-0.5">One-off shifts</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">One-off shifts</p>
             </div>
             {weekDays.map((day, dayIdx) => {
               const cellShifts = customShifts.filter((s) => sameDay(new Date(s.startTime), day))
@@ -597,13 +597,14 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       {/* ================================================================ */}
       <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
-          <div className="min-w-0 flex items-center gap-2">
-            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">
-              {isUnified ? 'Bench' : (activeHouse === 'foh' ? 'Bench · Front of House' : 'Bench · Back of House')}
-            </p>
-            <span className="text-gray-300">·</span>
-            <p className="text-xs text-gray-500">Drag onto a shift block to assign</p>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
+              <h2 className="text-sm font-semibold tracking-tight text-gray-900">
+                {isUnified ? 'Bench' : (activeHouse === 'foh' ? 'Bench · Front of House' : 'Bench · Back of House')}
+              </h2>
+            </div>
+            <p className="mt-0.5 text-[11px] text-gray-500">Drag onto a shift block to assign.</p>
           </div>
           <span className={`flex-shrink-0 inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
             {houseEmployees.length} available
@@ -708,66 +709,102 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
 }
 
 // ----------------------------------------------------------------
-function EditDrawer({ shift, employees, sections, onClose }: {
+// EditDrawer — the shift-edit drawer opened by clicking any shift
+// card on the schedule board. Uses the shared DrawerShell pattern
+// so it visually matches the rest of the staffing drawers (Employee,
+// Block, Custom shift). Save action lives in the footer; Remove
+// shift is a quiet destructive secondary at the bottom.
+// ----------------------------------------------------------------
+function EditDrawer({ shift, employees, sections: _sections, onClose }: {
   shift: Shift; employees: Employee[]; sections: Section[]; onClose: () => void
 }) {
   const [eState, eAction, ePending] = useActionState(updateShift, null)
   const [dState, dAction, dPending] = useActionState(deleteShift, null)
+  useAutoCloseOnSuccess(ePending, eState, onClose)
+  useAutoCloseOnSuccess(dPending, dState, onClose)
 
   return (
-    <>
-      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 bottom-0 w-full max-w-sm bg-white border-l border-gray-200 shadow-xl z-50 overflow-y-auto">
-        <div className="p-6">
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-lg font-bold text-gray-900">Edit shift</h2>
-            <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-600 p-1">
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-            </button>
-          </div>
+    <DrawerShell
+      eyebrow="Shift"
+      title={`Edit ${shift.employeeName}`}
+      subtitle={`${shift.role} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`}
+      onClose={onClose}
+    >
+      <form action={eAction} className="flex-1 flex flex-col min-h-0">
+        <input type="hidden" name="shift_id" value={shift.id} />
+        <DrawerBody>
+          <Field label="Employee" htmlFor="es-employee">
+            <select
+              id="es-employee"
+              name="employee_id"
+              required
+              defaultValue={shift.employeeId}
+              className={fieldInputClass}
+            >
+              {employees.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.role}</option>)}
+            </select>
+          </Field>
 
-          <form action={eAction} className="space-y-4">
-            <input type="hidden" name="shift_id" value={shift.id} />
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Employee</label>
-              <select name="employee_id" required defaultValue={shift.employeeId}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                {employees.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.role}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Start</label>
-              <input name="start_time" type="datetime-local" required defaultValue={toLocal(new Date(shift.startTime))}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">End</label>
-              <input name="end_time" type="datetime-local" required defaultValue={toLocal(new Date(shift.endTime))}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Notes <span className="text-gray-400 font-normal">(optional)</span></label>
-              <input name="notes" type="text" defaultValue={shift.notes ?? ''}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            </div>
-            {eState?.error && <p className="text-sm text-red-600">{eState.error}</p>}
-            <button type="submit" disabled={ePending}
-              className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60">
-              {ePending ? 'Saving…' : 'Save changes'}
-            </button>
-          </form>
+          <Field label="Start" htmlFor="es-start">
+            <input
+              id="es-start"
+              name="start_time"
+              type="datetime-local"
+              required
+              defaultValue={toLocal(new Date(shift.startTime))}
+              className={fieldInputClass}
+            />
+          </Field>
 
-          <div className="mt-6 pt-4 border-t border-gray-100">
-            <form action={dAction}><input type="hidden" name="shift_id" value={shift.id} />
-              <button type="submit" disabled={dPending} className="text-xs text-red-500 hover:text-red-600 disabled:opacity-60">
-                {dPending ? 'Removing…' : 'Remove this shift'}
+          <Field label="End" htmlFor="es-end">
+            <input
+              id="es-end"
+              name="end_time"
+              type="datetime-local"
+              required
+              defaultValue={toLocal(new Date(shift.endTime))}
+              className={fieldInputClass}
+            />
+          </Field>
+
+          <Field label="Notes" htmlFor="es-notes" optional>
+            <input
+              id="es-notes"
+              name="notes"
+              type="text"
+              defaultValue={shift.notes ?? ''}
+              placeholder="Anything worth flagging"
+              className={fieldInputClass}
+            />
+          </Field>
+
+          {eState?.error && <p className="text-xs text-red-600">{eState.error}</p>}
+        </DrawerBody>
+
+        <DrawerFooter>
+          <div className="flex items-center justify-between gap-3">
+            <form action={dAction}>
+              <input type="hidden" name="shift_id" value={shift.id} />
+              <button
+                type="submit"
+                disabled={dPending}
+                className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
+              >
+                {dPending ? 'Removing…' : 'Remove shift'}
               </button>
             </form>
-            {dState?.error && <p className="text-xs text-red-500 mt-2">{dState.error}</p>}
+            <button
+              type="submit"
+              disabled={ePending}
+              className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {ePending ? 'Saving…' : 'Save changes'}
+            </button>
           </div>
-        </div>
-      </div>
-    </>
+          {dState?.error && <p className="mt-2 text-xs text-red-500">{dState.error}</p>}
+        </DrawerFooter>
+      </form>
+    </DrawerShell>
   )
 }
 

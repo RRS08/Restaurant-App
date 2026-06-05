@@ -41,6 +41,7 @@ import {
   ChefHat,
   ShoppingCart,
   BarChart3,
+  Wrench,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
@@ -50,7 +51,15 @@ import {
 // - Adding a new page = add one line here
 // - No duplication across sidebar and any mobile nav you add later
 // ----------------------------------------------------------------
-const navItems = [
+// `dev: true` items are filtered out for non-dev viewers. The
+// /dev-tools page is also server-side guarded (`isDevEmail`); this
+// flag controls sidebar visibility only — convenience, not security.
+const navItems: Array<{
+  label: string
+  href: string
+  icon: typeof LayoutDashboard
+  dev?: true
+}> = [
   {
     label: 'Dashboard',
     href: '/dashboard',
@@ -96,6 +105,12 @@ const navItems = [
     href: '/settings',
     icon: Settings,
   },
+  {
+    label: 'Dev Toolbox',
+    href: '/dev-tools',
+    icon: Wrench,
+    dev: true,
+  },
 ]
 
 // ----------------------------------------------------------------
@@ -122,10 +137,14 @@ export default function Sidebar({
   operatingMode,
   isDev,
 }: SidebarProps) {
-  // Mode-driven filter. Only the POS link is mode-sensitive today;
-  // we hide it for external_pos users (their selling happens in
-  // Square/Clover). Dev accounts see everything.
+  // Visibility filter:
+  //   • `dev: true` items render for dev accounts only. The page
+  //     itself is server-side guarded; this is a convenience.
+  //   • POS link hides for external_pos restaurants (their selling
+  //     happens in Square/Clover). Dev accounts still see it so the
+  //     testing workflow can hit both surfaces.
   const visibleNavItems = navItems.filter((item) => {
+    if (item.dev && !isDev) return false
     if (isDev) return true
     if (item.href === '/pos' && operatingMode === 'external_pos') return false
     return true
@@ -141,7 +160,7 @@ export default function Sidebar({
     <aside className="w-60 min-h-screen bg-white border-r border-gray-200 flex flex-col">
 
       {/* ---- Top: Restaurant brand ---- */}
-      <div className="px-5 py-5 border-b border-gray-100">
+      <div className="px-4 py-4 border-b border-gray-100">
         <div className="flex items-center gap-2.5">
           {/* Logo placeholder — replace with an actual logo image later */}
           <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
@@ -183,7 +202,15 @@ export default function Sidebar({
                   isActive ? 'text-blue-600' : 'text-gray-400'
                 )}
               />
-              {item.label}
+              <span className="flex-1">{item.label}</span>
+              {item.dev && (
+                <span
+                  className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded"
+                  aria-label="developer only"
+                >
+                  Dev
+                </span>
+              )}
             </Link>
           )
         })}

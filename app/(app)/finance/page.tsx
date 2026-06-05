@@ -17,9 +17,9 @@ import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
 import FinanceClient from './client'
 
 // Plaid Personal Finance Category primaries → short human labels.
-// Keeps the External money UI readable without pretending the
+// Keeps the Operating UI readable without pretending the
 // classification is more than what Plaid actually returns.
-function friendlyExternalCategory(raw: string): string {
+function friendlyOperatingCategory(raw: string): string {
   const map: Record<string, string> = {
     RENT_AND_UTILITIES: 'Rent & utilities',
     GENERAL_SERVICES: 'Services & subscriptions',
@@ -133,13 +133,15 @@ export default async function FinancePage() {
       .order('created_at', { ascending: true }),
 
     // 6. Bank transactions — last 7 days. Selects enough to drive
-    // the External money card + drawer (outside-the-system spend
-    // focus): per-row amount, direction, raw category, merchant
-    // and description for unresolved-activity rows. Bank row IDs
-    // never reach the UI as identifiers — only content.
+    // the Operating card + drawer (outside-labor/inventory spend
+    // focus) plus the Bank Review settlement workflow added in V3:
+    // per-row amount, direction, raw category, merchant, description,
+    // and the four review columns (review_state, settled_kind,
+    // settled_expense_id, settled_at). Bank row IDs DO reach the UI
+    // now — Bank Review needs them to drive settle/ignore actions.
     supabase
       .from('bank_transactions')
-      .select('id, amount, direction, raw_category, merchant_name, description, posted_at')
+      .select('id, amount, direction, raw_category, merchant_name, description, posted_at, review_state, settled_kind, settled_expense_id, settled_at')
       .gte('posted_at', sevenDaysAgo.toISOString()),
 
     // 7. Active employees with positive hourly_rate. Used to tell the
@@ -302,6 +304,33 @@ export default async function FinancePage() {
   }
   const unresolvedRows: UnresolvedRow[] = []
 
+  // ---- Bank Review V1 review-queue accumulators ----
+  // Bank transactions carry a review_state column added in the
+  // Bank Review V1 migration. We surface rows by state so the
+  // Bank Review card + drawer can render review queues without
+  // a second round-trip. Settled rows feed the "Settled" tail of
+  // the drawer; ignored rows are excluded from every Finance
+  // total below so personal/owner-transfer activity stops
+  // polluting the business numbers.
+  type ReviewRow = {
+    id: string
+    direction: 'inflow' | 'outflow'
+    amount: number
+    rawCategory: string | null
+    merchantName: string | null
+    description: string | null
+    postedAt: string
+    reviewState: 'unreviewed' | 'settled' | 'ignored' | 'not_a_match'
+    settledKind: 'revenue' | 'inventory' | 'labor' | 'operating' | null
+  }
+  const reviewRows: ReviewRow[] = []
+  let unreviewedCount = 0
+  let unreviewedInflowCount = 0
+  let unreviewedOutflowCount = 0
+  let settledCount = 0
+  let ignoredCount = 0
+  let notAMatchCount = 0
+
   // PFC → bucket. Conservative mapping: only food/drink and general-
   // merchandise route to Inventory; everything else categorized goes
   // to External. Labor/payroll detection is intentionally deferred —
@@ -317,16 +346,48 @@ export default async function FinancePage() {
 
   for (const tx of periodBankTxns ?? []) {
     const amt = Number(tx.amount)
+    const rawCat = (tx.raw_category as string | null)?.trim() || null
+    const reviewState = ((tx.review_state as string | null) ?? 'unreviewed') as ReviewRow['reviewState']
+    const settledKind = ((tx.settled_kind as string | null) ?? null) as ReviewRow['settledKind']
+
+    // Populate the review feed for every row (regardless of state).
+    // The Bank Review drawer filters at render time.
+    reviewRows.push({
+      id: tx.id as string,
+      direction: tx.direction as 'inflow' | 'outflow',
+      amount: round2(amt),
+      rawCategory: rawCat,
+      merchantName: (tx.merchant_name as string | null) ?? null,
+      description: (tx.description as string | null) ?? null,
+      postedAt: tx.posted_at as string,
+      reviewState,
+      settledKind,
+    })
+    if (reviewState === 'settled') settledCount++
+    else if (reviewState === 'ignored') ignoredCount++
+    else if (reviewState === 'not_a_match') notAMatchCount++
+    else {
+      unreviewedCount++
+      if (tx.direction === 'inflow') unreviewedInflowCount++
+      else unreviewedOutflowCount++
+    }
+
+    // Ignored rows are excluded from every Finance total — they
+    // are personal / owner-transfer / not-a-business-event by
+    // explicit manager decision. They still appear in the Bank
+    // Review drawer's ignored tail for reversibility.
+    if (reviewState === 'ignored') continue
+
     bankTxnCount7d++
     if (tx.direction === 'inflow') {
       bankInflow7d += amt
       continue
     }
-    // Outflow path — counts toward external spend.
+
+    // Outflow path — counts toward external/operating spend.
     bankOutflow7d += amt
     externalSpendCount7d++
 
-    const rawCat = (tx.raw_category as string | null)?.trim() || null
     const klass = classifyBankPfc(rawCat)
 
     if (klass === 'unresolved') {
@@ -360,7 +421,7 @@ export default async function FinancePage() {
 
   const externalByCategory = Array.from(externalByCategoryMap.entries())
     .map(([rawLabel, v]) => ({
-      label: friendlyExternalCategory(rawLabel),
+      label: friendlyOperatingCategory(rawLabel),
       rawLabel,
       amount: round2(v.amount),
       count: v.count,
@@ -379,6 +440,11 @@ export default async function FinancePage() {
   const recentUnresolved = unresolvedRows
     .sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
     .slice(0, 8)
+
+  // Sort review rows newest first. Drawer renders by section
+  // (suggested / incoming / outgoing / settled / ignored) and reuses
+  // this single feed — no extra round-trip needed.
+  reviewRows.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
 
   // Bank state — used by the header chip and by the connected-accounts
   // card to make Finance's source-of-truth posture explicit:
@@ -442,6 +508,17 @@ export default async function FinancePage() {
         externalByCategory,
         recentUnresolved,
         state: bankState,
+        review: {
+          rows: reviewRows,
+          counts: {
+            unreviewed: unreviewedCount,
+            unreviewedInflow: unreviewedInflowCount,
+            unreviewedOutflow: unreviewedOutflowCount,
+            settled: settledCount,
+            ignored: ignoredCount,
+            notAMatch: notAMatchCount,
+          },
+        },
       }}
       recentExpenses={(recentExpenses ?? []).map((e) => ({
         id: e.id,

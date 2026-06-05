@@ -221,10 +221,10 @@ export default function SalesClient({
     .reduce((s, o) => s + o.total, 0)
 
   const subtitle = operatingMode === 'external_pos'
-    ? 'Review imported orders from your connected POS and correct mistaken sales.'
+    ? 'Imported orders from your connected POS.'
     : operatingMode === 'native_pos'
-      ? 'Review native sales rung up at the in-app POS and correct mistakes.'
-      : 'Review recent orders and correct mistaken sales.'
+      ? 'Native sales from the in-app POS.'
+      : 'Recent orders for review.'
 
   return (
     <div className="max-w-[1200px]">
@@ -278,10 +278,11 @@ export default function SalesClient({
         </div>
 
         {/* ----- Workflow header / filter bar -----
-            Filter chips on the left as the natural starting control
-            cluster, active-scope counter on the right. The cluster
-            speaks for itself — no "View" label needed. */}
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            Filter chips on their own row. The header-side range
+            readout that used to live here was consolidated into
+            the footer pager so navigation context lives in one
+            place. */}
+        <div className="mb-3 flex flex-wrap items-center gap-3">
           <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white p-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               {availableFilters.map((f) => {
                 const active = filter === f
@@ -309,15 +310,6 @@ export default function SalesClient({
                 )
               })}
           </div>
-          {visible.length > 0 && (
-            <p className="text-[11px] text-gray-500 tabular-nums">
-              Showing{' '}
-              <span className="font-semibold text-gray-700">
-                {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
-              </span>{' '}
-              of {visible.length}
-            </p>
-          )}
         </div>
 
         {/* Orders card.
@@ -336,12 +328,12 @@ export default function SalesClient({
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 text-left">
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">When</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Items</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Source</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Payment</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em]">Status</th>
-                    <th className="px-6 py-3 text-[10px] font-semibold text-gray-500 uppercase tracking-[0.14em] text-right">Total</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">When</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Items</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Source</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Payment</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Status</th>
+                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500 text-right">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-50">
@@ -357,28 +349,38 @@ export default function SalesClient({
               </table>
 
               {/* Pager pinned at bottom for stable card height.
-                  Range readout lives in the workflow header above,
-                  so the footer just shows page position + nav. */}
-              <div className="mt-auto border-t border-gray-100 px-6 py-3 flex items-center justify-between">
-                <p className="text-[11px] text-gray-400 tabular-nums">
-                  Page {safePage + 1} of {pageCount}
+                  Compact "Showing N–M of T · ← X / Y →" footer that
+                  matches the rest of the product family (Inventory,
+                  Finance, Restock Orders). */}
+              <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
+                <p className="text-[10px] text-gray-500 tabular-nums">
+                  Showing{' '}
+                  <span className="font-semibold text-gray-700">
+                    {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
+                  </span>{' '}
+                  of <span className="font-semibold text-gray-700">{visible.length}</span>
                 </p>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={safePage === 0}
-                    className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Previous orders"
+                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
-                    ← Prev
+                    ←
                   </button>
+                  <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+                    {safePage + 1} / {pageCount}
+                  </span>
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
                     disabled={safePage >= pageCount - 1}
-                    className="rounded-md border border-gray-200 bg-white px-2.5 py-1 text-[11px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Next orders"
+                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
-                    Next →
+                    →
                   </button>
                 </div>
               </div>
@@ -644,7 +646,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               as the lead number of the inspection without being
               promoted back into the header. Items and Lines stay
               at the standard cell scale. */}
-          <div className="grid grid-cols-3 rounded-xl border border-gray-200 divide-x divide-gray-100 bg-white">
+          <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
             <DrawerStatCell
               label="Total"
               value={fmtMoney(order.total)}
@@ -717,7 +719,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
                 {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'} · {itemCount} {itemCount === 1 ? 'unit' : 'units'}
               </p>
             </div>
-            <ul className="rounded-xl border border-gray-200 bg-white divide-y divide-gray-100">
+            <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               {order.lineItems.map((li) => (
                 <li
                   key={li.id}
@@ -752,13 +754,10 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             Correction
           </p>
           {canVoid ? (
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               <p className="text-xs font-semibold text-gray-900">Void this order</p>
               <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                Use this when the order was rung up in error or refunded outside the system.
-                Voiding marks the record as corrected and reverses any inventory it depleted.
-                The original entry stays in the ledger so the sale, the void event, and any
-                reversed stock movement all remain visible for auditing.
+                Use this when the order was rung in error or refunded outside the system. Voiding reverses any inventory it depleted; the original entry stays in the ledger for auditing.
               </p>
               <form action={action} className="mt-4">
                 <input type="hidden" name="order_id" value={order.id} />
@@ -775,11 +774,10 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               </form>
             </div>
           ) : (
-            <div className="rounded-xl border border-gray-200 bg-white p-4">
+            <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
               <p className="text-xs font-semibold text-gray-700">No further correction available</p>
               <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                This order has already been voided. The record is preserved as-is so the original
-                sale, the void event, and any reversed inventory all stay visible to an auditor.
+                This order is already voided. The record stays in the ledger for auditing.
               </p>
             </div>
           )}

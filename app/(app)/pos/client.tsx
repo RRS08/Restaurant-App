@@ -222,16 +222,18 @@ export default function PosClient({
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">POS</h1>
-          <p className="mt-1.5 text-sm text-gray-500">Ring up a sale. Orders post to the Sales ledger and deplete stock automatically.</p>
+          <p className="mt-1.5 text-sm text-gray-500">Ring up a sale.</p>
         </div>
       </div>
 
       {operatingMode === 'external_pos' && (
-        <div className="mb-4 flex items-start gap-3 rounded-xl border border-indigo-200 bg-indigo-50/70 px-4 py-3">
-          <span className="flex-shrink-0 mt-0.5 text-[10px] font-bold uppercase tracking-widest text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded">External POS</span>
-          <p className="text-xs text-indigo-700 leading-relaxed">
-            Your restaurant is set up to import sales from an external POS. Orders rung up here still post to the
-            Sales ledger, but your provider is the canonical source of truth — use this surface only when needed.
+        <div className="mb-4 flex items-start gap-3 rounded-xl border border-indigo-200/80 bg-indigo-50/60 px-4 py-3">
+          <span className="flex-shrink-0 mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+            <span className="w-1 h-1 rounded-full bg-indigo-500" />
+            External POS
+          </span>
+          <p className="text-xs text-indigo-800 leading-relaxed">
+            Your provider is the canonical sales source — use this surface only when needed.
           </p>
         </div>
       )}
@@ -279,23 +281,21 @@ export default function PosClient({
           <div className="sticky top-4 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]">
 
             {/* Header */}
-            <div className="border-b border-gray-100 px-5 py-4 flex items-start justify-between">
+            <div className="border-b border-gray-100 px-5 py-4 flex items-baseline justify-between">
               <div>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Current order</p>
-                <h2 className="text-base font-bold text-gray-900 mt-1">
-                  {cart.length === 0 ? 'Empty cart' : `${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
-                </h2>
+                <h2 className="text-sm font-semibold tracking-tight text-gray-900">Current order</h2>
+                <p className="mt-0.5 text-[11px] text-gray-500">
+                  {cart.length === 0 ? 'Empty' : `${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
+                </p>
               </div>
-              {/* Clear — secondary destructive. Kept text-only so it
-                  doesn't compete with the workflow's primary action,
-                  but the uppercase + font-semibold + red-on-hover
-                  treatment makes it clearly an action rather than
-                  decorative metadata. */}
+              {/* Clear — quiet text link. Calmer than the previous
+                  uppercase treatment but still red-on-hover so the
+                  destructive intent is obvious on intent to use. */}
               {cart.length > 0 && (
                 <button
                   type="button"
                   onClick={clearCart}
-                  className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 hover:text-red-600 transition-colors"
+                  className="text-[11px] font-medium text-gray-500 hover:text-red-600 transition-colors"
                 >
                   Clear
                 </button>
@@ -313,7 +313,7 @@ export default function PosClient({
               {cart.length === 0 ? (
                 <div className="p-6 text-center">
                   <p className="text-xs text-gray-400 leading-relaxed">
-                    Tap a menu item on the left to add it to the order.
+                    Tap a menu item to add it.
                   </p>
                 </div>
               ) : (
@@ -340,14 +340,14 @@ export default function PosClient({
                           stepper so the remove X feels like part of
                           the row, not floating. */}
                       <div className="mt-2.5 flex items-center justify-between">
-                        <div className="inline-flex items-center rounded-lg border border-gray-200 bg-white overflow-hidden">
+                        <div className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white overflow-hidden">
                           <button
                             type="button"
                             onClick={() => changeQty(line.itemId, -1)}
                             className="px-2.5 py-1 text-gray-600 hover:bg-gray-50 text-sm leading-none"
                             aria-label="Decrease"
                           >−</button>
-                          <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold tabular-nums text-center text-gray-900 border-x border-gray-200">
+                          <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold tabular-nums text-center text-gray-900 border-x border-gray-200/80">
                             {line.quantity}
                           </span>
                           <button
@@ -929,13 +929,13 @@ function CardWorkflow({
       )}
 
       {stage === 'connecting' && (
-        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3.5">
+        <div className="rounded-xl border border-gray-200/80 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-gray-400 animate-pulse" aria-hidden="true" />
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-700">Connecting to reader…</span>
+            <span className="text-xs font-semibold text-gray-800">Connecting to reader…</span>
           </div>
-          <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
-            Discovering simulated readers and creating the payment session.
+          <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+            Finding the reader and opening the payment session.
           </p>
         </div>
       )}
@@ -944,9 +944,9 @@ function CardWorkflow({
         <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-4 py-3.5">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-blue-500 animate-pulse" aria-hidden="true" />
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-blue-700">Reader ready</span>
+            <span className="text-xs font-semibold text-blue-800">Reader ready</span>
           </div>
-          <p className="mt-2 text-xs text-blue-800 leading-relaxed">
+          <p className="mt-1.5 text-xs text-blue-800/80 leading-relaxed">
             Hand the reader to the guest to tap, insert, or swipe.
           </p>
         </div>
@@ -957,16 +957,16 @@ function CardWorkflow({
           <div className="rounded-xl border border-blue-200 bg-blue-50/50 px-4 py-3.5">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-2 w-2 rounded-full bg-blue-500 animate-pulse" aria-hidden="true" />
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-blue-700">Collecting card</span>
+              <span className="text-xs font-semibold text-blue-800">Collecting card</span>
             </div>
-            <p className="mt-2 text-xs text-blue-800 leading-relaxed">
+            <p className="mt-1.5 text-xs text-blue-800/80 leading-relaxed">
               Waiting for the reader. The simulator auto-presents a test card.
             </p>
           </div>
           <button
             type="button"
             onClick={cancelFlow}
-            className="w-full rounded-lg border border-gray-200 bg-white px-3 py-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+            className="w-full rounded-lg border border-gray-200/80 bg-white px-3 py-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Cancel
           </button>
@@ -974,13 +974,13 @@ function CardWorkflow({
       )}
 
       {stage === 'processing' && (
-        <div className="rounded-xl border border-gray-200 bg-white px-4 py-3.5">
+        <div className="rounded-xl border border-gray-200/80 bg-white px-4 py-3.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-gray-400 animate-pulse" aria-hidden="true" />
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-gray-700">Processing payment…</span>
+            <span className="text-xs font-semibold text-gray-800">Processing payment…</span>
           </div>
-          <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
-            Stripe is authorizing the card. Do not close the drawer.
+          <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+            Authorizing the card. Keep the drawer open.
           </p>
         </div>
       )}
@@ -989,10 +989,10 @@ function CardWorkflow({
         <div className="rounded-xl border border-green-200 bg-green-50/60 px-4 py-3.5">
           <div className="flex items-center gap-2">
             <span className="inline-flex h-2 w-2 rounded-full bg-green-500" aria-hidden="true" />
-            <span className="text-[11px] font-semibold uppercase tracking-widest text-green-700">Approved · finalizing sale</span>
+            <span className="text-xs font-semibold text-green-800">Approved · finalizing sale</span>
           </div>
-          <p className="mt-2 text-xs text-green-800 leading-relaxed">
-            Stripe approved. Writing the order and depleting inventory.
+          <p className="mt-1.5 text-xs text-green-800/80 leading-relaxed">
+            Writing the order and depleting inventory.
           </p>
         </div>
       )}
@@ -1002,9 +1002,9 @@ function CardWorkflow({
           <div className="rounded-xl border border-red-200 bg-red-50/60 px-4 py-3.5">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-2 w-2 rounded-full bg-red-500" aria-hidden="true" />
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-red-700">Card payment failed</span>
+              <span className="text-xs font-semibold text-red-800">Card payment failed</span>
             </div>
-            <p className="mt-2 text-xs text-red-700 leading-relaxed">
+            <p className="mt-1.5 text-xs text-red-700/90 leading-relaxed">
               {errorMessage ?? 'The card did not go through. Try a different card or switch to cash.'}
             </p>
           </div>
@@ -1012,7 +1012,7 @@ function CardWorkflow({
             <button
               type="button"
               onClick={resetToIdle}
-              className="rounded-lg border border-gray-200 bg-white px-3 py-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+              className="rounded-lg border border-gray-200/80 bg-white px-3 py-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
             >
               Cancel
             </button>
@@ -1032,9 +1032,9 @@ function CardWorkflow({
           <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3.5">
             <div className="flex items-center gap-2">
               <span className="inline-flex h-2 w-2 rounded-full bg-amber-500" aria-hidden="true" />
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-700">Payment canceled</span>
+              <span className="text-xs font-semibold text-amber-800">Payment canceled</span>
             </div>
-            <p className="mt-2 text-xs text-amber-700 leading-relaxed">
+            <p className="mt-1.5 text-xs text-amber-700/90 leading-relaxed">
               No card was charged. The order is still here when you&apos;re ready.
             </p>
           </div>
@@ -1069,10 +1069,9 @@ function OtherWorkflow({
 }) {
   return (
     <div className="space-y-3">
-      <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+      <div className="rounded-xl border border-gray-200/80 bg-white px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <p className="text-[11px] text-gray-500 leading-relaxed">
-          Manual payment outside cash or card-present flow — comp, employee meal, or future external method.
-          The sale will still post to the Sales ledger.
+          Manual payment — comp, employee meal, or external method. The sale still posts to the Sales ledger.
         </p>
       </div>
       <button
@@ -1159,10 +1158,10 @@ function CheckoutDrawer({
         {/* Header */}
         <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Checkout</p>
-            <h2 className="mt-1 text-base font-bold text-gray-900">Collect payment</h2>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Checkout</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight">Collect payment</h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              {cartItemCount} item{cartItemCount !== 1 ? 's' : ''} · choose a payment method to finish the sale.
+              {cartItemCount} item{cartItemCount !== 1 ? 's' : ''} · pick a payment method.
             </p>
           </div>
           <button
@@ -1193,7 +1192,7 @@ function CheckoutDrawer({
               one — same number, repeated twice. We keep this single
               summary as the canonical "what's being paid" and the
               workflows below go straight into their controls. */}
-          <div className="rounded-xl border border-gray-200 bg-gray-50/50 px-4 py-3.5">
+          <div className="rounded-xl border border-gray-200/80 bg-gray-50/50 px-4 py-3.5">
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Amount due</span>
               <span className="text-lg font-mono tabular-nums font-bold text-gray-900">{CURRENCY(subtotal)}</span>

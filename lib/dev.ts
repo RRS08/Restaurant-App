@@ -25,7 +25,37 @@ function parseAllowlist(raw: string | undefined): string[] {
     .filter((e) => e.length > 0)
 }
 
-export const DEV_EMAILS: string[] = parseAllowlist(process.env.DEV_EMAILS)
+// ----------------------------------------------------------------
+// Development-only fallback allowlist.
+//
+// Why this exists: DEV_EMAILS is loaded at process start. If a dev
+// edits .env.local while the Next.js server is running, the new
+// value isn't picked up until the server restarts — and the silent
+// failure mode is "Dev Toolbox link disappears, /dev-tools
+// redirects, looks like the page is broken." This hardcoded list
+// gives local testing accounts a survivable fallback that doesn't
+// rely on env-var timing.
+//
+// SECURITY: production deploys never honor this list — the
+// NODE_ENV check below restricts the augmentation to development.
+// Production trusts DEV_EMAILS alone, exactly as before.
+// ----------------------------------------------------------------
+const DEV_FALLBACK_EMAILS = [
+  'sandra.ruiz@yahoo.com.mx',
+] as const
+
+function buildAllowlist(): string[] {
+  const fromEnv = parseAllowlist(process.env.DEV_EMAILS)
+  if (process.env.NODE_ENV === 'production') return fromEnv
+  // Development: union env list + hardcoded fallback so local
+  // testing accounts always resolve as dev.
+  return Array.from(new Set([
+    ...fromEnv,
+    ...DEV_FALLBACK_EMAILS.map((e) => e.toLowerCase()),
+  ]))
+}
+
+export const DEV_EMAILS: string[] = buildAllowlist()
 
 export function isDevEmail(email: string | null | undefined): boolean {
   if (!email) return false

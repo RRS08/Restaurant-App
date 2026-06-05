@@ -103,21 +103,21 @@ const MODES: {
     eyebrow: '01',
     label: 'Descriptive',
     title: 'What happened',
-    sub: 'Orientation only. The numbers in plain form for the chosen comparison window.',
+    sub: 'The numbers, plain — for the selected window.',
   },
   {
     id: 'diagnostic',
     eyebrow: '02',
     label: 'Diagnostic',
     title: 'Why it happened',
-    sub: 'Drivers beneath the headline. Each block surfaces only when the underlying pattern is real.',
+    sub: "What's driving the headline number.",
   },
   {
     id: 'predictive',
     eyebrow: '03 →',
     label: 'Predictive',
     title: "What's likely next",
-    sub: 'Restrained continuation signals. Not recommendations — just where the current direction points if conditions hold.',
+    sub: 'Where current direction points if conditions hold.',
   },
 ]
 
@@ -139,11 +139,12 @@ export default function AnalyticsClient({
 }: Props) {
   const [win, setWin] = useState<Window>('30d')
   const [metric, setMetric] = useState<Metric>('revenue')
-  // Default mode is Diagnostic — that's where Analytics earns its
-  // keep. Landing on Descriptive would feel like a report. Landing
-  // on Diagnostic immediately frames the page as an analyst.
-  const [mode, setMode] = useState<Mode>('diagnostic')
-  const activeMode = MODES.find((m) => m.id === mode) ?? MODES[1]
+  // Default mode is Descriptive — the entry orientation, "what
+  // happened." Diagnostic and Predictive stay one click away;
+  // landing on Descriptive lets the page open as a calm report and
+  // pulls users into the deeper modes on their own pace.
+  const [mode, setMode] = useState<Mode>('descriptive')
+  const activeMode = MODES.find((m) => m.id === mode) ?? MODES[0]
 
   // ---- Descriptive scalars (current vs previous, same window) ----
   const size = win === '7d' ? 7 : 30
@@ -172,16 +173,7 @@ export default function AnalyticsClient({
     [currentWindow, metric],
   )
 
-  // ---- Diagnostic 1: growth decomposition ----
-  // Decompose the headline revenue move into orders × ticket-size.
-  // Volume-led means orders moved more than ticket size; ticket-led
-  // is the reverse. Both can coexist with a flat or down headline.
-  const growthDecomp = useMemo(
-    () => buildGrowthDecomp(revDelta, ordDelta, ticketDelta),
-    [revDelta, ordDelta, ticketDelta],
-  )
-
-  // ---- Diagnostic 2: category carry ----
+  // ---- Diagnostic: category carry ----
   // Surface categories where one item provides most of the revenue.
   // This is the "fragile category" pattern — strong number masking
   // weakness in the rest of the lineup.
@@ -220,7 +212,7 @@ export default function AnalyticsClient({
     return out.sort((a, b) => b.topItemShare - a.topItemShare).slice(0, 3)
   }, [categoryAggregates, itemAggregates])
 
-  // ---- Diagnostic 3: mix shift (avg item price) ----
+  // ---- Diagnostic: mix shift (avg item price) ----
   // Revenue per unit sold. Different from ticket size: this is
   // sensitive to which items guests are buying, independent of how
   // many items per order.
@@ -244,18 +236,6 @@ export default function AnalyticsClient({
   // for Diagnostic on its own.
   const mixShiftMaterial = mixShift.delta !== null && Math.abs(mixShift.delta) >= 6
 
-  // ---- Predictive 1: 7-day pace projection ----
-  // The lead surface for Predictive. We add prior-7-days revenue
-  // so the lead can show a delta vs the previous week — gives the
-  // pace number meaningful context as a continuation read rather
-  // than a number floating without a frame of reference.
-  const last7 = dailyBuckets.slice(-7)
-  const prior7 = dailyBuckets.slice(-14, -7)
-  const last7Revenue = sum(last7, (d) => d.revenue)
-  const last7Orders = sum(last7, (d) => d.orders)
-  const prior7Revenue = sum(prior7, (d) => d.revenue)
-  const paceDelta = pctDelta(last7Revenue, prior7Revenue)
-
   // ---- Descriptive composition: window-active mixes ----
   // Both blocks track the comparison window: switching 7d / 30d
   // changes which mix is rendered.
@@ -272,7 +252,7 @@ export default function AnalyticsClient({
     return { rows, total }
   }, [activeCategoryMix])
 
-  // ---- Predictive 4: next-7-days outlook ----
+  // ---- Predictive 1: next-7-days outlook ----
   // Project the upcoming week's revenue rhythm from day-of-week
   // patterns in the trailing 60 days. The signal answers "which
   // days are likely to be strong / soft next?" using the
@@ -315,44 +295,51 @@ export default function AnalyticsClient({
     }
   }, [dailyBuckets])
 
-  // ---- Predictive 3: near-term continuation ----
-  // Items with material, directionally-clear movement that's worth
-  // calling out as likely to keep moving the same way. Built on the
-  // same itemAggregates the diagnostic blocks use — we just lean
-  // into the higher-confidence (high absolute, clear delta) rows.
-  const continuation = useMemo(() => {
-    const enriched = itemAggregates
-      .filter((i) => i.previousRevenue >= 50 || i.currentRevenue >= 50)
-      .map((i) => ({
-        ...i,
-        revenueDelta: pctDelta(i.currentRevenue, i.previousRevenue),
-      }))
-      .filter((i) => i.revenueDelta !== null && Math.abs(i.revenueDelta) >= 15)
-    const holding = enriched
-      .filter((i) => (i.revenueDelta ?? 0) > 0)
-      .sort((a, b) => b.currentRevenue - a.currentRevenue)
-      .slice(0, 3)
-    const weak = enriched
-      .filter((i) => (i.revenueDelta ?? 0) < 0)
-      .sort((a, b) => b.previousRevenue - a.previousRevenue)
-      .slice(0, 3)
-    return { holding, weak }
-  }, [itemAggregates])
+  // ---- Predictive 2: recent weekly pace ----
+  // The four trailing weekly totals leading into the projected
+  // rhythm above. Answers a different operational question than the
+  // day-by-day rhythm — "is overall demand healthy or soft right
+  // now?" — by showing how the business has been pacing week over
+  // week. Pure roll-up of the existing dailyBuckets values; no new
+  // analytics, just a different aggregation.
+  const recentWeeks = useMemo(() => {
+    type Week = {
+      total: number
+      startDate: string
+      endDate: string
+    }
+    const out: Week[] = []
+    const buckets = dailyBuckets.slice(-28)
+    if (buckets.length === 0) return out
+    // Walk backward from the end in 7-day chunks. Newest chunk last
+    // so the bars read chronologically top → bottom in the card.
+    for (let i = 0; i < 4; i++) {
+      const sliceEnd = buckets.length - i * 7
+      const sliceStart = Math.max(0, sliceEnd - 7)
+      if (sliceEnd <= sliceStart) break
+      const week = buckets.slice(sliceStart, sliceEnd)
+      if (week.length === 0) break
+      const total = sum(week, (d) => d.revenue)
+      out.unshift({
+        total,
+        startDate: week[0].date,
+        endDate: week[week.length - 1].date,
+      })
+    }
+    return out
+  }, [dailyBuckets])
 
   return (
     <div className="max-w-[1400px]">
       {/* ---- HEADER ----
-          Identity-only header. The comparison window moved down to
-          sit beside the mode switch so it reads as a control for the
-          analytical workspace, not detached page chrome. */}
-      <div className="mb-8 pb-5 border-b border-gray-100">
-        <h1 className="text-2xl font-bold text-gray-900 leading-tight">Analytics</h1>
-        <p className="mt-1.5 text-sm text-gray-500 leading-relaxed max-w-2xl">
-          The in-product analyst.{' '}
-          <span className="text-gray-400">
-            Patterns, drivers, and what&apos;s likely next — across orders, items,
-            and categories.
-          </span>
+          Calm identity-only header. The comparison window sits in
+          the control band below, alongside the mode switch. */}
+      <div className="mb-7 pb-5 border-b border-gray-100">
+        <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">
+          Analytics
+        </h1>
+        <p className="mt-1.5 text-sm text-gray-500 leading-relaxed">
+          Patterns, drivers, and what&apos;s likely next.
         </p>
       </div>
 
@@ -378,9 +365,7 @@ export default function AnalyticsClient({
           ))}
         </div>
         <div className="flex items-center gap-2">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            Comparison window
-          </p>
+          <span className="text-[11px] text-gray-500">Last</span>
           <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
             <Toggle label="7d" active={win === '7d'} onClick={() => setWin('7d')} small />
             <Toggle label="30d" active={win === '30d'} onClick={() => setWin('30d')} small />
@@ -394,7 +379,7 @@ export default function AnalyticsClient({
       {/* ============ DESCRIPTIVE CONTENT ============ */}
       {mode === 'descriptive' && (
         <>
-        <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
         <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
           <DescriptiveStat
             label="Revenue"
@@ -417,9 +402,7 @@ export default function AnalyticsClient({
         </div>
 
         <div className="border-t border-gray-100 bg-gray-50/40 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            Daily rhythm
-          </p>
+          <p className="text-[11px] font-medium text-gray-500">Daily rhythm</p>
           <div className="inline-flex items-center gap-0.5 rounded-lg bg-white border border-gray-200 p-0.5">
             <Toggle
               label="Revenue"
@@ -455,16 +438,21 @@ export default function AnalyticsClient({
         </>
       )}
 
-      {/* ============ DIAGNOSTIC CONTENT ============ */}
+      {/* ============ DIAGNOSTIC CONTENT ============
+          Two-band hierarchy, deliberately simple:
+            1 · Driver chart — visual decomposition of the move.
+            2 · Supporting signals — category concentration + mix shift
+                when material.
+          Analyst read + Driver breakdown were removed at the user's
+          request: for now the chart carries the visual answer and
+          the supporting signals carry the evidence; no middle text
+          layer is needed. */}
       {mode === 'diagnostic' && (
         <>
-          {/* Lead surface — Growth decomposition reads as the
-              primary driver explanation, with a richer header,
-              bigger headline, and three driver cells (revenue,
-              orders, avg ticket) prominent in the footer band. */}
-          <LeadGrowthDecomposition
-            verdict={growthDecomp.verdict}
-            headline={growthDecomp.headline}
+          {/* 1 · Driver chart — centered-baseline horizontal bars in
+              green/red/gray so the direction and relative magnitude
+              of Revenue / Orders / Avg ticket reads at a glance. */}
+          <DiagnosticDriverChart
             revDelta={revDelta}
             ordDelta={ordDelta}
             ticketDelta={ticketDelta}
@@ -472,26 +460,12 @@ export default function AnalyticsClient({
 
           <SupportEyebrow>Supporting signals</SupportEyebrow>
 
-          {/* 2b · Category carry — category (violet) identity */}
-          <SignalBlockMulti
-            title="Category carry"
-            tone="category"
-            subtitle="Categories where one item provides most of the revenue. Fragile by construction — the rest of the lineup is doing less than it looks."
-            empty="No category leans on a single item right now. Revenue is spread across the lineup."
-            items={categoryCarry.map((c) => ({
-              key: c.categoryId,
-              headline: `${c.categoryName}: ${c.topItemName} carries ${c.topItemShare}% of revenue.`,
-              detail: `Rest of category: ${SHORT_CURRENCY(c.restPrevious)} → ${SHORT_CURRENCY(c.restRevenue)} (${deltaText(c.restDelta)}).`,
-              tone: c.restDelta !== null && c.restDelta < 0 ? 'warn' : 'neutral',
-            }))}
-          />
+          {/* 2a · Category concentration — evidence-row layout per
+              category. */}
+          <CategoryCarryEvidence items={categoryCarry} />
 
-          {/* 2c · Mix shift — mix (orange) identity. Now carries
-              the full "subtle under-the-surface change" role: a
-              composition shift in what guests are buying that
-              revenue and ticket-size alone won't reveal. Lower
-              trigger threshold (6%) widens the signal so subtler
-              moves still surface. */}
+          {/* 2b · Mix shift — kept as a small supporting signal when
+              material. Same calculation + threshold as before. */}
           {mixShiftMaterial && (
             <SignalBlock
               title="Mix shift"
@@ -499,7 +473,7 @@ export default function AnalyticsClient({
               verdict={(mixShift.delta ?? 0) < 0 ? 'Cheaper mix' : 'Pricier mix'}
               headline={`Average item price moved ${CURRENCY(mixShift.prevAvg)} → ${CURRENCY(mixShift.curAvg)} (${deltaText(mixShift.delta)}). A subtle composition shift beneath the surface — guests are buying ${
                 (mixShift.delta ?? 0) < 0 ? 'lower' : 'higher'
-              }-priced items independent of how many items per order. Easy to miss if only watching revenue and ticket size.`}
+              }-priced items independent of how many items per order.`}
               evidence={[
                 { label: 'Previous avg', value: CURRENCY(mixShift.prevAvg) },
                 { label: 'Current avg', value: CURRENCY(mixShift.curAvg) },
@@ -510,30 +484,19 @@ export default function AnalyticsClient({
       )}
 
       {/* ============ PREDICTIVE CONTENT ============
-          Compact lead + supporting layout:
-            • Lead — Weekly rhythm: pace projection + the upcoming
-              week's day-by-day rhythm in a single anchored panel
-              with indigo accents.
-            • Supporting — At-risk stock pressure (cross-pillar) and
-              Near-term demand continuation (item-level direction).
-          Category momentum and the separate pace tile were removed
-          to keep Predictive compact and to make the lead clearly
-          dominant. */}
+          Two-band hierarchy, deliberately simple:
+            1 · Next 7 days rhythm — the forward shape.
+            2 · Recent weekly pace — the trajectory leading into it.
+          Analyst read, projection summary, and the at-risk /
+          continuation supporting signals were removed at the user's
+          request. The rhythm answers "which days are likely
+          strong"; the recent pace answers "are we in a strong or
+          soft period right now?" — together they cover what's next
+          and where it's coming from. */}
       {mode === 'predictive' && (
         <>
-          {/* Lead surface — weekly rhythm with embedded pace */}
-          <LeadWeeklyRhythm
-            outlook={next7Outlook}
-            last7Revenue={last7Revenue}
-            last7Orders={last7Orders}
-            prior7Revenue={prior7Revenue}
-            paceDelta={paceDelta}
-          />
-
-          <SupportEyebrow>Supporting forward signals</SupportEyebrow>
-
-          <AtRiskStockPressure items={atRiskInventory} />
-          <NearTermContinuation holding={continuation.holding} weak={continuation.weak} />
+          <PredictiveRhythmChart outlook={next7Outlook} />
+          <PredictiveRecentWeeks weeks={recentWeeks} />
         </>
       )}
     </div>
@@ -725,7 +688,7 @@ function SignalBlock({
   const t = SIGNAL_TONE[tone]
   return (
     <div
-      className={`rounded-xl border border-gray-200 bg-white mb-3 overflow-hidden ${t.accent}`}
+      className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden ${t.accent}`}
     >
       <div
         className={`border-b border-gray-100 px-5 py-2.5 flex items-center justify-between gap-2 ${t.headerTint}`}
@@ -770,74 +733,185 @@ function SignalBlock({
 // itself a signal (no fragility detected).
 // ================================================================
 // ================================================================
-// LeadGrowthDecomposition — the diagnostic mode's lead surface.
-// Same `info` (blue) identity as the previous Growth decomposition
-// SignalBlock, but structurally richer: three bands (header /
-// headline body / driver footer), bigger headline, three driver
-// cells (Revenue / Orders / Avg ticket) prominent in the footer.
-// The "Primary driver" eyebrow tag is the explicit lead/support
-// signal that makes the layout grammar visible.
+// DiagnosticDriverChart — Diagnostic's tier-1 surface (the visual
+// answer). Centered-baseline horizontal bars for the three drivers
+// (Revenue / Orders / Avg ticket). Bars extend right for positive
+// deltas, left for negative — the relative widths show which driver
+// did the moving, without the reader having to parse percentages.
+//
+// Pure UI over the existing revDelta / ordDelta / ticketDelta
+// values — no new calculation.
 // ================================================================
-function LeadGrowthDecomposition({
-  verdict,
-  headline,
+function DiagnosticDriverChart({
   revDelta,
   ordDelta,
   ticketDelta,
 }: {
-  verdict: string
-  headline: string
   revDelta: number | null
   ordDelta: number | null
   ticketDelta: number | null
 }) {
-  const t = SIGNAL_TONE.info
+  const rows: { label: string; value: number | null }[] = [
+    { label: 'Revenue', value: revDelta },
+    { label: 'Orders', value: ordDelta },
+    { label: 'Avg ticket', value: ticketDelta },
+  ]
+  // Shared scale across the three bars so the visual is honest about
+  // relative magnitudes. Floor at 1% so a single zero-delta row
+  // doesn't divide by zero.
+  const scale = Math.max(
+    Math.abs(revDelta ?? 0),
+    Math.abs(ordDelta ?? 0),
+    Math.abs(ticketDelta ?? 0),
+    1,
+  )
+  const allNull = revDelta === null && ordDelta === null && ticketDelta === null
   return (
-    <div
-      className={`rounded-xl border border-gray-200 bg-white mb-3 overflow-hidden ${t.accent}`}
-    >
-      <div
-        className={`border-b border-gray-100 px-6 py-3 flex items-start justify-between gap-3 ${t.headerTint}`}
-      >
-        <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-            Primary driver · Growth decomposition
-          </p>
-          <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-            The lead explanation of why the headline number moved.
-          </p>
-        </div>
-        <span
-          className={`inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full flex-shrink-0 ${t.pillBg}`}
-        >
-          <span className={`h-1.5 w-1.5 rounded-full ${t.dot}`} aria-hidden="true" />
-          {verdict}
-        </span>
-      </div>
-      <div className="px-6 py-5">
-        <p className="text-[17px] font-semibold text-gray-900 leading-relaxed max-w-3xl">
-          {headline}
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden border-l-2 border-l-blue-300">
+      <div className="border-b border-gray-100 px-6 py-3 bg-blue-50/30">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-blue-700">
+          Driver chart
+        </p>
+        <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
+          What moved the headline number — visually, side by side.
         </p>
       </div>
-      <div className="border-t border-gray-100 bg-gray-50/40 grid grid-cols-3 divide-x divide-gray-100">
-        <DriverCell label="Revenue" value={deltaText(revDelta)} />
-        <DriverCell label="Orders" value={deltaText(ordDelta)} />
-        <DriverCell label="Avg ticket" value={deltaText(ticketDelta)} />
-      </div>
+      {allNull ? (
+        <p className="px-6 py-8 text-xs text-gray-400 text-center">
+          Not enough history yet to decompose the move.
+        </p>
+      ) : (
+        <div className="px-6 py-5 space-y-3.5">
+          {rows.map((r) => (
+            <DriverBar key={r.label} label={r.label} value={r.value} scale={scale} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }
 
-// Small footer cell used by LeadGrowthDecomposition — three side
-// by side, divided. Matches the descriptive panel's inline-stat
-// cell language so the family stays consistent.
-function DriverCell({ label, value }: { label: string; value: string }) {
+// One row of the driver chart: label / centered-baseline bar /
+// signed delta. Bar fills toward the right for positive values and
+// toward the left for negative ones. Color tone matches sign.
+function DriverBar({
+  label,
+  value,
+  scale,
+}: {
+  label: string
+  value: number | null
+  scale: number
+}) {
+  const v = value ?? 0
+  const isMissing = value === null
+  const isFlat = !isMissing && v === 0
+  const isPositive = v > 0
+  // Bar can fill at most one half of the track (centered baseline).
+  const widthPct = Math.min(50, (Math.abs(v) / scale) * 50)
+  const tone = isMissing || isFlat
+    ? 'text-gray-400'
+    : isPositive
+      ? 'text-green-700'
+      : 'text-red-600'
+  const barTone = isMissing
+    ? 'bg-gray-200'
+    : isFlat
+      ? 'bg-gray-300'
+      : isPositive
+        ? 'bg-green-400'
+        : 'bg-red-400'
   return (
-    <div className="px-5 py-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-        {label}
-      </p>
-      <p className="mt-0.5 text-sm font-bold tabular-nums text-gray-900">{value}</p>
+    <div className="grid grid-cols-[96px_1fr_72px] items-center gap-3">
+      <span className="text-[12px] font-semibold text-gray-700">{label}</span>
+      <div className="relative h-2.5 bg-gray-50 rounded-full overflow-hidden">
+        {/* Center baseline */}
+        <div className="absolute top-0 bottom-0 left-1/2 w-px bg-gray-200" aria-hidden="true" />
+        {!isMissing && (
+          <div
+            className={`absolute top-0 bottom-0 ${barTone} rounded-full`}
+            style={
+              isPositive || isFlat
+                ? { left: '50%', width: `${Math.max(widthPct, isFlat ? 2 : 1)}%` }
+                : { right: '50%', width: `${widthPct}%` }
+            }
+          />
+        )}
+      </div>
+      <span className={`text-[12px] font-bold tabular-nums text-right ${tone}`}>
+        {deltaText(value)}
+      </span>
+    </div>
+  )
+}
+
+// ================================================================
+// CategoryCarryEvidence — supporting signal block for Diagnostic.
+// Replaces the bulleted SignalBlockMulti rendering with an
+// evidence-row layout: each row reads as a category name eyebrow,
+// a top-item sentence, and a quiet "rest of category" delta line.
+// Feels like supporting evidence, not a bullet list.
+//
+// Uses the same `categoryCarry` data shape produced upstream — no
+// calculation change, just presentation.
+// ================================================================
+function CategoryCarryEvidence({
+  items,
+}: {
+  items: {
+    categoryId: string
+    categoryName: string
+    topItemName: string
+    topItemShare: number
+    restRevenue: number
+    restPrevious: number
+    restDelta: number | null
+  }[]
+}) {
+  const t = SIGNAL_TONE.category
+  return (
+    <div
+      className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden ${t.accent}`}
+    >
+      <div className={`border-b border-gray-100 px-5 py-3 ${t.headerTint}`}>
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+          Category concentration
+        </p>
+        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
+          These categories leaned on a single item for most of their revenue.
+        </p>
+      </div>
+      {items.length === 0 ? (
+        <p className="px-5 py-6 text-xs text-gray-400">
+          No category leans on a single item. Revenue is spread across the lineup.
+        </p>
+      ) : (
+        <ul className="divide-y divide-gray-100">
+          {items.map((c) => {
+            const restTone =
+              c.restDelta !== null && c.restDelta < 0
+                ? 'text-amber-700'
+                : c.restDelta !== null && c.restDelta > 0
+                  ? 'text-green-700'
+                  : 'text-gray-500'
+            return (
+              <li key={c.categoryId} className="px-5 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+                  {c.categoryName}
+                </p>
+                <p className="mt-1 text-[14px] text-gray-900 leading-snug">
+                  <span className="font-semibold">{c.topItemName}</span> carried{' '}
+                  <span className="font-semibold tabular-nums">{c.topItemShare}%</span> of revenue.
+                </p>
+                <p className="mt-1 text-[11px] text-gray-500 leading-relaxed tabular-nums">
+                  Rest of category: {SHORT_CURRENCY(c.restPrevious)} → {SHORT_CURRENCY(c.restRevenue)}{' '}
+                  <span className={`font-semibold ${restTone}`}>({deltaText(c.restDelta)})</span>
+                </p>
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </div>
   )
 }
@@ -863,7 +937,7 @@ function SignalBlockMulti({
   const t = SIGNAL_TONE[tone]
   return (
     <div
-      className={`rounded-xl border border-gray-200 bg-white mb-3 overflow-hidden ${t.accent}`}
+      className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden ${t.accent}`}
     >
       <div className={`border-b border-gray-100 px-5 py-3 ${t.headerTint}`}>
         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
@@ -944,7 +1018,7 @@ function CategoryMixSnapshot({
 }) {
   const topShare = rows[0]?.share ?? 0
   return (
-    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
@@ -1040,14 +1114,14 @@ function PaymentMixSnapshot({
   const leader = sortedBuckets[0]
   const leaderShare = empty ? 0 : (mix[leader.key].revenue / mix.totalRevenue) * 100
   return (
-    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden flex flex-col">
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
             Payment mix
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-            How guests paid — composition of revenue.
+            How guests paid.
           </p>
         </div>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full whitespace-nowrap">
@@ -1112,180 +1186,133 @@ function PaymentMixSnapshot({
 }
 
 // ================================================================
-// AtRiskStockPressure — predictive cross-pillar continuation.
-// Surfaces inventory items whose current stock + 30-day consumption
-// rate suggests near-term (< 14d) supply pressure. Frames the
-// reading as continuation, not advice.
+// PredictiveRecentWeeks — Predictive's tier-2 surface. Companion to
+// the next-7-days rhythm chart above.
+//
+// The rhythm chart answers "which days will be strong?" — what it
+// can't answer is "are we currently in a strong period or a soft
+// one?" This card fills that gap: the last four weekly revenue
+// totals as calm horizontal bars, with a Rising / Steady /
+// Softening trend chip and the 4-week average in the footer band.
+//
+// Pure roll-up of existing `dailyBuckets` — no new analytics, no
+// new server call, no forecast. The card frames itself as context
+// for the projection, not as a forecast of next week.
 // ================================================================
-function AtRiskStockPressure({ items }: { items: AtRiskItem[] }) {
-  return (
-    <div className="mt-4 rounded-xl border border-gray-200 bg-white overflow-hidden border-l-2 border-l-indigo-200">
-      <div className="border-b border-gray-100 px-5 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-          <span className="text-gray-400 mr-1" aria-hidden="true">
-            →
-          </span>
-          At-risk stock pressure
-        </p>
-        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
-          Inventory items likely to hit supply pressure within two weeks if current
-          sales pace continues. Based on the last 30 days of demand and the latest
-          stock count.
-        </p>
-      </div>
-      {items.length === 0 ? (
-        <p className="px-5 py-6 text-xs text-gray-400">
-          No items projected to hit near-term pressure at current pace.
-        </p>
-      ) : (
-        <ul className="divide-y divide-gray-100">
-          {items.map((it) => {
-            const urgent = it.daysOfSupply < 7
-            return (
-              <li key={it.id} className="px-5 py-3.5 flex gap-3 items-start">
-                <span
-                  className={`mt-2 h-1.5 w-1.5 rounded-full flex-shrink-0 ${
-                    urgent ? 'bg-red-500' : 'bg-amber-500'
-                  }`}
-                  aria-hidden="true"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <p className="text-[14px] font-semibold text-gray-900 truncate">
-                      {it.name}
-                    </p>
-                    <p
-                      className={`text-[12px] font-bold tabular-nums flex-shrink-0 ${
-                        urgent ? 'text-red-700' : 'text-amber-700'
-                      }`}
-                    >
-                      ~{it.daysOfSupply}d left
-                    </p>
-                  </div>
-                  <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                    {it.currentStock} {it.unit} on hand · using ~
-                    {it.consumptionPerDay.toFixed(2)} {it.unit}/day
-                    {it.driverItemName ? <> · driven by {it.driverItemName}</> : null}
-                  </p>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-// ================================================================
-// NearTermContinuation — predictive read on items expected to keep
-// moving in their current direction. Two short lists: holding
-// strength (positive delta + meaningful revenue) and remaining weak.
-// More concrete than category arrows because it names items and
-// shows where the revenue actually sits.
-// ================================================================
-function NearTermContinuation({
-  holding,
-  weak,
+function PredictiveRecentWeeks({
+  weeks,
 }: {
-  holding: { id: string; name: string; currentRevenue: number; revenueDelta: number | null }[]
-  weak: { id: string; name: string; previousRevenue: number; revenueDelta: number | null }[]
+  weeks: { total: number; startDate: string; endDate: string }[]
 }) {
-  const empty = holding.length === 0 && weak.length === 0
-  return (
-    <div className="mt-4 rounded-xl border border-gray-200 bg-white overflow-hidden border-l-2 border-l-indigo-200">
-      <div className="border-b border-gray-100 px-5 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-          <span className="text-gray-400 mr-1" aria-hidden="true">
-            →
-          </span>
-          Near-term demand continuation
-        </p>
-        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
-          Items where the current 30-day move is clear enough to expect continuation
-          if conditions hold. Not a forecast — a directional read.
+  if (weeks.length === 0) {
+    return (
+      <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden">
+        <div className="border-b border-gray-100 px-6 py-3">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Recent weekly pace
+          </p>
+        </div>
+        <p className="px-6 py-8 text-xs text-gray-400 text-center">
+          Not enough history yet to show recent weekly pace.
         </p>
       </div>
-      {empty ? (
-        <p className="px-5 py-6 text-xs text-gray-400">
-          No items with strong, clearly directional movement right now.
-        </p>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
-          <div className="px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700 mb-2">
-              Likely holding strength
-            </p>
-            {holding.length === 0 ? (
-              <p className="text-[11px] text-gray-400">None with clear upside.</p>
-            ) : (
-              <ul className="space-y-2.5">
-                {holding.map((i) => (
-                  <li key={i.id} className="text-[12px]">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-gray-900 font-medium truncate">{i.name}</span>
-                      <span className="text-green-700 font-bold tabular-nums flex-shrink-0">
-                        ↑ {deltaText(i.revenueDelta)}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[10px] text-gray-400 tabular-nums">
-                      ${i.currentRevenue.toLocaleString('en-US', { maximumFractionDigits: 0 })} current
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700 mb-2">
-              Likely remaining weak
-            </p>
-            {weak.length === 0 ? (
-              <p className="text-[11px] text-gray-400">None with clear downside.</p>
-            ) : (
-              <ul className="space-y-2.5">
-                {weak.map((i) => (
-                  <li key={i.id} className="text-[12px]">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="text-gray-900 font-medium truncate">{i.name}</span>
-                      <span className="text-red-600 font-bold tabular-nums flex-shrink-0">
-                        ↓ {deltaText(i.revenueDelta)}
-                      </span>
-                    </div>
-                    <p className="mt-0.5 text-[10px] text-gray-400 tabular-nums">
-                      ${i.previousRevenue.toLocaleString('en-US', { maximumFractionDigits: 0 })} prior
-                    </p>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+    )
+  }
+
+  const max = Math.max(...weeks.map((w) => w.total), 1)
+  const earliest = weeks[0].total
+  const latest = weeks[weeks.length - 1].total
+  const avgAll = weeks.reduce((s, w) => s + w.total, 0) / weeks.length
+
+  // Trend classification: latest vs earliest, with a 15% deadband
+  // so small wiggles don't read as "trending" anything.
+  let trendLabel = 'Steady'
+  let trendTone = 'text-gray-700 bg-gray-100'
+  if (earliest > 0) {
+    const change = (latest - earliest) / earliest
+    if (change > 0.15) {
+      trendLabel = 'Rising'
+      trendTone = 'text-green-800 bg-green-50'
+    } else if (change < -0.15) {
+      trendLabel = 'Softening'
+      trendTone = 'text-red-700 bg-red-50'
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden">
+      <div className="border-b border-gray-100 px-6 py-3 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Recent weekly pace
+          </p>
+          <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
+            The last four weeks leading into the projected rhythm above.
+          </p>
         </div>
-      )}
+        <span
+          className={`inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full flex-shrink-0 ${trendTone}`}
+        >
+          {trendLabel}
+        </span>
+      </div>
+      <div className="px-6 py-4 space-y-2.5">
+        {weeks.map((w, i) => {
+          const isLatest = i === weeks.length - 1
+          const pct = (w.total / max) * 100
+          return (
+            <div key={w.startDate} className="grid grid-cols-[110px_1fr_72px] items-center gap-3">
+              <span
+                className={`text-[11px] tabular-nums ${
+                  isLatest ? 'text-gray-900 font-semibold' : 'text-gray-500'
+                }`}
+              >
+                {formatWeekLabel(w.startDate, w.endDate)}
+              </span>
+              <div className="relative h-2.5 bg-gray-50 rounded-full overflow-hidden">
+                <div
+                  className={`absolute top-0 bottom-0 left-0 rounded-full ${
+                    isLatest ? 'bg-indigo-400' : 'bg-gray-300'
+                  }`}
+                  style={{ width: `${Math.max(pct, 1)}%` }}
+                />
+              </div>
+              <span
+                className={`text-[12px] font-bold tabular-nums text-right ${
+                  isLatest ? 'text-gray-900' : 'text-gray-700'
+                }`}
+              >
+                {SHORT_CURRENCY(w.total)}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+      <div className="border-t border-gray-100 bg-gray-50/40 px-6 py-2 flex items-baseline justify-between gap-3 flex-wrap text-[11px]">
+        <span className="text-gray-600">
+          <span className="text-gray-400 mr-1">{weeks.length}-week average:</span>
+          <span className="tabular-nums font-bold text-gray-800">{SHORT_CURRENCY(avgAll)}</span>
+        </span>
+        <span className="text-[10px] text-gray-400">
+          Context for the projection above — not a forecast of next week.
+        </span>
+      </div>
     </div>
   )
 }
 
 // ================================================================
-// LeadWeeklyRhythm — the predictive mode's lead surface.
+// PredictiveRhythmChart — Predictive's tier-1 surface (the visual
+// forward shape). 7-cell day strip where each cell carries a mini
+// vertical bar sized to the day's projected revenue relative to
+// the strongest projected day. Strongest day picks up an indigo
+// highlight; everything else stays neutral.
 //
-// Combines two predictive reads that used to sit as separate cards:
-//   • the 7-day pace projection (this week's revenue + delta vs the
-//     prior 7 days), and
-//   • the day-of-week rhythm for the upcoming 7 days.
-//
-// Three bands: indigo-tinted header / body with pace + day grid /
-// tinted footer with strongest+softest summary. Indigo left edge
-// accent + indigo header tint + indigo highlight on the strongest
-// expected day give Predictive its forward-leaning color identity
-// without breaking calm family consistency.
+// Pure UI over the existing `next7Outlook` value — no new
+// calculation, no new aggregate, no schema change.
 // ================================================================
-function LeadWeeklyRhythm({
+function PredictiveRhythmChart({
   outlook,
-  last7Revenue,
-  last7Orders,
-  prior7Revenue,
-  paceDelta,
 }: {
   outlook: {
     upcoming: { dayLabel: string; dateLabel: string; projected: number; sampleSize: number }[]
@@ -1293,122 +1320,82 @@ function LeadWeeklyRhythm({
     softest: { dayLabel: string; dateLabel: string; projected: number; sampleSize: number } | null
     total: number
   }
-  last7Revenue: number
-  last7Orders: number
-  prior7Revenue: number
-  paceDelta: number | null
 }) {
   const empty = !outlook.strongest || outlook.total === 0
-  const deltaTone =
-    paceDelta === null
-      ? 'text-gray-400'
-      : paceDelta > 0
-        ? 'text-green-700'
-        : paceDelta < 0
-          ? 'text-red-600'
-          : 'text-gray-400'
-  const arrow = paceDelta === null ? '·' : paceDelta > 0 ? '↑' : paceDelta < 0 ? '↓' : '·'
+  const max = outlook.strongest ? outlook.strongest.projected : 0
   return (
-    <div className="rounded-xl border border-gray-200 bg-white mb-3 overflow-hidden border-l-2 border-l-indigo-300">
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden border-l-2 border-l-indigo-300">
       <div className="border-b border-gray-100 px-6 py-3 bg-indigo-50/30">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-700">
-          <span className="mr-1" aria-hidden="true">
-            →
-          </span>
-          Lead continuation read · next 7 days rhythm
+          Next 7 days rhythm
         </p>
         <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-          The week ahead — projected pace and day-by-day rhythm based on weekday
-          averages from recent history.
+          Day-by-day projected shape based on weekday averages from recent history.
         </p>
       </div>
-
-      <div className="px-6 py-5">
-        <p className="text-xs text-gray-500 leading-relaxed mb-2">
-          At this week&apos;s pace, the next 7 days project to:
+      {empty ? (
+        <p className="px-6 py-10 text-xs text-gray-400 text-center">
+          Not enough weekday history yet to project a day-by-day rhythm.
         </p>
-        <div className="flex items-baseline gap-4 flex-wrap">
-          <p className="text-4xl font-bold tabular-nums text-gray-900 leading-none">
-            {CURRENCY(last7Revenue)}
-          </p>
-          {paceDelta !== null && (
-            <span className={`text-sm font-bold tabular-nums ${deltaTone}`}>
-              {arrow} {Math.abs(paceDelta)}% vs prior 7 days
-            </span>
-          )}
-        </div>
-        <p className="mt-2 text-xs text-gray-600 leading-relaxed">
-          Based on{' '}
-          <span className="font-semibold text-gray-800 tabular-nums">{last7Orders}</span>{' '}
-          orders this past week
-          {prior7Revenue > 0 && (
-            <>
-              {' '}· prior 7 days were{' '}
-              <span className="font-semibold text-gray-800 tabular-nums">
-                {CURRENCY(prior7Revenue)}
-              </span>
-            </>
-          )}
-          .
-        </p>
-
-        {!empty && (
-          <div className="mt-6 pt-5 border-t border-gray-100">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-3">
-              Daily projection
-            </p>
-            <div className="grid grid-cols-7 gap-1.5">
-              {outlook.upcoming.map((u, i) => {
-                const isStrongest =
-                  outlook.strongest !== null &&
-                  u.projected === outlook.strongest.projected &&
-                  u.projected > 0
-                return (
-                  <div
-                    key={i}
-                    className={`rounded-lg px-2 py-2.5 text-center ${
-                      isStrongest ? 'bg-indigo-100' : 'bg-gray-50/60'
+      ) : (
+        <div className="px-6 py-5">
+          <div className="grid grid-cols-7 gap-2">
+            {outlook.upcoming.map((u, i) => {
+              const isStrongest = u.projected === max && u.projected > 0
+              const fillPct = max > 0 ? (u.projected / max) * 100 : 0
+              return (
+                <div
+                  key={i}
+                  className={`rounded-xl border px-2 pt-2 pb-2 text-center flex flex-col ${
+                    isStrongest
+                      ? 'border-indigo-200 bg-indigo-50/60'
+                      : 'border-gray-100 bg-gray-50/40'
+                  }`}
+                >
+                  <p
+                    className={`text-[10px] font-semibold uppercase tracking-[0.12em] ${
+                      isStrongest ? 'text-indigo-800' : 'text-gray-500'
                     }`}
                   >
-                    <p
-                      className={`text-[10px] font-semibold uppercase tracking-widest ${
-                        isStrongest ? 'text-indigo-800' : 'text-gray-400'
-                      }`}
-                    >
-                      {u.dayLabel}
-                    </p>
-                    <p className="mt-0.5 text-[10px] tabular-nums text-gray-400">
-                      {u.dateLabel}
-                    </p>
-                    <p
-                      className={`mt-2 text-[13px] font-bold tabular-nums ${
-                        isStrongest ? 'text-indigo-900' : 'text-gray-700'
-                      }`}
-                    >
-                      {u.projected > 0 ? SHORT_CURRENCY(u.projected) : '—'}
-                    </p>
+                    {u.dayLabel}
+                  </p>
+                  <p className="text-[10px] tabular-nums text-gray-400">
+                    {u.dateLabel}
+                  </p>
+                  {/* Mini bar: vertical fill scaled to strongest day */}
+                  <div className="mt-2 mb-1.5 h-12 flex items-end justify-center">
+                    {u.projected > 0 ? (
+                      <div
+                        className={`w-2 rounded-full ${
+                          isStrongest ? 'bg-indigo-400' : 'bg-gray-300'
+                        }`}
+                        style={{ height: `${Math.max(fillPct, 6)}%` }}
+                      />
+                    ) : (
+                      <div className="w-2 h-1 rounded-full bg-gray-200" aria-hidden="true" />
+                    )}
                   </div>
-                )
-              })}
-            </div>
+                  <p
+                    className={`text-[12px] font-bold tabular-nums ${
+                      isStrongest ? 'text-indigo-900' : 'text-gray-700'
+                    }`}
+                  >
+                    {u.projected > 0 ? SHORT_CURRENCY(u.projected) : '—'}
+                  </p>
+                </div>
+              )
+            })}
           </div>
-        )}
-
-        {empty && (
-          <p className="mt-6 pt-5 border-t border-gray-100 text-xs text-gray-400 text-center">
-            Not enough weekday history yet to project a day-by-day rhythm.
-          </p>
-        )}
-      </div>
-
+        </div>
+      )}
       {!empty && (
-        <div className="border-t border-gray-100 bg-gray-50/40 px-6 py-2.5 flex items-baseline justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-4 text-[11px]">
+        <div className="border-t border-gray-100 bg-gray-50/40 px-6 py-2.5 flex items-baseline justify-between gap-3 flex-wrap text-[11px]">
+          <div className="flex items-center gap-4">
             {outlook.strongest && (
-              <span className="text-gray-700">
+              <span className="text-gray-600">
                 <span className="text-gray-400 mr-1">Strongest:</span>
-                <span className="font-semibold">{outlook.strongest.dayLabel}</span>
-                <span className="text-gray-400"> · </span>
+                <span className="font-semibold text-gray-800">{outlook.strongest.dayLabel}</span>
+                <span className="text-gray-400 mx-1">·</span>
                 <span className="tabular-nums font-bold text-indigo-700">
                   {SHORT_CURRENCY(outlook.strongest.projected)}
                 </span>
@@ -1416,10 +1403,10 @@ function LeadWeeklyRhythm({
             )}
             {outlook.softest &&
               outlook.softest.projected !== outlook.strongest?.projected && (
-                <span className="text-gray-700">
+                <span className="text-gray-600">
                   <span className="text-gray-400 mr-1">Softest:</span>
-                  <span className="font-semibold">{outlook.softest.dayLabel}</span>
-                  <span className="text-gray-400"> · </span>
+                  <span className="font-semibold text-gray-800">{outlook.softest.dayLabel}</span>
+                  <span className="text-gray-400 mx-1">·</span>
                   <span className="tabular-nums font-bold text-gray-700">
                     {SHORT_CURRENCY(outlook.softest.projected)}
                   </span>
@@ -1427,7 +1414,7 @@ function LeadWeeklyRhythm({
               )}
           </div>
           <p className="text-[10px] text-gray-400 leading-relaxed">
-            Pace projection only — does not factor seasonality, holidays, or one-offs.
+            Directional read · seasonality, holidays, and one-offs not factored.
           </p>
         </div>
       )}
@@ -1493,42 +1480,17 @@ function formatDayLabel(dateKey: string): string {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-function buildGrowthDecomp(
-  revDelta: number | null,
-  ordDelta: number | null,
-  ticketDelta: number | null,
-): { verdict: string; headline: string } {
-  if (revDelta === null || ordDelta === null || ticketDelta === null) {
-    return {
-      verdict: 'No comparison',
-      headline:
-        'Not enough history in the previous window to decompose the move yet. Come back once two full periods of data are in.',
-    }
+// Format a "May 4 – May 10" / "May 25 – Jun 1" week range from
+// two ISO date keys. Used by PredictiveRecentWeeks to label each
+// trailing-week bar.
+function formatWeekLabel(startDate: string, endDate: string): string {
+  const [y1, m1, d1] = startDate.split('-').map(Number)
+  const [y2, m2, d2] = endDate.split('-').map(Number)
+  const start = new Date(y1, m1 - 1, d1)
+  const end = new Date(y2, m2 - 1, d2)
+  if (m1 === m2) {
+    return `${start.toLocaleDateString('en-US', { month: 'short' })} ${d1}–${d2}`
   }
-  if (revDelta === 0 && ordDelta === 0 && ticketDelta === 0) {
-    return {
-      verdict: 'Flat',
-      headline: 'Revenue, orders, and ticket size are all flat against the previous window.',
-    }
-  }
-  const absOrd = Math.abs(ordDelta)
-  const absTicket = Math.abs(ticketDelta)
-  let verdict: string
-  if (absOrd >= absTicket * 2) verdict = 'Volume-led'
-  else if (absTicket >= absOrd * 2) verdict = 'Ticket-led'
-  else verdict = 'Mixed'
-
-  const direction = revDelta > 0 ? 'rose' : revDelta < 0 ? 'fell' : 'held'
-  const magnitude = revDelta === 0 ? '' : ` ${Math.abs(revDelta)}%`
-  const drive =
-    verdict === 'Volume-led'
-      ? `Orders did the moving (${deltaText(ordDelta)}); avg ticket was ${deltaText(ticketDelta)}.`
-      : verdict === 'Ticket-led'
-        ? `Ticket size did the moving (${deltaText(ticketDelta)}); orders were ${deltaText(ordDelta)}.`
-        : `Orders ${deltaText(ordDelta)} and avg ticket ${deltaText(ticketDelta)} contributed roughly together.`
-
-  return {
-    verdict,
-    headline: `Revenue ${direction}${magnitude}. ${drive}`,
-  }
+  return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
 }
+

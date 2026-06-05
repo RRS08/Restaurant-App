@@ -30,6 +30,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { requireRestaurantOwner, AuthzError } from '@/lib/authz'
+import { isDevEmail } from '@/lib/dev'
 import {
   CountryCode,
   Products,
@@ -934,3 +935,334 @@ export async function createSandboxRentTransaction(
           `(or page load) will pull it in. (${exactlyTodaysTxns.length} txn(s) dated ${today})`)
   }
 }
+
+// ================================================================
+// BANK REVIEW V1 — settlement actions
+//
+// Four review actions that mutate the bank_transactions.review_state
+// column added in the Bank Review V1 migration. They are
+// intentionally thin: RLS scopes every UPDATE to the calling
+// restaurant, so the actions just need an authenticated user plus
+// a txn_id. No owner gate — any member of the restaurant can review
+// bank activity.
+//
+//   settleBankTransaction         marks a row settled with a kind
+//                                 (revenue | inventory | labor |
+//                                 operating)
+//   ignoreBankTransaction         personal / owner transfer / not a
+//                                 business event — excluded from
+//                                 Finance totals
+//   markBankTransactionNotAMatch  manager isn't sure yet; surface
+//                                 it under "Review later" without
+//                                 leaving it in the main queue
+//   reopenBankTransaction         undo — flips any state back to
+//                                 unreviewed
+//
+// Each action revalidates /finance so the card counts refresh
+// without a hard reload. Bank Review V1 does NOT create expense
+// rows on settle yet — it only tags the bank row. A future pass
+// will optionally write/link to expenses for double-entry honesty.
+// ================================================================
+type SettlementKind = 'revenue' | 'inventory' | 'labor' | 'operating'
+const SETTLEMENT_KINDS: SettlementKind[] = ['revenue', 'inventory', 'labor', 'operating']
+
+async function authedSupabase() {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false as const, error: 'Not authenticated.' }
+  return { ok: true as const, supabase, userId: user.id }
+}
+
+export async function settleBankTransaction(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnId = (formData.get('txn_id') as string | null)?.trim()
+  const kindRaw = (formData.get('kind') as string | null)?.trim()
+  if (!txnId) return { error: 'Missing transaction id.' }
+  if (!kindRaw || !SETTLEMENT_KINDS.includes(kindRaw as SettlementKind)) {
+    return { error: 'Invalid settlement kind.' }
+  }
+  const kind = kindRaw as SettlementKind
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'settled',
+      settled_kind: kind,
+      settled_at: new Date().toISOString(),
+    })
+    .eq('id', txnId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return { ok: true, message: `Settled as ${kind}.` }
+}
+
+export async function ignoreBankTransaction(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnId = (formData.get('txn_id') as string | null)?.trim()
+  if (!txnId) return { error: 'Missing transaction id.' }
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'ignored',
+      settled_kind: null,
+      settled_expense_id: null,
+      settled_at: new Date().toISOString(),
+    })
+    .eq('id', txnId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return { ok: true, message: 'Ignored.' }
+}
+
+export async function markBankTransactionNotAMatch(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnId = (formData.get('txn_id') as string | null)?.trim()
+  if (!txnId) return { error: 'Missing transaction id.' }
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'not_a_match',
+      settled_kind: null,
+      settled_expense_id: null,
+      settled_at: new Date().toISOString(),
+    })
+    .eq('id', txnId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return { ok: true, message: 'Marked for later review.' }
+}
+
+export async function reopenBankTransaction(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnId = (formData.get('txn_id') as string | null)?.trim()
+  if (!txnId) return { error: 'Missing transaction id.' }
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'unreviewed',
+      settled_kind: null,
+      settled_expense_id: null,
+      settled_at: null,
+    })
+    .eq('id', txnId)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return { ok: true, message: 'Reopened.' }
+}
+
+// ================================================================
+// FINANCE SETTLEMENT SANDBOX — dev-only seeding
+//
+// Inserts deterministic test bank_transactions rows so the Bank
+// Review workflow can be exercised against scenarios that real
+// Plaid sandbox data doesn't reliably produce. Every seeded row is
+// tagged in two redundant ways for safe cleanup:
+//
+//   1. provider_transaction_id begins with 'sandbox_'
+//   2. provider_metadata.sandbox is true
+//
+// `clearSandboxBankTransactions` filters on the prefix AND the
+// calling restaurant scope so a runaway query cannot delete real
+// Plaid-imported rows. Every action is gated by isDevEmail; in
+// production an unauthorized user receives the same generic error
+// the auth gate would return.
+//
+// Scenarios are tuned to the matching engine in lib/finance/
+// matching.ts so the "Suggested matches" section actually fires:
+//   - revenue   → Stripe Payout (REVENUE_KEYWORDS + INCOME PFC)
+//   - inventory → Sysco Foods   (INVENTORY_KEYWORDS + FOOD_AND_DRINK)
+//   - payroll   → ADP Payroll   (LABOR_KEYWORDS)
+//   - operating → Rent payment  (OPERATING_KEYWORDS + RENT_AND_UTILITIES)
+//   - personal  → CVS Pharmacy  (PERSONAL_KEYWORDS, MEDICAL PFC)
+//   - cash      → Cash Deposit  (no PFC; classifier returns unclear)
+//   - unmatched → ambiguous in + out (no signals — manager triage)
+// ================================================================
+
+const SANDBOX_PFX = 'sandbox_'
+
+interface SandboxSeedSpec {
+  scenario: string
+  direction: 'inflow' | 'outflow'
+  amount: number
+  rawCategory: string | null
+  merchantName: string
+  description: string
+  daysAgo: number
+}
+
+const SANDBOX_SCENARIOS: Record<string, SandboxSeedSpec[]> = {
+  revenue: [
+    { scenario: 'revenue', direction: 'inflow', amount: 487.32, rawCategory: 'INCOME',
+      merchantName: 'Stripe Payout', description: 'STRIPE PAYOUT 487.32', daysAgo: 1 },
+  ],
+  inventory: [
+    { scenario: 'inventory', direction: 'outflow', amount: 312.50, rawCategory: 'FOOD_AND_DRINK',
+      merchantName: 'Sysco Foods', description: 'SYSCO ACH DEBIT', daysAgo: 2 },
+  ],
+  payroll: [
+    { scenario: 'payroll', direction: 'outflow', amount: 1842.50, rawCategory: 'GENERAL_SERVICES',
+      merchantName: 'ADP Payroll', description: 'ADP PAYROLL BIWEEKLY', daysAgo: 3 },
+  ],
+  operating: [
+    { scenario: 'operating', direction: 'outflow', amount: 1500.00, rawCategory: 'RENT_AND_UTILITIES',
+      merchantName: 'Property Mgmt LLC', description: 'RENT PAYMENT MAY', daysAgo: 0 },
+  ],
+  personal: [
+    { scenario: 'personal', direction: 'outflow', amount: 87.23, rawCategory: 'MEDICAL',
+      merchantName: 'CVS Pharmacy', description: 'CVS PHARMACY 87.23', daysAgo: 4 },
+  ],
+  cash: [
+    { scenario: 'cash', direction: 'inflow', amount: 425.00, rawCategory: null,
+      merchantName: 'Cash Deposit', description: 'CASH DEPOSIT BRANCH', daysAgo: 1 },
+  ],
+  unmatched: [
+    { scenario: 'unmatched_in', direction: 'inflow', amount: 200.00, rawCategory: null,
+      merchantName: 'Unknown Deposit', description: 'INCOMING WIRE', daysAgo: 5 },
+    { scenario: 'unmatched_out', direction: 'outflow', amount: 142.99, rawCategory: null,
+      merchantName: 'WTHDRWL', description: 'WTHDRWL ATM 142.99', daysAgo: 3 },
+  ],
+}
+
+async function gateDev(): Promise<
+  | { ok: true; supabase: Awaited<ReturnType<typeof createClient>>; restaurantId: string }
+  | { ok: false; error: string }
+> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { ok: false, error: 'Not authenticated.' }
+  if (!isDevEmail(user.email)) return { ok: false, error: 'Dev access only.' }
+  const { data: role } = await supabase
+    .from('user_roles')
+    .select('restaurant_id')
+    .eq('user_id', user.id)
+    .single()
+  if (!role?.restaurant_id) return { ok: false, error: 'No restaurant found.' }
+  return { ok: true, supabase, restaurantId: role.restaurant_id }
+}
+
+export async function seedSandboxBankTransactions(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const gate = await gateDev()
+  if (!gate.ok) return { error: gate.error }
+
+  const scenarioKey = (formData.get('scenario') as string | null)?.trim()
+  if (!scenarioKey) return { error: 'Missing scenario.' }
+
+  // 'demo' = run every named scenario; otherwise the single one.
+  let specs: SandboxSeedSpec[] = []
+  if (scenarioKey === 'demo') {
+    specs = Object.values(SANDBOX_SCENARIOS).flat()
+  } else if (scenarioKey in SANDBOX_SCENARIOS) {
+    specs = SANDBOX_SCENARIOS[scenarioKey]
+  } else {
+    return { error: `Unknown scenario: ${scenarioKey}` }
+  }
+
+  // Need an active connected_bank_account to anchor the FK. The
+  // Plaid sandbox connect lives at the top of /dev-tools — the
+  // manager has to run that once before this section can do work.
+  const { data: accts } = await gate.supabase
+    .from('connected_bank_accounts')
+    .select('id')
+    .eq('restaurant_id', gate.restaurantId)
+    .eq('active', true)
+    .limit(1)
+  const accountId = accts?.[0]?.id
+  if (!accountId) {
+    return { error: 'Connect a sandbox bank first (top of /dev-tools).' }
+  }
+
+  const nowMs = Date.now()
+  const nowIso = new Date().toISOString()
+  const rows = specs.map((spec, i) => {
+    const postedAt = new Date()
+    postedAt.setDate(postedAt.getDate() - spec.daysAgo)
+    return {
+      restaurant_id: gate.restaurantId,
+      connected_bank_account_id: accountId,
+      provider_transaction_id: `${SANDBOX_PFX}${spec.scenario}_${nowMs}_${i}`,
+      amount: spec.amount,
+      direction: spec.direction,
+      currency: 'USD',
+      description: spec.description,
+      merchant_name: spec.merchantName,
+      raw_category: spec.rawCategory,
+      posted_at: postedAt.toISOString(),
+      pending: false,
+      provider_metadata: { sandbox: true, scenario: spec.scenario, seeded_at: nowIso },
+      review_state: 'unreviewed',
+    }
+  })
+
+  const { error } = await gate.supabase.from('bank_transactions').insert(rows)
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  revalidatePath('/dev-tools')
+  return {
+    ok: true,
+    message: `Seeded ${rows.length} sandbox row${rows.length === 1 ? '' : 's'} (${scenarioKey}).`,
+  }
+}
+
+export async function clearSandboxBankTransactions(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const gate = await gateDev()
+  if (!gate.ok) return { error: gate.error }
+
+  // Two-fold safety: explicit restaurant scope + prefix match.
+  // RLS already constrains writes to this restaurant; the prefix
+  // guarantees only sandbox-seeded rows are touched even if a
+  // future RLS change widens scope.
+  const { data, error } = await gate.supabase
+    .from('bank_transactions')
+    .delete()
+    .eq('restaurant_id', gate.restaurantId)
+    .like('provider_transaction_id', `${SANDBOX_PFX}%`)
+    .select('id')
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  revalidatePath('/dev-tools')
+  return {
+    ok: true,
+    message: `Cleared ${data?.length ?? 0} sandbox row${(data?.length ?? 0) === 1 ? '' : 's'}.`,
+  }
+}
+

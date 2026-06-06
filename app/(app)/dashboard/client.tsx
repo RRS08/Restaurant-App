@@ -31,9 +31,8 @@
 // Dashboard only reports operating state and routes attention.
 // ----------------------------------------------------------------
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import SimpleLineChart from '@/components/line-chart'
 import type { PillarKey, PillarState } from '@/lib/readiness'
 
 interface Props {
@@ -95,30 +94,71 @@ interface Props {
     quantityChange: number
     datetime: string
   } | null
+  /** Pre-computed metric values for the four top-card carousels.
+   *  Each pillar carries four metrics; the carousel rotates through
+   *  them client-side on a calm 6s interval, staggered between cards. */
+  topCards: {
+    sales: {
+      salesToday: number
+      ordersToday: number
+      avgTicketToday: number
+      bestSeller: { name: string; count: number } | null
+      paymentMix: { card: number; cash: number; other: number; total: number } | null
+    }
+    staffing: {
+      shiftsToday: number
+      hoursToday: number
+      activeStaff: number
+      /** Hourly-rate × hours for today's shifts. null when no shift
+       *  this week had a rated employee (Labor estimate unavailable). */
+      laborEstimateToday: number | null
+      /** FOH / BOH split of today's shifts. null when no shifts
+       *  have a section.area assigned (no house coverage data). */
+      houseCoverage: { foh: number; boh: number } | null
+    }
+    inventory: {
+      outItems: number
+      lowItems: number
+      /** Recorded inventory cost — sum of is_inventory_related
+       *  expense rows in the 30-day window. Bank-settled figure
+       *  is not yet exposed, so this is explicitly "recorded". */
+      recordedInventoryCost30d: number
+      pendingRestocks: { drafts: number; ordered: number }
+    }
+    finance: {
+      moneyReview: { attention: number; auto: number; scanned: number }
+      depositsToConfirm: number
+      /** Sum of non-inventory expense rows in the 30-day window.
+       *  Labeled "estimated" on the carousel. */
+      operatingEstimate30d: number
+      bankSyncedAt: string | null
+    }
+  }
 }
 
 // ================================================================
 // Domain types for view-model
 // ================================================================
 
-type Severity = 'critical' | 'warn' | 'info'
-type PillarTag = 'Inventory' | 'Staffing' | 'Sales' | 'Finance' | 'Setup'
+// Severity / PillarTag / AttentionItem / buildAttention were removed
+// when "Needs Attention" was replaced with the Quick Actions card.
+// Their work is now done by the per-pillar Status carousels (current
+// state) + the inventory pressure footer on Operating Pressure.
 
-interface AttentionItem {
-  id: string
-  severity: Severity
-  pillar: PillarTag
-  headline: string
-  sub?: string
-  href: string
-}
+// ReadinessCheck / buildReadinessChecks / ReadinessDot were removed
+// with the Daily Readiness card. The Manager To-Do card replaces it
+// with a manager-editable checklist (DEFAULT_TODO_ITEMS, below).
 
-interface ReadinessCheck {
-  id: string
-  label: string
-  status: 'ready' | 'limited' | 'pending'
-  sub?: string
-}
+// Default checklist for the Manager To-Do card. Seeds first-load
+// state when localStorage is empty. The manager can edit, add,
+// remove via the Manage drawer; their changes persist.
+const DEFAULT_TODO_ITEMS: { id: string; label: string; hint?: string }[] = [
+  { id: 'pos-ready',      label: 'Confirm POS is ready',           hint: 'Hardware, network, signed in.' },
+  { id: 'stock-check',    label: 'Check low-stock and out items',  hint: 'Review the Inventory card alerts.' },
+  { id: 'staffing-today', label: "Confirm today's staffing",       hint: 'All blocks covered or gaps acknowledged.' },
+  { id: 'sales-check',    label: 'Review recent sales activity',   hint: 'Look at last 7 days vs today.' },
+  { id: 'money-review',   label: 'Check money review / deposits',  hint: 'Confirm deposits and resolve exceptions.' },
+]
 
 // ================================================================
 // Formatting helpers
@@ -148,220 +188,6 @@ function fmtDateOnly(iso: string): string {
 }
 
 // ================================================================
-// View-model builders
-// ================================================================
-
-function buildAttention(props: Props): AttentionItem[] {
-  const out: AttentionItem[] = []
-  const {
-    inventory,
-    staffing,
-    sales,
-    readiness,
-    inventoryWriteLive,
-    bankConnectedUnsynced,
-  } = props
-
-  // ---- Setup-level (readiness honesty) ----
-  if (readiness) {
-    if (!inventoryWriteLive) {
-      out.push({
-        id: 'setup-inventory-not-live',
-        severity: 'info',
-        pillar: 'Setup',
-        headline: 'Inventory tracking not active yet',
-        sub: 'Stock counts shown are setup data — depletion is not flowing.',
-        href: '/settings',
-      })
-    } else if (readiness.inventory === 'active_with_limitations') {
-      out.push({
-        id: 'setup-inventory-partial',
-        severity: 'info',
-        pillar: 'Setup',
-        headline: 'Inventory active with limitations',
-        sub: 'Some menu items are still unmapped to recipes.',
-        href: '/settings',
-      })
-    }
-
-    if (readiness.sales === 'setup_in_progress' || readiness.sales === 'not_started') {
-      out.push({
-        id: 'setup-sales-pending',
-        severity: 'warn',
-        pillar: 'Setup',
-        headline: 'Sales not flowing yet',
-        sub: 'Pick an operating mode to start ringing up orders.',
-        href: '/settings',
-      })
-    }
-
-    if (readiness.finance === 'active_with_limitations') {
-      if (bankConnectedUnsynced) {
-        out.push({
-          id: 'setup-bank-unsynced',
-          severity: 'info',
-          pillar: 'Finance',
-          headline: 'Bank connected, awaiting first sync',
-          sub: 'Finance will reconcile once transactions arrive.',
-          href: '/finance',
-        })
-      } else {
-        out.push({
-          id: 'setup-bank-internal-only',
-          severity: 'info',
-          pillar: 'Finance',
-          headline: 'Finance on internal data only',
-          sub: 'No bank sync connected — money pulse is approximate.',
-          href: '/finance',
-        })
-      }
-    }
-  }
-
-  // ---- Inventory ----
-  if (inventory.outOfStockCount > 0) {
-    out.push({
-      id: 'inv-out-of-stock',
-      severity: 'critical',
-      pillar: 'Inventory',
-      headline: `Restock ${inventory.outOfStockCount} item${inventory.outOfStockCount === 1 ? '' : 's'}`,
-      sub: 'Currently estimated at zero or below.',
-      href: '/inventory',
-    })
-  }
-  if (inventory.lowStockCount > 0) {
-    out.push({
-      id: 'inv-low-stock',
-      severity: 'warn',
-      pillar: 'Inventory',
-      headline: `Review ${inventory.lowStockCount} low-stock item${inventory.lowStockCount === 1 ? '' : 's'}`,
-      sub: 'Below the low-stock threshold.',
-      href: '/inventory',
-    })
-  }
-  if (inventory.noCountCount > 0) {
-    out.push({
-      id: 'inv-no-count',
-      severity: 'info',
-      pillar: 'Inventory',
-      headline: `Count ${inventory.noCountCount} uncounted item${inventory.noCountCount === 1 ? '' : 's'}`,
-      sub: 'No baseline count recorded yet.',
-      href: '/inventory/new-count',
-    })
-  }
-
-  // ---- Staffing ----
-  if (staffing.employeeCount === 0) {
-    out.push({
-      id: 'staff-no-employees',
-      severity: 'warn',
-      pillar: 'Staffing',
-      headline: 'No active employees',
-      sub: 'Add your team to begin scheduling.',
-      href: '/staffing',
-    })
-  } else if (staffing.shiftsToday === 0) {
-    out.push({
-      id: 'staff-no-shifts',
-      severity: 'warn',
-      pillar: 'Staffing',
-      headline: 'No shifts scheduled today',
-      sub: 'Today\'s coverage is currently empty.',
-      href: '/staffing',
-    })
-  }
-
-  // ---- Sales ----
-  if (
-    sales.ordersToday === 0 &&
-    readiness?.sales === 'active'
-  ) {
-    out.push({
-      id: 'sales-no-today',
-      severity: 'info',
-      pillar: 'Sales',
-      headline: 'No sales recorded today',
-      sub: 'Open POS or check the import feed.',
-      href: '/pos',
-    })
-  }
-
-  // Sort: critical → warn → info; stable within group.
-  const order: Record<Severity, number> = { critical: 0, warn: 1, info: 2 }
-  return out.sort((a, b) => order[a.severity] - order[b.severity])
-}
-
-function buildReadinessChecks(props: Props): ReadinessCheck[] {
-  const { readiness, inventoryWriteLive, inventory, staffing, sales, bankConnectedUnsynced } = props
-  const stockAlertCount = inventory.outOfStockCount + inventory.lowStockCount
-
-  return [
-    {
-      id: 'pos',
-      label: 'POS ready',
-      status: readiness?.sales === 'active' ? 'ready' : 'pending',
-      sub:
-        readiness?.sales === 'active'
-          ? 'Operating mode set; orders can flow.'
-          : 'Pick an operating mode in Settings.',
-    },
-    {
-      id: 'staffing',
-      label: 'Today\'s staffing confirmed',
-      status:
-        staffing.employeeCount > 0 && staffing.shiftsToday > 0
-          ? 'ready'
-          : 'pending',
-      sub:
-        staffing.shiftsToday > 0
-          ? `${staffing.shiftsToday} shift${staffing.shiftsToday === 1 ? '' : 's'} on today.`
-          : 'No shifts scheduled for today.',
-    },
-    {
-      id: 'inventory',
-      label: 'Stock alerts reviewed',
-      status: !inventoryWriteLive
-        ? 'pending'
-        : stockAlertCount === 0
-          ? 'ready'
-          : 'limited',
-      sub: !inventoryWriteLive
-        ? 'Tracking not active yet — counts are setup data.'
-        : stockAlertCount === 0
-          ? 'All items in good standing.'
-          : `${stockAlertCount} alert${stockAlertCount === 1 ? '' : 's'} pending review.`,
-    },
-    {
-      id: 'finance',
-      label: 'Finance status known',
-      status:
-        readiness?.finance === 'active'
-          ? 'ready'
-          : readiness?.finance === 'active_with_limitations'
-            ? 'limited'
-            : 'pending',
-      sub:
-        readiness?.finance === 'active'
-          ? 'Bank synced.'
-          : bankConnectedUnsynced
-            ? 'Bank connected, awaiting first sync.'
-            : readiness?.finance === 'active_with_limitations'
-              ? 'Internal expense tracking only.'
-              : 'Not configured yet.',
-    },
-    {
-      id: 'sales-activity',
-      label: 'Recent sales activity reviewed',
-      status: sales.ordersLast7Days > 0 ? 'ready' : 'limited',
-      sub:
-        sales.ordersLast7Days > 0
-          ? `${sales.ordersLast7Days} order${sales.ordersLast7Days === 1 ? '' : 's'} in the last 7 days.`
-          : 'No sales in the last 7 days.',
-    },
-  ]
-}
-
-// ================================================================
 // Main client
 // ================================================================
 
@@ -383,64 +209,21 @@ export default function DashboardClient(props: Props) {
     readiness,
     bankConnectedUnsynced,
     inventoryWriteLive,
+    topCards,
   } = props
 
-  // ----------------------------------------------------------------
-  // Today's Rhythm — selected-day state
-  //
-  // Default: today's Mon..Sun index (0=Mon, 6=Sun). If for any
-  // reason today isn't in the displayed week, fall back to the
-  // latest day with any data (sales or shifts), otherwise day 0.
-  // ----------------------------------------------------------------
+  // Today's Mon..Sun index (0=Mon, 6=Sun). Used by Operating
+  // Pressure to anchor today's column with a stronger fill.
   const todayIdx = useMemo(() => {
     const jsDay = new Date().getDay() // 0=Sun..6=Sat
     return jsDay === 0 ? 6 : jsDay - 1
   }, [])
 
-  const defaultSelectedIdx = useMemo(() => {
-    // Today is the natural default.
-    if (todayIdx >= 0 && todayIdx < 7) return todayIdx
-    // Fallback: latest day in the week that has any activity.
-    for (let i = 6; i >= 0; i--) {
-      if ((salesByDay[i]?.value ?? 0) > 0 || (shiftsByDay[i]?.value ?? 0) > 0) {
-        return i
-      }
-    }
-    return 0
-  }, [todayIdx, salesByDay, shiftsByDay])
-
-  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(defaultSelectedIdx)
-
-  // Resolved values for the selected day. Each useMemo only
-  // recomputes when its inputs change, so flipping days is cheap.
-  const selectedSales = salesByDay[selectedDayIdx] ?? null
-  const selectedShifts = shiftsByDay[selectedDayIdx] ?? null
-  const selectedDate = selectedShifts?.date ?? selectedSales?.date ?? null
-
-  // First scheduled shift on the selected day. Earliest start time
-  // wins — this is the "next" for today/future and the "first" for
-  // a past day, framed with a single neutral eyebrow.
-  const selectedFirstShift = useMemo(() => {
-    if (!selectedDate) return null
-    const target = new Date(selectedDate)
-    const onDay = weekShiftDetails.filter((s) => {
-      const d = new Date(s.startTime)
-      return (
-        d.getFullYear() === target.getFullYear() &&
-        d.getMonth() === target.getMonth() &&
-        d.getDate() === target.getDate()
-      )
-    })
-    if (onDay.length === 0) return null
-    return [...onDay].sort(
-      (a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime(),
-    )[0]
-  }, [selectedDate, weekShiftDetails])
-
   const stockAlerts = inventory.outOfStockCount + inventory.lowStockCount
-  const attention = buildAttention(props)
-  const readinessChecks = buildReadinessChecks(props)
-  const nextShift = upcomingShifts[0] ?? null
+  // Manager To-Do drawer — visibility lives on the root client so
+  // both the card (which fires the open) and the drawer mount
+  // (which lives below the support-row) share one source of truth.
+  const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
 
   // Daily Status Strip — each card answers one question for today.
   const salesState: 'ready' | 'quiet' =
@@ -532,48 +315,25 @@ export default function DashboardClient(props: Props) {
           the status pill — each layer answers "is today okay?" at
           a different fidelity. */}
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 mb-5">
-        <DailyStatusCard
+        <StatusCarousel
           href="/sales"
-          label="Sales Today"
-          value={MONEY(sales.salesToday)}
-          sub={
-            sales.ordersToday === 0
-              ? 'No completed orders yet today'
-              : `${sales.ordersToday} completed order${sales.ordersToday === 1 ? '' : 's'} today`
-          }
-          status={sales.ordersToday === 0 ? 'No sales yet' : 'Active'}
+          label="Sales"
+          status={topCards.sales.ordersToday === 0 ? 'No sales yet' : 'Active'}
           tone={salesState === 'ready' ? 'normal' : 'neutral'}
+          rotateOffsetMs={0}
+          metrics={buildSalesMetrics(topCards.sales)}
         />
-        <DailyStatusCard
+        <StatusCarousel
           href="/staffing"
-          label="Staff Coverage"
-          value={`${staffing.shiftsToday} shift${staffing.shiftsToday === 1 ? '' : 's'}`}
-          sub={
-            staffing.employeeCount === 0
-              ? 'Add your team to begin scheduling'
-              : staffing.shiftsToday === 0
-                ? 'No coverage scheduled today'
-                : `${staffing.employeeCount} active employee${staffing.employeeCount === 1 ? '' : 's'} on the team`
-          }
+          label="Staffing"
           status={staffStatus}
           tone={staffState === 'ready' ? 'normal' : 'warn'}
+          rotateOffsetMs={1500}
+          metrics={buildStaffingMetrics(topCards.staffing)}
         />
-        <DailyStatusCard
+        <StatusCarousel
           href="/inventory"
-          label="Inventory Risk"
-          value={
-            inventory.outOfStockCount > 0
-              ? `${inventory.outOfStockCount} out`
-              : stockAlerts > 0
-                ? `${stockAlerts} alert${stockAlerts === 1 ? '' : 's'}`
-                : 'All clear'
-          }
-          sub={(() => {
-            const needReview =
-              inventory.outOfStockCount + inventory.lowStockCount + inventory.noCountCount
-            if (needReview === 0) return `${inventory.totalItems} tracked · all in good standing`
-            return `${inventory.totalItems} tracked · ${needReview} need${needReview === 1 ? 's' : ''} review`
-          })()}
+          label="Inventory"
           status={inventoryStatus}
           tone={
             inventoryState === 'critical'
@@ -582,12 +342,12 @@ export default function DashboardClient(props: Props) {
                 ? 'warn'
                 : 'normal'
           }
+          rotateOffsetMs={3000}
+          metrics={buildInventoryMetrics(topCards.inventory)}
         />
-        <DailyStatusCard
+        <StatusCarousel
           href="/finance"
-          label="Money Pulse"
-          value={MONEY(finance.expenseTotal30d)}
-          sub={`${finance.expenseCount30d} expense${finance.expenseCount30d === 1 ? '' : 's'} tracked · last 30d`}
+          label="Finance"
           status={financeStatus}
           tone={
             financeState === 'ready'
@@ -596,152 +356,37 @@ export default function DashboardClient(props: Props) {
                 ? 'neutral'
                 : 'warn'
           }
+          rotateOffsetMs={4500}
+          metrics={buildFinanceMetrics(topCards.finance)}
         />
       </div>
 
       {/* ============================================================ */}
       {/* 2. MAIN OPERATING AREA                                         */}
-      {/* Left: Today's Rhythm — sales chart + shift coverage strip.     */}
-      {/* Right: Needs Attention — the dominant operational surface.    */}
-      {/* The right column intentionally outweighs the left in product  */}
-      {/* role even though the left is wider visually: charts orient,   */}
-      {/* attention routes.                                              */}
+      {/* Left: Operating Pressure — multi-pillar weekly read.           */}
+      {/* Right: Quick Actions — common manager shortcuts.               */}
+      {/* The left card answers "what should I notice?"; the right       */}
+      {/* answers "what can I do right now?".                            */}
       {/* ============================================================ */}
       <div className="grid gap-4 grid-cols-1 xl:grid-cols-5 mb-5">
 
-        {/* LEFT — Today's Rhythm (col-span-3).
-            Compact: sales line at 110px (was 160), shift coverage
-            is now a 7-tile horizontal strip (was a bar chart) so
-            empty days don't carry chart chrome. Today's tile is
-            highlighted dark to anchor the eye to "now". */}
-        <div className="xl:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
-          <div className="border-b border-gray-100 px-5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Today&apos;s rhythm
-            </p>
-            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Sales movement and scheduled coverage this week.
-            </p>
-          </div>
-          <div className="px-5 pt-3 pb-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
-              Sales · this week
-            </p>
-            <SimpleLineChart data={salesByDay} color="#3b82f6" height={110} />
-          </div>
-          <div className="px-5 py-3 border-t border-gray-100 bg-gray-50/40">
-            <div className="flex items-baseline justify-between mb-2">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-                Shifts · this week
-              </p>
-              <p className="text-[10px] tabular-nums text-gray-500">
-                <span className="font-semibold text-gray-700">
-                  {shiftsByDay.reduce((s, d) => s + d.value, 0)}
-                </span>{' '}
-                total
-              </p>
-            </div>
-            <ShiftStrip
-              days={shiftsByDay}
-              selectedIdx={selectedDayIdx}
-              todayIdx={todayIdx}
-              onSelect={setSelectedDayIdx}
-            />
-          </div>
+        {/* LEFT — Operating Pressure (col-span-3). A weekly chart
+            of derived pressure (sales × demand factor, capped to
+            scale). Hover a column for full detail. The chart fills
+            the card; no bottom interpretation block. */}
+        <OperatingPressureCard
+          salesByDay={salesByDay}
+          shiftsByDay={shiftsByDay}
+          todayIdx={todayIdx}
+          outItems={inventory.outOfStockCount}
+          lowItems={inventory.lowStockCount}
+        />
 
-          {/* Selected-day summary — appears inside the same Today's
-              Rhythm card so the interaction stays contained. Three
-              compact columns: Sales / Coverage / Next. Empty states
-              are honest ("No sales recorded" / "No shifts scheduled"
-              / "No upcoming shift") so the card never invents data. */}
-          <SelectedDaySummary
-            sales={selectedSales}
-            shifts={selectedShifts}
-            firstShift={selectedFirstShift}
-            dateIso={selectedDate}
-          />
-        </div>
-
-        {/* RIGHT — Needs Attention (col-span-2). The dominant
-            operational triage surface. Header carries a sub-line +
-            a count pill that's the same visual class as the daily
-            status strip's pills, so this surface anchors as the
-            page's triage anchor rather than a generic side list. */}
-        <div className="xl:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
-          <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
-                Needs attention
-              </p>
-              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                What to look at next.
-              </p>
-            </div>
-            {attention.length > 0 && (
-              <span
-                className={`inline-flex items-center gap-1.5 text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-full flex-shrink-0 ${
-                  attention.some((a) => a.severity === 'critical')
-                    ? 'bg-red-50 text-red-700'
-                    : attention.some((a) => a.severity === 'warn')
-                      ? 'bg-amber-50 text-amber-700'
-                      : 'bg-gray-100 text-gray-700'
-                }`}
-              >
-                {attention.length}
-              </span>
-            )}
-          </div>
-          {attention.length === 0 ? (
-            <div className="flex-1 px-5 py-10 text-center">
-              <p className="text-xs font-semibold text-gray-700">Nothing urgent right now.</p>
-              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed max-w-xs mx-auto">
-                Today&apos;s operating state looks healthy. Open a pillar to keep working.
-              </p>
-            </div>
-          ) : (
-            <ul className="flex-1 divide-y divide-gray-100">
-              {attention.slice(0, 8).map((item) => (
-                <li key={item.id}>
-                  <Link
-                    href={item.href}
-                    className="flex items-start gap-3 px-5 py-3.5 hover:bg-gray-50 transition-colors group"
-                  >
-                    <span
-                      className={`mt-1.5 h-2 w-2 rounded-full flex-shrink-0 ${
-                        item.severity === 'critical'
-                          ? 'bg-red-500'
-                          : item.severity === 'warn'
-                            ? 'bg-amber-500'
-                            : 'bg-blue-400'
-                      }`}
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-                        {item.pillar}
-                      </p>
-                      <p className="mt-0.5 text-[13px] font-semibold text-gray-900 leading-snug">
-                        {item.headline}
-                      </p>
-                      {item.sub && (
-                        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                          {item.sub}
-                        </p>
-                      )}
-                    </div>
-                    {/* Explicit action affordance — a small text
-                        link rather than a lone arrow. Blue is the
-                        family accent for action; sentence-case +
-                        medium weight keeps the row calm. */}
-                    <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 mt-0.5 whitespace-nowrap">
-                      Review →
-                    </span>
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        {/* RIGHT — Quick Actions (col-span-2). Action-oriented
+            shortcuts to the most-used manager flows. Each row
+            navigates to the relevant page (some with a query
+            param that opens the relevant drawer on landing). */}
+        <QuickActionsCard />
 
       </div>
 
@@ -751,77 +396,24 @@ export default function DashboardClient(props: Props) {
       {/* ============================================================ */}
       <div className="grid gap-4 grid-cols-1 md:grid-cols-3">
 
-        {/* Daily readiness — system-driven, not a to-do list. Broader
-            than "opening" since the dashboard plays a daily role
-            beyond morning workflows. */}
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-          <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Daily readiness
-            </p>
-            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Readiness checks for today&apos;s operation.
-            </p>
-          </div>
-          <ul className="divide-y divide-gray-100">
-            {readinessChecks.map((check) => (
-              <li key={check.id} className="px-4 py-2.5 flex items-start gap-2.5">
-                <ReadinessDot status={check.status} />
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-medium text-gray-800 leading-snug">
-                    {check.label}
-                  </p>
-                  {check.sub && (
-                    <p className="mt-0.5 text-[10px] text-gray-500 leading-relaxed">
-                      {check.sub}
-                    </p>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </div>
+        {/* Manager To-Do — replaces the system-driven Daily
+            Readiness card. Items are managed in a drawer + persist
+            in localStorage. Defaults seeded from `readinessChecks`
+            so the first-load experience already has a meaningful
+            checklist; the manager can edit, add, or remove from
+            there. See ManagerTodoCard. */}
+        <ManagerTodoCard
+          defaultItems={DEFAULT_TODO_ITEMS}
+          onOpenManager={() => setTodoDrawerOpen(true)}
+        />
 
-        {/* Next up — next scheduled operational event */}
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-          <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Next up
-            </p>
-            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              The next scheduled shift.
-            </p>
-          </div>
-          <div className="px-4 py-4">
-            {nextShift ? (
-              <>
-                <p className="text-sm font-semibold text-gray-900 truncate">
-                  {nextShift.employeeName}
-                </p>
-                <p className="mt-0.5 text-[11px] text-gray-500">{nextShift.role}</p>
-                <p className="mt-2 text-[11px] text-gray-600 tabular-nums leading-relaxed">
-                  {new Date(nextShift.startTime).toLocaleDateString('en-US', {
-                    weekday: 'short',
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                  {' · '}
-                  {new Date(nextShift.startTime).toLocaleTimeString('en-US', {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                  {' – '}
-                  {new Date(nextShift.endTime).toLocaleTimeString('en-US', {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                </p>
-              </>
-            ) : (
-              <p className="text-xs text-gray-400">No upcoming shifts.</p>
-            )}
-          </div>
-        </div>
+        {/* Next Shift / Clock-In Check — replaces the static "Next
+            up" card. Within the first hour after a shift's
+            start_time, switches to a clock-in watch state listing
+            scheduled staff for that shift. Outside that window,
+            shows the next upcoming shift group (everyone starting
+            at the same time, regardless of role/house). */}
+        <NextShiftCard upcomingShifts={upcomingShifts} />
 
         {/* Recent movement — proof the system is alive */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
@@ -861,34 +453,13 @@ export default function DashboardClient(props: Props) {
 
       </div>
 
-      {/* ============================================================ */}
-      {/* 4. QUICK ACTIONS — secondary strip below the supporting row. */}
-      {/* Manual expense entry used to live as a dominant card on the */}
-      {/* Finance page; it now lives in a Finance drawer reachable    */}
-      {/* either from there or from this Dashboard quick action.      */}
-      {/* ?log=1 deep-links into the Log Expense drawer on load.      */}
-      {/* ============================================================ */}
-      <div className="mt-4">
-        <Link
-          href="/finance?log=1"
-          className="block rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-gray-300 hover:shadow-[0_4px_12px_-4px_rgba(15,23,42,0.08)] transition-all p-4 group"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                Quick action
-              </p>
-              <p className="mt-1 text-sm font-semibold text-gray-900">Add manual expense</p>
-              <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-                Record a cash purchase, owner-paid expense, or one-off correction.
-              </p>
-            </div>
-            <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 whitespace-nowrap">
-              Open form →
-            </span>
-          </div>
-        </Link>
-      </div>
+      {/* Manager To-Do edit drawer — sibling at the page root so
+          it overlays cleanly. Manual expense quick action moved to
+          the middle Quick Actions card. */}
+      <ManagerTodoDrawer
+        open={todoDrawerOpen}
+        onClose={() => setTodoDrawerOpen(false)}
+      />
     </div>
   )
 }
@@ -966,197 +537,616 @@ function DailyStatusCard({
 }
 
 // ================================================================
-// ShiftStrip — interactive 7-tile week strip. Each tile is a button
-// that selects that day for the inline summary below.
+// StatusCarousel — top-row pillar tile that rotates through 4
+// pre-computed metrics on a calm 6s interval. Identity
+// (label / status pill / tone / href) stays stable; only the
+// metric title + value + sub fade between rotations.
 //
-// Visual states:
-//   • selected    → dark navy fill (bg-gray-900) — legitimate now
-//                   that the tiles are actual interactive controls,
-//                   matching the family's primary-control language.
-//   • unselected  → white surface, thin gray-100 border, hover state
-//                   that picks up a slightly darker border + bg-gray-50.
-//   • today (when not selected) gets a small blue dot above the label
-//                   so the manager can still spot "now" at a glance.
-//
-// Zero-shift days show "—" instead of "0" to stay calm.
+// Behavior:
+//   • Auto-rotates every ROTATE_MS (6000) once mounted.
+//   • Each card is given a different `rotateOffsetMs` (0 / 1500 /
+//     3000 / 4500) so the four cards don't pulse together.
+//   • Hover / focus pauses rotation — manager-readable while
+//     they're reading.
+//   • Cross-fade between metrics via two stacked absolutely-
+//     positioned layers; the container's min-height keeps the
+//     card from jumping when copy lengths differ.
+//   • Falls back to the first metric if `metrics.length === 1`
+//     (no rotation timer started).
 // ================================================================
-function ShiftStrip({
-  days,
-  selectedIdx,
-  todayIdx,
-  onSelect,
+
+interface CarouselMetric {
+  /** small title above the big value, e.g. "Sales today" */
+  title: string
+  /** the headline value, e.g. "$39" or "On pace" */
+  value: string
+  /** the supporting line under the value, e.g. "1 completed order today" */
+  sub: string
+}
+
+const ROTATE_MS = 6000
+
+function StatusCarousel({
+  href,
+  label,
+  status,
+  tone,
+  rotateOffsetMs,
+  metrics,
 }: {
-  days: { label: string; value: number }[]
-  selectedIdx: number
-  todayIdx: number
-  onSelect: (idx: number) => void
+  href: string
+  label: string
+  status: string
+  tone: 'normal' | 'neutral' | 'warn' | 'critical'
+  rotateOffsetMs: number
+  metrics: CarouselMetric[]
 }) {
+  const [idx, setIdx] = useState(0)
+  const [paused, setPaused] = useState(false)
+
+  const lastRotateRef = useRef<number>(Date.now())
+  useEffect(() => {
+    if (paused || metrics.length <= 1) return
+    // Stagger startup: the first rotation is delayed by
+    // rotateOffsetMs so neighboring cards don't tick at the same
+    // instant. After that, rotations occur every ROTATE_MS.
+    const elapsed = Date.now() - lastRotateRef.current
+    const initialDelay = Math.max(0, rotateOffsetMs - elapsed)
+    let intervalId: ReturnType<typeof setInterval> | null = null
+    const timeoutId = setTimeout(() => {
+      setIdx((i) => (i + 1) % metrics.length)
+      lastRotateRef.current = Date.now()
+      intervalId = setInterval(() => {
+        setIdx((i) => (i + 1) % metrics.length)
+        lastRotateRef.current = Date.now()
+      }, ROTATE_MS)
+    }, initialDelay + ROTATE_MS)
+    return () => {
+      clearTimeout(timeoutId)
+      if (intervalId) clearInterval(intervalId)
+    }
+  }, [paused, rotateOffsetMs, metrics.length])
+
+  // The four pillar cards share identical outer chrome — same
+  // border, same shadow, no left-edge accent. Any "this needs
+  // attention" signal lives INSIDE the card body via the status
+  // pill (top right) and the bottom progress segments. Keeps the
+  // strip visually congruent: cards look like quadrants of one
+  // surface rather than four cards in different uniforms.
+  const pillBg =
+    tone === 'critical'
+      ? 'bg-red-50 text-red-700'
+      : tone === 'warn'
+        ? 'bg-amber-50 text-amber-700'
+        : tone === 'neutral'
+          ? 'bg-gray-100 text-gray-600'
+          : 'bg-emerald-50 text-emerald-700'
+  const dotClr =
+    tone === 'critical'
+      ? 'bg-red-500'
+      : tone === 'warn'
+        ? 'bg-amber-500'
+        : tone === 'neutral'
+          ? 'bg-gray-400'
+          : 'bg-emerald-500'
+
   return (
-    <div className="grid grid-cols-7 gap-1" role="tablist" aria-label="Select weekday">
-      {days.map((d, i) => {
-        const isSelected = i === selectedIdx
-        const isToday = i === todayIdx
-        const empty = d.value === 0
-        return (
-          <button
+    <Link
+      href={href}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={() => setPaused(true)}
+      onBlur={() => setPaused(false)}
+      aria-label={`${label} — ${metrics[idx]?.title ?? ''}: ${metrics[idx]?.value ?? ''}`}
+      className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 hover:border-gray-300 hover:shadow-md transition-all block"
+    >
+      {/* Header — identity row stays stable while inner content rotates. */}
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+          {label}
+        </p>
+        <span
+          className={`inline-flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${pillBg}`}
+        >
+          <span className={`h-1 w-1 rounded-full ${dotClr}`} aria-hidden="true" />
+          {status}
+        </span>
+      </div>
+
+      {/* Rotating content area — two stacked layers cross-fade. The
+          container holds a min-height so card height stays stable
+          regardless of which metric is showing. */}
+      <div className="relative mt-2" style={{ minHeight: '62px' }}>
+        {metrics.map((m, i) => (
+          <div
             key={i}
-            type="button"
-            role="tab"
-            aria-selected={isSelected}
-            onClick={() => onSelect(i)}
-            className={`rounded-md px-1.5 py-1.5 text-center transition-colors relative ${
-              isSelected
-                ? 'bg-gray-900 border border-gray-900 shadow-sm'
-                : 'bg-white border border-gray-100 hover:border-gray-300 hover:bg-gray-50'
+            className={`absolute inset-0 transition-opacity duration-500 ${
+              i === idx ? 'opacity-100' : 'opacity-0 pointer-events-none'
             }`}
+            aria-hidden={i === idx ? undefined : 'true'}
           >
-            {/* Small blue dot marks "today" when today is not the
-                currently selected day — keeps "now" findable even
-                while the manager is browsing other days. */}
-            {isToday && !isSelected && (
-              <span
-                className="absolute top-1 right-1 h-1 w-1 rounded-full bg-blue-500"
-                aria-hidden="true"
-              />
-            )}
-            <p
-              className={`text-[9px] font-semibold uppercase tracking-widest ${
-                isSelected ? 'text-white/70' : 'text-gray-400'
-              }`}
-            >
-              {d.label}
+            <p className="text-[10px] font-medium text-gray-500 leading-none">{m.title}</p>
+            <p className="mt-1 text-xl font-bold tabular-nums leading-tight text-gray-900">
+              {m.value}
             </p>
-            <p
-              className={`mt-0.5 text-[12px] font-bold tabular-nums ${
-                isSelected
-                  ? 'text-white'
-                  : empty
-                    ? 'text-gray-300'
-                    : 'text-gray-700'
+            <p className="mt-0.5 text-[11px] text-gray-500 truncate">{m.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Carousel position indicator — four 1px segments at the
+          bottom, only the active one filled. Tiny enough to read
+          as decoration rather than dots-as-navigation. */}
+      {metrics.length > 1 && (
+        <div
+          className="mt-3 flex items-center gap-1"
+          aria-label={`Metric ${idx + 1} of ${metrics.length}`}
+        >
+          {metrics.map((_, i) => (
+            <span
+              key={i}
+              className={`h-[2px] flex-1 rounded-full transition-colors ${
+                i === idx ? dotClr : 'bg-gray-200'
               }`}
-            >
-              {empty ? '—' : d.value}
-            </p>
-          </button>
-        )
-      })}
-    </div>
+            />
+          ))}
+        </div>
+      )}
+    </Link>
   )
 }
 
 // ================================================================
-// SelectedDaySummary — compact band that sits at the bottom of the
-// Today's Rhythm card and explains the selected day. Strictly bound
-// to the Dashboard's product role: sales totals, scheduled coverage,
-// and the first shift of the day. No category breakdowns, no payment
-// mix, no diagnostic language. Empty states are honest.
+// Per-pillar metric builders — turn the topCards prop into 4
+// CarouselMetric objects. Kept as pure functions next to the
+// carousel so the data shape, the format strings, and the fallback
+// copy all live in one place. Each builder owns its pillar's
+// language (Sales speaks order activity, Staffing speaks coverage,
+// Inventory speaks sellability, Finance speaks money truth).
 // ================================================================
-function SelectedDaySummary({
-  sales,
-  shifts,
-  firstShift,
-  dateIso,
+
+function buildSalesMetrics(s: Props['topCards']['sales']): CarouselMetric[] {
+  const salesTodayMetric: CarouselMetric = {
+    title: 'Sales today',
+    value: MONEY(s.salesToday),
+    sub: s.ordersToday === 0
+      ? 'No completed orders yet'
+      : `${s.ordersToday} completed order${s.ordersToday === 1 ? '' : 's'} today`,
+  }
+
+  // Average ticket — falls back when there are no orders.
+  const avgTicketMetric: CarouselMetric = s.ordersToday > 0
+    ? {
+        title: 'Average ticket size',
+        value: MONEY(s.avgTicketToday),
+        sub: 'Per completed order',
+      }
+    : {
+        title: 'Average ticket size',
+        value: '—',
+        sub: 'No ticket data yet',
+      }
+
+  // Best seller today — top menu item by quantity today.
+  const bestSellerMetric: CarouselMetric = s.bestSeller
+    ? {
+        title: 'Best seller today',
+        value: s.bestSeller.name,
+        sub: `${s.bestSeller.count} sold today`,
+      }
+    : {
+        title: 'Best seller today',
+        value: '—',
+        sub: 'No items sold yet',
+      }
+
+  // Payment mix — card / cash percentages from today's orders.
+  // We surface the two dominant types and only mention "other"
+  // when it's meaningful so the line stays calm.
+  const paymentMixMetric: CarouselMetric = (() => {
+    if (!s.paymentMix || s.paymentMix.total === 0) {
+      return { title: 'Payment mix', value: '—', sub: 'No payment data yet' }
+    }
+    const total = s.paymentMix.total
+    const pct = (n: number) => Math.round((n / total) * 100)
+    const cardPct = pct(s.paymentMix.card)
+    const cashPct = pct(s.paymentMix.cash)
+    const otherPct = pct(s.paymentMix.other)
+    return {
+      title: 'Payment mix',
+      value: `Card ${cardPct}% · Cash ${cashPct}%`,
+      sub: s.paymentMix.other > 0
+        ? `Other ${otherPct}% · ${total} order${total === 1 ? '' : 's'} today`
+        : `${total} order${total === 1 ? '' : 's'} today`,
+    }
+  })()
+
+  return [salesTodayMetric, avgTicketMetric, bestSellerMetric, paymentMixMetric]
+}
+
+function buildStaffingMetrics(s: Props['topCards']['staffing']): CarouselMetric[] {
+  const shiftsTodayMetric: CarouselMetric = {
+    title: 'Shifts today',
+    value: s.shiftsToday === 0
+      ? '—'
+      : `${s.shiftsToday} shift${s.shiftsToday === 1 ? '' : 's'}`,
+    sub: s.shiftsToday === 0
+      ? 'No shifts today'
+      : `${s.hoursToday.toFixed(1)}h scheduled`,
+  }
+
+  const activeEmployeesMetric: CarouselMetric = {
+    title: 'Active employees',
+    value: s.activeStaff === 0 ? '—' : `${s.activeStaff} active`,
+    sub: s.activeStaff === 0
+      ? 'No active employees'
+      : 'Available on the team',
+  }
+
+  // Labor estimate today — hours × hourly_rate over today's rated
+  // shifts. Clearly labeled "estimate" so it can't be confused
+  // with bank-settled labor cost (Finance owns that).
+  const laborEstimateMetric: CarouselMetric = s.laborEstimateToday !== null
+    ? {
+        title: 'Labor estimate',
+        value: MONEY(s.laborEstimateToday),
+        sub: 'Scheduled labor estimate',
+      }
+    : {
+        title: 'Labor estimate',
+        value: '—',
+        sub: 'Labor estimate unavailable',
+      }
+
+  // House coverage — FOH / BOH split of today's shifts. Falls back
+  // when no shift carries a section.area so we don't fake a split.
+  const houseCoverageMetric: CarouselMetric = s.houseCoverage
+    ? {
+        title: 'House coverage',
+        value: `FOH ${s.houseCoverage.foh} · BOH ${s.houseCoverage.boh}`,
+        sub: 'Scheduled by house',
+      }
+    : {
+        title: 'House coverage',
+        value: '—',
+        sub: 'No house coverage yet',
+      }
+
+  return [shiftsTodayMetric, activeEmployeesMetric, laborEstimateMetric, houseCoverageMetric]
+}
+
+function buildInventoryMetrics(i: Props['topCards']['inventory']): CarouselMetric[] {
+  const outMetric: CarouselMetric = {
+    title: 'Out items',
+    value: i.outItems === 0 ? '—' : `${i.outItems} out`,
+    sub: i.outItems === 0 ? 'No out items' : 'Needs attention',
+  }
+  const lowMetric: CarouselMetric = {
+    title: 'Low stock',
+    value: i.lowItems === 0 ? '—' : `${i.lowItems} low`,
+    sub: i.lowItems === 0 ? 'No low-stock items' : 'Below threshold',
+  }
+
+  // Inventory cost — explicitly labeled "Recorded" since this comes
+  // from manually-logged inventory_related expenses, not bank-
+  // settled inventory cost (no separable settled figure exposed).
+  const inventoryCostMetric: CarouselMetric = i.recordedInventoryCost30d > 0
+    ? {
+        title: 'Inventory cost',
+        value: MONEY(i.recordedInventoryCost30d),
+        sub: 'Recorded inventory cost · last 30d',
+      }
+    : {
+        title: 'Inventory cost',
+        value: '—',
+        sub: 'No inventory cost yet',
+      }
+
+  // Pending restock orders — draft + ordered are both "pending"
+  // (one's pre-place, the other's awaiting receipt). Combine for
+  // the headline number; show the split in the sub if useful.
+  const pendingTotal = i.pendingRestocks.drafts + i.pendingRestocks.ordered
+  const restockMetric: CarouselMetric = pendingTotal === 0
+    ? {
+        title: 'Pending restock orders',
+        value: '—',
+        sub: 'No pending restocks',
+      }
+    : {
+        title: 'Pending restock orders',
+        value: `${pendingTotal} pending`,
+        sub: i.pendingRestocks.ordered > 0
+          ? `${i.pendingRestocks.ordered} awaiting receipt${
+              i.pendingRestocks.drafts > 0 ? ` · ${i.pendingRestocks.drafts} in cart` : ''
+            }`
+          : `${i.pendingRestocks.drafts} in cart`,
+      }
+
+  return [outMetric, lowMetric, inventoryCostMetric, restockMetric]
+}
+
+function buildFinanceMetrics(f: Props['topCards']['finance']): CarouselMetric[] {
+  const reviewMetric: CarouselMetric = f.moneyReview.attention === 0
+    ? {
+        title: 'Money review',
+        value: '—',
+        sub: 'No money items need review',
+      }
+    : {
+        title: 'Money review',
+        value: `${f.moneyReview.attention} need${f.moneyReview.attention === 1 ? 's' : ''} attention`,
+        sub: 'Deposits, exceptions, or mismatches',
+      }
+
+  const depositsMetric: CarouselMetric = f.depositsToConfirm === 0
+    ? {
+        title: 'Deposits to confirm',
+        value: '—',
+        sub: 'No deposits pending',
+      }
+    : {
+        title: 'Deposits to confirm',
+        value: `${f.depositsToConfirm} pending`,
+        sub: 'Sales deposits to match',
+      }
+
+  // Estimated operating expense — non-inventory expense rows in
+  // the 30-day window. Explicitly labeled "estimated" since it
+  // doesn't yet incorporate bank-confirmed signals; Inventory
+  // owns "Recorded inventory cost" and Staffing owns "Labor
+  // estimate" so this card avoids repeating them.
+  const operatingMetric: CarouselMetric = f.operatingEstimate30d > 0
+    ? {
+        title: 'Estimated operating expense',
+        value: `${MONEY(f.operatingEstimate30d)} estimated`,
+        sub: 'Operating spend estimate · last 30d',
+      }
+    : {
+        title: 'Estimated operating expense',
+        value: '—',
+        sub: 'No operating estimate yet',
+      }
+
+  const syncMetric: CarouselMetric = f.bankSyncedAt
+    ? {
+        title: 'Last bank sync',
+        value: `Synced ${formatTime(f.bankSyncedAt)}`,
+        sub: 'Bank context current',
+      }
+    : {
+        title: 'Last bank sync',
+        value: '—',
+        sub: 'Bank not synced yet',
+      }
+
+  return [reviewMetric, depositsMetric, operatingMetric, syncMetric]
+}
+
+// Compact "X minutes / hours / days ago" used by the carousel's
+// latest-sale metric. Kept local to the carousel so the rest of
+// the dashboard's time formatting stays untouched.
+function relativeTimeAgo(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return '—'
+  const diffMs = Date.now() - then
+  if (diffMs < 0) return 'Just now'
+  const minutes = Math.floor(diffMs / 60_000)
+  if (minutes < 1) return 'Just now'
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso)
+  if (!Number.isFinite(d.getTime())) return '—'
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+// ================================================================
+// OperatingPressureCard — full-chart weekly pressure read.
+//
+// The chart is the entire body; no bottom interpretation block.
+// Each day renders a bar whose height represents the day's
+// pressure score (sales demand × inventory-risk multiplier).
+// Hover a column for full breakdown via tooltip.
+//
+// Pressure score (per day):
+//   pressureScore = salesNormalized × inventoryMultiplier
+//
+// Where:
+//   salesNormalized   = day's sales / max day's sales (0..1)
+//   inventoryMultiplier = 1 + (0.05 × stockPressure), capped at 1.5
+//
+// Days with zero sales score zero; days with sales lean higher
+// when inventory pressure is also active. Today is highlighted
+// via a darker bar; no-coverage days on a sales day get an amber
+// risk marker (small triangle) at the top of the bar.
+//
+// Tooltip on hover/focus surfaces: weekday, sales, staffing
+// (shifts + scheduled hours derivable from shift count via
+// approximate average), and the inventory risk count.
+// ================================================================
+function OperatingPressureCard({
+  salesByDay,
+  shiftsByDay,
+  todayIdx,
+  outItems,
+  lowItems,
 }: {
-  sales: { value: number; orders: number } | null
-  shifts: { value: number; employees: number } | null
-  firstShift: {
-    employeeName: string
-    role: string
-    startTime: string
-    endTime: string
-  } | null
-  dateIso: string | null
+  salesByDay: { label: string; value: number; orders: number; date: string }[]
+  shiftsByDay: { label: string; value: number; employees: number; date: string }[]
+  todayIdx: number
+  outItems: number
+  lowItems: number
 }) {
-  if (!dateIso) return null
-  const dateObj = new Date(dateIso)
-  const fullDate = dateObj.toLocaleDateString('en-US', {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const stockPressure = outItems + lowItems
+  const inventoryMultiplier = Math.min(1.5, 1 + 0.05 * stockPressure)
+
+  const maxSales = Math.max(0, ...salesByDay.map((d) => d.value))
+  const hasAnySales = maxSales > 0
+
+  // Per-day pressure score (0..1). When there are no sales at all,
+  // every day is zero — the chart still renders neutral baselines
+  // so the card never collapses.
+  const pressureByDay = salesByDay.map((d) => {
+    if (!hasAnySales) return 0
+    const salesNorm = d.value / maxSales
+    return Math.min(1, salesNorm * inventoryMultiplier)
   })
 
-  const hasSales = sales !== null && sales.value > 0
-  const hasShifts = shifts !== null && shifts.value > 0
-  const fmtTime = (iso: string) =>
-    new Date(iso).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-    })
+  const formatDayDate = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
 
   return (
-    <div className="px-5 py-4 border-t border-gray-100">
-      <div className="flex items-baseline justify-between gap-3 flex-wrap mb-3">
+    // overflow-visible (not overflow-hidden) so the hover tooltip
+    // can extend above the chart without being clipped by the
+    // card's rounded mask.
+    <div className="xl:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-visible flex flex-col">
+      {/* Header */}
+      <div className="border-b border-gray-100 px-5 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-          Selected day
+          Operating pressure
         </p>
-        <p className="text-[12px] font-semibold text-gray-900 tabular-nums">
-          {fullDate}
+        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+          Where sales, coverage, and stock risk overlap.
         </p>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {/* Sales for the selected day */}
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            Sales
-          </p>
-          {hasSales ? (
-            <>
-              <p className="mt-1 text-base font-bold tabular-nums text-gray-900">
-                ${sales!.value.toLocaleString('en-US', {
-                  minimumFractionDigits: 0,
-                  maximumFractionDigits: 0,
-                })}
-              </p>
-              <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                {sales!.orders} completed order{sales!.orders === 1 ? '' : 's'}
-              </p>
-            </>
-          ) : (
-            <p className="mt-1 text-xs text-gray-400">No sales recorded</p>
-          )}
-        </div>
+      {/* Chart body — fills the rest of the card. Extra top padding
+          gives the tooltip vertical room above the tallest bars. */}
+      <div className="flex-1 px-5 pt-10 pb-4 relative">
+        {!hasAnySales && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <p className="text-[11px] text-gray-400 italic">Not enough activity yet</p>
+          </div>
+        )}
 
-        {/* Scheduled coverage */}
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            Coverage
-          </p>
-          {hasShifts ? (
-            <>
-              <p className="mt-1 text-base font-bold tabular-nums text-gray-900">
-                {shifts!.value} shift{shifts!.value === 1 ? '' : 's'}
-              </p>
-              <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                {shifts!.employees} scheduled employee
-                {shifts!.employees === 1 ? '' : 's'}
-              </p>
-            </>
-          ) : (
-            <p className="mt-1 text-xs text-gray-400">No shifts scheduled</p>
-          )}
-        </div>
+        {/* Chart area */}
+        <div className="grid grid-cols-7 gap-3 items-end" style={{ minHeight: '180px' }}>
+          {salesByDay.map((d, i) => {
+            const shifts = shiftsByDay[i]?.value ?? 0
+            const isToday = i === todayIdx
+            const isHovered = hoverIdx === i
+            const score = pressureByDay[i]
+            const barHeightPx = Math.max(hasAnySales && d.value > 0 ? 8 : 2, Math.round(score * 150))
+            const noCoverageOnSalesDay = d.value > 0 && shifts === 0
+            const baseBar = isToday
+              ? 'bg-gray-900'
+              : isHovered
+                ? 'bg-blue-500'
+                : score > 0.66
+                  ? 'bg-blue-500'
+                  : score > 0.33
+                    ? 'bg-blue-400'
+                    : score > 0
+                      ? 'bg-blue-300'
+                      : 'bg-gray-200'
 
-        {/* First scheduled shift of the day */}
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
-            Next
-          </p>
-          {firstShift ? (
-            <>
-              <p className="mt-1 text-[13px] font-semibold text-gray-900 truncate">
-                {firstShift.employeeName}
-              </p>
-              <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                {fmtTime(firstShift.startTime)} – {fmtTime(firstShift.endTime)}
-                {firstShift.role && (
-                  <span className="text-gray-400"> · {firstShift.role}</span>
+            return (
+              <button
+                key={i}
+                type="button"
+                onMouseEnter={() => setHoverIdx(i)}
+                onMouseLeave={() => setHoverIdx((cur) => (cur === i ? null : cur))}
+                onFocus={() => setHoverIdx(i)}
+                onBlur={() => setHoverIdx((cur) => (cur === i ? null : cur))}
+                className="group relative flex flex-col items-center justify-end h-full focus:outline-none"
+                aria-label={`${d.label} ${formatDayDate(d.date)} — pressure ${Math.round(score * 100)}%`}
+              >
+                {/* Risk marker — small amber chip above the bar
+                    when there's a sales day with zero coverage.
+                    Single signal, no clutter. */}
+                {noCoverageOnSalesDay && (
+                  <span
+                    className="mb-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400 border border-amber-500"
+                    aria-hidden="true"
+                  />
                 )}
-              </p>
-            </>
-          ) : (
-            <p className="mt-1 text-xs text-gray-400">No upcoming shift</p>
-          )}
+                <span
+                  className={`w-full rounded-t-md transition-all ${baseBar} ${
+                    isHovered ? 'shadow-[0_-2px_8px_-2px_rgba(15,23,42,0.15)]' : ''
+                  }`}
+                  style={{ height: `${barHeightPx}px` }}
+                />
+                <p
+                  className={`mt-1.5 text-[10px] font-semibold uppercase tracking-widest ${
+                    isToday ? 'text-gray-900' : 'text-gray-400'
+                  }`}
+                >
+                  {d.label}
+                </p>
+
+                {/* Tooltip — dynamically anchored to the bar.
+                    Vertical: `bottom` is computed from the bar's
+                    pixel height so the tooltip rises with the bar
+                    (Fri's tall bar pushes the tooltip up; Mon's
+                    short bar keeps it near the chart floor) — the
+                    tooltip always sits just above the bar's top
+                    edge with a small gap.
+                    Horizontal: first column aligns left, last
+                    column aligns right, all others center on the
+                    bar. Keeps the tooltip on-card regardless of
+                    which day you hover. */}
+                {isHovered && (
+                  <div
+                    className={`absolute z-20 w-52 rounded-md border border-gray-200 bg-white shadow-lg px-3 py-2 text-left pointer-events-none ${
+                      i === 0
+                        ? 'left-0'
+                        : i === salesByDay.length - 1
+                          ? 'right-0'
+                          : 'left-1/2 -translate-x-1/2'
+                    }`}
+                    // Day label (~16px) + small gap (10px) sits
+                    // below the bar; bar height varies; tooltip
+                    // bottom = label/gap + bar height + 8px gap
+                    // above the bar.
+                    style={{ bottom: `${barHeightPx + 30}px` }}
+                  >
+                    <p className="text-[11px] font-semibold text-gray-900 leading-tight">
+                      {formatDayDate(d.date)}
+                    </p>
+                    <p className="mt-1.5 text-[10px] text-gray-600">
+                      Sales:{' '}
+                      <span className="font-semibold text-gray-800 tabular-nums">{MONEY(d.value)}</span>
+                      {d.orders > 0 && (
+                        <span className="text-gray-500"> · {d.orders} order{d.orders === 1 ? '' : 's'}</span>
+                      )}
+                    </p>
+                    <p className="text-[10px] text-gray-600">
+                      Staffing:{' '}
+                      <span className="font-semibold text-gray-800 tabular-nums">
+                        {shifts === 0 ? 'No shifts' : `${shifts} shift${shifts === 1 ? '' : 's'}`}
+                      </span>
+                    </p>
+                    <p className="text-[10px] text-gray-600">
+                      Inventory risk:{' '}
+                      <span className={`font-semibold tabular-nums ${stockPressure > 0 ? 'text-amber-700' : 'text-gray-800'}`}>
+                        {stockPressure} item{stockPressure === 1 ? '' : 's'} at risk
+                      </span>
+                    </p>
+                    <p className="mt-1.5 text-[10px] text-gray-500">
+                      Pressure:{' '}
+                      <span className="font-semibold text-gray-800">
+                        {!hasAnySales || d.value === 0
+                          ? 'None'
+                          : score > 0.75
+                            ? 'High'
+                            : score > 0.5
+                              ? 'Elevated'
+                              : score > 0.25
+                                ? 'Moderate'
+                                : 'Low'}
+                      </span>
+                    </p>
+                  </div>
+                )}
+              </button>
+            )
+          })}
         </div>
       </div>
     </div>
@@ -1164,21 +1154,729 @@ function SelectedDaySummary({
 }
 
 // ================================================================
-// ReadinessDot — three-state status indicator for Opening Readiness.
-// Calm — a small filled dot, ringed when limited, hollow when pending.
+// QuickActionsCard — the right half of the middle row.
+//
+// Five compact action rows for the most common manager flows.
+// Each row navigates to the relevant pillar page; the Log manual
+// expense action deep-links to /finance?log=1 which the Finance
+// page already handles by opening the Log Expense drawer on
+// mount. Designed to be scannable rather than dense.
 // ================================================================
-function ReadinessDot({ status }: { status: 'ready' | 'limited' | 'pending' }) {
-  const cls =
-    status === 'ready'
-      ? 'bg-emerald-500'
-      : status === 'limited'
-        ? 'bg-amber-400'
-        : 'bg-gray-300'
+function QuickActionsCard() {
+  // Four manager flows. `/finance?log=1` deep-links into the
+  // Log Expense drawer that the Finance client already handles on
+  // mount; the other three land on their pillar page where the
+  // relevant workflow lives.
+  const actions: Array<{
+    href: string
+    title: string
+    description: string
+  }> = [
+    {
+      href: '/finance?log=1',
+      title: 'Log Expense',
+      description: 'Record a cash, owner-paid, or one-off expense.',
+    },
+    {
+      href: '/inventory',
+      title: 'Create Restock Order',
+      description: 'Replenish low or out items.',
+    },
+    {
+      href: '/staffing',
+      title: 'Add Shift',
+      description: 'Fill a schedule gap.',
+    },
+    {
+      href: '/finance',
+      title: 'Review Bank Transactions',
+      description: 'Review deposits, exceptions, and bank activity.',
+    },
+  ]
+
   return (
-    <span
-      className={`mt-1.5 h-1.5 w-1.5 rounded-full flex-shrink-0 ${cls}`}
-      aria-hidden="true"
-    />
+    <div className="xl:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
+      <div className="border-b border-gray-100 px-5 py-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+          Quick actions
+        </p>
+        <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+          Jump into common manager tasks.
+        </p>
+      </div>
+      <ul className="flex-1 divide-y divide-gray-100">
+        {actions.map((a) => (
+          <li key={a.title}>
+            <Link
+              href={a.href}
+              className="flex items-start gap-3 px-5 py-3 hover:bg-gray-50 transition-colors group"
+            >
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-semibold text-gray-900 leading-snug">
+                  {a.title}
+                </p>
+                <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
+                  {a.description}
+                </p>
+              </div>
+              <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 mt-0.5 whitespace-nowrap">
+                Open →
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+// ================================================================
+// Manager To-Do — localStorage-backed checklist
+//
+// Replaces the old system-driven Daily Readiness card. The list is
+// editable end-to-end via the Manage drawer. Persistence is
+// localStorage-only for this pass — explicit in the report. Items
+// are seeded from DEFAULT_TODO_ITEMS on first load (no stored
+// state). Completed state is per-day so the list "resets" each
+// morning rather than requiring the manager to uncheck yesterday.
+// ================================================================
+
+interface TodoItem {
+  id: string
+  label: string
+  hint?: string
+}
+
+const TODO_ITEMS_KEY = 'dashboard.todo.items.v1'
+const TODO_COMPLETED_KEY = 'dashboard.todo.completed.v1'
+
+function todayKey(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+// Read items + per-day completion from localStorage. Returns
+// defaults if nothing is stored or the stored value is malformed.
+function loadTodoItems(): TodoItem[] {
+  if (typeof window === 'undefined') return DEFAULT_TODO_ITEMS
+  try {
+    const raw = window.localStorage.getItem(TODO_ITEMS_KEY)
+    if (!raw) return DEFAULT_TODO_ITEMS
+    const parsed = JSON.parse(raw) as TodoItem[]
+    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_TODO_ITEMS
+    return parsed
+  } catch {
+    return DEFAULT_TODO_ITEMS
+  }
+}
+function saveTodoItems(items: TodoItem[]): void {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.setItem(TODO_ITEMS_KEY, JSON.stringify(items)) } catch { /* noop */ }
+}
+function loadCompletedIds(): Set<string> {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.localStorage.getItem(TODO_COMPLETED_KEY)
+    if (!raw) return new Set()
+    const parsed = JSON.parse(raw) as { day: string; ids: string[] }
+    if (!parsed || parsed.day !== todayKey()) return new Set()
+    return new Set(parsed.ids)
+  } catch {
+    return new Set()
+  }
+}
+function saveCompletedIds(ids: Set<string>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      TODO_COMPLETED_KEY,
+      JSON.stringify({ day: todayKey(), ids: [...ids] }),
+    )
+  } catch { /* noop */ }
+}
+
+// Module-level event channel so the card + drawer can update each
+// other's view of the list without prop drilling. Simple custom
+// event — fired when the drawer commits a save.
+const TODO_CHANGE_EVENT = 'dashboard:todo-items-changed'
+
+const TODO_PAGE_SIZE = 5
+
+function ManagerTodoCard({
+  defaultItems,
+  onOpenManager,
+}: {
+  defaultItems: TodoItem[]
+  onOpenManager: () => void
+}) {
+  const [items, setItems] = useState<TodoItem[]>(defaultItems)
+  const [completed, setCompleted] = useState<Set<string>>(new Set())
+  const [page, setPage] = useState(0)
+  // Hydration-safe: read storage after mount so SSR / first render
+  // matches between server and client.
+  useEffect(() => {
+    setItems(loadTodoItems())
+    setCompleted(loadCompletedIds())
+    // If the saved list shrinks between visits, snap back to page 0
+    // so we never land on a now-empty page.
+    setPage(0)
+    const onChange = () => {
+      setItems(loadTodoItems())
+      setPage(0)
+    }
+    window.addEventListener(TODO_CHANGE_EVENT, onChange)
+    return () => window.removeEventListener(TODO_CHANGE_EVENT, onChange)
+  }, [])
+
+  function toggle(id: string) {
+    setCompleted((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      saveCompletedIds(next)
+      return next
+    })
+  }
+
+  const doneCount = items.reduce((n, it) => n + (completed.has(it.id) ? 1 : 0), 0)
+
+  // Pagination — render TODO_PAGE_SIZE items at a time so the card
+  // stays visually balanced with its neighbors no matter how long
+  // the manager's list grows. Controls are only rendered when the
+  // list actually exceeds one page.
+  const pageCount = Math.max(1, Math.ceil(items.length / TODO_PAGE_SIZE))
+  const safePage = Math.min(page, pageCount - 1)
+  const startIdx = safePage * TODO_PAGE_SIZE
+  const visibleItems = items.slice(startIdx, startIdx + TODO_PAGE_SIZE)
+  const hasPagination = items.length > TODO_PAGE_SIZE
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
+      <div className="border-b border-gray-100 px-4 py-3 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Manager to-do
+          </p>
+          <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+            Opening, closing, and daily checks.
+          </p>
+        </div>
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          <span className="text-[10px] font-semibold tabular-nums text-gray-500">
+            {doneCount}/{items.length}
+          </span>
+          <button
+            type="button"
+            onClick={onOpenManager}
+            className="text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700 hover:text-blue-800 transition-colors"
+          >
+            Manage
+          </button>
+        </div>
+      </div>
+      {items.length === 0 ? (
+        <div className="px-4 py-6 text-center">
+          <p className="text-xs text-gray-400">No checklist items yet.</p>
+          <button
+            type="button"
+            onClick={onOpenManager}
+            className="mt-2 text-[11px] font-semibold text-blue-700 hover:text-blue-800"
+          >
+            Add the first item →
+          </button>
+        </div>
+      ) : (
+        <>
+          <ul className="divide-y divide-gray-100 flex-1">
+            {visibleItems.map((it) => {
+              const isDone = completed.has(it.id)
+              return (
+                <li key={it.id}>
+                  <label className="px-4 py-2.5 flex items-start gap-2.5 cursor-pointer hover:bg-gray-50/60 transition-colors select-none">
+                    <input
+                      type="checkbox"
+                      checked={isDone}
+                      onChange={() => toggle(it.id)}
+                      className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className={`text-xs leading-snug ${isDone ? 'line-through text-gray-400' : 'font-medium text-gray-800'}`}>
+                        {it.label}
+                      </p>
+                      {it.hint && (
+                        <p className={`mt-0.5 text-[10px] leading-relaxed ${isDone ? 'text-gray-300 line-through' : 'text-gray-500'}`}>
+                          {it.hint}
+                        </p>
+                      )}
+                    </div>
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+          {/* Page break — visible separator + prev/next pager.
+              Only rendered when there's actually a second page so
+              short lists stay calm. */}
+          {hasPagination && (
+            <div className="border-t border-gray-100 px-4 py-2 flex items-center justify-between gap-2 bg-gray-50/40">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+                className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:text-gray-800 disabled:text-gray-300 disabled:cursor-not-allowed"
+              >
+                ← Prev
+              </button>
+              <span className="text-[10px] font-semibold tabular-nums text-gray-500">
+                Page {safePage + 1} of {pageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+                disabled={safePage >= pageCount - 1}
+                className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:text-gray-800 disabled:text-gray-300 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ================================================================
+// ManagerTodoDrawer — manage the checklist (edit / add / remove).
+//
+// Persistence: localStorage only (TODO_ITEMS_KEY). Save fires a
+// `dashboard:todo-items-changed` event so the card refetches its
+// items immediately, no page reload required.
+//
+// Reordering is not implemented in this pass — out-of-scope per
+// the V1 brief. Items render in insertion order.
+// ================================================================
+function ManagerTodoDrawer({
+  open,
+  onClose,
+}: {
+  open: boolean
+  onClose: () => void
+}) {
+  // The drawer is a *live* view of the persisted list: every add /
+  // delete / edit commits immediately to localStorage and fires the
+  // change event so the card mirrors the change. No Save / Cancel
+  // ceremony — the manager's intent is the action.
+  const [items, setItems] = useState<TodoItem[]>([])
+  const [completed, setCompleted] = useState<Set<string>>(new Set())
+  // When non-null, that one row is in edit mode; everyone else
+  // renders as a normal checklist row (same shape as the card).
+  const [editingId, setEditingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (open) {
+      setItems(loadTodoItems())
+      setCompleted(loadCompletedIds())
+      setEditingId(null)
+    }
+  }, [open])
+
+  // Single commit path — writes through to localStorage and lets
+  // the dashboard card refresh from the same source of truth.
+  function commit(next: TodoItem[]) {
+    setItems(next)
+    saveTodoItems(next)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(TODO_CHANGE_EVENT))
+    }
+  }
+
+  function updateItem(id: string, patch: Partial<TodoItem>) {
+    const next = items.map((it) => (it.id === id ? { ...it, ...patch } : it))
+    commit(next)
+  }
+  function removeItem(id: string) {
+    const next = items.filter((it) => it.id !== id)
+    commit(next)
+    if (editingId === id) setEditingId(null)
+  }
+  function addItem() {
+    const id = `custom-${Date.now()}`
+    const newItem: TodoItem = { id, label: 'New task', hint: undefined }
+    const next = [...items, newItem]
+    commit(next)
+    // Auto-open the new row in edit mode so the manager can type
+    // straight in. The title input autofocuses when editing.
+    setEditingId(id)
+  }
+  function toggleCompleted(id: string) {
+    setCompleted((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      saveCompletedIds(next)
+      return next
+    })
+  }
+
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      {/* Backdrop — explicit z-0 so it sits BELOW the panel.
+          Required because the panel is a static flex item; without
+          this, CSS would paint the absolutely-positioned backdrop
+          on top of the panel and swallow every click. */}
+      <button
+        type="button"
+        aria-label="Close drawer"
+        onClick={onClose}
+        className="absolute inset-0 bg-gray-900/30 z-0"
+      />
+      {/* Panel — relative + z-10 so it captures its own clicks. */}
+      <aside className="relative z-10 ml-auto h-full w-full max-w-md bg-white shadow-xl flex flex-col">
+        {/* Header */}
+        <div className="border-b border-gray-100 px-5 py-4 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Dashboard checklist
+            </p>
+            <h2 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900">
+              Manage To-Do List
+            </h2>
+            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+              Tap a row to edit. Changes save automatically to this browser.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
+          >
+            Close
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto">
+          {items.length === 0 ? (
+            <div className="px-5 py-8 text-center">
+              <p className="text-xs text-gray-400 italic">No items yet — add one below.</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-gray-100">
+              {items.map((it) => {
+                const isEditing = editingId === it.id
+                const isDone = completed.has(it.id)
+                if (isEditing) {
+                  return (
+                    <li key={it.id} className="px-5 py-3 bg-blue-50/40">
+                      <TodoEditRow
+                        item={it}
+                        onChange={(patch) => updateItem(it.id, patch)}
+                        onRemove={() => removeItem(it.id)}
+                        onDone={() => setEditingId(null)}
+                      />
+                    </li>
+                  )
+                }
+                // Display row — same shape as the dashboard card.
+                return (
+                  <li key={it.id}>
+                    <div className="px-5 py-2.5 flex items-start gap-2.5 group">
+                      <input
+                        type="checkbox"
+                        checked={isDone}
+                        onChange={() => toggleCompleted(it.id)}
+                        className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40 flex-shrink-0"
+                        aria-label={`Toggle ${it.label}`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(it.id)}
+                        className="min-w-0 flex-1 text-left focus:outline-none"
+                      >
+                        <p className={`text-xs leading-snug ${isDone ? 'line-through text-gray-400' : 'font-medium text-gray-800'}`}>
+                          {it.label}
+                        </p>
+                        {it.hint && (
+                          <p className={`mt-0.5 text-[10px] leading-relaxed ${isDone ? 'text-gray-300 line-through' : 'text-gray-500'}`}>
+                            {it.hint}
+                          </p>
+                        )}
+                      </button>
+                      <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-300 group-hover:text-gray-500 transition-colors flex-shrink-0 mt-1">
+                        Edit
+                      </span>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+          {/* Add to list — compact black pill below the list.
+              Creates a placeholder item and immediately opens it
+              for edit. */}
+          <div className="px-5 py-3 border-t border-gray-100 flex justify-center">
+            <button
+              type="button"
+              onClick={addItem}
+              className="inline-flex items-center text-[11px] font-semibold rounded-md bg-gray-900 text-white px-3 py-1.5 hover:bg-gray-800 transition-colors"
+            >
+              + Add to list
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// TodoEditRow — inline editor for a single checklist item. Used
+// only inside ManagerTodoDrawer when an item is in edit mode.
+// Auto-focuses the title input on mount so the manager can type
+// straight into a newly-added row.
+// ----------------------------------------------------------------
+function TodoEditRow({
+  item,
+  onChange,
+  onRemove,
+  onDone,
+}: {
+  item: TodoItem
+  onChange: (patch: Partial<TodoItem>) => void
+  onRemove: () => void
+  onDone: () => void
+}) {
+  const titleRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    titleRef.current?.focus()
+    titleRef.current?.select()
+  }, [])
+  return (
+    <div className="space-y-2.5">
+      <div>
+        <label
+          htmlFor={`todo-title-${item.id}`}
+          className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-gray-400 mb-1"
+        >
+          Title
+        </label>
+        <input
+          ref={titleRef}
+          id={`todo-title-${item.id}`}
+          type="text"
+          value={item.label}
+          onChange={(e) => onChange({ label: e.target.value })}
+          onBlur={(e) => {
+            // If the manager blurs leaving an empty title, treat
+            // it as a request to drop the row. Prevents lingering
+            // blank rows from showing up on the card.
+            if (e.target.value.trim() === '') onRemove()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === 'Escape') {
+              e.preventDefault()
+              onDone()
+            }
+          }}
+          className="w-full text-xs font-semibold text-gray-900 bg-white border border-gray-200 rounded-md px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
+          placeholder="Task title"
+        />
+      </div>
+      <div>
+        <label
+          htmlFor={`todo-hint-${item.id}`}
+          className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-gray-400 mb-1"
+        >
+          Description <span className="text-gray-300 normal-case tracking-normal font-normal">(optional)</span>
+        </label>
+        <input
+          id={`todo-hint-${item.id}`}
+          type="text"
+          value={item.hint ?? ''}
+          onChange={(e) => onChange({ hint: e.target.value || undefined })}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === 'Escape') {
+              e.preventDefault()
+              onDone()
+            }
+          }}
+          className="w-full text-[11px] text-gray-700 bg-white border border-gray-200 rounded-md px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 placeholder:text-gray-400"
+          placeholder="Helper text shown under the title"
+        />
+      </div>
+      <div className="flex items-center justify-between pt-0.5">
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-[10px] font-semibold uppercase tracking-[0.06em] text-red-600 hover:text-red-700"
+        >
+          Remove
+        </button>
+        <button
+          type="button"
+          onClick={onDone}
+          className="text-[11px] font-semibold rounded-md bg-gray-900 text-white px-3 py-1.5 hover:bg-gray-800 transition-colors"
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// NextShiftCard — dynamic "Next Shift / Clock-In Check" card.
+//
+// Two modes, chosen by the current clock:
+//
+//   Clock-In Check   : a shift began within the last hour. Card
+//                      shows "Clock-In Check", the shift start
+//                      time, and the staff scheduled to clock in.
+//                      All staff sharing that start time are
+//                      grouped, regardless of role / FOH / BOH.
+//
+//   Next Shift       : the soonest upcoming shift group. Same
+//                      grouping rule — everyone starting at the
+//                      same moment shows together.
+//
+// CLOCK-IN DATA LIMITATION:
+//   The schema doesn't carry a per-shift clocked_in_at column
+//   yet, so the Clock-In Check mode renders a future-ready
+//   "Scheduled to clock in" placeholder rather than a real check
+//   state. Wiring real clock-in data is reported as a follow-up.
+//
+// Re-evaluates every minute so the card flips between modes
+// without a page refresh.
+// ================================================================
+
+const CLOCK_IN_WINDOW_MS = 60 * 60 * 1000
+
+interface UpcomingShift {
+  id: string
+  employeeName: string
+  role: string
+  startTime: string
+  endTime: string
+}
+
+function groupByStartTime(shifts: UpcomingShift[]): { startTime: string; endTime: string; staff: UpcomingShift[] }[] {
+  const groups = new Map<string, { startTime: string; endTime: string; staff: UpcomingShift[] }>()
+  for (const s of shifts) {
+    const existing = groups.get(s.startTime)
+    if (existing) existing.staff.push(s)
+    else groups.set(s.startTime, { startTime: s.startTime, endTime: s.endTime, staff: [s] })
+  }
+  return [...groups.values()]
+}
+
+function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) {
+  // Re-evaluate every 60s so the card flips between modes without
+  // a refresh. `tick` is just a dependency to force re-render.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => clearInterval(id)
+  }, [])
+
+  const now = Date.now()
+  const grouped = groupByStartTime(upcomingShifts)
+  const activeGroup = grouped.find((g) => {
+    const t = new Date(g.startTime).getTime()
+    return t <= now && now - t < CLOCK_IN_WINDOW_MS
+  })
+  const nextGroup = activeGroup
+    ? null
+    : grouped.find((g) => new Date(g.startTime).getTime() > now) ?? null
+
+  const fmtTime = (iso: string) =>
+    new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  const fmtDateShort = (iso: string) =>
+    new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
+      {activeGroup ? (
+        <>
+          {/* Clock-In Check mode */}
+          <div className="border-b border-gray-100 px-4 py-3 flex items-start justify-between gap-2">
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-blue-700">
+                Clock-in check
+              </p>
+              <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+                {fmtTime(activeGroup.startTime)} shift · staff scheduled to clock in.
+              </p>
+            </div>
+            <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 flex-shrink-0">
+              <span className="h-1 w-1 rounded-full bg-blue-500" />
+              Active
+            </span>
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {activeGroup.staff.map((s) => (
+              <li key={s.id} className="px-4 py-2.5">
+                <p className="text-sm font-semibold text-gray-900 truncate">{s.employeeName}</p>
+                <p className="mt-0.5 text-[11px] text-gray-500">
+                  {s.role || '—'}
+                  <span className="text-gray-300 px-1">·</span>
+                  Scheduled to clock in
+                </p>
+              </li>
+            ))}
+          </ul>
+          <p className="px-4 py-2.5 text-[10px] text-gray-400 italic border-t border-gray-100">
+            Clock-in tracking coming soon — showing scheduled staff.
+          </p>
+        </>
+      ) : nextGroup ? (
+        <>
+          {/* Next Shift mode */}
+          <div className="border-b border-gray-100 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Next shift
+            </p>
+            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+              Upcoming scheduled staff.
+            </p>
+          </div>
+          <div className="px-4 py-3 border-b border-gray-100">
+            <p className="text-[12px] tabular-nums font-semibold text-gray-900">
+              {fmtTime(nextGroup.startTime)} – {fmtTime(nextGroup.endTime)}
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+              {fmtDateShort(nextGroup.startTime)}
+            </p>
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {nextGroup.staff.map((s) => (
+              <li key={s.id} className="px-4 py-2.5">
+                <p className="text-sm font-semibold text-gray-900 truncate">{s.employeeName}</p>
+                <p className="mt-0.5 text-[11px] text-gray-500">{s.role || '—'}</p>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        <>
+          <div className="border-b border-gray-100 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Next shift
+            </p>
+            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+              Upcoming scheduled staff.
+            </p>
+          </div>
+          <div className="px-4 py-4">
+            <p className="text-sm font-semibold text-gray-900">No upcoming shifts</p>
+            <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
+              Schedule is clear for the selected window.
+            </p>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

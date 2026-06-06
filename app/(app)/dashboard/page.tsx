@@ -27,6 +27,7 @@ import {
   type PillarKey,
   type PillarState,
 } from '@/lib/readiness'
+import { groupBankTransactions } from '@/lib/finance/matching'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -79,6 +80,13 @@ export default async function DashboardPage() {
     { data: todayOrders },
     { data: latestExpenseRow },
     { data: latestInventoryTxRow },
+    { data: shiftSections },
+    { data: recipeEdges },
+    { data: pendingRestocks },
+    { data: periodBankTxns },
+    { data: bankAccountSyncs },
+    { data: activeMenuItems },
+    { data: todayOrderItems },
   ] = await Promise.all([
     supabase
       .from('orders')
@@ -113,12 +121,12 @@ export default async function DashboardPage() {
       .eq('active', true),
 
     // Current-week shifts. Selecting more fields than the count
-    // alone needs so the Today's Rhythm selected-day summary can
-    // look up "first scheduled shift on day X" without a second
-    // round-trip.
+    // alone needs so the carousel can compute labor estimate
+    // (hourly_rate × hours) and FOH/BOH coverage split without
+    // a second round-trip.
     supabase
       .from('shifts')
-      .select('id, employee_id, role, start_time, end_time, employees ( name )')
+      .select('id, employee_id, role, start_time, end_time, employees ( name, hourly_rate ), shift_sections ( area )')
       .gte('start_time', monday.toISOString())
       .lt('start_time', sundayEnd.toISOString()),
 
@@ -136,16 +144,20 @@ export default async function DashboardPage() {
       .order('start_time', { ascending: true })
       .limit(6),
 
-    // 10. Expenses last 30 days (for Finance snapshot)
+    // 10. Expenses last 30 days (for Finance snapshot). Now also
+    //     selects is_inventory_related so the dashboard carousel can
+    //     split recorded inventory cost vs operating estimate.
     supabase
       .from('expenses')
-      .select('id, amount')
+      .select('id, amount, is_inventory_related')
       .gte('expense_date', thirtyDaysAgo.toISOString().split('T')[0]),
 
-    // 11. Today's orders (for Sales card) — voided excluded
+    // 11. Today's orders (for Sales card) — voided excluded.
+    //     payment_type is included so we can compute the card/cash
+    //     payment-mix metric.
     supabase
       .from('orders')
-      .select('id, total_amount')
+      .select('id, total_amount, payment_type')
       .eq('status', 'completed')
       .gte('created_at', todayStart.toISOString())
       .lt('created_at', todayEnd.toISOString()),
@@ -170,6 +182,65 @@ export default async function DashboardPage() {
       .order('transaction_datetime', { ascending: false })
       .limit(1)
       .maybeSingle(),
+
+    // 14. Shift sections defined for today's house — feeds the
+    //     Staffing carousel's "Coverage gaps" metric. We compare
+    //     this against the sections that actually have a shift
+    //     today; the diff is the gap.
+    supabase
+      .from('shift_sections')
+      .select('id, name'),
+
+    // 15. Menu item ↔ inventory item dependency edges — feeds the
+    //     Inventory carousel's "Menu impact" metric. We resolve
+    //     this client-side after combining with out/low item ids.
+    supabase
+      .from('recipe_components')
+      .select('menu_item_id, inventory_item_id'),
+
+    // 16. Restock orders — feeds the Inventory carousel's "Restock
+    //     queue" metric. Only draft + ordered are pending; received
+    //     / canceled aren't queue.
+    supabase
+      .from('restock_orders')
+      .select('id, status')
+      .in('status', ['draft', 'ordered']),
+
+    // 17. Bank transactions last 7 days — feeds the Finance
+    //     carousel's Money Review + Deposits + Settled metrics.
+    //     Same column shape Finance uses, so groupBankTransactions
+    //     can run over it without a second fetch.
+    supabase
+      .from('bank_transactions')
+      .select('id, amount, direction, raw_category, merchant_name, description, posted_at, review_state, settled_kind')
+      .gte('posted_at', sevenDaysAgo.toISOString()),
+
+    // 18. Connected bank accounts — feeds the Finance carousel's
+    //     "Bank sync" metric (most recent sync timestamp).
+    supabase
+      .from('connected_bank_accounts')
+      .select('last_synced_at')
+      .eq('active', true),
+
+    // 19. Active menu items — count is used as the denominator
+    //     for the "X / Y affected" inventory menu-impact metric.
+    supabase
+      .from('menu_items')
+      .select('id')
+      .eq('active', true),
+
+    // 20. Today's order line items — feeds the Sales carousel's
+    //     "Best seller today" metric. Joins to menu_items for the
+    //     name + to orders to scope by today's status='completed'.
+    //     We rely on the inner-join semantics of `orders!inner` to
+    //     drop line items whose parent order isn't a today's
+    //     completed order.
+    supabase
+      .from('order_items')
+      .select('quantity, menu_items ( name ), orders!inner ( status, created_at )')
+      .eq('orders.status', 'completed')
+      .gte('orders.created_at', todayStart.toISOString())
+      .lt('orders.created_at', todayEnd.toISOString()),
   ])
 
   // ---- Metrics ----
@@ -349,6 +420,204 @@ export default async function DashboardPage() {
     inventoryWriteLive = isInventoryWriteLive(snapshot)
   }
 
+  // ================================================================
+  // Top-card carousel metrics — four per pillar, computed once on
+  // the server and shipped down as a flat shape so the client never
+  // has to recompute on rotation. Each pillar's metrics are
+  // independent and don't overlap (Sales owns customer activity,
+  // Staffing owns coverage, Inventory owns sellability, Finance
+  // owns money truth).
+  // ================================================================
+
+  // ---- SALES ----
+  // Sales today + average ticket from todayOrders. Best seller is
+  // computed from today's order_items (quantity rolled up by
+  // menu item). Payment mix splits today's completed orders by
+  // payment_type (card / cash / other).
+  const avgTicketToday = ordersToday > 0 ? salesToday / ordersToday : 0
+
+  // Best seller today — rank by total quantity sold today.
+  const bestSellerCounts = new Map<string, number>()
+  for (const row of todayOrderItems ?? []) {
+    const name = ((row.menu_items as unknown) as { name: string } | null)?.name
+    if (!name) continue
+    bestSellerCounts.set(name, (bestSellerCounts.get(name) ?? 0) + Number(row.quantity ?? 0))
+  }
+  let bestSellerName: string | null = null
+  let bestSellerCount = 0
+  for (const [name, q] of bestSellerCounts.entries()) {
+    if (q > bestSellerCount) {
+      bestSellerName = name
+      bestSellerCount = q
+    }
+  }
+
+  // Payment mix today — % share by payment_type. `total` is the
+  // denominator the carousel uses to compute percentages.
+  let paymentMixCard = 0
+  let paymentMixCash = 0
+  let paymentMixOther = 0
+  for (const o of todayOrders ?? []) {
+    const pt = (o.payment_type as string | null) ?? 'cash'
+    if (pt === 'card') paymentMixCard++
+    else if (pt === 'cash') paymentMixCash++
+    else paymentMixOther++
+  }
+  const paymentMixTotal = paymentMixCard + paymentMixCash + paymentMixOther
+
+  // ---- STAFFING ----
+  // Today's-only slice of weekShifts. Labor estimate sums hours ×
+  // hourly_rate over this slice (rated shifts only); FOH/BOH split
+  // counts shifts with a section.area === 'foh' vs 'boh'.
+  const todaysWeekShifts = (weekShifts ?? []).filter((s) => {
+    const t = new Date(s.start_time)
+    return t >= todayStart && t < todayEnd
+  })
+  let totalShiftsScheduledHoursToday = 0
+  let laborEstimateToday = 0
+  let fohShiftsToday = 0
+  let bohShiftsToday = 0
+  let ratedShiftCountToday = 0
+  for (const s of todaysWeekShifts) {
+    const start = new Date(s.start_time).getTime()
+    const end = new Date(s.end_time).getTime()
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue
+    const hours = (end - start) / (1000 * 60 * 60)
+    totalShiftsScheduledHoursToday += hours
+    const emp = s.employees as unknown as { name: string; hourly_rate: number | null } | null
+    const rate = emp?.hourly_rate ? Number(emp.hourly_rate) : 0
+    if (rate > 0) {
+      laborEstimateToday += rate * hours
+      ratedShiftCountToday++
+    }
+    const section = s.shift_sections as unknown as { area: 'foh' | 'boh' } | null
+    if (section?.area === 'foh') fohShiftsToday++
+    else if (section?.area === 'boh') bohShiftsToday++
+  }
+  const houseSplitAvailable = (fohShiftsToday + bohShiftsToday) > 0
+
+  // ---- INVENTORY ----
+  // Inventory cost (recorded) — sum of expense rows flagged
+  // is_inventory_related in the 30-day window. No bank-settlement
+  // path exists yet that exposes a separable "settled inventory
+  // cost" per the spec; we label this clearly as "Recorded" on
+  // the carousel so it can't be confused with a settled total.
+  // Pending restocks = orders in 'draft' or 'ordered' status.
+  const recordedInventoryCost30d = (periodExpenses ?? [])
+    .filter((e) => e.is_inventory_related === true)
+    .reduce((sum, e) => sum + Number(e.amount), 0)
+
+  const restockDrafts = (pendingRestocks ?? []).filter((r) => r.status === 'draft').length
+  const restockOrdered = (pendingRestocks ?? []).filter((r) => r.status === 'ordered').length
+
+  // ---- FINANCE ----
+  // Money review = same grouping engine as /finance. We hand the
+  // unreviewed bank rows to groupBankTransactions and count groups
+  // by triage. Deposits-to-confirm is the inflow attention slice.
+  // Settled spend = sum of settled outflows in the 7-day window.
+  // Bank sync = most recent last_synced_at across active accounts.
+  type FinanceTxnLite = {
+    id: string
+    amount: number
+    direction: 'inflow' | 'outflow'
+    rawCategory: string | null
+    merchantName: string | null
+    description: string | null
+    postedAt: string
+    reviewState: 'unreviewed' | 'settled' | 'ignored' | 'not_a_match'
+    settledKind: string | null
+  }
+  const txnLite: FinanceTxnLite[] = (periodBankTxns ?? []).map((tx) => ({
+    id: tx.id as string,
+    amount: Number(tx.amount),
+    direction: tx.direction as 'inflow' | 'outflow',
+    rawCategory: (tx.raw_category as string | null) ?? null,
+    merchantName: (tx.merchant_name as string | null) ?? null,
+    description: (tx.description as string | null) ?? null,
+    postedAt: tx.posted_at as string,
+    reviewState:
+      ((tx.review_state as string | null) ?? 'unreviewed') as FinanceTxnLite['reviewState'],
+    settledKind: (tx.settled_kind as string | null) ?? null,
+  }))
+  const unreviewedTxns = txnLite.filter((t) => t.reviewState === 'unreviewed')
+  const reviewGroups = groupBankTransactions(
+    unreviewedTxns.map((t) => ({
+      id: t.id,
+      direction: t.direction,
+      amount: t.amount,
+      rawCategory: t.rawCategory,
+      merchantName: t.merchantName,
+      description: t.description,
+      postedAt: t.postedAt,
+    })),
+  )
+  const moneyReviewAttention = reviewGroups.filter((g) => g.triage !== 'auto').length
+  const moneyReviewAuto = reviewGroups.filter((g) => g.triage === 'auto').length
+  const depositsAttention = reviewGroups.filter(
+    (g) => g.direction === 'inflow' && g.triage === 'attention',
+  ).length
+  // Operating estimate — non-inventory expenses in the 30-day
+  // window. Matches the Finance page's "manualNonInventorySpend"
+  // half of the operating bucket; clearly labeled "estimated" in
+  // the carousel since it doesn't include bank-confirmed signals.
+  const operatingEstimate30d = (periodExpenses ?? [])
+    .filter((e) => e.is_inventory_related !== true)
+    .reduce((sum, e) => sum + Number(e.amount), 0)
+
+  const mostRecentBankSyncAt = (bankAccountSyncs ?? [])
+    .map((a) => a.last_synced_at as string | null)
+    .filter((v): v is string => !!v)
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null
+
+  const topCards = {
+    sales: {
+      salesToday,
+      ordersToday,
+      avgTicketToday: Math.round(avgTicketToday * 100) / 100,
+      bestSeller: bestSellerName
+        ? { name: bestSellerName, count: bestSellerCount }
+        : null,
+      paymentMix: paymentMixTotal > 0
+        ? {
+            card: paymentMixCard,
+            cash: paymentMixCash,
+            other: paymentMixOther,
+            total: paymentMixTotal,
+          }
+        : null,
+    },
+    staffing: {
+      shiftsToday,
+      hoursToday: Math.round(totalShiftsScheduledHoursToday * 10) / 10,
+      activeStaff: employeeCount,
+      laborEstimateToday: ratedShiftCountToday > 0
+        ? Math.round(laborEstimateToday * 100) / 100
+        : null,
+      houseCoverage: houseSplitAvailable
+        ? { foh: fohShiftsToday, boh: bohShiftsToday }
+        : null,
+    },
+    inventory: {
+      outItems: outOfStockCount,
+      lowItems: lowStockCount,
+      recordedInventoryCost30d: Math.round(recordedInventoryCost30d * 100) / 100,
+      pendingRestocks: {
+        drafts: restockDrafts,
+        ordered: restockOrdered,
+      },
+    },
+    finance: {
+      moneyReview: {
+        attention: moneyReviewAttention,
+        auto: moneyReviewAuto,
+        scanned: unreviewedTxns.length,
+      },
+      depositsToConfirm: depositsAttention,
+      operatingEstimate30d: Math.round(operatingEstimate30d * 100) / 100,
+      bankSyncedAt: mostRecentBankSyncAt,
+    },
+  }
+
   return (
     <DashboardClient
       firstName={firstName}
@@ -374,6 +643,7 @@ export default async function DashboardPage() {
       latestSale={latestSale}
       latestExpense={latestExpense}
       latestInventoryMovement={latestInventoryMovement}
+      topCards={topCards}
     />
   )
 }

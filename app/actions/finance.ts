@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { getAuthContext, resolveLocationId, logAudit, formatError } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
+import { normalizeDisplayName } from '@/lib/strings/names'
 
 async function requireLocResult(restaurantId: string, locationId: string): Promise<string | null> {
   try {
@@ -31,7 +32,12 @@ export async function createExpense(
   const category = formData.get('category') as string
   const amountRaw = formData.get('amount') as string
   const expenseDate = formData.get('expense_date') as string
-  const vendorName = (formData.get('vendor_name') as string)?.trim() || null
+  // Vendor name is a short user-created business identifier →
+  // normalize display form so "us foods", "US FOODS", and "Us Foods"
+  // resolve to one clean stored value. No dedup (no vendor entity).
+  // Notes are free-text and stay raw.
+  const vendorRaw = (formData.get('vendor_name') as string)?.trim() || ''
+  const vendorName = vendorRaw ? normalizeDisplayName(vendorRaw) : null
   const notes = (formData.get('notes') as string)?.trim() || null
   const isInventoryRelated = formData.get('is_inventory_related') === 'on'
 

@@ -38,14 +38,18 @@ import {
   ignoreBankTransaction,
   markBankTransactionNotAMatch,
   reopenBankTransaction,
+  settleBankTransactionGroup,
+  ignoreBankTransactionGroup,
+  markBankTransactionGroupNotAMatch,
 } from '@/app/actions/bank'
 import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
 import { ConnectBankButton } from '@/components/bank/connect-bank-button'
 import {
   suggestSettlementKind,
-  classifyConfidence,
   looksPersonal,
+  groupBankTransactions,
   type SuggestedKind,
+  type BankReviewGroup,
 } from '@/lib/finance/matching'
 
 interface RecentExpense {
@@ -247,6 +251,28 @@ export default function FinanceClient({
   const netActivity = cards.revenue7d - totalSpend7d
   const netPositive = netActivity >= 0
   const hasAnyActivity = cards.revenue7d > 0 || totalSpend7d > 0
+
+  // ----------------------------------------------------------------
+  // Bank Review groups — bucket unreviewed transactions by likely
+  // pattern (Costco, Rent & utilities, etc.) so the Bank Review
+  // surface presents one decision per group instead of one per row.
+  // The group-first model is the V2 user model; per-row settle/
+  // ignore are kept as fallbacks for the drilldown view.
+  // ----------------------------------------------------------------
+  const reviewGroups = useMemo<BankReviewGroup[]>(() => {
+    const unreviewed = bank.review.rows
+      .filter((r) => r.reviewState === 'unreviewed')
+      .map((r) => ({
+        id: r.id,
+        direction: r.direction,
+        amount: r.amount,
+        rawCategory: r.rawCategory,
+        merchantName: r.merchantName,
+        description: r.description,
+        postedAt: r.postedAt,
+      }))
+    return groupBankTransactions(unreviewed)
+  }, [bank.review.rows])
 
   // Convenience for driver cards — share-of-spend for each bucket,
   // rendered as a small "· N% of spend" suffix so the cards read as
@@ -475,9 +501,16 @@ export default function FinanceClient({
             </div>
           </div>
 
-          {/* RIGHT: Bank Review summary — settlement workflow entry point */}
+          {/* RIGHT: Money Review summary — exception-first triage card */}
           <BankReviewSummaryCard
             counts={bank.review.counts}
+            groupCount={reviewGroups.length}
+            attentionCount={
+              reviewGroups.filter((g) => g.triage !== 'auto').length
+            }
+            autoCount={
+              reviewGroups.filter((g) => g.triage === 'auto').length
+            }
             bankState={bank.state}
             onOpen={() => setDrawer('bank_review')}
           />
@@ -582,14 +615,18 @@ export default function FinanceClient({
       <Drawer
         open={drawer === 'bank_review'}
         onClose={() => setDrawer(null)}
-        title="Bank Review"
+        title="Money Review"
         subtitle={
           bank.state === 'not_connected'
-            ? 'Connect a bank to start reviewing activity'
-            : `${bank.review.counts.unreviewed} need review · ${bank.review.counts.settled} settled`
+            ? 'Connect a bank to start verifying cash reality'
+            : (() => {
+                const attention = reviewGroups.filter((g) => g.triage !== 'auto').length
+                return `${attention} need${attention === 1 ? 's' : ''} attention · ${reviewGroups.filter((g) => g.triage === 'auto').length} auto-classified`
+              })()
         }
       >
         <BankReviewDrawerContent
+          groups={reviewGroups}
           rows={bank.review.rows}
           counts={bank.review.counts}
           bankState={bank.state}
@@ -2176,10 +2213,16 @@ function NetActivityDrawerContent({
 // ================================================================
 function BankReviewSummaryCard({
   counts,
+  groupCount,
+  attentionCount,
+  autoCount,
   bankState,
   onOpen,
 }: {
   counts: Props['bank']['review']['counts']
+  groupCount: number
+  attentionCount: number
+  autoCount: number
   bankState: BankState
   onOpen: () => void
 }) {
@@ -2189,61 +2232,72 @@ function BankReviewSummaryCard({
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-gray-300" />
-            <p className="text-xs font-semibold text-gray-900">Bank Review</p>
+            <p className="text-xs font-semibold text-gray-900">Money Review</p>
           </div>
           <span className="text-[10px] text-gray-400">Not connected</span>
         </div>
         <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-          Connect a bank to start reviewing activity. Bank Review settles
-          incoming and outgoing transactions against your business.
+          Connect a bank to start verifying cash reality. Money Review surfaces
+          deposits to confirm and exceptions — not every transaction.
         </p>
         <div className="mt-auto">
-          <p className="text-[11px] text-gray-400">Settlement workflow · activates after bank sync</p>
+          <p className="text-[11px] text-gray-400">Exception triage · activates after bank sync</p>
         </div>
       </aside>
     )
   }
 
-  const noWork = counts.unreviewed === 0
+  const noWork = attentionCount === 0
   const dotTone =
-    counts.unreviewed >= 5
+    attentionCount >= 5
       ? 'bg-amber-500'
-      : counts.unreviewed > 0
+      : attentionCount > 0
         ? 'bg-blue-500'
         : 'bg-green-500'
   const statusChip =
     noWork
       ? { label: 'Caught up', tone: 'bg-green-50 text-green-700' }
-      : { label: 'Needs review', tone: 'bg-amber-50 text-amber-700' }
+      : { label: 'Needs attention', tone: 'bg-amber-50 text-amber-700' }
 
   return (
     <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 flex flex-col min-h-[500px]">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${dotTone}`} />
-          <p className="text-xs font-semibold text-gray-900">Bank Review</p>
+          <p className="text-xs font-semibold text-gray-900">Money Review</p>
         </div>
         <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusChip.tone}`}>
           {statusChip.label}
         </span>
       </div>
 
+      {/* Hero — TRUE attention required (deposits to confirm,
+          exceptions, suggested personal). Auto-classified activity
+          stays out of this number so the manager sees the real
+          workload, not "236 things to review." */}
       <p className={`text-[34px] leading-none font-semibold tracking-tight tabular-nums ${noWork ? 'text-gray-300' : 'text-gray-900'}`}>
-        {counts.unreviewed}
+        {attentionCount}
       </p>
       <p className="mt-2 text-xs text-gray-500">
-        {noWork ? 'All bank activity is reviewed.' : 'need review'}
+        {noWork
+          ? 'All money movement is classified.'
+          : `need${attentionCount === 1 ? 's' : ''} attention`}
+      </p>
+      <p className="mt-1 text-[11px] text-gray-500 tabular-nums">
+        {autoCount} auto-classified
+        <span className="text-gray-300 px-1">·</span>
+        {counts.unreviewed} transaction{counts.unreviewed === 1 ? '' : 's'} scanned
       </p>
 
       {!noWork && (
         <div className="mt-5 space-y-2 text-[11px] text-gray-500">
           <div className="flex items-center justify-between">
-            <span>Incoming</span>
+            <span>Deposits to confirm</span>
             <span className="font-semibold tabular-nums text-gray-700">{counts.unreviewedInflow}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span>Outgoing</span>
+            <span>Outgoing exceptions</span>
             <span className="font-semibold tabular-nums text-gray-700">{counts.unreviewedOutflow}</span>
           </div>
         </div>
@@ -2251,17 +2305,23 @@ function BankReviewSummaryCard({
 
       <div className="mt-5 pt-4 border-t border-gray-100 space-y-1 text-[10px] text-gray-400">
         <div className="flex items-center justify-between">
-          <span>Settled</span>
+          <span>Confirmed</span>
           <span className="font-medium tabular-nums">{counts.settled}</span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Ignored</span>
+          <span>Marked personal</span>
           <span className="font-medium tabular-nums">{counts.ignored}</span>
         </div>
         {counts.notAMatch > 0 && (
           <div className="flex items-center justify-between">
             <span>Review later</span>
             <span className="font-medium tabular-nums">{counts.notAMatch}</span>
+          </div>
+        )}
+        {groupCount > 0 && (
+          <div className="flex items-center justify-between pt-1 mt-1 border-t border-gray-100">
+            <span>Total groups</span>
+            <span className="font-medium tabular-nums">{groupCount}</span>
           </div>
         )}
       </div>
@@ -2272,7 +2332,7 @@ function BankReviewSummaryCard({
           onClick={onOpen}
           className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
         >
-          {noWork ? 'Open Bank Review' : 'Review now →'}
+          {noWork ? 'Open Money Review' : 'Review now →'}
         </button>
       </div>
     </aside>
@@ -2280,28 +2340,36 @@ function BankReviewSummaryCard({
 }
 
 // ----------------------------------------------------------------
-// BankReviewDrawerContent — the actual settlement workspace.
+// BankReviewDrawerContent — priority-based Money Review workspace.
 //
 // Sections (in order):
-//   1. Suggested matches  — rows where classifyConfidence === likely_match
-//   2. Incoming money     — direction=inflow, unreviewed
-//   3. Outgoing money     — direction=outflow, unreviewed
-//   4. Review later       — collapsible; state=not_a_match
-//   5. Settled            — collapsible; state=settled (with reopen)
-//   6. Ignored            — collapsible; state=ignored  (with reopen)
+//   1. Top stats strip            — need attention / auto-classified / confirmed / personal
+//   2. Deposits to confirm        — every inflow group, attention tier
+//   3. Exceptions                 — outflow attention groups (unclear / unknown / transfers / large)
+//   4. Suggested personal         — personal attention tier
+//   5. Auto-classified (collapsed)— outflow attention=auto, expanded on demand
+//   6. Review later (rows)        — per-row, collapsible
+//   7. Confirmed tail (rows)      — per-row, collapsible
+//   8. Personal tail (rows)       — per-row, collapsible
 //
-// Each unreviewed row renders direction-appropriate settle buttons
-// (Revenue for inflow; Inventory / Labor / Operating for outflow),
-// plus Ignore and Review later. Server actions are called through
-// useTransition so the page revalidates and the row disappears
-// from the queue without a hard reload.
+// Triage tier is computed by groupBankTransactions() in matching.ts:
+//   • inflow → always attention (deposits/income always matter)
+//   • outflow + personal → personal
+//   • outflow + suggestedKind + confidence + amount in tolerance → auto
+//   • outflow + no suggestion / transfers / unknown / large unclear → attention
+//
+// Auto-classified is shown but NOT counted as required work; the
+// hero "X need attention" excludes it. Manager can confirm in bulk
+// from the collapsed section if they want extra audit pressure.
 // ----------------------------------------------------------------
 function BankReviewDrawerContent({
+  groups,
   rows,
   counts,
   bankState,
   plaidConfigured,
 }: {
+  groups: BankReviewGroup[]
   rows: BankReviewRow[]
   counts: Props['bank']['review']['counts']
   bankState: BankState
@@ -2310,6 +2378,7 @@ function BankReviewDrawerContent({
   const [showSettled, setShowSettled] = useState(false)
   const [showIgnored, setShowIgnored] = useState(false)
   const [showReviewLater, setShowReviewLater] = useState(false)
+  const [showAuto, setShowAuto] = useState(false)
 
   if (bankState === 'not_connected') {
     return (
@@ -2317,9 +2386,9 @@ function BankReviewDrawerContent({
         <div className="rounded-xl border border-gray-200/80 bg-gray-50/60 p-5">
           <p className="text-sm font-semibold text-gray-900">No bank connected</p>
           <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
-            Connect a bank to see settlement candidates. Bank Review will surface
-            incoming and outgoing activity that needs to be matched to a business
-            event or ignored as personal.
+            Connect a bank to see incoming deposits and outgoing exceptions.
+            Money Review focuses on what needs your attention — not every
+            transaction.
           </p>
         </div>
         <div className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
@@ -2329,79 +2398,108 @@ function BankReviewDrawerContent({
     )
   }
 
-  // Partition the feed into queues by review_state.
-  const unreviewed = rows.filter((r) => r.reviewState === 'unreviewed')
   const settled = rows.filter((r) => r.reviewState === 'settled')
   const ignored = rows.filter((r) => r.reviewState === 'ignored')
   const reviewLater = rows.filter((r) => r.reviewState === 'not_a_match')
 
-  // Suggested matches = unreviewed rows the matcher flags as
-  // likely_match. Stripped from the per-direction queues so a row
-  // doesn't appear twice in the same drawer pass.
-  const suggested = unreviewed.filter(
-    (r) =>
-      classifyConfidence({
-        direction: r.direction,
-        amount: r.amount,
-        rawCategory: r.rawCategory,
-        merchantName: r.merchantName,
-        description: r.description,
-      }) === 'likely_match',
-  )
-  const suggestedIds = new Set(suggested.map((r) => r.id))
-  const incoming = unreviewed.filter((r) => r.direction === 'inflow' && !suggestedIds.has(r.id))
-  const outgoing = unreviewed.filter((r) => r.direction === 'outflow' && !suggestedIds.has(r.id))
+  // Triage partition — drives section order. Inflow + outflow are
+  // separated because their copy + primary actions differ.
+  const depositsToConfirm = groups.filter((g) => g.direction === 'inflow' && g.triage === 'attention')
+  const exceptions = groups.filter((g) => g.direction === 'outflow' && g.triage === 'attention')
+  const suggestedPersonal = groups.filter((g) => g.triage === 'personal')
+  const autoClassified = groups.filter((g) => g.triage === 'auto')
+
+  const attentionTotal = depositsToConfirm.length + exceptions.length + suggestedPersonal.length
 
   return (
     <div className="space-y-6">
-      {/* Top stats strip */}
-      <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Need review" value={`${counts.unreviewed}`} muted={counts.unreviewed === 0} />
-        <DrawerStat label="Settled" value={`${counts.settled}`} muted={counts.settled === 0} />
-        <DrawerStat label="Ignored" value={`${counts.ignored}`} muted={counts.ignored === 0} />
+      {/* Top stats strip — Need attention is the headline; auto-
+          classified counts as visibility, not work. */}
+      <div className="grid grid-cols-4 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+        <DrawerStat label="Need attention" value={`${attentionTotal}`} muted={attentionTotal === 0} />
+        <DrawerStat label="Auto-classified" value={`${autoClassified.length}`} muted={autoClassified.length === 0} />
+        <DrawerStat label="Confirmed" value={`${counts.settled}`} muted={counts.settled === 0} />
+        <DrawerStat label="Personal" value={`${counts.ignored}`} muted={counts.ignored === 0} />
       </div>
 
-      {/* Suggested matches */}
-      {suggested.length > 0 && (
-        <DrawerSection title="Suggested matches">
-          <p className="mb-2.5 text-[11px] text-gray-500 leading-relaxed">
-            Bank activity that matches a known business pattern. Confirm or override.
+      {/* Opening orientation */}
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        Money Review — confirm deposits, resolve exceptions, and verify cash
+        reality. Normal recurring activity is auto-classified below.
+      </p>
+
+      {/* 1. Deposits to confirm */}
+      <DrawerSection title={`Deposits to confirm${depositsToConfirm.length > 0 ? ` · ${depositsToConfirm.length}` : ''}`}>
+        {depositsToConfirm.length === 0 ? (
+          <p className="text-xs text-gray-400 italic">No incoming deposits waiting on a match.</p>
+        ) : (
+          <div className="space-y-2">
+            {depositsToConfirm.map((group) => (
+              <ReviewGroupCard key={group.key} group={group} />
+            ))}
+          </div>
+        )}
+      </DrawerSection>
+
+      {/* 2. Exceptions */}
+      {exceptions.length > 0 && (
+        <DrawerSection title={`Exceptions · ${exceptions.length}`}>
+          <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
+            Outflows that didn&apos;t auto-classify — unknown vendors,
+            transfers, or amounts large enough to want eyes on.
           </p>
           <div className="space-y-2">
-            {suggested.map((row) => (
-              <ReviewRow key={row.id} row={row} />
+            {exceptions.map((group) => (
+              <ReviewGroupCard key={group.key} group={group} />
             ))}
           </div>
         </DrawerSection>
       )}
 
-      {/* Incoming money */}
-      <DrawerSection title={`Incoming money${incoming.length > 0 ? ` · ${incoming.length}` : ''}`}>
-        {incoming.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No incoming activity needs review.</p>
-        ) : (
+      {/* 3. Suggested personal */}
+      {suggestedPersonal.length > 0 && (
+        <DrawerSection title={`Suggested personal · ${suggestedPersonal.length}`}>
+          <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
+            Looks like personal spend — mark it so it stops counting against
+            business totals.
+          </p>
           <div className="space-y-2">
-            {incoming.map((row) => (
-              <ReviewRow key={row.id} row={row} />
+            {suggestedPersonal.map((group) => (
+              <ReviewGroupCard key={group.key} group={group} />
             ))}
           </div>
-        )}
-      </DrawerSection>
+        </DrawerSection>
+      )}
 
-      {/* Outgoing money */}
-      <DrawerSection title={`Outgoing money${outgoing.length > 0 ? ` · ${outgoing.length}` : ''}`}>
-        {outgoing.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No outgoing activity needs review.</p>
-        ) : (
-          <div className="space-y-2">
-            {outgoing.map((row) => (
-              <ReviewRow key={row.id} row={row} />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
+      {/* 4. Auto-classified — collapsed by default. Visible for
+          audit / override, not required work. */}
+      {autoClassified.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowAuto((v) => !v)}
+            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+          >
+            <span>{showAuto ? '▾' : '▸'}</span>
+            Auto-classified · {autoClassified.length}
+          </button>
+          {!showAuto && (
+            <p className="mt-1.5 text-[11px] text-gray-400 leading-relaxed">
+              Normal recurring activity, already categorized. Open to confirm
+              in bulk or override.
+            </p>
+          )}
+          {showAuto && (
+            <div className="mt-3 space-y-2">
+              {autoClassified.map((group) => (
+                <ReviewGroupCard key={group.key} group={group} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
-      {/* Review later (not_a_match) */}
+      {/* 5. Review later (not_a_match) — per-row */}
       {reviewLater.length > 0 && (
         <div>
           <button
@@ -2422,7 +2520,7 @@ function BankReviewDrawerContent({
         </div>
       )}
 
-      {/* Settled tail */}
+      {/* 6. Confirmed tail */}
       {settled.length > 0 && (
         <div>
           <button
@@ -2431,7 +2529,7 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showSettled ? '▾' : '▸'}</span>
-            Settled · {settled.length}
+            Confirmed · {settled.length}
           </button>
           {showSettled && (
             <div className="mt-3 space-y-2">
@@ -2443,7 +2541,7 @@ function BankReviewDrawerContent({
         </div>
       )}
 
-      {/* Ignored tail */}
+      {/* 7. Personal tail */}
       {ignored.length > 0 && (
         <div>
           <button
@@ -2452,7 +2550,7 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showIgnored ? '▾' : '▸'}</span>
-            Ignored · {ignored.length}
+            Personal · {ignored.length}
           </button>
           {showIgnored && (
             <div className="mt-3 space-y-2">
@@ -2467,14 +2565,210 @@ function BankReviewDrawerContent({
       {/* Honesty caveat */}
       <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
         <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>V1 limitation.</strong> Settling tags the bank row only — it does not
-          yet create or link a Finance expense entry. Inventory restock orders and
-          their receipts are still the source of truth for inventory spend; settling
-          an inventory bank row will not double-count.
+          <strong>Truth model.</strong> Confirming an outflow records the bank
+          amount as the settled value for that category. Operational records
+          (inventory orders, scheduled labor, recorded sales) are never
+          overwritten — both sides stay visible and auditable. Per-ticket
+          expected-vs-settled display requires a follow-up schema pass and is
+          intentionally deferred.
         </p>
       </div>
     </div>
   )
+}
+
+// ----------------------------------------------------------------
+// ReviewGroupCard — one card per bucketed pattern (Costco, HEB,
+// Rent & utilities, etc.). Renders the group's suggested decision
+// + one primary action, with secondary controls tucked behind a
+// Change-category dropdown, an Ignore action, and a Review details
+// drilldown that expands into the underlying transactions.
+//
+// Primary CTA logic:
+//   • personal group               → primary action = Ignore
+//   • inflow + revenue suggestion  → "Match to Sales"
+//   • outflow + suggestion present → "Settle as {kind}"
+//   • no suggestion                → "Review details" (no settle)
+//
+// Override path: the Change-category dropdown lets the manager
+// pick any of the standard kinds (or mark for later) without hunting
+// through five equal buttons.
+// ----------------------------------------------------------------
+function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
+  const [isPending, startTransition] = useTransition()
+  const [showDetails, setShowDetails] = useState(false)
+  const [overrideKind, setOverrideKind] = useState<string>('')
+
+  const sign = group.direction === 'outflow' ? '−' : '+'
+  const amountTone = group.direction === 'outflow' ? 'text-red-700' : 'text-green-700'
+  const txnIdsCsv = group.txnIds.join(',')
+
+  function callGroupAction(
+    action:
+      | typeof settleBankTransactionGroup
+      | typeof ignoreBankTransactionGroup
+      | typeof markBankTransactionGroupNotAMatch,
+    kind?: SuggestedKind,
+  ) {
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.append('txn_ids', txnIdsCsv)
+      if (kind) fd.append('kind', kind)
+      await action(null, fd)
+    })
+  }
+
+  function onPrimaryClick() {
+    if (group.personal) return callGroupAction(ignoreBankTransactionGroup)
+    if (!group.suggestedKind) return setShowDetails(true)
+    return callGroupAction(settleBankTransactionGroup, group.suggestedKind)
+  }
+
+  function onOverrideChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const value = e.target.value
+    setOverrideKind(value)
+    if (!value) return
+    if (value === 'ignore') {
+      callGroupAction(ignoreBankTransactionGroup)
+    } else if (value === 'review_later') {
+      callGroupAction(markBankTransactionGroupNotAMatch)
+    } else if (
+      value === 'revenue' || value === 'inventory' || value === 'labor' || value === 'operating'
+    ) {
+      callGroupAction(settleBankTransactionGroup, value)
+    }
+    // Reset so a re-pick of the same override fires again next time.
+    setOverrideKind('')
+  }
+
+  const primaryLabel = (() => {
+    if (group.personal) return 'Mark personal'
+    if (!group.suggestedKind) return 'Review details'
+    if (group.direction === 'inflow' && group.suggestedKind === 'revenue') return 'Match to Sales Deposit'
+    return `Confirm as ${prettyKind(group.suggestedKind)}`
+  })()
+
+  const suggestedLabel = group.personal
+    ? 'Suggested as personal'
+    : group.suggestedKind
+      ? `Suggested: ${prettyKind(group.suggestedKind)}`
+      : 'Suggested: review details'
+
+  return (
+    <div className="rounded-lg border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+      {/* Header — name, amount */}
+      <div className="px-3.5 py-3 flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-semibold text-gray-900 truncate">{group.label}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5 tabular-nums">
+            {group.txnCount} transaction{group.txnCount === 1 ? '' : 's'}
+          </p>
+          <p className="text-[11px] text-gray-500 mt-1.5">
+            <span className="font-medium text-gray-700">{suggestedLabel}</span>
+            <span className="text-gray-300 px-1">·</span>
+            <span>{group.reason}</span>
+          </p>
+        </div>
+        <p className={`text-sm font-bold tabular-nums flex-shrink-0 ${amountTone}`}>
+          {sign}${group.totalAmount.toFixed(2)}
+        </p>
+      </div>
+
+      {/* Action row — one primary CTA + Change-category + drilldown */}
+      <div className="px-3.5 pb-3 pt-1 flex flex-wrap items-center gap-1.5">
+        <button
+          type="button"
+          disabled={isPending}
+          onClick={onPrimaryClick}
+          className="text-[10px] font-semibold uppercase tracking-[0.06em] px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-900 text-white hover:bg-gray-800"
+        >
+          {primaryLabel}
+        </button>
+
+        {/* Change-category dropdown — single override surface
+            instead of a row of equal buttons. Empty option keeps
+            the suggested decision; picking any concrete kind fires
+            the corresponding action immediately. */}
+        <label className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 inline-flex items-center gap-1 border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 transition-colors cursor-pointer">
+          <span>Change</span>
+          <select
+            value={overrideKind}
+            onChange={onOverrideChange}
+            disabled={isPending}
+            className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 bg-transparent border-0 outline-none cursor-pointer disabled:cursor-not-allowed"
+          >
+            <option value="">…</option>
+            {group.direction === 'inflow' ? (
+              <option value="revenue">Sales Deposit</option>
+            ) : (
+              <>
+                <option value="inventory">Inventory</option>
+                <option value="labor">Labor</option>
+                <option value="operating">Operating</option>
+              </>
+            )}
+            <option value="ignore">Mark personal</option>
+            <option value="review_later">Review later</option>
+          </select>
+        </label>
+
+        {/* Mark-personal secondary — suppressed when the primary
+            CTA is already Mark personal, so two equivalents never
+            appear at once. */}
+        {!group.personal && (
+          <button
+            type="button"
+            disabled={isPending}
+            onClick={() => callGroupAction(ignoreBankTransactionGroup)}
+            className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:bg-gray-100 border border-gray-200 px-2 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Mark personal
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setShowDetails((v) => !v)}
+          className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500 hover:text-gray-700 ml-auto px-2 py-1 rounded-md transition-colors"
+        >
+          {showDetails ? 'Hide details' : 'Details'}
+        </button>
+      </div>
+
+      {/* Drilldown — underlying transactions for this group. Each
+          row is the same ReviewRow used by the Settled / Ignored
+          tails, so the manager has per-row override available
+          without leaving the group context. */}
+      {showDetails && (
+        <div className="border-t border-gray-100 px-3 py-3 bg-gray-50/40">
+          <div className="space-y-2">
+            {group.txns.map((txn) => {
+              const fullRow: BankReviewRow = {
+                id: txn.id,
+                direction: txn.direction,
+                amount: txn.amount,
+                rawCategory: txn.rawCategory,
+                merchantName: txn.merchantName,
+                description: txn.description,
+                postedAt: txn.postedAt,
+                reviewState: 'unreviewed',
+                settledKind: null,
+              }
+              return <ReviewRow key={txn.id} row={fullRow} />
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function prettyKind(kind: SuggestedKind): string {
+  if (kind === 'revenue') return 'Sales'
+  if (kind === 'inventory') return 'Inventory'
+  if (kind === 'labor') return 'Labor'
+  if (kind === 'operating') return 'Operating'
+  return ''
 }
 
 // ----------------------------------------------------------------
@@ -2550,21 +2844,21 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'inventory')}
                 >
-                  Settle as inventory
+                  Confirm as inventory
                 </ActionButton>
                 <ActionButton
                   primary={suggested === 'labor'}
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'labor')}
                 >
-                  Settle as labor
+                  Confirm as labor
                 </ActionButton>
                 <ActionButton
                   primary={suggested === 'operating'}
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'operating')}
                 >
-                  Settle as operating
+                  Confirm as operating
                 </ActionButton>
               </>
             ) : (
@@ -2573,7 +2867,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
                 disabled={isPending}
                 onClick={() => call(settleBankTransaction, 'revenue')}
               >
-                Settle as revenue
+                Match to Sales Deposit
               </ActionButton>
             )}
             <ActionButton
@@ -2582,7 +2876,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
               disabled={isPending}
               onClick={() => call(ignoreBankTransaction)}
             >
-              Ignore as personal
+              Mark personal
             </ActionButton>
             <ActionButton
               primary={false}

@@ -24,7 +24,6 @@ import { useState, useMemo, useActionState, useEffect, useRef, useTransition } f
 import { createOrder } from '@/app/actions/sales'
 import { createTerminalPaymentIntent } from '@/app/actions/payments'
 import {
-  isPosSellable,
   type EffectiveSellability,
   type ProjectionState,
 } from '@/lib/menu/availability'
@@ -43,7 +42,28 @@ interface Item {
   projectedCount: number | null
   projectionState: ProjectionState
 }
-interface CartLine { itemId: string; name: string; price: number; quantity: number }
+interface CartLine {
+  /** Per-line unique identifier (UUID). Every click on a menu tile
+   *  creates a new cart line — two Cheeseburgers can sit side by
+   *  side with different notes/modifiers/quantities — so we can't
+   *  identify lines by `itemId` anymore. Generated on add via
+   *  crypto.randomUUID(); never reaches the server (the server still
+   *  only sees aggregated { menu_item_id, total_quantity } below). */
+  lineId: string
+  itemId: string
+  name: string
+  price: number
+  quantity: number
+  /** UI-only — captured by the Order item drawer. Not yet sent to
+   *  createOrder; the action contract still only takes
+   *  menu_item_id + quantity. Stored on the cart line so the drawer
+   *  can round-trip the value while the order is being built. */
+  notes?: string
+  /** UI-only — placeholder for the future add-on / customization
+   *  flow. The drawer surfaces a "coming soon" panel today but the
+   *  field is in place so wiring is ready when the data model lands. */
+  modifiers?: string[]
+}
 
 type PaymentType = 'cash' | 'card' | 'other'
 
@@ -73,6 +93,19 @@ type TerminalStage =
   | 'canceled'
 
 const CURRENCY = (n: number) => `$${n.toFixed(2)}`
+
+// Per-line unique id for cart rows. Each click on a menu tile
+// generates a fresh one so two identical base items can live as
+// separate lines with their own notes/modifiers/quantities.
+// crypto.randomUUID exists in every modern browser and in Node ≥
+// 14.17; the Math.random fallback is enough for ephemeral
+// client-only cart ids if the API ever isn't available.
+function makeLineId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `line-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
 
 // ================================================================
 // Quick tender helper.
@@ -137,6 +170,13 @@ export default function PosClient({
   //      order is even ready.
   const [checkoutOpen, setCheckoutOpen] = useState(false)
 
+  // Order item drawer — opens when the cashier clicks a cart row to
+  // edit that specific line item (quantity, notes, modifiers, or
+  // remove). Identified by the cart line's `itemId` so the drawer
+  // can read live from the cart state and auto-close if the row
+  // gets removed.
+  const [editingLineId, setEditingLineId] = useState<string | null>(null)
+
   // ----------------------------------------------------------------
   // Success effect.
   //
@@ -176,33 +216,80 @@ export default function PosClient({
 
   const subtotal = useMemo(() => cart.reduce((s, l) => s + l.price * l.quantity, 0), [cart])
 
+  // Every tap on a menu tile creates a NEW cart line (no merging).
+  // Two guests can order the same base item with different
+  // customizations; smart merging by (menu_item_id + modifiers +
+  // notes) is a future enhancement. For pilot, the simple rule
+  // wins: one click → one line.
   const addItem = (item: Item) => {
-    setCart((p) => {
-      const existing = p.find((l) => l.itemId === item.id)
-      if (existing) {
-        return p.map((l) => l.itemId === item.id ? { ...l, quantity: l.quantity + 1 } : l)
-      }
-      return [...p, { itemId: item.id, name: item.name, price: item.price, quantity: 1 }]
-    })
+    setCart((p) => [
+      ...p,
+      {
+        lineId: makeLineId(),
+        itemId: item.id,
+        name: item.name,
+        price: item.price,
+        quantity: 1,
+      },
+    ])
   }
 
-  const changeQty = (itemId: string, delta: number) => {
+  const changeQty = (lineId: string, delta: number) => {
     setCart((p) => p
-      .map((l) => l.itemId === itemId ? { ...l, quantity: l.quantity + delta } : l)
+      .map((l) => l.lineId === lineId ? { ...l, quantity: l.quantity + delta } : l)
       .filter((l) => l.quantity > 0))
   }
 
-  const removeLine = (itemId: string) => {
-    setCart((p) => p.filter((l) => l.itemId !== itemId))
+  const removeLine = (lineId: string) => {
+    setCart((p) => p.filter((l) => l.lineId !== lineId))
+  }
+
+  // Generic patch for a cart line — used by the Order item drawer
+  // to update notes / modifiers without conflating with the qty +/-
+  // semantics already covered by changeQty.
+  const updateLine = (lineId: string, patch: Partial<CartLine>) => {
+    setCart((p) => p.map((l) => l.lineId === lineId ? { ...l, ...patch } : l))
   }
 
   const clearCart = () => setCart([])
 
+  // Resolve the currently-edited cart line. Auto-clears when the
+  // line is removed (so the drawer closes naturally instead of
+  // pointing at a stale id).
+  const editingLine = useMemo(
+    () => cart.find((l) => l.lineId === editingLineId) ?? null,
+    [cart, editingLineId],
+  )
+  useEffect(() => {
+    if (editingLineId && !editingLine) {
+      setEditingLineId(null)
+    }
+  }, [editingLineId, editingLine])
+
   // Serialized payload for the server action.
-  const lineItemsJson = JSON.stringify(cart.map((l) => ({
-    menu_item_id: l.itemId,
-    quantity: l.quantity,
-  })))
+  //
+  // Cart lines are kept separate in the UI (each click = a new
+  // line) so two guests can attach different notes/modifiers to the
+  // same base menu item. For the wire format we aggregate by
+  // menu_item_id and sum quantities so:
+  //   • the server contract stays unchanged ({menu_item_id, quantity})
+  //   • inventory depletion sees the total quantity per item
+  //   • order_items records one row per unique menu item with the
+  //     correct total quantity
+  // Notes/modifiers don't reach the server in this pass — they're
+  // captured client-side only per the prior pass.
+  const lineItemsJson = useMemo(() => {
+    const byItem = new Map<string, number>()
+    for (const line of cart) {
+      byItem.set(line.itemId, (byItem.get(line.itemId) ?? 0) + line.quantity)
+    }
+    return JSON.stringify(
+      Array.from(byItem.entries()).map(([menu_item_id, quantity]) => ({
+        menu_item_id,
+        quantity,
+      })),
+    )
+  }, [cart])
 
   const cartItemCount = cart.reduce((s, l) => s + l.quantity, 0)
 
@@ -319,56 +406,42 @@ export default function PosClient({
               ) : (
                 <ul className="px-3 py-3 space-y-2">
                   {cart.map((line) => (
-                    <li
-                      key={line.itemId}
-                      className="rounded-lg border border-gray-200/80 bg-white px-3 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.02)]"
-                    >
-                      {/* Identity row — item name + line total
-                          baseline-aligned so the eye reads them as
-                          one operational pair. The old "$X × N"
-                          subtext was removed: redundant with the
-                          stepper's count + the line total. */}
-                      <div className="flex items-baseline justify-between gap-3">
-                        <p className="text-sm font-semibold text-gray-900 truncate">{line.name}</p>
-                        <p className="text-sm font-semibold text-gray-900 tabular-nums whitespace-nowrap">
-                          {CURRENCY(line.price * line.quantity)}
-                        </p>
-                      </div>
-                      {/* Action row — stepper + remove. Symmetric
-                          layout: control on the left, destructive on
-                          the right. Both vertically centered with the
-                          stepper so the remove X feels like part of
-                          the row, not floating. */}
-                      <div className="mt-2.5 flex items-center justify-between">
-                        <div className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white overflow-hidden">
-                          <button
-                            type="button"
-                            onClick={() => changeQty(line.itemId, -1)}
-                            className="px-2.5 py-1 text-gray-600 hover:bg-gray-50 text-sm leading-none"
-                            aria-label="Decrease"
-                          >−</button>
-                          <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold tabular-nums text-center text-gray-900 border-x border-gray-200/80">
-                            {line.quantity}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => changeQty(line.itemId, 1)}
-                            className="px-2.5 py-1 text-gray-600 hover:bg-gray-50 text-sm leading-none"
-                            aria-label="Increase"
-                          >+</button>
+                    <li key={line.lineId} className="relative">
+                      {/* Row body — clickable surface that opens the
+                          Order item drawer for this specific line.
+                          Each line is independent: two clicks on the
+                          same menu item produce two rows here so
+                          guests with different mods stay separate. */}
+                      <button
+                        type="button"
+                        onClick={() => setEditingLineId(line.lineId)}
+                        className="w-full text-left rounded-lg border border-gray-200/80 bg-white px-3 py-2.5 pr-10 shadow-[0_1px_2px_rgba(0,0,0,0.02)] hover:border-blue-300 hover:bg-blue-50/30 transition-colors"
+                      >
+                        <div className="flex items-baseline justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-semibold text-gray-900 truncate">{line.name}</p>
+                            {line.notes && (
+                              <p className="text-[11px] text-gray-500 truncate mt-0.5">{line.notes}</p>
+                            )}
+                          </div>
+                          <p className="text-sm font-semibold text-blue-600 tabular-nums whitespace-nowrap flex-shrink-0">
+                            {CURRENCY(line.price * line.quantity)}
+                          </p>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => removeLine(line.itemId)}
-                          aria-label={`Remove ${line.name}`}
-                          title="Remove from order"
-                          className="text-gray-400 hover:text-red-600 p-1.5 rounded-md hover:bg-red-50 transition-colors"
-                        >
-                          <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                          </svg>
-                        </button>
-                      </div>
+                      </button>
+                      {/* Remove X — sibling of the clickable row, not
+                          a nested button (HTML can't nest buttons). */}
+                      <button
+                        type="button"
+                        onClick={() => removeLine(line.lineId)}
+                        aria-label={`Remove ${line.name}`}
+                        title="Remove from order"
+                        className="absolute top-1/2 -translate-y-1/2 right-1.5 text-gray-400 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors"
+                      >
+                        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -409,6 +482,24 @@ export default function PosClient({
         </aside>
       </div>
 
+      {/* Order item drawer — clicking a cart row in the right rail
+          opens this drawer for that specific line item. Quantity,
+          notes, modifier placeholders, and the per-line Remove
+          action all live here so the cart row itself stays minimal
+          (name + line total + remove X). */}
+      {editingLine && (
+        <OrderItemDrawer
+          line={editingLine}
+          onClose={() => setEditingLineId(null)}
+          onChangeQty={(delta) => changeQty(editingLine.lineId, delta)}
+          onUpdateNotes={(notes) => updateLine(editingLine.lineId, { notes })}
+          onRemove={() => {
+            removeLine(editingLine.lineId)
+            setEditingLineId(null)
+          }}
+        />
+      )}
+
       {/* Phase 2 — checkout drawer.
           Opens only after the cashier confirms the order is ready
           via "Continue to payment." Carries the payment-method
@@ -418,6 +509,7 @@ export default function PosClient({
           payment surface. */}
       {checkoutOpen && cart.length > 0 && (
         <CheckoutDrawer
+          cart={cart}
           subtotal={subtotal}
           cartItemCount={cartItemCount}
           lineItemsJson={lineItemsJson}
@@ -458,21 +550,76 @@ function CategoryChip({ label, active, onClick }: { label: string; active: boole
 // ItemTile — left-side menu item button.
 // ================================================================
 function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
-  const sellable = isPosSellable(item.effectiveSellability)
-  // Status cue mirrors the menu card chip vocabulary so staff don't
-  // have to remember two languages. Healthy items show no cue;
-  // auto-disabled and manually-disabled items get an inline state pill.
-  const statusCue: { label: string; tone: 'red' | 'amber' | 'gray' } | null = (() => {
-    if (item.effectiveSellability === 'auto_disabled') return { label: 'Out', tone: 'red' }
-    if (item.effectiveSellability === 'manually_disabled') return { label: 'Disabled', tone: 'gray' }
-    if (item.effectiveSellability === 'manually_enabled' && item.projectionState === 'out') {
-      return { label: 'Out · Override', tone: 'amber' }
+  // Tile communicates status through subtle card styling — no
+  // visible labels on the face. Four states, all calm:
+  //
+  //   healthy   → default white card with gray border, blue hover.
+  //   low       → faint amber tint + soft amber border. Still
+  //               clickable. Covers projection 'low' and the
+  //               force-enabled-but-stock-out case (still sellable,
+  //               still flagged).
+  //   out       → faint red tint + soft red border, not clickable,
+  //               name muted. Communicates "inventory is out."
+  //   disabled  → default border, no tint, opacity-50, not
+  //               clickable. Visually different from 'out' on
+  //               purpose: it's a manager override, not a stock
+  //               problem.
+  //
+  // The status info is folded into aria-label so screen-reader
+  // users still hear the state we removed from the visible face.
+  type TileState = 'healthy' | 'low' | 'out' | 'disabled'
+  const state: TileState = (() => {
+    if (item.effectiveSellability === 'manually_disabled') return 'disabled'
+    if (item.effectiveSellability === 'auto_disabled') return 'out'
+    if (
+      item.projectionState === 'low' ||
+      (item.effectiveSellability === 'manually_enabled' && item.projectionState === 'out')
+    ) {
+      return 'low'
     }
-    if (item.projectionState === 'low' && item.projectedCount !== null) {
-      return { label: `Low · ${item.projectedCount}`, tone: 'amber' }
-    }
-    return null
+    return 'healthy'
   })()
+  const sellable = state === 'healthy' || state === 'low'
+
+  const ariaSuffix =
+    state === 'out'
+      ? ' (out of stock)'
+      : state === 'disabled'
+        ? ' (unavailable)'
+        : state === 'low'
+          ? item.projectionState === 'low' && item.projectedCount !== null
+            ? ` (low stock, ${item.projectedCount} left)`
+            : ' (low stock)'
+          : ''
+
+  // Card + text styling per state. Every card is white with a
+  // calm gray border on all four sides. The state cue is a small
+  // colored arc overlay in the bottom-right corner — see the
+  // accentClass span at the end of the button below. Healthy and
+  // Disabled get no accent.
+  const cardClass: Record<TileState, string> = {
+    healthy:
+      'border-gray-200/80 bg-white hover:border-blue-300 hover:shadow-md active:scale-[.98]',
+    low:
+      'border-gray-200/80 bg-white hover:border-gray-300 hover:shadow-md active:scale-[.98]',
+    out:
+      'border-gray-200/80 bg-white cursor-not-allowed',
+    disabled:
+      'border-gray-200/80 bg-white cursor-not-allowed opacity-50',
+  }
+  const textClass: Record<TileState, string> = {
+    healthy: 'text-gray-900',
+    low: 'text-gray-900',
+    out: 'text-gray-500',
+    disabled: 'text-gray-500',
+  }
+  // Bottom-right corner accent — small colored L that hugs the
+  // card's rounded corner. Roughly ¼ of each adjacent edge so the
+  // indicator stays a subtle corner cue, not a half-card border.
+  const accentBorderClass: string | null =
+    state === 'low' ? 'border-amber-300'
+      : state === 'out' ? 'border-red-300'
+        : null
 
   return (
     <button
@@ -480,33 +627,40 @@ function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
       onClick={sellable ? onAdd : undefined}
       disabled={!sellable}
       aria-disabled={!sellable}
-      className={`group text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 py-3.5 transition-all ${
-        sellable
-          ? 'border-gray-200/80 hover:border-blue-300 hover:shadow-md active:scale-[.98]'
-          : 'border-gray-200/80 opacity-60 cursor-not-allowed'
-      }`}
+      aria-label={`${item.name}${ariaSuffix}`}
+      className={`relative group rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 py-5 transition-all flex items-center justify-center min-h-[5rem] ${cardClass[state]}`}
     >
-      <p className={`text-sm font-semibold line-clamp-2 min-h-[2.5rem] ${sellable ? 'text-gray-900' : 'text-gray-500'}`}>
+      <p className={`text-sm font-semibold text-center line-clamp-2 ${textClass[state]}`}>
         {item.name}
       </p>
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <p className={`text-base font-bold tabular-nums ${sellable ? 'text-blue-600' : 'text-gray-400'}`}>
-          {CURRENCY(item.price)}
-        </p>
-        {statusCue && (
-          <span
-            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
-              statusCue.tone === 'red'
-                ? 'bg-red-50 text-red-700'
-                : statusCue.tone === 'amber'
-                  ? 'bg-amber-50 text-amber-700'
-                  : 'bg-gray-100 text-gray-600'
-            }`}
-          >
-            {statusCue.label}
-          </span>
-        )}
-      </div>
+      {accentBorderClass && (
+        <span
+          aria-hidden="true"
+          className={`pointer-events-none absolute -bottom-px -right-px w-7 h-7 rounded-br-xl border-b border-r ${accentBorderClass}`}
+        />
+      )}
+      {/* Remaining-stock count — tiny black number tucked into the
+          bottom-right corner accent. Renders for both Low (showing
+          the projected count) and Out (showing `0`). Healthy and
+          Manually-disabled tiles show no number. The aria-label
+          already carries the same info for screen readers, so this
+          span is decorative. */}
+      {state === 'low' && item.projectionState === 'low' && item.projectedCount !== null && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold tabular-nums text-gray-400"
+        >
+          {item.projectedCount}
+        </span>
+      )}
+      {state === 'out' && (
+        <span
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold tabular-nums text-gray-400"
+        >
+          0
+        </span>
+      )}
     </button>
   )
 }
@@ -587,7 +741,12 @@ function CashWorkflow({
             </div>
           </div>
 
-          {/* Live change/owed signal. Only one of the two ever shows. */}
+          {/* Live change / remaining signal. Only one of the two
+              renders at a time — "Change due" when the cashier has
+              enough cash to close the sale, "Remaining" while they
+              still need more. Cashiers think in terms of change
+              due, so the prominent green Change-due card stays the
+              decisive end of the flow. */}
           {cashReceivedRaw !== '' && (
             sufficient ? (
               <div className="rounded-xl border border-green-200 bg-green-50/60 px-4 py-3 flex items-center justify-between">
@@ -596,7 +755,7 @@ function CashWorkflow({
               </div>
             ) : (
               <div className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 flex items-center justify-between">
-                <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-700">Still owed</span>
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-amber-700">Remaining</span>
                 <span className="text-base font-mono tabular-nums font-bold text-amber-700">{CURRENCY(stillOwed)}</span>
               </div>
             )
@@ -615,7 +774,7 @@ function CashWorkflow({
             ? 'Add items to start'
             : !sufficient
               ? `Enter at least ${CURRENCY(total)}`
-              : `Complete cash sale · ${CURRENCY(total)}`}
+              : 'Complete cash payment'}
       </button>
     </div>
   )
@@ -876,7 +1035,7 @@ function CardWorkflow({
             disabled={cartEmpty || pending || total <= 0}
             className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-bold text-white hover:bg-gray-800 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            {cartEmpty ? 'Add items to start' : `Charge card · ${CURRENCY(total)}`}
+            {cartEmpty ? 'Add items to start' : 'Charge card'}
           </button>
 
           {/* Dev-only simulator switch. Only meaningful while the
@@ -1083,7 +1242,7 @@ function OtherWorkflow({
           ? 'Saving…'
           : cartEmpty
             ? 'Add items to start'
-            : `Complete sale · ${CURRENCY(total)}`}
+            : 'Complete other payment'}
       </button>
     </div>
   )
@@ -1108,6 +1267,7 @@ function OtherWorkflow({
 // parent's existing wasPendingRef effect.
 // ================================================================
 function CheckoutDrawer({
+  cart,
   subtotal,
   cartItemCount,
   lineItemsJson,
@@ -1120,6 +1280,7 @@ function CheckoutDrawer({
   actionError,
   onClose,
 }: {
+  cart: CartLine[]
   subtotal: number
   cartItemCount: number
   lineItemsJson: string
@@ -1155,14 +1316,16 @@ function CheckoutDrawer({
       />
       <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
-        {/* Header */}
-        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
+        {/* Header — trimmed. The "N items · pick a method" subtitle
+            moved into the hero amount block below; the header now
+            carries only the section identity + Close so the body
+            can open straight on the dollar amount. */}
+        <div className="border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Checkout</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight">Collect payment</h2>
-            <p className="mt-0.5 text-xs text-gray-500">
-              {cartItemCount} item{cartItemCount !== 1 ? 's' : ''} · pick a payment method.
-            </p>
+            <h2 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900 leading-tight">
+              Collect payment
+            </h2>
           </div>
           <button
             type="button"
@@ -1174,11 +1337,16 @@ function CheckoutDrawer({
           </button>
         </div>
 
-        {/* Body — order summary + payment method + active workflow.
-            The form wraps the whole body so the submit buttons
-            inside each workflow component still drive createOrder
-            with the same hidden-field payload as before. */}
-        <form action={action} className="flex-1 overflow-y-auto px-6 py-6 space-y-5">
+        {/* Body — five bands top-to-bottom:
+              1. Hero amount due (visual anchor)
+              2. Read-only order summary
+              3. Payment method
+              4. Active per-method workflow
+              5. Optional action error
+            The form wraps the whole body so each workflow's submit
+            button still drives createOrder with the same hidden-
+            field payload as before. */}
+        <form action={action} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           <input type="hidden" name="line_items" value={lineItemsJson} />
           <input type="hidden" name="source" value="native_pos" />
           <input type="hidden" name="payment_type" value={paymentType} />
@@ -1186,25 +1354,59 @@ function CheckoutDrawer({
           <input type="hidden" name="status" value="completed" />
           <input type="hidden" name="redirect_to" value="/pos" />
 
-          {/* Single primary amount summary for the drawer.
-              The Cash and Card workflows used to each render their
-              own "Amount due" / "Amount to charge" block under this
-              one — same number, repeated twice. We keep this single
-              summary as the canonical "what's being paid" and the
-              workflows below go straight into their controls. */}
-          <div className="rounded-xl border border-gray-200/80 bg-gray-50/50 px-4 py-3.5">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Amount due</span>
-              <span className="text-lg font-mono tabular-nums font-bold text-gray-900">{CURRENCY(subtotal)}</span>
-            </div>
-            <p className="mt-1 text-[11px] text-gray-500 tabular-nums">
+          {/* 1. Hero — Amount due is the visual anchor of the
+              drawer. No card chrome around it; a large centered
+              tabular number reads as the checkout moment, not as a
+              metric in a generic form. */}
+          <div className="text-center pt-1 pb-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+              Amount due
+            </p>
+            <p className="mt-1 text-[40px] leading-none font-mono tabular-nums font-bold text-gray-900">
+              {CURRENCY(subtotal)}
+            </p>
+            <p className="mt-2 text-[11px] text-gray-500">
               {cartItemCount} item{cartItemCount !== 1 ? 's' : ''} in this order
             </p>
           </div>
 
-          {/* Payment method selector */}
+          {/* 2. Order summary — read-only, bounded scroll so long
+              orders don't push payment controls off-screen. Each
+              row is a quiet "name · qty · line total" tuple; no
+              edit affordances (the cart panel behind the drawer is
+              the editor). */}
           <div>
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">Payment method</p>
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Order summary
+            </p>
+            <ul className="rounded-lg border border-gray-200/80 bg-white divide-y divide-gray-100 max-h-32 overflow-y-auto">
+              {cart.map((line) => (
+                <li
+                  key={line.lineId}
+                  className="flex items-baseline justify-between gap-3 px-3 py-2"
+                >
+                  <p className="text-xs font-medium text-gray-900 truncate">
+                    {line.name}
+                    {line.quantity > 1 && (
+                      <span className="ml-1.5 text-[11px] text-gray-500 tabular-nums">
+                        × {line.quantity}
+                      </span>
+                    )}
+                  </p>
+                  <p className="text-xs font-semibold text-gray-900 tabular-nums whitespace-nowrap">
+                    {CURRENCY(line.price * line.quantity)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* 3. Payment method — same three options as before, still
+              rendered as a 3-column segmented strip. */}
+          <div>
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Payment method
+            </p>
             <div className="grid grid-cols-3 gap-1.5">
               {(['cash', 'card', 'other'] as PaymentType[]).map((pt) => {
                 const active = paymentType === pt
@@ -1258,6 +1460,187 @@ function CheckoutDrawer({
             <p className="text-[11px] text-red-600 text-center">{actionError}</p>
           )}
         </form>
+      </aside>
+    </>
+  )
+}
+
+// ================================================================
+// OrderItemDrawer — per-line editor for items already in the cart.
+//
+// Opens when the cashier taps a cart row in the right-side current
+// order panel. Renders the same drawer chrome (right-side aside +
+// backdrop) the CheckoutDrawer uses so the family stays consistent.
+//
+// What it manages:
+//   • Quantity (stepper; minimum 1 — removal goes through the
+//     dedicated Remove button so the cashier never "decrements
+//     into a delete" by mistake)
+//   • Special request / note — captured on the cart line via
+//     onUpdateNotes. UI-only for this pass; the createOrder action
+//     contract isn't extended yet (see the CartLine JSDoc).
+//   • Add-ons / modifiers — placeholder section so the interaction
+//     is established. Renders a "coming soon" surface today.
+//   • Remove from order — destructive action footer-left.
+// ================================================================
+function OrderItemDrawer({
+  line,
+  onClose,
+  onChangeQty,
+  onUpdateNotes,
+  onRemove,
+}: {
+  line: CartLine
+  onClose: () => void
+  onChangeQty: (delta: number) => void
+  onUpdateNotes: (notes: string) => void
+  onRemove: () => void
+}) {
+  // Esc + body-scroll lock — same pattern as the CheckoutDrawer and
+  // the rest of the family.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  return (
+    <>
+      <div
+        onClick={onClose}
+        className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
+      />
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+
+        {/* Header — single price mention only. Per-unit price reads
+            as quiet supporting context under the name. Line total
+            used to appear here AND beside the quantity AND in the
+            cart row outside; the drawer now lets the cart row carry
+            the live total so the header stays simple. */}
+        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Order item</p>
+            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">
+              {line.name}
+            </h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              <span className="font-mono tabular-nums">{CURRENCY(line.price)}</span> each
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors -mt-1 -mr-1"
+          >
+            Close
+          </button>
+        </div>
+
+        {/* Body — section order per the polish spec:
+              1. Quantity (smaller, less dominant)
+              2. Add-ons / modifiers
+              3. Special request
+            Quantity is the first editable control after identity;
+            add-ons sit ahead of notes because structural customization
+            comes before free-text annotation. */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+
+          {/* 1. Quantity — compact stepper. Sized down from text-base
+              to text-sm so it reads as a modifier of the item rather
+              than the main focus of the drawer. */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+              Quantity
+            </p>
+            <div className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white overflow-hidden">
+              <button
+                type="button"
+                onClick={() => onChangeQty(-1)}
+                disabled={line.quantity <= 1}
+                aria-label="Decrease quantity"
+                className="px-2.5 py-1 text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed text-sm leading-none"
+              >
+                −
+              </button>
+              <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold tabular-nums text-center text-gray-900 border-x border-gray-200/80">
+                {line.quantity}
+              </span>
+              <button
+                type="button"
+                onClick={() => onChangeQty(1)}
+                aria-label="Increase quantity"
+                className="px-2.5 py-1 text-gray-600 hover:bg-gray-50 text-sm leading-none"
+              >
+                +
+              </button>
+            </div>
+            <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed">
+              Use Remove below to take this item off the order.
+            </p>
+          </div>
+
+          {/* 2. Add-ons / modifiers — placeholder until the data
+              model lands. Structural customization sits ahead of the
+              free-text "Special request" below. */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+              Add-ons / modifiers
+            </p>
+            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-5 text-center">
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Item customizations coming soon.
+              </p>
+              <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
+                Modifiers and add-ons will appear here once available.
+              </p>
+            </div>
+          </div>
+
+          {/* 3. Special request — free-text after structural mods. */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+              Special request
+            </p>
+            <textarea
+              value={line.notes ?? ''}
+              onChange={(e) => onUpdateNotes(e.target.value)}
+              rows={3}
+              placeholder="No onions, dressing on the side…"
+              className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition resize-none"
+            />
+            <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
+              Captured with this line item during the current order.
+            </p>
+          </div>
+        </div>
+
+        {/* Footer — destructive on the left, primary "Done" on the
+            right. Done just closes the drawer; quantity / notes
+            updates already wrote through to the cart on each
+            interaction, so there's no separate save step. */}
+        <div className="border-t border-gray-100 px-6 py-4 flex-shrink-0 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 text-xs font-semibold transition-colors"
+          >
+            Remove from order
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-gray-900 text-white hover:bg-gray-800 px-4 py-1.5 text-xs font-semibold transition-colors"
+          >
+            Done
+          </button>
+        </div>
       </aside>
     </>
   )

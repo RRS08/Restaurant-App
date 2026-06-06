@@ -32,7 +32,7 @@
 //   • Add new server actions or change DB shape.
 // ----------------------------------------------------------------
 
-import { useState, useRef, useEffect, useActionState } from 'react'
+import { useState, useRef, useEffect, useActionState, useTransition } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   createMenuItemInSection,
@@ -41,11 +41,13 @@ import {
   setMenuItemActive,
   deleteCategory,
   setMenuItemAvailabilityOverride,
+  updateMenuItemPrice,
 } from '@/app/actions/menu'
 import {
   addRecipeComponent,
   removeRecipeComponent,
   createInlineInventoryItem,
+  updateRecipeComponentQuantity,
 } from '@/app/actions/recipe'
 import {
   shortAvailabilityChip,
@@ -484,6 +486,8 @@ function ItemCard({
   onClick: () => void
 }) {
   const isInactive = !item.active
+  const isImported = isImportedSource(item.source)
+  const mapped = hasRecipe(item)
   const ringClass = selected
     ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.12)]'
     : 'border-gray-200/80 hover:border-gray-300'
@@ -504,6 +508,62 @@ function ItemCard({
     || item.effectiveSellability === 'manually_disabled'
     || isInactive
 
+  // ---- ONE status badge, picked by strict priority ----
+  //
+  // The previous polish dropped the badge pile too aggressively and
+  // the cards read as flat. The revision restores a single highest-
+  // priority status badge per card — never a pile — chosen by:
+  //
+  //   1. Imported + unmapped (any state)  → "Needs review"  amber
+  //      (catch-all — the manager hasn't yet mapped the imported
+  //      item, and that's the action regardless of active state)
+  //   2. Inactive                         → "Inactive"      gray
+  //   3. Disabled (manual override off)   → "Disabled"      gray
+  //   4. Out / Out · Override on          → from cue        red/amber
+  //   5. Low · N left                     → from cue        amber
+  //   6. Native + unmapped (active)       → no badge — the metadata
+  //                                          line "No recipe" carries
+  //                                          the signal itself.
+  //
+  // Healthy mapped items return null and the card carries only the
+  // quiet recipe metadata.
+  type BadgeTone = 'red' | 'amber' | 'gray'
+  let status: { label: string; tone: BadgeTone } | null = null
+  if (isImported && !mapped) {
+    status = { label: 'Needs review', tone: 'amber' }
+  } else if (isInactive) {
+    status = { label: 'Inactive', tone: 'gray' }
+  } else if (availabilityCue?.label === 'Disabled') {
+    status = { label: 'Disabled', tone: 'gray' }
+  } else if (availabilityCue?.label.startsWith('Out')) {
+    status = { label: availabilityCue.label, tone: availabilityCue.tone === 'red' ? 'red' : 'amber' }
+  } else if (availabilityCue?.label.startsWith('Low')) {
+    status = { label: availabilityCue.label, tone: 'amber' }
+  }
+
+  // ---- Metadata line (always rendered) ----
+  //
+  // Calm text that describes the item's recipe and (when relevant)
+  // its source. Three patterns, matching the spec examples:
+  //
+  //   mapped               → "Recipe · N ingredients"   (green pill)
+  //   imported + unmapped  → "Imported item · No recipe" (amber text)
+  //   native  + unmapped   → "No recipe"                 (amber text)
+  //
+  // Mapped items render as a small soft green pill so the "this is
+  // healthy" signal pops back into the card after the prior polish
+  // pass made it too quiet. Unmapped items stay plain colored text
+  // (no pill) so the right-side status badge still reads as the
+  // dominant call to action when something needs review.
+  const metadata = mapped
+    ? {
+        text: `Recipe · ${item.recipe.length} ingredient${item.recipe.length !== 1 ? 's' : ''}`,
+        kind: 'pill' as const,
+      }
+    : isImported
+      ? { text: 'Imported item · No recipe', kind: 'text' as const, tone: 'amber' as const }
+      : { text: 'No recipe', kind: 'text' as const, tone: 'amber' as const }
+
   return (
     <button
       // Stable DOM id so external surfaces (e.g. the Inventory item
@@ -514,11 +574,10 @@ function ItemCard({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 py-3.5 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''}`}
+      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''}`}
     >
       {/* Identity row — name + price baseline-aligned so the eye reads
-          them as one operational pair. Price tone bumped to gray-900
-          font-medium to feel more deliberate. */}
+          them as one operational pair. */}
       <div className="flex items-baseline justify-between gap-3">
         <p
           className={`text-sm font-semibold tracking-tight truncate transition-colors ${
@@ -531,46 +590,39 @@ function ItemCard({
           {fmtMoney(item.currentPrice)}
         </span>
       </div>
-      {/* Supporting band — one concise row of operational signals.
-          Tones are restrained so multiple chips don't feel scattered:
-            • recipe count / no recipe  → quiet (green for mapped,
-              gray-50 for unmapped)
-            • imported                  → indigo (provenance)
-            • inactive                  → gray-50 (structural)
-            • availability cue          → low=amber, out=red, disabled=gray
-          Healthy items return null on the availability chip and only
-          the recipe chip renders, keeping the band lightest. */}
-      <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-        {hasRecipe(item) ? (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-50 text-green-700">
-            {item.recipe.length} ingredient{item.recipe.length !== 1 ? 's' : ''}
-          </span>
-        ) : (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200/70">
-            No recipe
-          </span>
-        )}
-        {isImportedSource(item.source) && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700">
-            Imported
-          </span>
-        )}
-        {isInactive && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-50 text-gray-500 border border-gray-200/70">
-            Inactive
-          </span>
-        )}
-        {availabilityCue && (
+
+      {/* Footer band — metadata left, single status badge right.
+          The hairline divider that used to sit between identity and
+          metadata was removed for a calmer card. Vertical rhythm
+          alone (mt-3) keeps the three-layer reading without an
+          explicit rule. */}
+      <div className="mt-3 flex items-center justify-between gap-3 min-h-[22px]">
+        <div className="min-w-0 flex-1">
+          {metadata.kind === 'pill' ? (
+            <span className="inline-flex text-[10px] font-medium px-1.5 py-0.5 rounded bg-green-50 text-green-700">
+              {metadata.text}
+            </span>
+          ) : (
+            <p
+              className={`text-[11px] truncate ${
+                metadata.tone === 'amber' ? 'text-amber-700' : 'text-gray-500'
+              }`}
+            >
+              {metadata.text}
+            </p>
+          )}
+        </div>
+        {status && (
           <span
-            className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
-              availabilityCue.tone === 'red'
+            className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+              status.tone === 'red'
                 ? 'bg-red-50 text-red-700'
-                : availabilityCue.tone === 'amber'
+                : status.tone === 'amber'
                   ? 'bg-amber-50 text-amber-700'
                   : 'bg-gray-50 text-gray-600 border border-gray-200/70'
             }`}
           >
-            {availabilityCue.label}
+            {status.label}
           </span>
         )}
       </div>
@@ -831,20 +883,39 @@ function ItemDrawer({
       />
       <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
-        {/* HEADER
-            Top row carries the section eyebrow + Close. Title row
-            leads with the item name and an inline status pill so
-            "Active / Inactive" registers immediately, paralleling the
-            order-id + status-pill pattern in the Sales drawer. The
-            subtitle line collapses what used to live in a separate
-            body stats strip — price + source — into a single calm
-            line of identity, leaving the body free to focus on
-            ingredients. */}
+        {/* HEADER — three-tier identity, in order:
+              1. Item name (drawer headline)
+              2. Calm meta line: "{Section} · ${Price} · {Source}"
+              3. Status pill row: "Active/Inactive" + an optional
+                 secondary state pill (Sellable / Low · N left / Out
+                 / Disabled / etc.) so the manager reads "can this
+                 be sold?" without diving into the Sellability band.
+            The previous layout split price into its own line; this
+            revision collapses identity into one quiet meta row so
+            the pills below pop as the actionable signal. */}
         <div className="border-b border-gray-100 px-6 py-5 flex-shrink-0">
           <div className="flex items-start justify-between gap-4">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">
-              Menu item{sectionName ? <> · {sectionName}</> : null}
-            </p>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">
+                {item.name}
+              </h2>
+              {/* Meta row — section + source on either side of the
+                  inline price editor. Wrapped in a flex container
+                  (not a <p>) so the price editor can swap to an
+                  input + Save/Cancel inline without breaking the
+                  layout. */}
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-gray-500 leading-relaxed">
+                {sectionName && (
+                  <>
+                    <span>{sectionName}</span>
+                    <span className="text-gray-300">·</span>
+                  </>
+                )}
+                <HeaderPriceEditor item={item} />
+                <span className="text-gray-300">·</span>
+                <span>{sourceLabel}</span>
+              </div>
+            </div>
             <button
               type="button"
               onClick={onClose}
@@ -853,25 +924,113 @@ function ItemDrawer({
               Close
             </button>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
-            <span
-              className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                item.active ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-600'
-              }`}
-            >
-              <span className={`w-1.5 h-1.5 rounded-full ${item.active ? 'bg-green-500' : 'bg-gray-400'}`} />
-              {item.active ? 'Active' : 'Inactive'}
-            </span>
+          {/* Top status pills — up to three:
+                1. Active / Inactive (always)
+                2. Sellable / Sellable · override on / Hidden by override
+                   (suppressed for Inactive items, and when the stock
+                   pill already says "Out" we skip a redundant "Not
+                   sellable" pill — the stock pill carries that fact.)
+                3. Stock state — Healthy / Low · N left / Out / No
+                   recipe / Stock unknown (suppressed for Inactive).
+              The bottleneck inventory item, when present and the
+              stock is low/out, renders as a calm sub-line beneath
+              the pills (relocated from the removed Sellability
+              card). This replaces the prior single-secondary chip
+              and brings stock + sellability into the header. */}
+          <div className="mt-3 space-y-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(() => {
+                type PillTone = 'green' | 'blue' | 'amber' | 'red' | 'gray'
+                const pills: { label: string; tone: PillTone }[] = []
+
+                // Pill 1 — Active state
+                pills.push({
+                  label: item.active ? 'Active' : 'Inactive',
+                  tone: item.active ? 'green' : 'gray',
+                })
+
+                if (item.active) {
+                  // Pill 2 — Sellability (suppressed for the
+                  // auto_disabled-because-Out case; the stock pill
+                  // already says "Out".)
+                  switch (item.effectiveSellability) {
+                    case 'enabled':
+                      pills.push({ label: 'Sellable', tone: 'blue' })
+                      break
+                    case 'manually_enabled':
+                      pills.push({ label: 'Sellable · override on', tone: 'amber' })
+                      break
+                    case 'manually_disabled':
+                      pills.push({ label: 'Hidden by override', tone: 'gray' })
+                      break
+                    case 'auto_disabled':
+                      // Stock pill below carries the signal — no
+                      // separate "Not sellable" pill.
+                      break
+                    case 'inactive':
+                      break
+                  }
+
+                  // Pill 3 — Stock state
+                  switch (item.projectionState) {
+                    case 'healthy':
+                      pills.push({ label: 'Healthy', tone: 'green' })
+                      break
+                    case 'low':
+                      pills.push({
+                        label: item.projectedCount !== null ? `Low · ${item.projectedCount} left` : 'Low',
+                        tone: 'amber',
+                      })
+                      break
+                    case 'out':
+                      pills.push({ label: 'Out', tone: 'red' })
+                      break
+                    case 'unavailable_to_project':
+                      pills.push({
+                        label: hasRecipe(item) ? 'Stock unknown' : 'No recipe',
+                        tone: 'gray',
+                      })
+                      break
+                  }
+                }
+
+                const toneClass: Record<PillTone, string> = {
+                  green: 'bg-green-50 text-green-700',
+                  blue: 'bg-blue-50 text-blue-700',
+                  amber: 'bg-amber-50 text-amber-700',
+                  red: 'bg-red-50 text-red-700',
+                  gray: 'bg-gray-100 text-gray-600',
+                }
+
+                return pills.map((p, i) => (
+                  <span
+                    key={`${p.label}-${i}`}
+                    className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${toneClass[p.tone]}`}
+                  >
+                    {/* Show a leading dot only on the Active pill —
+                        keeps the active/inactive distinction quick
+                        to read while the other pills stay calmer. */}
+                    {i === 0 && (
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        p.tone === 'green' ? 'bg-green-500' : 'bg-gray-400'
+                      }`} />
+                    )}
+                    {p.label}
+                  </span>
+                ))
+              })()}
+            </div>
+            {item.active &&
+              item.bottleneckInventoryItemName &&
+              (item.projectionState === 'low' || item.projectionState === 'out') && (
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  Limited by{' '}
+                  <span className="font-medium text-gray-700">
+                    {item.bottleneckInventoryItemName}
+                  </span>
+                </p>
+              )}
           </div>
-          {/* Price gets its own line with stronger typography so it
-              reads as the item's headline value, with the muted
-              source label as the soft secondary signal. */}
-          <p className="mt-2 flex items-baseline gap-2 text-xs">
-            <span className="text-[15px] font-mono tabular-nums font-semibold text-gray-900">{fmtMoney(item.currentPrice)}</span>
-            <span className="text-gray-300">·</span>
-            <span className="text-gray-500">{sourceLabel}</span>
-          </p>
         </div>
 
         {/* Inactive ribbon — same pattern as Sales' voided stamp.
@@ -924,48 +1083,31 @@ function ItemDrawer({
         )}
 
         {/* BODY
-            Stats strip and a separate Details section both removed.
-            All identity (price / section / source / status) now lives
-            in the header. Body bands are Ingredients (primary
-            workspace) → Availability (projection + override). The
-            space-y-8 between them gives the drawer a slightly more
-            generous rhythm than the body's prior single-section
-            layout — enough air to read each as its own band without
-            losing density. */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-8">
+            Three stacked cards with subtle hue separation so each
+            band reads as its own self-contained surface (modeled on
+            the Inventory drawer's section grouping):
+              1. Recipe — cool neutral tint, primary workspace
+              2. POS override — subtle blue tint, secondary control
+              3. Item controls — neutral tint, compact destructive
+            The pinned footer that previously held Item controls was
+            removed; that band is now a tight in-body card so the
+            drawer reads as a stack of related cards rather than a
+            heavy bottom-pinned panel. */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
 
-          {/* Ingredients section — body's primary band.
-              List → spacing → "+ Add ingredient" reveal trigger. The
-              list and the trigger are intentionally close (mt-3) so
-              the trigger reads as the next step beneath the list, not
-              as a separate orphaned action. */}
-          <div>
+          {/* Recipe card — self-contained with the eyebrow inside
+              the card chrome (not above it). Subtle cool/neutral
+              tint sets it apart from the POS override and Item
+              controls cards below without adding loud color. */}
+          <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 p-4">
             <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
-              Ingredients
+              Recipe
             </p>
 
             {item.recipe.length > 0 && (
               <ul className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] divide-y divide-gray-100 mb-3 overflow-hidden">
                 {item.recipe.map((rc) => (
-                  <li key={rc.id} className="flex items-center justify-between px-3.5 py-2.5 transition-colors hover:bg-gray-50/60">
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-gray-900 truncate">{rc.inventoryItemName}</p>
-                      <p className="text-[11px] text-gray-500 tabular-nums mt-0.5">
-                        {rc.quantityRequired} {rc.unitOfMeasure}
-                      </p>
-                    </div>
-                    <form action={removeRecipeComponent}>
-                      <input type="hidden" name="component_id" value={rc.id} />
-                      <input type="hidden" name="menu_item_id" value={item.id} />
-                      <button
-                        type="submit"
-                        aria-label="Remove ingredient"
-                        className="text-gray-300 hover:text-red-500 p-1 rounded-md hover:bg-red-50 transition-colors"
-                      >
-                        <XIcon size={14} />
-                      </button>
-                    </form>
-                  </li>
+                  <RecipeRow key={rc.id} rc={rc} menuItemId={item.id} />
                 ))}
               </ul>
             )}
@@ -1179,151 +1321,124 @@ function ItemDrawer({
                 )}
               </div>
             )}
-          </div>
+          </section>
 
-          {/* AVAILABILITY — projection state + manual override.
-              The drawer is the canonical place to understand and
-              steer item sellability. The card above only carries a
-              quiet chip; full audit context lives here. */}
-          <AvailabilitySection item={item} inventoryActive={inventoryActive} />
-        </div>
+          {/* POS Override card — subtle blue tint marks it as a
+              system/availability control. Separation from Recipe
+              now comes from the gap between cards (space-y-4) plus
+              the distinct hue, not from a hairline divider. */}
+          <section className="rounded-xl border border-blue-200/60 bg-blue-50/30 p-4">
+            <AvailabilitySection item={item} />
+          </section>
 
-        {/* ACTION ZONE — pinned footer with 2-step remove */}
-        <div className="border-t border-gray-200 bg-gray-50/40 px-6 py-5 flex-shrink-0">
-          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">Manage</p>
-          {/* Deactivate card — paired with the inline Activate
-              button in the inactive ribbon at the top of the
-              drawer. Shown only when the item is currently active.
-              Lives next to Remove because it's the same "wind this
-              item down" cluster, but it's non-destructive (the row
-              and recipes stay; only the active flag flips). */}
-          {item.active && (
-            <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 mb-4">
-              <p className="text-xs font-semibold text-gray-900">Deactivate this item</p>
-              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                Hides the item from POS and analytics. Recipe links stay intact for when you reactivate.
-              </p>
-              <form action={activeAction} className="mt-4">
-                <input type="hidden" name="item_id" value={item.id} />
-                <input type="hidden" name="active" value="false" />
-                <button
-                  type="submit"
-                  disabled={activePending}
-                  className="w-full rounded-lg border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 hover:border-amber-300 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
-                >
-                  {activePending ? 'Deactivating…' : 'Deactivate this item'}
-                </button>
-              </form>
-              {activeState?.error && (
-                <p className="mt-2 text-[11px] text-red-700">{activeState.error}</p>
+          {/* Item controls card — compact destructive zone. Renamed
+              from the former pinned footer into a normal in-body
+              card so the drawer reads as a stack rather than
+              pinned-foot heavy. Internal divide-y keeps the two
+              rows tight; small action buttons sit on the right. */}
+          <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-3.5 py-2.5">
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Item controls
+            </p>
+            <div className="divide-y divide-gray-200/60">
+              {item.active && (
+                <div className="flex items-center justify-between gap-3 py-2">
+                  <div className="min-w-0">
+                    <p className="text-[12px] font-medium text-gray-900">Deactivate this item</p>
+                    <p className="text-[10px] text-gray-500 leading-snug mt-0.5">
+                      Hides from POS and analytics. Recipe links stay saved.
+                    </p>
+                  </div>
+                  <form action={activeAction} className="flex-shrink-0">
+                    <input type="hidden" name="item_id" value={item.id} />
+                    <input type="hidden" name="active" value="false" />
+                    <button
+                      type="submit"
+                      disabled={activePending}
+                      className="rounded-md border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 hover:border-amber-300 px-2.5 py-1 text-[10px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
+                    >
+                      {activePending ? 'Deactivating…' : 'Deactivate'}
+                    </button>
+                  </form>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between gap-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-[12px] font-medium text-gray-900">Remove this item</p>
+                  <p className="text-[10px] text-gray-500 leading-snug mt-0.5">
+                    Removes the item and clears its recipe links. Past orders stay in Sales.
+                  </p>
+                </div>
+                {!removeMode ? (
+                  <button
+                    type="button"
+                    onClick={() => setRemoveMode(true)}
+                    className="flex-shrink-0 rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-2.5 py-1 text-[10px] font-semibold transition-colors whitespace-nowrap"
+                  >
+                    Remove
+                  </button>
+                ) : (
+                  <form action={deleteAction} className="flex-shrink-0 flex items-center gap-1">
+                    <input type="hidden" name="item_id" value={item.id} />
+                    <button
+                      type="submit"
+                      disabled={deletePending}
+                      className="rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 text-[10px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
+                    >
+                      {deletePending ? 'Removing…' : 'Confirm'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRemoveMode(false)}
+                      disabled={deletePending}
+                      className="rounded-md border border-gray-200 bg-white text-[10px] font-medium text-gray-600 px-2 py-1 hover:bg-gray-50 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {(activeState?.error || deleteState?.error) && (
+                <p className="py-2 text-[11px] text-red-600">
+                  {activeState?.error || deleteState?.error}
+                </p>
               )}
             </div>
-          )}
-
-          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4">
-            <p className="text-xs font-semibold text-gray-900">Remove this item</p>
-            <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-              Removes the item and clears its ingredient links. Past orders stay in the Sales ledger.
-            </p>
-            {!removeMode ? (
-              <button
-                type="button"
-                onClick={() => setRemoveMode(true)}
-                className="mt-4 w-full rounded-lg border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-4 py-2 text-xs font-semibold transition-colors"
-              >
-                Remove this item
-              </button>
-            ) : (
-              <form action={deleteAction} className="mt-4 flex items-center gap-2">
-                <input type="hidden" name="item_id" value={item.id} />
-                <button
-                  type="submit"
-                  disabled={deletePending}
-                  className="flex-1 rounded-lg border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
-                >
-                  {deletePending ? 'Removing…' : 'Confirm remove'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRemoveMode(false)}
-                  disabled={deletePending}
-                  className="rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 px-3 py-2 hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-              </form>
-            )}
-            {deleteState?.error && (
-              <p className="mt-2 text-[11px] text-amber-600">{deleteState.error}</p>
-            )}
-          </div>
+          </section>
         </div>
+
       </aside>
     </>
   )
 }
 
 // ================================================================
-// AvailabilitySection — drawer's canonical availability surface.
+// AvailabilitySection — POS override control band.
 //
-// Reads the precomputed projection state on the menu item and lets
-// the manager set a manual override (none / force_enabled /
-// force_disabled). Designed to keep system truth visible even when
-// the override flips an item against it: the projection row stays
-// honest about "system says out" even while the override forces
-// the item enabled at POS.
+// Previously rendered a Stock status card + the override card under
+// a "Sellability" eyebrow. The stock card was removed in this pass
+// — its information (Active / Sellable / Healthy-Low-Out, plus the
+// bottleneck "Limited by") now lives in the drawer header pills.
+// What remains here is the compact override control: three options
+// in a single horizontal segmented strip plus a quiet hint line.
+//
+// The override values ('none' / 'force_enabled' / 'force_disabled')
+// and the `setMenuItemAvailabilityOverride` action are unchanged —
+// POS availability logic is untouched. Only the rendering compacted.
 // ================================================================
-function AvailabilitySection({
-  item,
-  inventoryActive,
-}: {
-  item: MenuItem
-  inventoryActive: boolean
-}) {
+function AvailabilitySection({ item }: { item: MenuItem }) {
   const [state, action, pending] = useActionState(setMenuItemAvailabilityOverride, null)
 
-  // Map projection state to a small chip with calm tone. Healthy is
-  // intentionally green-quiet; the goal here is honest signal, not
-  // alerts.
-  const projectionChip = (() => {
-    switch (item.projectionState) {
-      case 'healthy':
-        return { label: 'Healthy', tone: 'green' as const }
-      case 'low':
-        return {
-          label: item.projectedCount !== null ? `Low · ${item.projectedCount} left` : 'Low',
-          tone: 'amber' as const,
-        }
-      case 'out':
-        return { label: 'Out of stock', tone: 'red' as const }
-      case 'unavailable_to_project':
-        return {
-          label: !inventoryActive ? 'Inventory not active' : !hasRecipe(item) ? 'Not inventory-backed' : 'Stock unknown',
-          tone: 'gray' as const,
-        }
-    }
-  })()
-
-  const projectionToneClass: Record<typeof projectionChip.tone, string> = {
-    green: 'bg-green-50 text-green-700',
-    amber: 'bg-amber-50 text-amber-700',
-    red: 'bg-red-50 text-red-700',
-    gray: 'bg-gray-100 text-gray-600',
-  }
-
-  // Sellability label — what POS will actually do.
-  const sellabilityLabel: Record<EffectiveSellability, string> = {
-    enabled: 'Sellable at POS',
-    inactive: 'Inactive (menu)',
-    auto_disabled: 'Auto-disabled · out of stock',
-    manually_disabled: 'Manually disabled',
-    manually_enabled: 'Manually enabled · override on',
-  }
-
+  // Override option set. Internal AvailabilityOverride values
+  // ('none' / 'force_enabled' / 'force_disabled') are unchanged so
+  // setMenuItemAvailabilityOverride keeps working — only the user-
+  // facing labels/copy were updated per the polish spec.
   const overrideOptions: { value: AvailabilityOverride; label: string; hint: string }[] = [
-    { value: 'none',           label: 'System default', hint: 'Auto-disable when out of stock.' },
-    { value: 'force_enabled',  label: 'Force enabled',  hint: 'Stay sellable even if system says out.' },
-    { value: 'force_disabled', label: 'Force disabled', hint: 'Hide from POS regardless of stock.' },
+    { value: 'none',           label: 'System default',    hint: 'System default follows inventory availability.' },
+    { value: 'force_enabled',  label: 'Force available',   hint: 'Stay sellable at the POS even when stock projects out.' },
+    { value: 'force_disabled', label: 'Force unavailable', hint: 'Hide from the POS regardless of stock.' },
   ]
 
   // Active override hint — surfaces the consequence of the current
@@ -1334,82 +1449,56 @@ function AvailabilitySection({
 
   return (
     <div>
-      <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
-        Availability
-      </p>
-
-      {/* System truth — compact operational summary.
-          Two key/value rows + an optional bottleneck row. POS
-          sellability is the bottom line and gets a thin top border
-          to read as the conclusion drawn from the projection above. */}
-      <div className="rounded-xl border border-gray-200/80 bg-white px-3.5 py-3 mb-3">
-        <div className="flex items-center justify-between gap-3 py-1">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Projection</span>
-          <span className={`inline-flex text-[10px] font-semibold px-1.5 py-0.5 rounded ${projectionToneClass[projectionChip.tone]}`}>
-            {projectionChip.label}
-          </span>
-        </div>
-        {item.bottleneckInventoryItemName && (item.projectionState === 'low' || item.projectionState === 'out') && (
-          <div className="flex items-center justify-between gap-3 py-1">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">Limited by</span>
-            <span className="text-[11px] text-gray-700 truncate">{item.bottleneckInventoryItemName}</span>
-          </div>
-        )}
-        <div className="flex items-center justify-between gap-3 pt-2 mt-1 border-t border-gray-100">
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">POS sellability</span>
-          <span className="text-[11px] font-medium text-gray-800 truncate">
-            {sellabilityLabel[item.effectiveSellability]}
-          </span>
-        </div>
-      </div>
-
-      {/* Manual override — three-option control with the active
-          option's consequence read inline. "System default" is the
-          neutral baseline (always renders as the leftmost option);
-          force states are positioned right so the visual order
-          mirrors "less intervention → more intervention." */}
-      <div className="rounded-xl border border-gray-200 bg-gray-50/40 px-3.5 py-3">
-        <div className="mb-2.5 flex items-baseline justify-between gap-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-            Manual override
-          </p>
-          {isOverrideOn && item.overrideSetAt && (
-            <p className="text-[10px] text-gray-400 tabular-nums">
-              since {new Date(item.overrideSetAt).toLocaleString('en-US', {
-                month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
-              })}
-            </p>
-          )}
-        </div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {overrideOptions.map((opt) => {
-            const active = item.override === opt.value
-            return (
-              <form action={action} key={opt.value}>
-                <input type="hidden" name="item_id" value={item.id} />
-                <input type="hidden" name="override" value={opt.value} />
-                <button
-                  type="submit"
-                  disabled={pending || active}
-                  className={`w-full rounded-lg px-2 py-1.5 text-[11px] font-semibold transition-colors ${
-                    active
-                      ? 'bg-gray-900 text-white border border-gray-900'
-                      : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 disabled:opacity-60'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              </form>
-            )
-          })}
-        </div>
-        {activeOverrideHint && (
-          <p className="mt-2.5 text-[11px] text-gray-500 leading-relaxed">
-            {activeOverrideHint}
+      <div className="mb-2.5 flex items-baseline justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+          POS override
+        </p>
+        {isOverrideOn && item.overrideSetAt && (
+          <p className="text-[10px] text-gray-400 tabular-nums">
+            since {new Date(item.overrideSetAt).toLocaleString('en-US', {
+              month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+            })}
           </p>
         )}
-        {state?.error && <p className="mt-2 text-[11px] text-red-600">{state.error}</p>}
       </div>
+
+      {/* Compact segmented control — three options share one rounded
+          container with hairline internal dividers. Sized smaller
+          than the prior card-of-three-buttons so the override reads
+          as a secondary control beneath the Recipe workspace, not
+          as a major content block. All three sit on one horizontal
+          row at typical drawer widths. */}
+      <div className="flex w-full rounded-md border border-gray-200 bg-white overflow-hidden">
+        {overrideOptions.map((opt, i) => {
+          const active = item.override === opt.value
+          return (
+            <form action={action} key={opt.value} className="flex-1 min-w-0">
+              <input type="hidden" name="item_id" value={item.id} />
+              <input type="hidden" name="override" value={opt.value} />
+              <button
+                type="submit"
+                disabled={pending || active}
+                className={`w-full px-2 py-1.5 text-[10px] font-semibold transition-colors truncate ${
+                  i > 0 ? 'border-l border-gray-200' : ''
+                } ${
+                  active
+                    ? 'bg-gray-900 text-white'
+                    : 'text-gray-700 hover:bg-gray-50 disabled:opacity-60'
+                }`}
+              >
+                {opt.label}
+              </button>
+            </form>
+          )
+        })}
+      </div>
+
+      {activeOverrideHint && (
+        <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
+          {activeOverrideHint}
+        </p>
+      )}
+      {state?.error && <p className="mt-2 text-[11px] text-red-600">{state.error}</p>}
     </div>
   )
 }
@@ -1422,5 +1511,191 @@ function XIcon({ size = 16 }: { size?: number }) {
     <svg width={size} height={size} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
+  )
+}
+
+// ================================================================
+// HeaderPriceEditor — inline price edit affordance in the drawer
+// header. Display mode shows `$X.XX` followed by a small Edit link;
+// clicking swaps to an input + Save/Cancel. On successful save the
+// page revalidates, `item.currentPrice` updates, and the editor
+// closes automatically (no manual prop-sync race).
+// ================================================================
+function HeaderPriceEditor({ item }: { item: MenuItem }) {
+  const [state, action, pending] = useActionState(updateMenuItemPrice, null)
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(item.currentPrice.toFixed(2))
+
+  // Close the editor on the pending → not-pending transition when no
+  // error was returned. `wasPendingRef` tracks the prior pending
+  // value so the close fires once per successful save, not on the
+  // initial mount.
+  const wasPendingRef = useRef(false)
+  useEffect(() => {
+    if (wasPendingRef.current && !pending && !state?.error) {
+      setEditing(false)
+      setVal(item.currentPrice.toFixed(2))
+    }
+    wasPendingRef.current = pending
+  }, [pending, state, item.currentPrice])
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span className="font-mono tabular-nums font-medium text-gray-700">{fmtMoney(item.currentPrice)}</span>
+        <button
+          type="button"
+          onClick={() => {
+            setVal(item.currentPrice.toFixed(2))
+            setEditing(true)
+          }}
+          className="text-[10px] font-medium text-blue-700 hover:text-blue-900 px-1.5 py-0.5 rounded hover:bg-blue-50 transition-colors"
+        >
+          Edit
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <form action={action} className="inline-flex flex-wrap items-center gap-1.5">
+      <input type="hidden" name="item_id" value={item.id} />
+      <span className="inline-flex items-center text-gray-500">
+        <span className="text-[11px] mr-0.5">$</span>
+        <input
+          name="price"
+          type="number"
+          min="0.01"
+          step="0.01"
+          value={val}
+          onChange={(e) => setVal(e.target.value)}
+          autoFocus
+          required
+          className="w-20 h-7 rounded border border-gray-300 px-1.5 text-[12px] font-mono tabular-nums text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+        />
+      </span>
+      <button
+        type="submit"
+        disabled={pending}
+        className="text-[10px] font-semibold text-white bg-gray-900 hover:bg-gray-800 px-2 py-1 rounded disabled:opacity-60 transition-colors"
+      >
+        {pending ? 'Saving…' : 'Save price'}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false)
+          setVal(item.currentPrice.toFixed(2))
+        }}
+        disabled={pending}
+        className="text-[10px] font-medium text-gray-600 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100 disabled:opacity-60 transition-colors"
+      >
+        Cancel
+      </button>
+      {state?.error && (
+        <span className="basis-full text-[10px] text-red-600 mt-0.5">{state.error}</span>
+      )}
+    </form>
+  )
+}
+
+// ================================================================
+// RecipeRow — editable row for a single recipe component.
+//
+// Layout:
+//   Tortilla Chips
+//   [3]  units used per sale  [Save]                       Remove
+//
+// The Save button only appears when the typed quantity differs
+// from the saved one — keeps the row calm in the steady state and
+// makes the "dirty / can save" affordance unmistakable when the
+// manager has actually changed something.
+//
+// Both update and remove use useTransition so the page revalidates
+// in place; no useActionState forms here because we want the
+// pending state to apply to whichever button was clicked.
+// ================================================================
+function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) {
+  const [pending, startTransition] = useTransition()
+  const [qty, setQty] = useState(String(rc.quantityRequired))
+  const [err, setErr] = useState<string | null>(null)
+
+  // Compare the typed value against the stored quantity. parseFloat
+  // ignores trailing zeros / decimals, so "3", "3.0", "3.00" all
+  // collapse to 3 — the Save button hides when the saved value
+  // already matches what the user typed.
+  const parsed = parseFloat(qty)
+  const dirty =
+    qty.trim().length > 0 &&
+    Number.isFinite(parsed) &&
+    parsed !== rc.quantityRequired
+
+  function save() {
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setErr('Quantity must be greater than 0.')
+      return
+    }
+    setErr(null)
+    const fd = new FormData()
+    fd.append('component_id', rc.id)
+    fd.append('menu_item_id', menuItemId)
+    fd.append('quantity_required', qty)
+    startTransition(async () => {
+      const res = await updateRecipeComponentQuantity(null, fd)
+      if (res?.error) setErr(res.error)
+    })
+  }
+
+  function remove() {
+    setErr(null)
+    const fd = new FormData()
+    fd.append('component_id', rc.id)
+    fd.append('menu_item_id', menuItemId)
+    startTransition(async () => {
+      await removeRecipeComponent(fd)
+    })
+  }
+
+  return (
+    <li className="px-3.5 py-2.5 transition-colors hover:bg-gray-50/60">
+      <p className="text-xs font-medium text-gray-900 truncate">{rc.inventoryItemName}</p>
+      <div className="mt-1 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <input
+            type="number"
+            min="0.0001"
+            step="0.0001"
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            disabled={pending}
+            aria-label={`Quantity per sale for ${rc.inventoryItemName}`}
+            className="w-16 h-7 rounded border border-gray-200 bg-white px-1.5 text-[11px] font-mono tabular-nums text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60"
+          />
+          <span className="text-[11px] text-gray-500 whitespace-nowrap">
+            {rc.unitOfMeasure} used per sale
+          </span>
+          {dirty && (
+            <button
+              type="button"
+              onClick={save}
+              disabled={pending}
+              className="text-[10px] font-semibold text-blue-700 hover:text-blue-900 px-1.5 py-0.5 rounded hover:bg-blue-50 disabled:opacity-60 transition-colors whitespace-nowrap"
+            >
+              {pending ? 'Saving…' : 'Save'}
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={remove}
+          disabled={pending}
+          aria-label={`Remove ${rc.inventoryItemName} from recipe`}
+          className="text-[10px] font-medium text-gray-500 hover:text-red-600 px-1.5 py-0.5 rounded hover:bg-red-50 disabled:opacity-60 transition-colors whitespace-nowrap flex-shrink-0"
+        >
+          Remove
+        </button>
+      </div>
+      {err && <p className="mt-1 text-[10px] text-red-600">{err}</p>}
+    </li>
   )
 }

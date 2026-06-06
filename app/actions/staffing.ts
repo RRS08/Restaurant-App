@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { getAuthContext, resolveLocationId, logAudit, formatError } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
+import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
 
 // Graceful wrapper so existing { error: string } action returns stay
 // intact. Each location-scoped staffing write calls this right after
@@ -29,7 +30,9 @@ export async function addStaffingRole(
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
   const area = formData.get('area') as 'foh' | 'boh'
-  const role = (formData.get('role') as string)?.trim()
+  const rawRole = (formData.get('role') as string) ?? ''
+  const role = normalizeDisplayName(rawRole)
+  const roleKey = normalizeNameKey(rawRole)
   if (!role) return { error: 'Role name is required.' }
   if (area !== 'foh' && area !== 'boh') return { error: 'Invalid house.' }
 
@@ -42,7 +45,9 @@ export async function addStaffingRole(
     .from('staffing_config').select(column).eq('restaurant_id', ctx.restaurantId).maybeSingle()
 
   const existing: string[] = (config as Record<string, string[]> | null)?.[column] ?? []
-  if (existing.some((r) => r.toLowerCase() === role.toLowerCase())) {
+  // Duplicate guard uses the normalized key on both sides so casing
+  // and whitespace differences collide (was: only case-insensitive).
+  if (existing.some((r) => normalizeNameKey(r) === roleKey)) {
     return { error: 'That role already exists for this house.' }
   }
 
@@ -92,9 +97,12 @@ export async function createShiftSection(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
-  const name = (formData.get('name') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const name = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
   const area = (formData.get('area') as string)?.trim()
-  const role = ((formData.get('role') as string)?.trim()) || 'General'
+  const rawRole = (formData.get('role') as string) ?? ''
+  const role = normalizeDisplayName(rawRole) || 'General'
   if (!name) return { error: 'Block name is required.' }
   if (!VALID_AREAS.has(area)) return { error: 'Area must be foh or boh.' }
 
@@ -105,20 +113,20 @@ export async function createShiftSection(
   if (end === start) return { error: 'End hour must differ from start hour.' }
 
   // Same-shape duplicate guard — block the manager from creating a
-  // second block with identical (name, area, start, end) for the
-  // same restaurant. The "+ Block" flow had no such check, which
-  // let duplicates leak in and produced ghost empty rows on the
-  // board. We compare by the same shape signature the page-load
-  // dedupe uses, so both sides agree on what "same block" means.
-  const { data: existingMatch } = await ctx.supabase
+  // second block with identical (normalized name, area, start, end)
+  // for the same restaurant. Now uses normalizeNameKey so "Lunch"
+  // and "lunch" collide. We fetch by area + hours (the cheap filter)
+  // then check name in JS using the normalized key.
+  const { data: candidates } = await ctx.supabase
     .from('shift_sections')
-    .select('id')
+    .select('id, name')
     .eq('restaurant_id', ctx.restaurantId)
-    .eq('name', name)
     .eq('area', area)
     .eq('default_start_hour', start)
     .eq('default_end_hour', end)
-    .maybeSingle()
+  const existingMatch = (candidates ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
   if (existingMatch) {
     return { error: 'A block with the same name, house, and hours already exists.' }
   }
@@ -154,7 +162,9 @@ export async function updateShiftSection(
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
   const sectionId = (formData.get('section_id') as string)?.trim()
-  const name = (formData.get('name') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const name = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
   if (!sectionId) return { error: 'No block selected.' }
   if (!name) return { error: 'Block name is required.' }
 
@@ -163,6 +173,33 @@ export async function updateShiftSection(
   const end = parseHour(formData.get('default_end_hour'), 'End hour')
   if (typeof end === 'object') return end
   if (end === start) return { error: 'End hour must differ from start hour.' }
+
+  // Block edited-name from colliding with another block in the same
+  // restaurant (same area+hours signature). The current section is
+  // excluded by id so renaming a block to its own normalized form
+  // isn't blocked.
+  const { data: currentRow } = await ctx.supabase
+    .from('shift_sections')
+    .select('area')
+    .eq('id', sectionId)
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (currentRow) {
+    const { data: candidates } = await ctx.supabase
+      .from('shift_sections')
+      .select('id, name')
+      .eq('restaurant_id', ctx.restaurantId)
+      .eq('area', currentRow.area)
+      .eq('default_start_hour', start)
+      .eq('default_end_hour', end)
+      .neq('id', sectionId)
+    const collision = (candidates ?? []).find(
+      (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+    )
+    if (collision) {
+      return { error: 'A block with the same name, house, and hours already exists.' }
+    }
+  }
 
   const { error } = await ctx.supabase
     .from('shift_sections')
@@ -255,8 +292,11 @@ export async function createEmployee(
   const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
   if (locAuthErr) return { error: locAuthErr }
 
-  const name = (formData.get('name') as string)?.trim()
-  const role = (formData.get('role') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const name = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
+  const rawRole = (formData.get('role') as string) ?? ''
+  const role = normalizeDisplayName(rawRole)
   const hourlyRateRaw = formData.get('hourly_rate') as string
 
   if (!name) return { error: 'Employee name is required.' }
@@ -264,6 +304,25 @@ export async function createEmployee(
 
   const hourlyRate = hourlyRateRaw ? parseFloat(hourlyRateRaw) : null
   if (hourlyRate !== null && (isNaN(hourlyRate) || hourlyRate < 0)) return { error: 'Hourly rate must be 0 or more.' }
+
+  // Duplicate guard — active employees in this restaurant. Two people
+  // can legitimately share a name in reality; the manager can
+  // disambiguate (e.g. "Juan G." vs "Juan Garcia") when the form
+  // rejects. Archived employees don't block — same convention as
+  // the inventory + menu guards.
+  const { data: existingEmployees } = await ctx.supabase
+    .from('employees')
+    .select('id, name')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('active', true)
+  const collision = (existingEmployees ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
+  if (collision) {
+    return {
+      error: `An employee named ${normalizeDisplayName((collision.name as string) ?? '')} already exists.`,
+    }
+  }
 
   const { error } = await ctx.supabase.from('employees').insert({
     restaurant_id: ctx.restaurantId, primary_location_id: locationId,
@@ -291,8 +350,11 @@ export async function updateEmployee(
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
   const employeeId = (formData.get('employee_id') as string)?.trim()
-  const name = (formData.get('name') as string)?.trim()
-  const role = (formData.get('role') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const name = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
+  const rawRole = (formData.get('role') as string) ?? ''
+  const role = normalizeDisplayName(rawRole)
   const hourlyRateRaw = formData.get('hourly_rate') as string
 
   if (!employeeId) return { error: 'No employee selected.' }
@@ -302,6 +364,24 @@ export async function updateEmployee(
   const hourlyRate = hourlyRateRaw ? parseFloat(hourlyRateRaw) : null
   if (hourlyRate !== null && (isNaN(hourlyRate) || hourlyRate < 0)) {
     return { error: 'Hourly rate must be 0 or more.' }
+  }
+
+  // Duplicate guard — same shape as create. Exclude the current
+  // employee so renaming to the same normalized form (e.g. "john
+  // garcia" → "John Garcia") isn't blocked by itself.
+  const { data: existingEmployees } = await ctx.supabase
+    .from('employees')
+    .select('id, name')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('active', true)
+    .neq('id', employeeId)
+  const collision = (existingEmployees ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
+  if (collision) {
+    return {
+      error: `An employee named ${normalizeDisplayName((collision.name as string) ?? '')} already exists.`,
+    }
   }
 
   const { error } = await ctx.supabase

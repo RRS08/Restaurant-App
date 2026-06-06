@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getAuthContext, formatError, logAudit } from '@/lib/auth'
 import type { AvailabilityOverride } from '@/lib/menu/availability'
+import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
 
 export async function createCategory(
   prevState: { error: string } | null,
@@ -12,12 +13,30 @@ export async function createCategory(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
-  const name = (formData.get('name') as string)?.trim()
-  if (!name) return { error: 'Category name is required.' }
+  const rawName = (formData.get('name') as string) ?? ''
+  const displayName = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
+  if (!displayName) return { error: 'Category name is required.' }
+
+  // Duplicate guard — case-insensitive + whitespace-normalized,
+  // restaurant-scoped. No `active` column on menu_categories, so we
+  // compare against the full set.
+  const { data: existingCats } = await ctx.supabase
+    .from('menu_categories')
+    .select('name')
+    .eq('restaurant_id', ctx.restaurantId)
+  const collision = (existingCats ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
+  if (collision) {
+    return {
+      error: `A menu category named ${normalizeDisplayName((collision.name as string) ?? '')} already exists.`,
+    }
+  }
 
   const { error } = await ctx.supabase.from('menu_categories').insert({
     restaurant_id: ctx.restaurantId,
-    name,
+    name: displayName,
   })
 
   if (error) {
@@ -29,6 +48,32 @@ export async function createCategory(
   redirect('/menu')
 }
 
+// Restaurant-scoped duplicate-name guard for menu items. Returns
+// the colliding stored name (already normalized for display) when a
+// match is found, or null when the name is clear to insert.
+//
+// We compare on the normalized key so casing/whitespace differences
+// resolve to one fact. Active-only filter mirrors the inventory
+// guard — soft-deleted/deactivated rows don't block a fresh name.
+async function findMenuItemNameCollision(
+  supabase: Awaited<ReturnType<typeof getAuthContext>>['context'] extends infer C
+    ? C extends { supabase: infer S } ? S : never
+    : never,
+  restaurantId: string,
+  nameKey: string,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from('menu_items')
+    .select('name')
+    .eq('restaurant_id', restaurantId)
+    .eq('active', true)
+  const collision = (data ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
+  if (!collision) return null
+  return normalizeDisplayName((collision.name as string) ?? '')
+}
+
 // Creates an item directly inside a section (category_id required)
 export async function createMenuItemInSection(
   prevState: { error: string } | null,
@@ -37,20 +82,27 @@ export async function createMenuItemInSection(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
-  const name = (formData.get('name') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const displayName = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
   const priceRaw = formData.get('price') as string
   const categoryId = formData.get('category_id') as string
 
-  if (!name) return { error: 'Item name is required.' }
+  if (!displayName) return { error: 'Item name is required.' }
   if (!categoryId) return { error: 'Section is required.' }
 
   const price = parseFloat(priceRaw)
   if (isNaN(price) || price < 0) return { error: 'Please enter a valid price.' }
 
+  const colliding = await findMenuItemNameCollision(ctx.supabase, ctx.restaurantId, nameKey)
+  if (colliding) {
+    return { error: `A menu item named ${colliding} already exists.` }
+  }
+
   const { error } = await ctx.supabase.from('menu_items').insert({
     restaurant_id: ctx.restaurantId,
     category_id: categoryId,
-    name,
+    name: displayName,
     current_price: price,
     source: 'manual',
     external_id: null,
@@ -72,19 +124,26 @@ export async function createMenuItem(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
-  const name = (formData.get('name') as string)?.trim()
+  const rawName = (formData.get('name') as string) ?? ''
+  const displayName = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
   const priceRaw = formData.get('price') as string
   const categoryId = (formData.get('category_id') as string) || null
 
-  if (!name) return { error: 'Item name is required.' }
+  if (!displayName) return { error: 'Item name is required.' }
 
   const price = parseFloat(priceRaw)
   if (isNaN(price) || price < 0) return { error: 'Please enter a valid price.' }
 
+  const colliding = await findMenuItemNameCollision(ctx.supabase, ctx.restaurantId, nameKey)
+  if (colliding) {
+    return { error: `A menu item named ${colliding} already exists.` }
+  }
+
   const { error } = await ctx.supabase.from('menu_items').insert({
     restaurant_id: ctx.restaurantId,
     category_id: categoryId,
-    name,
+    name: displayName,
     current_price: price,
     source: 'manual',
     external_id: null,
@@ -192,6 +251,46 @@ const VALID_AVAILABILITY_OVERRIDES: AvailabilityOverride[] = [
 // explicit restaurant_id filter (RLS would block cross-tenant
 // writes too, but the filter is defense in depth).
 // ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// updateMenuItemPrice — inline price editor in the item drawer.
+//
+// Restaurant-scoped via the matching restaurant_id filter (RLS
+// blocks cross-tenant writes too, but the explicit filter is
+// defense in depth). The action only touches `current_price` —
+// recipe links, active flag, override, and source are untouched,
+// so POS depletion + Sales bridge keep working exactly as before.
+// Revalidates /menu and /pos so the drawer + the POS strip both
+// pick up the new price on the next render.
+// ----------------------------------------------------------------
+export async function updateMenuItemPrice(
+  prevState: { error: string } | null,
+  formData: FormData,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const itemId = ((formData.get('item_id') as string | null) ?? '').trim()
+  if (!itemId) return { error: 'No item specified.' }
+
+  const priceRaw = ((formData.get('price') as string | null) ?? '').trim()
+  const price = parseFloat(priceRaw)
+  if (!Number.isFinite(price) || price <= 0) {
+    return { error: 'Price must be greater than 0.' }
+  }
+
+  const { error } = await ctx.supabase
+    .from('menu_items')
+    .update({ current_price: price })
+    .eq('id', itemId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('menu item', error) }
+
+  revalidatePath('/menu')
+  revalidatePath('/pos')
+  return null
+}
+
 export async function setMenuItemActive(
   prevState: { error: string } | null,
   formData: FormData,

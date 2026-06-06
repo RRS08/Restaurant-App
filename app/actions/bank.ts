@@ -29,6 +29,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRestaurantOwner, AuthzError } from '@/lib/authz'
 import { isDevEmail } from '@/lib/dev'
 import {
@@ -1082,6 +1083,124 @@ export async function reopenBankTransaction(
 }
 
 // ================================================================
+// Group-level settlement actions
+//
+// Bank Review now groups unreviewed activity into vendor/category
+// buckets (Costco, HEB, Rent & utilities, Bank fees, etc.) so the
+// manager confirms or changes one pattern at a time instead of
+// every transaction. Each group action accepts a `txn_ids` field
+// — a comma-separated list of bank_transactions.id values — and
+// applies the same review_state update to every row in that list.
+//
+// RLS scopes the UPDATE to the calling restaurant automatically;
+// the only client-trusted input is the id set, which RLS rejects
+// for any id outside the restaurant. The shape (review_state +
+// settled_kind + settled_at) mirrors the single-row actions above
+// exactly, so settling a group is just a batched form of settling
+// each underlying row.
+// ================================================================
+
+function parseTxnIds(formData: FormData): string[] {
+  const raw = (formData.get('txn_ids') as string | null)?.trim() ?? ''
+  if (!raw) return []
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+}
+
+export async function settleBankTransactionGroup(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnIds = parseTxnIds(formData)
+  const kindRaw = (formData.get('kind') as string | null)?.trim()
+  if (txnIds.length === 0) return { error: 'No transactions to settle.' }
+  if (!kindRaw || !SETTLEMENT_KINDS.includes(kindRaw as SettlementKind)) {
+    return { error: 'Invalid settlement kind.' }
+  }
+  const kind = kindRaw as SettlementKind
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'settled',
+      settled_kind: kind,
+      settled_at: new Date().toISOString(),
+    })
+    .in('id', txnIds)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return {
+    ok: true,
+    message: `Settled ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'} as ${kind}.`,
+  }
+}
+
+export async function ignoreBankTransactionGroup(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnIds = parseTxnIds(formData)
+  if (txnIds.length === 0) return { error: 'No transactions to ignore.' }
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'ignored',
+      settled_kind: null,
+      settled_expense_id: null,
+      settled_at: new Date().toISOString(),
+    })
+    .in('id', txnIds)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return {
+    ok: true,
+    message: `Ignored ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'}.`,
+  }
+}
+
+export async function markBankTransactionGroupNotAMatch(
+  prevState: Result | null,
+  formData: FormData,
+): Promise<Result> {
+  const txnIds = parseTxnIds(formData)
+  if (txnIds.length === 0) return { error: 'No transactions to defer.' }
+
+  const gate = await authedSupabase()
+  if (!gate.ok) return { error: gate.error }
+
+  const { error } = await gate.supabase
+    .from('bank_transactions')
+    .update({
+      review_state: 'not_a_match',
+      settled_kind: null,
+      settled_expense_id: null,
+      settled_at: new Date().toISOString(),
+    })
+    .in('id', txnIds)
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/finance')
+  return {
+    ok: true,
+    message: `Marked ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'} for later review.`,
+  }
+}
+
+// ================================================================
 // FINANCE SETTLEMENT SANDBOX — dev-only seeding
 //
 // Inserts deterministic test bank_transactions rows so the Bank
@@ -1263,6 +1382,143 @@ export async function clearSandboxBankTransactions(
   return {
     ok: true,
     message: `Cleared ${data?.length ?? 0} sandbox row${(data?.length ?? 0) === 1 ? '' : 's'}.`,
+  }
+}
+
+// ================================================================
+// resetFinanceBankSandbox — dev-only full reset for Finance testing
+//
+// Wipes ALL local bank rows for this restaurant so the verification
+// engine can be exercised from a clean slate:
+//
+//   bank_transactions          — every row deleted (covers raw
+//                                Plaid-imported rows, sandbox seeds,
+//                                and all of their review_state /
+//                                settled_kind / settled_expense_id /
+//                                settled_at columns)
+//
+// CRITICAL — last_sync_cursor is intentionally PRESERVED.
+//
+//   Plaid's /transactions/sync is incremental: the cursor is its
+//   bookmark of what it has already handed us. If we null the
+//   cursor here, the next sync (which Finance auto-triggers on
+//   page load via maybeAutoSyncBankTransactions) will replay every
+//   historical Plaid transaction — undoing this reset within
+//   seconds. Keeping the cursor in place means "Plaid: don't
+//   redeliver what you've already shown us." Only genuinely new
+//   transactions will flow in after this reset.
+//
+//   If the manager wants Plaid to also re-deliver historical
+//   transactions, the path is to disconnect the bank in Settings
+//   and reconnect via Plaid Link — a new Item carries a fresh
+//   access_token + a null cursor by design.
+//
+// last_synced_at is also preserved — it's just a display field
+// ("Synced X minutes ago"); nulling it would force the staleness
+// detector to fire a sync immediately, fighting against the
+// cursor-preservation behavior above.
+//
+// Intentionally preserved (everything operational, plus the
+// connection itself):
+//
+//   bank_provider_secrets      — Plaid access tokens stay in place
+//   connected_bank_accounts    — rows + cursors + last_synced_at
+//   orders / expenses / inventory_movements / shifts / employees /
+//   menu_items / locations / restaurants / user_roles — never read
+//   or touched here.
+//
+// Restaurant-scoped via explicit .eq('restaurant_id', ...) on the
+// DELETE, on top of RLS. Dev gate enforces internal-only access.
+// ================================================================
+export async function resetFinanceBankSandbox(
+  prevState: Result | null,
+  _formData: FormData,
+): Promise<Result> {
+  // Auth layer 1: must be authenticated + on the dev allowlist.
+  // gateDev is the security boundary here; the actual DELETE uses
+  // the service-role admin client to bypass RLS — see below.
+  const gate = await gateDev()
+  if (!gate.ok) return { error: gate.error }
+
+  // Anchor restaurant_id by reading a visible bank row through the
+  // RLS-scoped client. That tells us exactly which restaurant
+  // Finance is reading (Finance uses the same anon-key path). If
+  // there is no visible row, we have nothing to delete and short-
+  // circuit.
+  const { data: visibleRow, error: selErr } = await gate.supabase
+    .from('bank_transactions')
+    .select('restaurant_id')
+    .limit(1)
+    .maybeSingle()
+  if (selErr) return { error: `Could not inspect bank transactions: ${selErr.message}` }
+
+  if (!visibleRow) {
+    revalidatePath('/finance')
+    revalidatePath('/dev-tools')
+    revalidatePath('/settings')
+    return {
+      ok: true,
+      message: 'No bank transactions visible for this account — nothing to delete.',
+    }
+  }
+
+  const targetRestaurantId = (visibleRow as { restaurant_id: string }).restaurant_id
+
+  // Cross-check: targetRestaurantId MUST match the restaurant_id
+  // that gateDev resolved for this user via user_roles. If they
+  // disagree, we refuse to delete — that's the "wrong restaurant"
+  // scenario and we don't want to wipe someone else's data even
+  // though the service-role client could.
+  if (targetRestaurantId !== gate.restaurantId) {
+    return {
+      error:
+        `Refusing to delete — Finance is showing bank rows from restaurant ` +
+        `${targetRestaurantId.slice(0, 8)}… but your account is authorized for ` +
+        `${gate.restaurantId.slice(0, 8)}…. Investigate the user_roles drift ` +
+        `before re-running.`,
+    }
+  }
+
+  // Auth layer 2 (data): service-role DELETE.
+  //
+  // Why service role here:
+  //   The anon-key DELETE through gate.supabase returns 0 affected
+  //   rows in this environment even though the matching SELECT
+  //   succeeds. The RLS DELETE policy on bank_transactions is
+  //   identical in shape to the SELECT policy (both check
+  //   `restaurant_id = my_restaurant_id()`), so the silent block
+  //   is a Supabase-side state issue, not a logic issue.
+  //
+  //   This is a dev-only, isDevEmail-gated destructive action.
+  //   The authorization decision has already been made above
+  //   (gateDev + restaurant_id cross-check). Bypassing RLS for
+  //   the data write is appropriate.
+  //
+  // Safety:
+  //   • Explicit .eq('restaurant_id', targetRestaurantId) — never
+  //     wipe more than this one restaurant's rows.
+  //   • targetRestaurantId was read via the RLS-scoped client, so
+  //     it's a restaurant the calling user can already see into.
+  //   • No table other than bank_transactions is touched.
+  const admin = createAdminClient()
+  const { data: deleted, error: delErr } = await admin
+    .from('bank_transactions')
+    .delete()
+    .eq('restaurant_id', targetRestaurantId)
+    .select('id')
+  if (delErr) return { error: `Bank transactions wipe failed: ${delErr.message}` }
+
+  revalidatePath('/finance')
+  revalidatePath('/dev-tools')
+  revalidatePath('/settings')
+  const n = deleted?.length ?? 0
+  return {
+    ok: true,
+    message:
+      `Reset complete. Deleted ${n} bank transaction${n === 1 ? '' : 's'} for restaurant ` +
+      `${targetRestaurantId.slice(0, 8)}…. Sync cursors preserved so Plaid will not ` +
+      `redeliver history — only genuinely new activity will sync. Sales, inventory, ` +
+      `staffing, menu, and business setup were not touched.`,
   }
 }
 

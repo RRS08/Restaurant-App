@@ -17,6 +17,7 @@ import {
   getStarterShiftSections,
   isRoleSelectionValid,
 } from '@/lib/onboarding/defaults'
+import { normalizeDisplayName } from '@/lib/strings/names'
 
 export async function createRestaurantAndLocation(
   prevState: { error: string } | null,
@@ -32,8 +33,19 @@ export async function createRestaurantAndLocation(
     return { error: 'You must be logged in to complete setup.' }
   }
 
-  const restaurantName = (formData.get('restaurant_name') as string)?.trim()
-  const locationName = (formData.get('location_name') as string)?.trim()
+  // Restaurant + location names are user-created business identifiers
+  // and follow the system-wide naming-normalization rule (title case,
+  // collapsed whitespace) so the database stays clean.
+  //
+  // Address stays raw — street addresses contain semantically
+  // meaningful capitalization (e.g. "PO Box", "McAllen") and casing
+  // rules are locale-specific. Same for timezone (IANA identifier).
+  const restaurantName = normalizeDisplayName(
+    (formData.get('restaurant_name') as string) ?? '',
+  )
+  const locationName = normalizeDisplayName(
+    (formData.get('location_name') as string) ?? '',
+  )
   const address = (formData.get('address') as string)?.trim()
   const timezone = (formData.get('timezone') as string) || 'UTC'
 

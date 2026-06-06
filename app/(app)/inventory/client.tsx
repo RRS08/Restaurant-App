@@ -467,7 +467,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
         />
       )}
       {drawer?.mode === 'create-item' && (
-        <CreateItemDrawer onClose={() => setDrawer(null)} />
+        <QuickAddItemDrawer onClose={() => setDrawer(null)} />
       )}
       {drawer?.mode === 'cart' && (
         <CartDrawer
@@ -2949,73 +2949,164 @@ function ClosedStat({ label, value, valueColor }: { label: string; value: string
 }
 
 // ----------------------------------------------------------------
-// CreateItemDrawer — drawer-wrapped version of the previous inline
-// CreateItemCard. The form behavior is unchanged; the chrome
-// matches the rest of the page-level drawers.
+// QuickActionDrawer — the lighter drawer treatment for fast,
+// single-purpose creation actions (Add item, and future quick-adds
+// elsewhere in the app). Intentionally distinct from the larger
+// workflow `DrawerShell` so the manager reads it as a quick action
+// rather than an unfinished full workflow:
+//
+//   • narrower (max-w-sm vs DrawerShell's max-w-md)
+//   • compact header (py-3.5, smaller title size, blue-tinted eyebrow)
+//   • compact body padding, tighter vertical rhythm
+//   • compact footer (py-3, h-9 buttons)
+//
+// The shell only owns chrome — the concrete drawer (e.g.
+// QuickAddItemDrawer) supplies the form body and footer buttons.
+// Seeded here for the inventory Add Item flow; reuse it for other
+// quick creation actions in future passes (do NOT swap workflow
+// drawers like Cart / Orders / Item detail onto this shell).
 // ----------------------------------------------------------------
-function CreateItemDrawer({ onClose }: { onClose: () => void }) {
+function QuickActionDrawer({ eyebrow, title, helper, onClose, children }: {
+  eyebrow: string
+  title: string
+  helper?: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <>
+      <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
+      <aside
+        className="fixed right-0 top-0 bottom-0 w-full max-w-sm bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
+        aria-label={title}
+      >
+        <header className="flex-shrink-0 border-b border-gray-100 px-5 py-3.5 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+              {eyebrow}
+            </p>
+            <h2 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900 leading-tight">
+              {title}
+            </h2>
+            {helper && (
+              <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">{helper}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+        {children}
+      </aside>
+    </>
+  )
+}
+
+// Small uppercase group header used inside a QuickActionDrawer to
+// segment fields into named bands ("Item", "Tracking", …) without
+// introducing card chrome.
+function QuickGroupLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">
+      {children}
+    </p>
+  )
+}
+
+// ----------------------------------------------------------------
+// QuickAddItemDrawer — inventory Add Item flow, mounted on the new
+// QuickActionDrawer shell. Two compact groups: Item (name + unit)
+// and Tracking (low stock threshold). Form fields, FormData names,
+// `createInventoryItem` action, and the auto-close-on-success
+// behavior upstream are all unchanged from the previous treatment.
+// ----------------------------------------------------------------
+function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
   const [state, action, pending] = useActionState(createInventoryItem, null)
   const nameRef = useRef<HTMLInputElement>(null)
   useEffect(() => { nameRef.current?.focus() }, [])
 
+  const fieldBase =
+    'h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition'
+
   return (
-    <DrawerShell
-      eyebrow="Track"
-      title="New item"
-      subtitle="Recipe ingredient, operational supply — anything you want to monitor."
+    <QuickActionDrawer
+      eyebrow="Quick add"
+      title="New inventory item"
+      helper="Track stock for an ingredient or supply."
       onClose={onClose}
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-          <div>
-            <label htmlFor="ci-name" className="block text-[11px] font-semibold text-gray-600 mb-1">
-              Item name
-            </label>
-            <input
-              ref={nameRef}
-              id="ci-name"
-              name="name"
-              type="text"
-              required
-              placeholder="Mozzarella, Olive oil, Napkins, Takeout boxes…"
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+
+          {/* Item group */}
+          <div className="space-y-2.5">
+            <QuickGroupLabel>Item</QuickGroupLabel>
+            <div>
+              <label htmlFor="ci-name" className="block text-[11px] font-medium text-gray-600 mb-1">
+                Name
+              </label>
+              <input
+                ref={nameRef}
+                id="ci-name"
+                name="name"
+                type="text"
+                required
+                placeholder="Mozzarella, Olive oil, Napkins…"
+                className={fieldBase}
+              />
+            </div>
+            <div>
+              <label htmlFor="ci-unit" className="block text-[11px] font-medium text-gray-600 mb-1">
+                Unit of measure
+              </label>
+              <select
+                id="ci-unit"
+                name="unit_of_measure"
+                defaultValue="units"
+                className={fieldBase}
+              >
+                <option value="units">Units (each)</option>
+                <option value="kg">Kilograms (kg)</option>
+                <option value="lbs">Pounds (lbs)</option>
+                <option value="liters">Liters</option>
+                <option value="gallons">Gallons</option>
+                <option value="oz">Ounces (oz)</option>
+                <option value="cases">Cases</option>
+                <option value="bags">Bags</option>
+              </select>
+            </div>
           </div>
 
-          <div>
-            <label htmlFor="ci-unit" className="block text-[11px] font-semibold text-gray-600 mb-1">
-              Unit of measure
-            </label>
-            <select
-              id="ci-unit"
-              name="unit_of_measure"
-              defaultValue="units"
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            >
-              <option value="units">Units (each)</option>
-              <option value="kg">Kilograms (kg)</option>
-              <option value="lbs">Pounds (lbs)</option>
-              <option value="liters">Liters</option>
-              <option value="gallons">Gallons</option>
-              <option value="oz">Ounces (oz)</option>
-              <option value="cases">Cases</option>
-              <option value="bags">Bags</option>
-            </select>
-          </div>
-
-          <div>
-            <label htmlFor="ci-threshold" className="block text-[11px] font-semibold text-gray-600 mb-1">
-              Low stock threshold
-            </label>
-            <input
-              id="ci-threshold"
-              name="low_stock_threshold"
-              type="number"
-              min="0"
-              step="0.01"
-              defaultValue="5"
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
+          {/* Tracking group */}
+          <div className="space-y-2.5">
+            <QuickGroupLabel>Tracking</QuickGroupLabel>
+            <div>
+              <label htmlFor="ci-threshold" className="block text-[11px] font-medium text-gray-600 mb-1">
+                Low stock threshold
+              </label>
+              <input
+                id="ci-threshold"
+                name="low_stock_threshold"
+                type="number"
+                min="0"
+                step="0.01"
+                defaultValue="5"
+                className={`${fieldBase} font-mono`}
+              />
+            </div>
           </div>
 
           {state?.error && (
@@ -3023,24 +3114,24 @@ function CreateItemDrawer({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        <div className="flex-shrink-0 border-t border-gray-100 px-6 py-4 bg-white flex items-center gap-2">
+        <div className="flex-shrink-0 border-t border-gray-100 px-5 py-3 bg-white flex items-center gap-2">
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 h-10 rounded-lg border border-gray-200 px-4 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
+            className="flex-1 h-9 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={pending}
-            className="flex-1 h-10 rounded-lg bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
+            className="flex-1 h-9 rounded-lg bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
           >
             {pending ? 'Creating…' : 'Create item'}
           </button>
         </div>
       </form>
-    </DrawerShell>
+    </QuickActionDrawer>
   )
 }
 

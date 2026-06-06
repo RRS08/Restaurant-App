@@ -71,13 +71,6 @@ const SOURCE_TEXT: Record<Source, string> = {
   external_pos: 'text-indigo-700',
 }
 
-// Drawer chip styles still use pills — appropriate at that scale.
-const SOURCE_CHIP: Record<Source, string> = {
-  manual: 'bg-gray-100 text-gray-700',
-  native_pos: 'bg-blue-50 text-blue-700',
-  external_pos: 'bg-indigo-50 text-indigo-700',
-}
-
 // Payment-type row tints. Same restrained colored-text pattern the
 // Source column uses, but the palette is deliberately disjoint from
 // both Source (gray / blue / indigo) and Status (green / red) so
@@ -168,10 +161,10 @@ function shortId(id: string): string {
 // Sales client
 // ================================================================
 
-// 10 rows per page: a fixed page size lets the ledger card hold a
-// stable visual height (see `min-h` on the card shell below). Rows
-// swap inside the surface; the surface itself never resizes.
-const PAGE_SIZE = 10
+// 6 rows per page. Fixed page size so the ledger card holds a
+// stable visual height (see `min-h` on the card shell below); rows
+// swap inside the surface and the surface itself never resizes.
+const PAGE_SIZE = 6
 
 export default function SalesClient({
   orders,
@@ -209,16 +202,17 @@ export default function SalesClient({
 
   const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-  // Scope-of-list counters and the dollar total for the current
-  // filter. Used by the orientation strip above the ledger. These
-  // are intentionally bounded to the current view (not the page,
-  // not the restaurant) so the strip reads as "what am I looking
-  // at?" — ledger truth, not analytics interpretation.
-  const completedInView = visible.filter((o) => o.status === 'completed').length
-  const voidedInView = visible.filter((o) => o.status === 'voided').length
-  const netTotal = visible
-    .filter((o) => o.status === 'completed')
-    .reduce((s, o) => s + o.total, 0)
+  // Sales-focused metrics for the orientation strip. Scope is the
+  // current filter, not the whole restaurant, so the strip reads as
+  // "what does this slice look like" — ledger truth, not analytics
+  // interpretation. Average ticket = sales total ÷ completed order
+  // count; if no completed orders, it reads $0.00.
+  const completedOrders = visible.filter((o) => o.status === 'completed')
+  const voidedOrders = visible.filter((o) => o.status === 'voided')
+  const salesTotal = completedOrders.reduce((s, o) => s + o.total, 0)
+  const orderCount = completedOrders.length
+  const voidCount = voidedOrders.length
+  const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
   const subtitle = operatingMode === 'external_pos'
     ? 'Imported orders from your connected POS.'
@@ -244,35 +238,34 @@ export default function SalesClient({
       {/* 2. ACTIVITY                                                      */}
       {/* ================================================================ */}
       <section>
-        {/* ----- Orientation summary strip -----
-            Four ledger-scope cells: count in view, completed,
-            voided, and the dollar net of completed sales in the
-            current filter. Scope-of-list only — does not interpret,
-            does not trend, does not compare. Voided cell tints red
-            when there's anything to look at so the eye lands there
-            first without adding a separate alert. */}
+        {/* ----- Sales snapshot strip -----
+            Four sales-focused cells: Sales total / Orders / Average
+            ticket / Voids. Reads as a quick commercial summary, not
+            as table metadata. Average ticket = sales total ÷ orders
+            (completed only). Voids cell tints amber when non-zero
+            so the eye lands there first without an extra alert. */}
         <div className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
             <LedgerStat
-              label="In view"
-              value={`${visible.length}`}
-              hint={`${visible.length === 1 ? 'order' : 'orders'} on this filter`}
+              label="Sales total"
+              value={fmtMoney(salesTotal)}
+              hint="completed in view"
             />
             <LedgerStat
-              label="Completed"
-              value={`${completedInView}`}
-              hint={completedInView === 0 ? 'none yet' : 'in current view'}
+              label="Orders"
+              value={`${orderCount}`}
+              hint={orderCount === 1 ? 'completed order' : 'completed orders'}
             />
             <LedgerStat
-              label="Voided"
-              value={`${voidedInView}`}
-              hint={voidedInView === 0 ? 'none' : 'in current view'}
-              tone={voidedInView > 0 ? 'warn' : 'neutral'}
+              label="Average ticket"
+              value={fmtMoney(avgTicket)}
+              hint={orderCount === 0 ? 'no completed orders' : 'per completed order'}
             />
             <LedgerStat
-              label="Net total"
-              value={fmtMoney(netTotal)}
-              hint="completed sales"
+              label="Voids"
+              value={`${voidCount}`}
+              hint={voidCount === 0 ? 'none' : 'in current view'}
+              tone={voidCount > 0 ? 'warn' : 'neutral'}
             />
           </div>
         </div>
@@ -325,28 +318,22 @@ export default function SalesClient({
             <EmptyLedger orders={orders.length} filter={filter} />
           ) : (
             <>
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 text-left">
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">When</th>
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Items</th>
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Source</th>
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Payment</th>
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Status</th>
-                    <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500 text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {pagedOrders.map((o) => (
-                    <OrderRow
-                      key={o.id}
-                      order={o}
-                      selected={openId === o.id}
-                      onOpen={() => setOpenId(o.id)}
-                    />
-                  ))}
-                </tbody>
-              </table>
+              {/* Card-list order feed. The table chrome (thead /
+                  tbody / tr / td) was replaced with a stacked ul of
+                  vertical-card rows so each order reads as one scan
+                  surface: date at top, item summary primary, meta
+                  small, and Source · Payment · Status + total on the
+                  bottom row. Less admin-table, more modern ledger. */}
+              <ul className="divide-y divide-gray-100">
+                {pagedOrders.map((o) => (
+                  <OrderRow
+                    key={o.id}
+                    order={o}
+                    selected={openId === o.id}
+                    onOpen={() => setOpenId(o.id)}
+                  />
+                ))}
+              </ul>
 
               {/* Pager pinned at bottom for stable card height.
                   Compact "Showing N–M of T · ← X / Y →" footer that
@@ -425,7 +412,18 @@ function SourceChip({ operatingMode }: { operatingMode: OperatingMode }) {
 }
 
 // ================================================================
-// OrderRow — list-row scan
+// OrderRow — vertical card-list row.
+//
+// Visual hierarchy:
+//   • Top-left: date · time (quiet)
+//   • Item summary (primary — semibold)
+//   • Meta: N items · location (smaller)
+//   • Bottom: Source · Payment · Status (inline, colored text) + Total ($)
+//
+// The row is a clickable surface; the selected state matches the
+// prior shadow-inset blue accent so deep-link / drawer selection
+// still reads identically. Voided rows strike-through the item
+// summary + total and mute the colored chips to gray.
 // ================================================================
 function OrderRow({
   order,
@@ -442,7 +440,7 @@ function OrderRow({
   const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
 
   return (
-    <tr
+    <li
       onClick={onOpen}
       aria-selected={selected}
       className={`group cursor-pointer transition-colors ${
@@ -451,65 +449,54 @@ function OrderRow({
           : 'hover:bg-gray-50/70'
       }`}
     >
-      {/* When — day on top, time muted underneath */}
-      <td className="px-6 py-4 whitespace-nowrap">
-        <div className={`text-[13px] font-semibold tabular-nums ${isVoided ? 'text-gray-400' : 'text-gray-800'}`}>
-          {date.day}
-        </div>
-        <div className="mt-0.5 text-[11px] text-gray-400 tabular-nums">{date.time}</div>
-      </td>
-      {/* Items — primary title bumped to semibold, supporting meta
-          stays restrained so the row reads as a clear scannable
-          identity line + a quieter second line. */}
-      <td className="px-6 py-4 max-w-[280px]">
-        <p className={`text-sm font-semibold truncate ${
+      <div className="px-6 py-3.5">
+        {/* Top — date / time */}
+        <p className="text-[11px] text-gray-500 tabular-nums">
+          {date.day} <span className="text-gray-300">·</span> {date.time}
+        </p>
+        {/* Item summary — primary identity */}
+        <p className={`mt-0.5 text-sm font-semibold truncate ${
           isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
         }`}>
           {fmtItemPreview(order.lineItems)}
         </p>
+        {/* Meta — count + location */}
         <p className="mt-0.5 text-[11px] text-gray-400 tabular-nums">
-          {itemCount} {itemCount === 1 ? 'unit' : 'units'}
+          {itemCount} {itemCount === 1 ? 'item' : 'items'}
           {order.locationName ? <> · {order.locationName}</> : null}
         </p>
-      </td>
-      {/* Source — colored text, restraint over chrome */}
-      <td className={`px-6 py-4 text-[13px] font-medium ${
-        isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]
-      }`}>
-        {SOURCE_LABEL[order.source]}
-      </td>
-      {/* Payment — colored text per type (Card blue, Cash green,
-          Other neutral) so the column reads at a glance. Same
-          family pattern as Source: tone over chrome, no pill in
-          the row. */}
-      <td className="px-6 py-4 text-[13px]">
-        <div className="flex items-center gap-2">
-          <span className={`capitalize font-medium ${
-            isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]
-          }`}>
-            {order.paymentType}
-          </span>
-          {order.paymentStatus === 'unpaid' && !isVoided && (
-            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
-              Unpaid
+        {/* Bottom — Source · Payment · Status, total on the right */}
+        <div className="mt-2 flex items-baseline justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-medium min-w-0">
+            <span className={isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]}>
+              {SOURCE_LABEL[order.source]}
             </span>
-          )}
+            <span className="text-gray-300">·</span>
+            <span className={`capitalize ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
+              {order.paymentType}
+            </span>
+            <span className="text-gray-300">·</span>
+            <span className={`inline-flex items-center gap-1 ${
+              isVoided ? 'text-red-700' : 'text-green-700'
+            }`}>
+              <span className={`w-1 h-1 rounded-full ${status.dot}`} />
+              {status.label}
+            </span>
+            {order.paymentStatus === 'unpaid' && !isVoided && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="text-amber-700">Unpaid</span>
+              </>
+            )}
+          </div>
+          <p className={`text-base font-mono tabular-nums whitespace-nowrap flex-shrink-0 ${
+            isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-bold'
+          }`}>
+            {fmtMoney(order.total)}
+          </p>
         </div>
-      </td>
-      {/* Status — chip pattern, same in row and drawer */}
-      <td className="px-6 py-4">
-        <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-          {status.label}
-        </span>
-      </td>
-      {/* Total — right-aligned mono for column alignment */}
-      <td className={`px-6 py-4 font-mono tabular-nums text-right text-sm ${
-        isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-semibold'
-      }`}>
-        {fmtMoney(order.total)}
-      </td>
-    </tr>
+      </div>
+    </li>
   )
 }
 
@@ -533,32 +520,30 @@ function EmptyLedger({ orders, filter }: { orders: number; filter: Filter }) {
 }
 
 // ================================================================
-// OrderDrawer — inspection workspace
+// OrderDrawer — physical-ticket workflow.
 //
-// Family-aligned with the Finance / Staffing / Inventory drawers:
+// Reframed from a generic inspection drawer into something that
+// reads like a printed sale ticket with controlled correction
+// tools. Top-down:
 //
-//   • Aside is `flex flex-col` so the header band is fixed-height
-//     and only the body scrolls — same shell every drawer in the app
-//     uses.
-//   • Header is the family's calm `text-base font-bold` title +
-//     subtitle line + labeled "Close" button. No giant total in the
-//     header — the receipt-y dollar hero made the drawer feel like
-//     a transaction snapshot instead of a managed object.
-//   • Body opens with a 3-cell stats strip (`Total / Items / Lines`)
-//     in the family's bordered/divided shell — same anatomy as the
-//     Labor and Inventory-spend stat strips. The dollar amount is
-//     still prominent, but as one cell of a structured object summary
-//     rather than the drawer's hero.
-//   • Sections use the family's quiet `mb-3 text-[10px] uppercase
-//     tracking-widest text-gray-500` eyebrow with no divider line —
-//     drawer-level rhythm is calmer than the page-level band rhythm.
-//   • Items is the body's central section: slightly stronger eyebrow
-//     tone (text-gray-700) and a compact line-list with the family's
-//     primary/secondary/value row pattern.
-//   • Correction is a real action-resolution zone: a full-bleed
-//     `border-t` separates it from the inspection content, then a
-//     calm tinted card houses the explanation + the destructive
-//     action.
+//   1. Header — order #, status pill, "Status · Source · Payment"
+//      meta line, full date.
+//   2. Voided ribbon (when voided) — same as before.
+//   3. Body sections (scrollable):
+//        a. Sale total hero — large dollar amount.
+//        b. Ticket — receipt-style line items.
+//        c. Payment — method · status · amount.
+//        d. Source — recorded-via location.
+//        e. Adjustments — placeholder with item-level deferral note.
+//        f. Note (optional) — when the order carries a note string.
+//   4. Footer — Correction tools, compact: a single Void order row
+//      with short copy and a small action button on the right.
+//
+// Item-level void is DEFERRED. It requires schema columns on
+// order_items (voided_at / void_reason) + a new server action with
+// per-line inventory reversal — too risky for a UI redesign pass.
+// The Adjustments section calls out that future capability so the
+// manager doesn't expect it from this build.
 // ================================================================
 function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) {
   const [state, action, pending] = useActionState(voidOrder, null)
@@ -578,10 +563,24 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
   }, [onClose])
 
   const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
-  const recordedVia =
+  // Manager-friendly source phrasing: "In-app POS · Location" /
+  // "External POS · Location" / "Manual entry · Location".
+  const sourceTitle =
     order.source === 'native_pos' ? 'In-app POS'
-      : order.source === 'external_pos' ? 'External POS import'
+      : order.source === 'external_pos' ? 'External POS'
         : 'Manual entry'
+  const sourceLine = order.locationName
+    ? `${sourceTitle} · ${order.locationName}`
+    : sourceTitle
+  const paymentTypeLabel = order.paymentType.charAt(0).toUpperCase() + order.paymentType.slice(1)
+  const paymentStatusLabel =
+    isVoided ? 'Voided'
+      : order.paymentStatus === 'paid' ? 'Paid'
+        : 'Unpaid'
+  const paymentStatusTone =
+    paymentStatusLabel === 'Voided' ? 'text-red-700'
+      : paymentStatusLabel === 'Paid' ? 'text-green-700'
+        : 'text-amber-700'
 
   return (
     <>
@@ -591,13 +590,9 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
       />
       <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
-        {/* ============================================================ */}
-        {/* HEADER — family pattern: title + subtitle + Close            */}
-        {/* The total moves out of the header into the stats strip below */}
-        {/* so the drawer no longer reads as "big-dollar receipt first,  */}
-        {/* everything else second." Identity is the lead: the order id  */}
-        {/* + status pill, then the time it happened in the subtitle.    */}
-        {/* ============================================================ */}
+        {/* HEADER — Order # + status pill, then a "Status · Source ·
+            Payment" meta line so the cashier reads the order's
+            shape at a glance. Date sits below as quiet context. */}
         <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -609,9 +604,15 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
                 {status.label}
               </span>
             </div>
-            <p className="mt-1 text-xs text-gray-500">
-              <span className="text-gray-700">{fmtFullDate(order.createdAt)}</span>
-              <span className="text-gray-400"> · {fmtRelative(order.createdAt)}</span>
+            <p className="mt-1 text-xs text-gray-600">
+              {status.label}
+              <span className="text-gray-300 mx-1">·</span>
+              {SOURCE_LABEL[order.source]}
+              <span className="text-gray-300 mx-1">·</span>
+              <span className="capitalize">{order.paymentType}</span>
+            </p>
+            <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+              {fmtFullDate(order.createdAt)} <span className="text-gray-300">·</span> {fmtRelative(order.createdAt)}
             </p>
           </div>
           <button
@@ -623,161 +624,177 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           </button>
         </div>
 
-        {/* Voided audit stamp — full-bleed strip directly under the
-            header so the corrected status reads before the body
-            content. Sits between the fixed header and the scrollable
-            body so it never collides with content on scroll. */}
+        {/* Voided audit stamp — full-bleed ribbon between the fixed
+            header and the scrolling body. */}
         {isVoided && (
           <div className="border-b border-red-200/60 bg-red-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
             <p className="text-[11px] text-red-700">
-              Voided · the original record stays in the ledger for auditability.
+              Voided · the original record stays in the ledger for audit history.
             </p>
           </div>
         )}
 
-        {/* ============================================================ */}
-        {/* BODY — scrollable, family rhythm                             */}
-        {/* ============================================================ */}
-        <div className="flex-1 overflow-y-auto px-6 py-6 space-y-6">
+        {/* BODY — Sale total hero → Ticket → Payment → Source →
+            Adjustments → optional Note. */}
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
 
-          {/* Stats strip — family pattern (Total / Items / Lines).
-              Total carries `prominent` so the dollar amount reads
-              as the lead number of the inspection without being
-              promoted back into the header. Items and Lines stay
-              at the standard cell scale. */}
-          <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-            <DrawerStatCell
-              label="Total"
-              value={fmtMoney(order.total)}
-              prominent
-              valueClass={isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}
-            />
-            <DrawerStatCell
-              label="Items"
-              value={`${itemCount}`}
-              muted={itemCount === 0}
-            />
-            <DrawerStatCell
-              label="Lines"
-              value={`${order.lineItems.length}`}
-              muted={order.lineItems.length === 0}
-            />
-          </div>
-
-          {/* Context — source / payment / payment status as a quiet
-              chip group. Lives outside the stats strip because these
-              are categorical (chip) signals, not numeric (cell). */}
-          <div>
-            <p className="mb-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Context
+          {/* a. Sale total — hero. Large mono dollar amount + item /
+              line count, framed by a calm bordered card so it reads
+              as the receipt's headline number. */}
+          <div className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-5 py-4">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Sale total
             </p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${SOURCE_CHIP[order.source]}`}>
-                {SOURCE_LABEL[order.source]}
-              </span>
-              <span className="inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 capitalize">
-                {order.paymentType}
-              </span>
-              <span className={`inline-flex text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                order.paymentStatus === 'paid' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-              }`}>
-                {order.paymentStatus}
-              </span>
-            </div>
-          </div>
-
-          {/* Provenance — quiet two-up grid */}
-          <div>
-            <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-              Provenance
+            <p className={`mt-1 text-[28px] leading-none font-mono tabular-nums font-bold ${
+              isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+            }`}>
+              {fmtMoney(order.total)}
             </p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-              <DrawerMeta label="Recorded via" value={recordedVia} />
-              <DrawerMeta label="Location" value={order.locationName ?? '—'} />
-            </dl>
-            {order.note && (
-              <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50/40 px-3.5 py-2.5">
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-                  Note
-                </p>
-                <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
-              </div>
-            )}
+            <p className="mt-2 text-[11px] text-gray-500 tabular-nums">
+              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+              <span className="text-gray-300"> · </span>
+              {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'}
+            </p>
           </div>
 
-          {/* Items — drawer's central section.
-              Eyebrow tone is bumped from gray-500 to gray-700 (the only
-              section to do so) so Items reads as the body's primary
-              content without resorting to dividers, badges, or color. */}
+          {/* b. Ticket — receipt-style line list. Each line:
+                  {name}
+                  {qty} × {unit price}                        {line total}
+              The eyebrow is bumped to gray-700 (the only stronger
+              eyebrow in this drawer) so Ticket reads as the body's
+              primary content. */}
           <div>
-            <div className="mb-3 flex items-baseline justify-between gap-3">
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
-                Items
-              </p>
-              <p className="text-[11px] text-gray-400 tabular-nums">
-                {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'} · {itemCount} {itemCount === 1 ? 'unit' : 'units'}
-              </p>
-            </div>
-            <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
+            <p className="mb-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+              Ticket
+            </p>
+            <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100">
               {order.lineItems.map((li) => (
                 <li
                   key={li.id}
                   className="flex items-center justify-between gap-3 px-4 py-3"
                 >
                   <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-gray-900 truncate">
+                    <p className={`text-[13px] font-semibold truncate ${
+                      isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+                    }`}>
                       {li.name}
                     </p>
                     <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
-                      {fmtMoney(li.unitPrice)} × {li.quantity}
+                      {li.quantity} × {fmtMoney(li.unitPrice)}
                     </p>
                   </div>
-                  <p className="text-sm font-bold font-mono tabular-nums text-gray-900 flex-shrink-0">
+                  <p className={`text-sm font-bold font-mono tabular-nums whitespace-nowrap ${
+                    isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+                  }`}>
                     {fmtMoney(li.totalPrice)}
                   </p>
                 </li>
               ))}
             </ul>
           </div>
+
+          {/* c. Payment — method · status · amount on one line. */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Payment
+            </p>
+            <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3 flex items-baseline justify-between gap-3">
+              <p className="text-[13px] min-w-0 flex flex-wrap items-baseline gap-x-1.5">
+                <span className={`font-medium ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
+                  {paymentTypeLabel}
+                </span>
+                <span className="text-gray-300">·</span>
+                <span className={`font-medium ${paymentStatusTone}`}>
+                  {paymentStatusLabel}
+                </span>
+              </p>
+              <p className={`text-sm font-mono tabular-nums font-semibold whitespace-nowrap ${
+                isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+              }`}>
+                {fmtMoney(order.total)}
+              </p>
+            </div>
+          </div>
+
+          {/* d. Source — manager-friendly "In-app POS · Location" /
+              "External POS · Location" / "Manual entry · Location". */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Source
+            </p>
+            <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3">
+              <p className="text-[13px] text-gray-900">{sourceLine}</p>
+            </div>
+          </div>
+
+          {/* e. Adjustments — placeholder. Item-level corrections
+              require schema + action work (see code comment above)
+              and are deferred. When no adjustments exist on the
+              order, the section communicates that calmly without
+              faking a corrections feed. */}
+          <div>
+            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              Adjustments
+            </p>
+            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-3 text-center">
+              <p className="text-[12px] text-gray-600">No adjustments yet.</p>
+              <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
+                Item-level voids, refunds, and comp tools are coming in a future update.
+              </p>
+            </div>
+          </div>
+
+          {/* f. Note — only when the order carries one. */}
+          {order.note && (
+            <div>
+              <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+                Note
+              </p>
+              <div className="rounded-lg border border-gray-200 bg-gray-50/40 px-4 py-3">
+                <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* ============================================================ */}
-        {/* ACTION RESOLUTION ZONE                                       */}
-        {/* Full-width footer band, separated from the scrollable body   */}
-        {/* by a top border so it reads as the drawer's concluding       */}
-        {/* operational moment — not just another bottom card. Pinned    */}
-        {/* below the body's flex-1 region so it never scrolls away.     */}
-        {/* ============================================================ */}
-        <div className="border-t border-gray-200 bg-gray-50/40 px-6 py-5 flex-shrink-0">
-          <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
-            Correction
+        {/* FOOTER — Correction tools. Compact: a single row with
+            short copy on the left and a small Void order button on
+            the right. Less dominant than the Ticket above, but
+            clearly the drawer's destructive resolution. */}
+        <div className="border-t border-gray-100 bg-white px-6 py-3.5 flex-shrink-0">
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            Correction tools
           </p>
           {canVoid ? (
-            <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-              <p className="text-xs font-semibold text-gray-900">Void this order</p>
-              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                Use this when the order was rung in error or refunded outside the system. Voiding reverses any inventory it depleted; the original entry stays in the ledger for auditing.
-              </p>
-              <form action={action} className="mt-4">
-                <input type="hidden" name="order_id" value={order.id} />
-                <button
-                  type="submit"
-                  disabled={pending}
-                  className="w-full rounded-lg border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-4 py-2 text-xs font-semibold disabled:opacity-60 transition-colors"
-                >
-                  {pending ? 'Voiding…' : 'Void this order'}
-                </button>
-                {state?.error && (
-                  <p className="mt-2 text-[11px] text-red-600">{state.error}</p>
-                )}
-              </form>
+            <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[12px] font-semibold text-gray-900">Void order</p>
+                  <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                    Use when the full sale was rung in error or refunded outside the system. The original ticket stays in the ledger.
+                  </p>
+                </div>
+                <form action={action} className="flex-shrink-0">
+                  <input type="hidden" name="order_id" value={order.id} />
+                  <button
+                    type="submit"
+                    disabled={pending}
+                    className="rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 text-[11px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
+                  >
+                    {pending ? 'Voiding…' : 'Void order'}
+                  </button>
+                </form>
+              </div>
+              {state?.error && (
+                <p className="mt-2 text-[11px] text-red-600">{state.error}</p>
+              )}
             </div>
           ) : (
-            <div className="rounded-xl border border-gray-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-              <p className="text-xs font-semibold text-gray-700">No further correction available</p>
-              <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
-                This order is already voided. The record stays in the ledger for auditing.
+            <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
+              <p className="text-[12px] font-semibold text-gray-700">Already voided</p>
+              <p className="mt-1 text-[11px] text-gray-500 leading-snug">
+                The record stays in the ledger for audit history.
               </p>
             </div>
           )}
@@ -818,50 +835,3 @@ function LedgerStat({
   )
 }
 
-// ================================================================
-// Drawer-local primitives
-//
-// Match the family's stat-cell / meta-pair pattern exactly. The
-// stat cell is the Sales analogue of Finance's `DrawerStat` — same
-// padding, same uppercase label, same bold value — so the strip
-// reads as the same component family across pillars.
-// ================================================================
-function DrawerStatCell({
-  label,
-  value,
-  muted = false,
-  prominent = false,
-  valueClass,
-}: {
-  label: string
-  value: string
-  muted?: boolean
-  prominent?: boolean
-  valueClass?: string
-}) {
-  const tone = valueClass ?? (muted ? 'text-gray-300' : 'text-gray-900')
-  return (
-    <div className="px-4 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
-      <p
-        className={`mt-1 font-bold tabular-nums truncate font-mono ${
-          prominent ? 'text-lg' : 'text-base'
-        } ${tone}`}
-      >
-        {value}
-      </p>
-    </div>
-  )
-}
-
-// Stacked key/value pair used in the Provenance grid. Vertical
-// orientation so two pairs sit side by side without competing for
-// width — labels stay restrained on top, values get full width below.
-function DrawerMeta({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">{label}</dt>
-      <dd className="mt-1 text-[12px] text-gray-800 truncate">{value}</dd>
-    </div>
-  )
-}

@@ -34,6 +34,7 @@ function getMonday(d: Date) { const date = new Date(d); const day = date.getDay(
 function getWeekDays(mon: Date) { return Array.from({ length: 7 }, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d }) }
 function sameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate() }
 function fmt(d: string) { return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
+function fmtMonthDay(d: string | Date) { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
 function hL(h: number) { return h === 0 ? '12a' : h === 12 ? '12p' : h < 12 ? `${h}a` : `${h-12}p` }
 function toLocal(d: Date) { const p = (n: number) => n.toString().padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}` }
 
@@ -65,6 +66,98 @@ function formatHours(h: number): string {
   // Whole numbers as 36h, fractional as 36.5h. Avoids the visual
   // noise of "36.0h" while still showing the half when it matters.
   return h % 1 === 0 ? `${h.toFixed(0)}h` : `${h.toFixed(1)}h`
+}
+
+// ----------------------------------------------------------------
+// Role color system.
+//
+// Maps role-name substrings to a small, calm color token set so the
+// bench + schedule scan well at scale. Role identity uses a tiny
+// colored dot + tinted role text + a 2px left accent stripe on
+// cards — never a full background wash.
+//
+// House colors are RESERVED and never reused as role colors:
+//   • Front of House → blue / sky    (reserved)
+//   • Back of House  → amber / yellow / orange (reserved)
+// The role palette below is built from the remaining color families
+// so the manager can never confuse "house identity" with "role
+// identity" when both are visible at once.
+//
+// Matching is by substring + lowercase so user-typed variants
+// resolve cleanly: "Server", "head server", "waitstaff" all hit the
+// same token. Unknown roles default to gray.
+// ----------------------------------------------------------------
+type RoleTone = {
+  text: string
+  chip: string
+  dot: string
+}
+const ROLE_GRAY: RoleTone = {
+  text: 'text-gray-600',
+  chip: 'bg-gray-100 text-gray-700',
+  dot: 'bg-gray-400',
+}
+const ROLE_MAP: Array<{ test: RegExp; tone: RoleTone }> = [
+  // FOH-adjacent — purple / teal / rose, never blue.
+  { test: /server|wait/,           tone: { text: 'text-purple-700',  chip: 'bg-purple-50 text-purple-700',   dot: 'bg-purple-500'  } },
+  { test: /host/,                  tone: { text: 'text-teal-700',    chip: 'bg-teal-50 text-teal-700',       dot: 'bg-teal-500'    } },
+  { test: /bartender|bar(\s|$)/,   tone: { text: 'text-rose-700',    chip: 'bg-rose-50 text-rose-700',       dot: 'bg-rose-500'    } },
+  // Busser / Runner split — slate (gray-blue) vs emerald, both off
+  // the FOH blue axis.
+  { test: /busser/,                tone: { text: 'text-slate-700',   chip: 'bg-slate-100 text-slate-700',    dot: 'bg-slate-500'   } },
+  { test: /runner/,                tone: { text: 'text-emerald-700', chip: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' } },
+  // Manager — zinc reads as a deliberate neutral-dark identity,
+  // distinct from busser's slate and from the default gray.
+  { test: /manager|lead|supervis/, tone: { text: 'text-zinc-800',    chip: 'bg-zinc-100 text-zinc-800',      dot: 'bg-zinc-700'    } },
+  // BOH-adjacent — stone / red / lime, never amber/yellow/orange.
+  { test: /prep/,                  tone: { text: 'text-stone-700',   chip: 'bg-stone-100 text-stone-700',    dot: 'bg-stone-500'   } },
+  { test: /line|cook|chef|grill/,  tone: { text: 'text-red-700',     chip: 'bg-red-50 text-red-700',         dot: 'bg-red-500'     } },
+  { test: /dish/,                  tone: { text: 'text-lime-700',    chip: 'bg-lime-50 text-lime-700',       dot: 'bg-lime-500'    } },
+  // Expo — violet, distinct from server's purple by tone bias.
+  { test: /expo|pass/,             tone: { text: 'text-violet-700',  chip: 'bg-violet-50 text-violet-700',   dot: 'bg-violet-500'  } },
+]
+function roleTone(role: string): RoleTone {
+  const r = (role ?? '').toLowerCase().trim()
+  if (!r) return ROLE_GRAY
+  for (const m of ROLE_MAP) {
+    if (m.test.test(r)) return m.tone
+  }
+  return ROLE_GRAY
+}
+
+// ----------------------------------------------------------------
+// Role ordering for the bench + per-cell shift sort.
+//
+// The bench stays one continuous grid — no section headers — but
+// employees are sorted so people of the same role naturally line
+// up next to each other (Host, Host, Host, Server, Server, …).
+// Within a role, sort by name. Unknown roles drop to the end.
+//
+// FOH order: Manager → Host → Server → Bartender → Runner →
+//            Busser → Expo → other.
+// BOH order: Manager → Prep Cook → Line Cook → Cook → Dishwasher →
+//            other.
+// Unified houses use FOH order as the canonical ordering.
+// ----------------------------------------------------------------
+function roleSortIndex(role: string, house: 'foh' | 'boh'): number {
+  const r = (role ?? '').toLowerCase().trim()
+  if (house === 'boh') {
+    if (/manager|lead|supervis/.test(r))   return 1
+    if (/prep/.test(r))                    return 2
+    if (/line/.test(r))                    return 3
+    if (/cook|chef|grill/.test(r))         return 4
+    if (/dish/.test(r))                    return 5
+    return 99
+  }
+  // FOH (and unified) ordering.
+  if (/manager|lead|supervis/.test(r))     return 1
+  if (/host/.test(r))                      return 2
+  if (/server|wait/.test(r))               return 3
+  if (/bartender|bar(\s|$)/.test(r))       return 4
+  if (/runner/.test(r))                    return 5
+  if (/busser/.test(r))                    return 6
+  if (/expo|pass/.test(r))                 return 7
+  return 99
 }
 
 // HoursIndicator — restrained per-tier text label + optional pill.
@@ -163,9 +256,23 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
     return true
   }
   const locEmployees = employees.filter((e) => e.primaryLocationId === locationId)
-  const houseEmployees = isUnified
+  const houseEmployeesRaw = isUnified
     ? locEmployees
     : locEmployees.filter((e) => activeHouse === 'foh' ? isFohRole(e.role) : !isFohRole(e.role))
+  // Bench display order — by role priority, then by employee name.
+  // No grouped sections; the bench stays one continuous grid but
+  // people of the same role naturally line up next to each other.
+  const houseEmployees = [...houseEmployeesRaw].sort((a, b) => {
+    const aIdx = roleSortIndex(a.role, activeHouse)
+    const bIdx = roleSortIndex(b.role, activeHouse)
+    if (aIdx !== bIdx) return aIdx - bIdx
+    // Tie-break by exact role string so two roles that share an
+    // index (e.g. "Server" and "Head Server") still cluster.
+    if (a.role.toLowerCase() !== b.role.toLowerCase()) {
+      return a.role.localeCompare(b.role)
+    }
+    return a.name.localeCompare(b.name)
+  })
   const houseSections = isUnified ? sections : sections.filter((s) => s.area === activeHouse)
   const weekShifts = shifts.filter((s) => s.locationId === locationId && new Date(s.startTime) >= weekStart && new Date(s.startTime) < weekEnd)
 
@@ -191,17 +298,48 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
   // change is one edit — and every branch sees the same swap.
   const tone = {
     soft:        color === 'blue' ? 'bg-blue-50/70'           : 'bg-amber-50/70',
+    // Column tint — extra faint so it can wash a full vertical
+    // stripe through the grid without overwhelming the shift cards.
+    columnTint:  color === 'blue' ? 'bg-blue-50/30'           : 'bg-amber-50/30',
     softerHover: color === 'blue' ? 'bg-blue-50'              : 'bg-amber-50',
     text:        color === 'blue' ? 'text-blue-700'           : 'text-amber-700',
     dot:         color === 'blue' ? 'bg-blue-500'             : 'bg-amber-500',
     accentBar:   color === 'blue' ? 'bg-blue-500'             : 'bg-amber-500',
     todayText:   color === 'blue' ? 'text-blue-600'           : 'text-amber-600',
+    // Thin top accent on the selected day header, so the active
+    // column reads as deliberate without a heavy fill.
+    todayTop:    color === 'blue' ? 'border-t-2 border-blue-500'  : 'border-t-2 border-amber-500',
+    // Drop-target ring — used when a bench card is dragged over
+    // an empty schedule cell. Inset so it doesn't push layout.
+    dropRing:    color === 'blue' ? 'ring-1 ring-inset ring-blue-300' : 'ring-1 ring-inset ring-amber-300',
+    dropHint:    color === 'blue' ? 'text-blue-600'           : 'text-amber-600',
     countChip:   color === 'blue' ? 'bg-blue-50 text-blue-700': 'bg-amber-50 text-amber-700',
   }
 
-  const totalShiftsThisWeek = weekShifts.filter(
+  const houseWeekShifts = weekShifts.filter(
     (s) => houseSections.some((sec) => sec.id === s.sectionId)
-  ).length
+  )
+  const totalShiftsThisWeek = houseWeekShifts.length
+  // Weekly total hours for the active house (block-aligned shifts).
+  // Lightweight derived value — surfaced next to the shift count in
+  // the schedule header pill so a manager can read coverage at a
+  // glance ("6 shifts · 48h") without leaving the board.
+  const totalHoursThisWeek = houseWeekShifts.reduce((sum, s) => {
+    const start = new Date(s.startTime).getTime()
+    const end = new Date(s.endTime).getTime()
+    return Number.isFinite(start) && Number.isFinite(end) && end > start
+      ? sum + (end - start) / (1000 * 60 * 60)
+      : sum
+  }, 0)
+  // Covered-days count — distinct calendar days that have at least
+  // one block-aligned shift this week. Surfaces operational context
+  // ("48h, but only Tue + Wed?") that raw shift count can't.
+  const coveredDays = new Set(
+    houseWeekShifts.map((s) => {
+      const d = new Date(s.startTime)
+      return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+    }),
+  ).size
 
   // ----------------------------------------------------------------
   // Weekly scheduled hours per employee, computed from the shifts
@@ -368,11 +506,31 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold tracking-tight text-gray-900">Schedule</h2>
-            <p className="mt-0.5 text-[11px] text-gray-500 truncate">{weekLabel}</p>
+            <p className="mt-0.5 text-[11px] text-gray-500 truncate">
+              {weekLabel}
+              {houseSections.length > 0 && (
+                <>
+                  <span className="text-gray-300 px-1">·</span>
+                  {houseSections.length} block{houseSections.length === 1 ? '' : 's'}
+                </>
+              )}
+            </p>
           </div>
+          {/* Coverage chip — primary operational summary for the week.
+              Structure: "N shifts · Xh · Y covered days" when there is
+              coverage, else "no coverage scheduled" so a blank week
+              reads as intentional rather than just empty. */}
           <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
             {totalShiftsThisWeek} shift{totalShiftsThisWeek === 1 ? '' : 's'}
+            <span className="opacity-50">·</span>
+            <span className="tabular-nums">{formatHours(totalHoursThisWeek)}</span>
+            <span className="opacity-50">·</span>
+            {totalShiftsThisWeek > 0 ? (
+              <span>{coveredDays} covered day{coveredDays === 1 ? '' : 's'}</span>
+            ) : (
+              <span className="font-medium opacity-80">no coverage</span>
+            )}
           </span>
         </div>
 
@@ -386,7 +544,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             return (
               <div
                 key={i}
-                className={`px-1 py-2.5 text-center border-l border-gray-100 ${isToday ? tone.soft : ''}`}
+                className={`px-1 py-2.5 text-center border-l border-gray-100 ${isToday ? `${tone.soft} ${tone.todayTop} -mt-[2px]` : ''}`}
               >
                 <p className={`text-[11px] font-medium ${isToday ? tone.todayText : 'text-gray-500'}`}>{DAYS[i]}</p>
                 <p className={`text-sm font-semibold tabular-nums ${isToday ? tone.todayText : 'text-gray-900'}`}>{day.getDate()}</p>
@@ -415,15 +573,12 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
           // these rows are grouped.
           // ----------------------------------------------------------------
           const renderSectionRow = (section: Section) => (
-            <div key={section.id} className="grid grid-cols-[110px_repeat(7,1fr)] border-b border-gray-100 last:border-b-0">
+            <div key={section.id} className="grid grid-cols-[110px_repeat(7,1fr)] border-b border-gray-200 last:border-b-0">
               {/* Lane label — clickable to open the edit-block drawer.
-                  Affordance is hover-only by design: at rest the
-                  cell is clean and uncluttered. On hover the cell
-                  picks up a clearly-interactive treatment — a
-                  visibly stronger bg fill plus a 1px inset ring
-                  for a crisp pressed-pill feel — so the action
-                  reads as obviously editable the moment the manager
-                  arrives, while the resting state stays calm. */}
+                  Sits on a faint gray band so the lane reads as a
+                  deliberate schedule lane, not just a row of cells.
+                  Resting state stays calm; the hover treatment is
+                  strong enough to flag the cell as editable. */}
               <button
                 type="button"
                 onClick={() => setDrawer({
@@ -431,76 +586,80 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                   section,
                   shiftCount: shiftsBySection.get(section.id) ?? 0,
                 })}
-                className="text-left px-3 py-3 flex flex-col justify-center border-r border-gray-100 cursor-pointer transition-all hover:bg-gray-100 hover:ring-1 hover:ring-inset hover:ring-gray-400"
+                className="text-left px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80 cursor-pointer transition-all hover:bg-gray-100 hover:ring-1 hover:ring-inset hover:ring-gray-400"
                 aria-label={`Edit block ${section.name}`}
               >
-                <p className="text-xs font-semibold text-gray-900 leading-tight truncate">{section.name}</p>
-                <p className="text-[10px] text-gray-400 mt-0.5 tabular-nums">
+                <p className="text-[12px] font-bold text-gray-900 leading-tight truncate tracking-tight">{section.name}</p>
+                <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
                   {hL(section.defaultStartHour)}–{hL(section.defaultEndHour)}
                 </p>
               </button>
               {weekDays.map((day, dayIdx) => {
                 const cellKey = `${section.id}-${dayIdx}`
-                const cellShifts = weekShifts.filter((s) => s.sectionId === section.id && sameDay(new Date(s.startTime), day))
+                const isToday = sameDay(day, new Date())
+                // Sort cell shifts by role index then name so cards
+                // inside a block mirror the bench's role ordering.
+                const cellShifts = weekShifts
+                  .filter((s) => s.sectionId === section.id && sameDay(new Date(s.startTime), day))
+                  .sort((a, b) => {
+                    const ai = roleSortIndex(a.role, activeHouse)
+                    const bi = roleSortIndex(b.role, activeHouse)
+                    if (ai !== bi) return ai - bi
+                    return a.employeeName.localeCompare(b.employeeName)
+                  })
                 const isOver = dragOver === cellKey
+                const isEmpty = cellShifts.length === 0
                 return (
                   <div
                     key={dayIdx}
                     onDragOver={(e) => { e.preventDefault(); setDragOver(cellKey) }}
                     onDragLeave={() => setDragOver(null)}
                     onDrop={(e) => handleDrop(e, dayIdx, section.id)}
-                    // Strict vertical stack so cards always sit on a
-                    // shared baseline: items-stretch makes every card
-                    // fill the cell width, justify-start pins the
-                    // first card to the top, gap-1 owns the spacing
-                    // (no per-card mb-* drift). min-h keeps empty
-                    // cells visually consistent with one-card cells.
-                    className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 transition-colors ${
-                      isOver ? tone.softerHover : ''
+                    className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 transition-colors relative ${
+                      isOver
+                        ? `${tone.softerHover} ${tone.dropRing}`
+                        : isToday
+                          ? tone.columnTint
+                          : ''
                     }`}
                   >
-                    {cellShifts.map((shift) => (
-                      <button
-                        key={shift.id}
-                        type="button"
-                        onClick={() => setDrawer({ mode: 'edit', shift })}
-                        // Strict, deterministic card layout so cells
-                        // in the same row line up pixel-for-pixel:
-                        //   • h-[44px] — fixed height (not min-h),
-                        //     so every card occupies exactly the
-                        //     same footprint regardless of content.
-                        //   • flex flex-col justify-center — content
-                        //     centers within that footprint.
-                        //   • gap-[2px] — controlled spacing between
-                        //     the two lines, no child margins.
-                        //   • pl-3 reserves room for the 2px stripe.
-                        className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
-                      >
-                        {/* Identity accent bar — a 2px stripe on the
-                            left edge carries the FOH/BOH cue without
-                            flooding the card with color. */}
-                        <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${tone.accentBar}`} aria-hidden />
-                        {/* <span> with block + explicit pixel
-                            line-height so the text row is exactly
-                            14px tall on every render — no inherited
-                            leading variance to shift centering. */}
-                        <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
-                          {shift.employeeName}
-                        </span>
-                        {/* The role+time row is also pinned to a
-                            12px line-height. min-w-0 lets role
-                            truncate inside the flex; flex-shrink-0
-                            on the separator and time keeps them at
-                            full width when role gets long. */}
-                        <span className="flex items-center gap-1.5 leading-[12px] min-w-0">
-                          <span className={`text-[10px] font-medium truncate ${tone.text}`}>{shift.role}</span>
-                          <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                          <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
-                            {fmt(shift.startTime)}–{fmt(shift.endTime)}
+                    {/* Drop-hint — only renders mid-drag over an empty
+                        cell. Suppresses on cells that already hold
+                        shifts (the shift cards themselves are the
+                        affordance there) and on rest of the grid so
+                        the schedule stays calm. */}
+                    {isOver && isEmpty && (
+                      <p className={`text-[10px] font-medium text-center pointer-events-none ${tone.dropHint}`}>
+                        Drop shift here
+                      </p>
+                    )}
+                    {cellShifts.map((shift) => {
+                      const r = roleTone(shift.role)
+                      return (
+                        <button
+                          key={shift.id}
+                          type="button"
+                          onClick={() => setDrawer({ mode: 'edit', shift })}
+                          className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
+                        >
+                          {/* Role identity — thin left accent bar in the
+                              role color. Card itself stays white so shifts
+                              read clearly against the lane row background. */}
+                          <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${r.dot}`} aria-hidden />
+                          <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
+                            {shift.employeeName}
                           </span>
-                        </span>
-                      </button>
-                    ))}
+                          {/* Role text — same role tone for visual cohesion. */}
+                          <span className="flex items-center gap-1 leading-[12px] min-w-0">
+                            <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
+                            <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
+                            <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
+                              {fmt(shift.startTime)}–{fmt(shift.endTime)}
+                            </span>
+                          </span>
+                        </button>
+                      )
+                    })}
                   </div>
                 )
               })}
@@ -525,14 +684,18 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             if (!groups.has(key)) groups.set(key, [])
             groups.get(key)!.push(s)
           }
-          return [...groups.entries()].map(([role, group]) => (
+          // Only render the role-group eyebrow when there is more
+          // than one group to separate; a single "General" bucket
+          // would just be noise floating between the header and the
+          // first row of cells.
+          const groupEntries = [...groups.entries()]
+          return groupEntries.map(([role, group]) => (
             <div key={role}>
-              <div className="bg-gray-50/80 border-b border-gray-100 px-3 py-2 flex items-center gap-2">
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-                <p className={`text-[11px] font-semibold ${tone.text}`}>{role}</p>
-                <span className="text-gray-300 text-[11px]">·</span>
-                <p className="text-[11px] text-gray-500">{group.length} block{group.length === 1 ? '' : 's'}</p>
-              </div>
+              {groupEntries.length > 1 && (
+                <div className="border-b border-gray-100 px-3 py-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">{role}</p>
+                </div>
+              )}
               {group.map(renderSectionRow)}
             </div>
           ))
@@ -550,38 +713,50 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* right subset.                                                 */}
         {/* ============================================================ */}
         {customShifts.length > 0 && (
-          <div className="grid grid-cols-[110px_repeat(7,1fr)] border-t border-gray-100">
-            <div className="px-3 py-3 flex flex-col justify-center border-r border-gray-100 bg-gray-50/40">
-              <p className="text-xs font-semibold text-gray-700 leading-tight">Custom</p>
+          <div className="grid grid-cols-[110px_repeat(7,1fr)] border-t border-gray-200">
+            <div className="px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80">
+              <p className="text-[12px] font-bold text-gray-700 leading-tight tracking-tight">Custom</p>
               <p className="text-[10px] text-gray-500 mt-0.5">One-off shifts</p>
             </div>
             {weekDays.map((day, dayIdx) => {
-              const cellShifts = customShifts.filter((s) => sameDay(new Date(s.startTime), day))
+              const isToday = sameDay(day, new Date())
+              const cellShifts = customShifts
+                .filter((s) => sameDay(new Date(s.startTime), day))
+                .sort((a, b) => {
+                  const ai = roleSortIndex(a.role, activeHouse)
+                  const bi = roleSortIndex(b.role, activeHouse)
+                  if (ai !== bi) return ai - bi
+                  return a.employeeName.localeCompare(b.employeeName)
+                })
               return (
                 <div
                   key={dayIdx}
-                  className="min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100"
+                  className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 ${isToday ? tone.columnTint : ''}`}
                 >
-                  {cellShifts.map((shift) => (
-                    <button
-                      key={shift.id}
-                      type="button"
-                      onClick={() => setDrawer({ mode: 'edit', shift })}
-                      className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
-                    >
-                      <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${tone.accentBar}`} aria-hidden />
-                      <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
-                        {shift.employeeName}
-                      </span>
-                      <span className="flex items-center gap-1.5 leading-[12px] min-w-0">
-                        <span className={`text-[10px] font-medium truncate ${tone.text}`}>{shift.role}</span>
-                        <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                        <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
-                          {fmt(shift.startTime)}–{fmt(shift.endTime)}
+                  {cellShifts.map((shift) => {
+                    const r = roleTone(shift.role)
+                    return (
+                      <button
+                        key={shift.id}
+                        type="button"
+                        onClick={() => setDrawer({ mode: 'edit', shift })}
+                        className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
+                      >
+                        {/* Role-colored accent bar — matches the board cards above. */}
+                        <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${r.dot}`} aria-hidden />
+                        <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
+                          {shift.employeeName}
                         </span>
-                      </span>
-                    </button>
-                  ))}
+                        <span className="flex items-center gap-1 leading-[12px] min-w-0">
+                          <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
+                          <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
+                          <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
+                            {fmt(shift.startTime)}–{fmt(shift.endTime)}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 </div>
               )
             })}
@@ -598,15 +773,13 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-              <h2 className="text-sm font-semibold tracking-tight text-gray-900">
-                {isUnified ? 'Bench' : (activeHouse === 'foh' ? 'Bench · Front of House' : 'Bench · Back of House')}
-              </h2>
-            </div>
-            <p className="mt-0.5 text-[11px] text-gray-500">Drag onto a shift block to assign.</p>
+            <h2 className="text-sm font-semibold tracking-tight text-gray-900">
+              {isUnified ? 'Bench' : (activeHouse === 'foh' ? 'Bench · Front of House' : 'Bench · Back of House')}
+            </h2>
+            <p className="mt-0.5 text-[11px] text-gray-500">Available staff — drag onto a shift block.</p>
           </div>
-          <span className={`flex-shrink-0 inline-flex items-center text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
+          <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
             {houseEmployees.length} available
           </span>
         </div>
@@ -641,8 +814,6 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                     hoursLabel={hoursLabel}
                     weekHours={weekHours}
                     tier={tier}
-                    toneAccentBar={tone.accentBar}
-                    toneText={tone.text}
                     onClick={() => setDrawer({
                       mode: 'edit-employee',
                       employee: emp,
@@ -675,6 +846,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
           isUnified={isUnified}
           house={drawer.house}
           roles={isUnified ? fohRoles : (drawer.house === 'foh' ? fohRoles : bohRoles)}
+          weekHours={hoursByEmployee.get(drawer.employee.id) ?? 0}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -730,9 +902,38 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
       subtitle={`${shift.role} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`}
       onClose={onClose}
     >
+      {/* Sibling delete form — lives OUTSIDE the edit form so we
+          don't nest <form> elements (HTML disallows it and React
+          warns about hydration). The "Remove shift" button below
+          binds to this form by id via `form="staffing-delete-shift"`,
+          matching the pattern EditBlockDrawer uses for its delete. */}
+      <form id="staffing-delete-shift" action={dAction}>
+        <input type="hidden" name="shift_id" value={shift.id} />
+      </form>
+
       <form action={eAction} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="shift_id" value={shift.id} />
         <DrawerBody>
+          {(() => {
+            const role = roleTone(shift.role)
+            const startMs = new Date(shift.startTime).getTime()
+            const endMs = new Date(shift.endTime).getTime()
+            const hrs = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
+              ? (endMs - startMs) / (1000 * 60 * 60)
+              : 0
+            return (
+              <PreviewCard
+                eyebrow="Shift"
+                toneDot={role.dot}
+                title={`${shift.employeeName} · ${shift.role}`}
+                meta={[
+                  `${fmtMonthDay(shift.startTime)} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`,
+                  `${formatHours(hrs)} scheduled`,
+                ]}
+              />
+            )
+          })()}
+
           <Field label="Employee" htmlFor="es-employee">
             <select
               id="es-employee"
@@ -783,16 +984,18 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
 
         <DrawerFooter>
           <div className="flex items-center justify-between gap-3">
-            <form action={dAction}>
-              <input type="hidden" name="shift_id" value={shift.id} />
-              <button
-                type="submit"
-                disabled={dPending}
-                className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
-              >
-                {dPending ? 'Removing…' : 'Remove shift'}
-              </button>
-            </form>
+            {/* Bound to the sibling delete form above via form=""
+                so this button doesn't need to live inside its own
+                nested <form> (which would re-introduce the
+                hydration error). */}
+            <button
+              form="staffing-delete-shift"
+              type="submit"
+              disabled={dPending}
+              className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
+            >
+              {dPending ? 'Removing…' : 'Remove shift'}
+            </button>
             <button
               type="submit"
               disabled={ePending}
@@ -845,17 +1048,16 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
 // and so every staffing branch consumes the same component.
 // ----------------------------------------------------------------
 function BenchCard({
-  employee, hoursLabel, weekHours, tier, toneAccentBar, toneText, onClick,
+  employee, hoursLabel, weekHours, tier, onClick,
 }: {
   employee: Employee
   hoursLabel: string
   weekHours: number
   tier: HoursTier
-  toneAccentBar: string
-  toneText: string
   onClick: () => void
 }) {
   const draggingRef = useRef(false)
+  const role = roleTone(employee.role)
 
   return (
     <div
@@ -866,8 +1068,6 @@ function BenchCard({
         draggingRef.current = true
       }}
       onDragEnd={() => {
-        // Reset on next tick so a click event triggered after a
-        // drag-release-without-movement is suppressed.
         setTimeout(() => { draggingRef.current = false }, 0)
       }}
       onClick={() => {
@@ -877,16 +1077,20 @@ function BenchCard({
       title={`${employee.name} (${employee.role}) · ${hoursLabel} this week — drag onto a shift, or click to manage`}
       className="group relative min-w-[170px] rounded-lg border border-gray-200/90 bg-white pl-3 pr-3 py-2 cursor-grab active:cursor-grabbing select-none transition-all hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_2px_4px_rgba(15,23,42,0.05)] overflow-hidden"
     >
-      {/* Same 2px identity bar pattern as assigned shift cards. */}
-      <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${toneAccentBar}`} aria-hidden />
-      {/* Top row: name on the left, weekly-hours indicator on the
-          right. The HoursIndicator carries its own tier styling so
-          high-hour staff stand out without cluttering the card. */}
+      {/* Role identity — thin left accent bar in the role color. The
+          card body stays white so the bench reads as a neutral
+          surface; the role tone is the *signal*, not the *fill*. */}
+      <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${role.dot}`} aria-hidden />
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-semibold text-gray-900 leading-tight truncate">{employee.name}</p>
         <HoursIndicator hours={weekHours} tier={tier} />
       </div>
-      <p className={`text-[10px] mt-0.5 truncate ${toneText}`}>{employee.role}</p>
+      {/* Role label — role-toned text, no leading dot. The left
+          accent bar already anchors the role color, so the dot read
+          as redundant signal. */}
+      <p className={`text-[10px] font-medium mt-0.5 truncate ${role.text}`}>
+        {employee.role}
+      </p>
     </div>
   )
 }
@@ -901,11 +1105,12 @@ function BenchCard({
 // footer as a destructive secondary action — soft delete only;
 // historical shifts stay intact.
 // ----------------------------------------------------------------
-function EditEmployeeDrawer({ employee, isUnified, house, roles, onClose }: {
+function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onClose }: {
   employee: Employee
   isUnified: boolean
   house: 'foh' | 'boh'
   roles: string[]
+  weekHours: number
   onClose: () => void
 }) {
   const [state, action, pending] = useActionState(updateEmployee, null)
@@ -915,6 +1120,7 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, onClose }: {
   useAutoCloseOnSuccess(archPending, archState, onClose)
 
   const eyebrow = isUnified ? 'Team' : (house === 'foh' ? 'Front of House' : 'Back of House')
+  const role = roleTone(employee.role)
 
   // The role select needs to include the employee's CURRENT role
   // even if it's no longer in the active house's role list (e.g.
@@ -933,12 +1139,32 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, onClose }: {
     <DrawerShell
       eyebrow={eyebrow}
       title={`Manage ${employee.name}`}
-      subtitle="Edit details, change role, or archive."
+      subtitle="Edit role, pay, and employee status."
       onClose={onClose}
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="employee_id" value={employee.id} />
         <DrawerBody>
+          {/* Top summary — quick context strip so the drawer reads as
+              "this person's record" before any field. Role uses the
+              shared role tone; hours come from the schedule view the
+              parent maintains. */}
+          <SummaryCard
+            entries={[
+              { label: 'Role', value: (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${role.dot}`} aria-hidden />
+                  <span className={role.text}>{employee.role}</span>
+                </span>
+              ) },
+              { label: 'Scheduled', value: formatHours(weekHours) + ' this week' },
+              { label: 'House', value: isUnified ? 'Team' : (house === 'foh' ? 'Front of House' : 'Back of House') },
+              { label: 'Status', value: 'Active' },
+            ]}
+          />
+
+          <SectionLabel>Profile</SectionLabel>
+
           <Field label="Name" htmlFor="ee-name">
             <input
               id="ee-name"
@@ -1097,6 +1323,14 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="primary_location_id" value={locationId} />
         <DrawerBody>
+          <PreviewCard
+            eyebrow={eyebrow}
+            toneDot={isUnified || house === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
+            title="New employee"
+            meta={[`Will appear on the ${houseLabel} bench after creation.`]}
+            footer="Role and hourly rate can be changed later."
+          />
+
           <Field label="Name" htmlFor="ae-name">
             <input
               id="ae-name"
@@ -1352,6 +1586,82 @@ function Field({ label, htmlFor, optional, hint, children }: {
   )
 }
 
+// SectionLabel — small uppercase eyebrow that groups Field rows
+// inside a DrawerBody into named bands ("Profile", "Pay", "Time").
+// Used to break up otherwise blank-looking drawer forms.
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <p className="mt-1 mb-0.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+      {children}
+    </p>
+  )
+}
+
+// PreviewCard — small contextual card used at the top of every
+// staffing add/edit drawer so the drawer doesn't read as a blank
+// quick-action form. Title + 0..N meta lines + optional footer
+// note. Eyebrow + tiny tone dot (e.g. house blue/amber) keep the
+// card visually attached to the active context.
+function PreviewCard({
+  eyebrow,
+  toneDot,
+  title,
+  meta,
+  footer,
+}: {
+  eyebrow?: string
+  toneDot?: string
+  title: React.ReactNode
+  meta?: React.ReactNode[]
+  footer?: string
+}) {
+  return (
+    <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 px-3.5 py-3">
+      {eyebrow && (
+        <div className="flex items-center gap-1.5">
+          {toneDot && <span className={`w-1.5 h-1.5 rounded-full ${toneDot}`} aria-hidden />}
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            {eyebrow}
+          </p>
+        </div>
+      )}
+      <p className={`text-xs font-semibold text-gray-900 leading-tight truncate ${eyebrow ? 'mt-1' : ''}`}>
+        {title}
+      </p>
+      {meta && meta.length > 0 && (
+        <div className="mt-0.5 space-y-0.5">
+          {meta.map((m, i) => (
+            <p key={i} className="text-[11px] text-gray-500 leading-snug tabular-nums">{m}</p>
+          ))}
+        </div>
+      )}
+      {footer && (
+        <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed">{footer}</p>
+      )}
+    </div>
+  )
+}
+
+// SummaryCard — context strip shown at the top of edit drawers so
+// the drawer reads as "this thing, here's what it looks like" before
+// the manager hits the fields. Two-column key/value grid; cells stay
+// quiet (gray-400 label, gray-900 value) to avoid competing with the
+// form below.
+function SummaryCard({ entries }: { entries: Array<{ label: string; value: React.ReactNode }> }) {
+  return (
+    <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 px-3.5 py-3">
+      <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
+        {entries.map((e) => (
+          <div key={e.label} className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{e.label}</dt>
+            <dd className="mt-0.5 text-xs text-gray-900 truncate">{e.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  )
+}
+
 // Standard input/select chrome — h-10, neutral border, 40%-alpha
 // focus ring matching Finance's form rhythm. Compose with extra
 // classes via `extra` for amount-prefix or compact variants.
@@ -1393,6 +1703,17 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
   const [state, action, pending] = useActionState(createShiftSection, null)
   useAutoCloseOnSuccess(pending, state, onClose)
 
+  // Controlled state for the live preview card. Inputs were
+  // uncontrolled before; keeping the field UX identical and just
+  // wiring state through `value` + `onChange` lets the preview
+  // update as the manager types.
+  const [name, setName] = useState('')
+  const [area, setArea] = useState<'foh' | 'boh'>(isUnified ? 'foh' : defaultArea)
+  const [startHour, setStartHour] = useState(9)
+  const [endHour, setEndHour] = useState(17)
+
+  const areaLabel = area === 'foh' ? 'Front of House' : 'Back of House'
+
   return (
     <DrawerShell
       eyebrow="Block"
@@ -1402,6 +1723,14 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <DrawerBody>
+          <PreviewCard
+            eyebrow={isUnified ? 'Block' : `Block · ${areaLabel}`}
+            toneDot={area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
+            title={name.trim() || 'New block'}
+            meta={[`${hL(startHour)}–${hL(endHour)} · ${areaLabel}`]}
+            footer="Reusable schedule lane"
+          />
+
           {/* Area is hidden + locked in unified mode. In split mode
               it renders as an explicit field so the manager knows
               which house the new block belongs to. */}
@@ -1413,7 +1742,8 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 id="ab-area"
                 name="area"
                 required
-                defaultValue={defaultArea}
+                value={area}
+                onChange={(e) => setArea(e.target.value as 'foh' | 'boh')}
                 className={fieldInputClass}
               >
                 <option value="foh">Front of House</option>
@@ -1429,10 +1759,15 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
               type="text"
               required
               autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Brunch, Late, Event"
               className={fieldInputClass}
             />
           </Field>
+          <p className="text-[10.5px] text-gray-400 leading-relaxed">
+            Examples: Opening, Mid, Closing, Brunch, Prep, Service.
+          </p>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Start hour" htmlFor="ab-start">
@@ -1444,7 +1779,8 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 max={24}
                 step={1}
                 required
-                defaultValue={9}
+                value={startHour}
+                onChange={(e) => setStartHour(Number(e.target.value))}
                 className={`${fieldInputClass} tabular-nums`}
               />
             </Field>
@@ -1457,7 +1793,8 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 max={24}
                 step={1}
                 required
-                defaultValue={17}
+                value={endHour}
+                onChange={(e) => setEndHour(Number(e.target.value))}
                 className={`${fieldInputClass} tabular-nums`}
               />
             </Field>
@@ -1525,6 +1862,19 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="section_id" value={section.id} />
         <DrawerBody>
+          <PreviewCard
+            eyebrow={`Block · ${areaLabel}`}
+            toneDot={section.area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
+            title={section.name}
+            meta={[
+              `${hL(section.defaultStartHour)}–${hL(section.defaultEndHour)} · ${areaLabel}`,
+              shiftCount === 0
+                ? 'No shifts using this block yet'
+                : `${shiftCount} shift${shiftCount === 1 ? '' : 's'} use this block`,
+            ]}
+            footer="Reusable lane on the weekly schedule"
+          />
+
           <Field label="Block name" htmlFor="eb-name">
             <input
               id="eb-name"
@@ -1718,9 +2068,26 @@ function AddCustomShiftDrawer({
     }
   }
 
+  // Employee selection — controlled so the preview card above the
+  // form can update in real time as the cashier picks a person.
+  const [employeeId, setEmployeeId] = useState('')
+  const selectedEmployee = useMemo(
+    () => employees.find((e) => e.id === employeeId) ?? null,
+    [employees, employeeId],
+  )
+  const selectedSection = useMemo(
+    () => sections.find((s) => s.id === sectionId) ?? null,
+    [sections, sectionId],
+  )
+
   // datetime-local format the server expects: YYYY-MM-DDTHH:MM
   const composedStart = `${date}T${startTime}`
   const composedEnd = `${date}T${endTime}`
+  // Preview duration — computed from composed start/end so the
+  // preview card stays in lockstep with the form fields.
+  const previewMs = new Date(composedEnd).getTime() - new Date(composedStart).getTime()
+  const previewHrs = Number.isFinite(previewMs) && previewMs > 0 ? previewMs / (1000 * 60 * 60) : 0
+  const previewRole = selectedEmployee ? roleTone(selectedEmployee.role) : null
 
   return (
     <DrawerShell
@@ -1752,12 +2119,28 @@ function AddCustomShiftDrawer({
           <input type="hidden" name="section_id" value={sectionId} />
 
           <DrawerBody>
+            <PreviewCard
+              eyebrow="Shift"
+              toneDot={previewRole?.dot}
+              title={
+                selectedEmployee
+                  ? `${selectedEmployee.name} · ${selectedEmployee.role}`
+                  : 'Unassigned'
+              }
+              meta={[
+                `${fmtMonthDay(composedStart)} · ${fmt(composedStart)}–${fmt(composedEnd)}`,
+                `${formatHours(previewHrs)} scheduled`,
+                ...(selectedSection ? [`Block: ${selectedSection.name}`] : []),
+              ]}
+            />
+
             <Field label="Employee" htmlFor="cs-emp">
               <select
                 id="cs-emp"
                 name="employee_id"
                 required
-                defaultValue=""
+                value={employeeId}
+                onChange={(e) => setEmployeeId(e.target.value)}
                 className={fieldInputClass}
               >
                 <option value="" disabled>Select…</option>

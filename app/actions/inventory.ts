@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { getAuthContext, resolveLocationId, logAudit, formatError } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
+import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
 
 // Graceful wrapper so existing { error: string } action returns stay
 // intact. Each operational write that targets a specific location
@@ -30,18 +31,43 @@ export async function createInventoryItem(
   const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
   if (locAuthErr) return { error: locAuthErr }
 
-  const name = (formData.get('name') as string)?.trim()
+  // Normalize on the way in. Display name = title-cased, trimmed,
+  // single-spaced. Key = lowercase version used to compare against
+  // existing rows so casing/whitespace differences collide cleanly.
+  const rawName = (formData.get('name') as string) ?? ''
+  const displayName = normalizeDisplayName(rawName)
+  const nameKey = normalizeNameKey(rawName)
   const unitOfMeasure = (formData.get('unit_of_measure') as string)?.trim() || 'units'
   const thresholdRaw = formData.get('low_stock_threshold') as string
   const threshold = thresholdRaw ? parseFloat(thresholdRaw) : 5
 
-  if (!name) return { error: 'Item name is required.' }
+  if (!displayName) return { error: 'Item name is required.' }
   if (isNaN(threshold) || threshold < 0) return { error: 'Threshold must be 0 or more.' }
+
+  // Duplicate guard — case-insensitive + whitespace-normalized. Scoped
+  // to active inventory items in this restaurant (RLS gates the row
+  // set; we additionally filter `active=true` so an archived prior
+  // row doesn't block a new create). Collision compares the normalized
+  // key, so "mushroom", "MUSHROOM", and "  Mushroom  " all collide
+  // with a stored "Mushroom".
+  const { data: existingItems } = await ctx.supabase
+    .from('inventory_items')
+    .select('id, name')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('active', true)
+  const collision = (existingItems ?? []).find(
+    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+  )
+  if (collision) {
+    return {
+      error: `An inventory item named ${normalizeDisplayName((collision.name as string) ?? '')} already exists.`,
+    }
+  }
 
   const { error } = await ctx.supabase.from('inventory_items').insert({
     restaurant_id: ctx.restaurantId,
     location_id: locationId,
-    name,
+    name: displayName,
     unit_of_measure: unitOfMeasure,
     low_stock_threshold: threshold,
     source: 'manual',
@@ -312,7 +338,13 @@ export async function createRestockOrder(
     return { error: 'Quantity must be greater than zero.' }
   }
 
-  const vendor = ((formData.get('vendor') as string)?.trim()) || null
+  // Vendor is a short user-created business name → normalize display
+  // form (title-case, collapsed whitespace). No vendor entity table
+  // exists, so we don't dedupe — managers may type "Sysco Foods"
+  // repeatedly; normalizing the display form is enough to keep the
+  // restock list clean.
+  const vendorRaw = ((formData.get('vendor') as string) ?? '').trim()
+  const vendor = vendorRaw ? normalizeDisplayName(vendorRaw) : null
   const notes = ((formData.get('notes') as string)?.trim()) || null
   const costRaw = (formData.get('expected_cost') as string)?.trim()
   const expectedCost = costRaw ? parseFloat(costRaw) : null
@@ -953,8 +985,8 @@ export async function updateRestockOrderDetails(
   const update: Record<string, string | number | null> = {}
 
   if (formData.has('vendor')) {
-    const vendor = ((formData.get('vendor') as string) ?? '').trim()
-    update.vendor = vendor.length > 0 ? vendor : null
+    const vendorRaw = ((formData.get('vendor') as string) ?? '').trim()
+    update.vendor = vendorRaw.length > 0 ? normalizeDisplayName(vendorRaw) : null
   }
 
   if (formData.has('expected_cost')) {
@@ -1085,8 +1117,9 @@ export async function placeRestockTicket(
   if (orderIds.length === 0) return { error: 'Add at least one item to the ticket.' }
 
   // Ticket-level fields. Vendor is required; the rest are optional.
-  const vendor = ((formData.get('vendor') as string) ?? '').trim()
-  if (!vendor) return { error: 'Vendor is required to create the order ticket.' }
+  const vendorRaw = ((formData.get('vendor') as string) ?? '').trim()
+  if (!vendorRaw) return { error: 'Vendor is required to create the order ticket.' }
+  const vendor = normalizeDisplayName(vendorRaw)
 
   const totalRaw = ((formData.get('expected_total') as string) ?? '').trim()
   let totalCost: number | null = null

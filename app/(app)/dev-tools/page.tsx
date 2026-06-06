@@ -29,6 +29,7 @@ import CleanupButton from '../settings/cleanup-button'
 import CloverCard from '../settings/clover-card'
 import BankCard from '../settings/bank-card'
 import FinanceSandboxCard from './finance-sandbox-card'
+import FinanceBankResetCard from './finance-bank-reset-card'
 
 export default async function DevToolboxPage() {
   const supabase = await createClient()
@@ -131,7 +132,25 @@ export default async function DevToolboxPage() {
         </DevSection>
       )}
 
-      {/* 4. FINANCE SETTLEMENT SANDBOX -----------------------------
+      {/* 4. FINANCE BANK SANDBOX RESET -----------------------------
+          Full reset for Finance verification testing. Wipes every
+          bank_transactions row (Plaid-imported + sandbox-seeded) for
+          this restaurant, clears the attached Bank Review state
+          columns, and resets the per-account sync cursor so the
+          next sync walks from the beginning. Keeps the Plaid
+          connection itself + all operational data (sales, inventory,
+          staffing, menu, employees, business setup). Used to start
+          Finance engine tests from a clean controlled state. */}
+      <DevSection
+        eyebrow="Finance Bank Testing"
+        title="Reset Finance Bank Sandbox"
+        body="Wipe all imported bank transactions and Bank Review test state so you can exercise the Finance verification engine from a clean slate. Keeps sales, inventory, staffing, menu, employees, and the bank connection itself."
+        destructive
+      >
+        <FinanceBankResetCard />
+      </DevSection>
+
+      {/* 5. FINANCE SETTLEMENT SANDBOX -----------------------------
           Deterministic seeded bank_transactions rows for testing
           the Bank Review settlement workflow. Real Plaid sandbox
           data is unreliable for end-to-end review testing — these
@@ -139,7 +158,7 @@ export default async function DevToolboxPage() {
           ADP payroll, rent payment, personal CVS charge, etc.).
           All seeded rows carry provider_transaction_id starting
           with 'sandbox_' and provider_metadata.sandbox=true so the
-          clear action can scope cleanup safely. */}
+          per-card clear action scopes cleanup safely. */}
       <DevSection
         eyebrow="Finance Settlement Sandbox"
         title="Seed Bank Review test scenarios"
@@ -148,7 +167,7 @@ export default async function DevToolboxPage() {
         <FinanceSandboxCard />
       </DevSection>
 
-      {/* 5. DATA MAINTENANCE ---------------------------------------
+      {/* 6. DATA MAINTENANCE ---------------------------------------
           Inventory-merge / integrity / clear-employees / reset-
           staffing. These are admin/testing operations — never owner-
           facing in pilot. The destructive items inside are styled

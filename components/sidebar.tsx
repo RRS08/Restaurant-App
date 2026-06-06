@@ -42,6 +42,7 @@ import {
   ShoppingCart,
   BarChart3,
   Wrench,
+  X,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
@@ -128,6 +129,11 @@ interface SidebarProps {
   /** Dev override — when true, every link is shown regardless of
    *  mode so the testing workflow can hit both surfaces. */
   isDev: boolean
+  /** Tablet-only — fired when a nav item is selected. AppShell uses
+   *  this to close the tablet overlay automatically so the manager
+   *  lands on the new page without an extra dismiss step. No-op on
+   *  desktop where the sidebar is always visible. */
+  onNavigate?: () => void
 }
 
 export default function Sidebar({
@@ -136,6 +142,7 @@ export default function Sidebar({
   userEmail,
   operatingMode,
   isDev,
+  onNavigate,
 }: SidebarProps) {
   // Visibility filter:
   //   • `dev: true` items render for dev accounts only. The page
@@ -160,8 +167,8 @@ export default function Sidebar({
     <aside className="w-60 min-h-screen bg-white border-r border-gray-200 flex flex-col">
 
       {/* ---- Top: Restaurant brand ---- */}
-      <div className="px-4 py-4 border-b border-gray-100">
-        <div className="flex items-center gap-2.5">
+      <div className="px-4 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2.5 min-w-0">
           {/* Logo placeholder — replace with an actual logo image later */}
           <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
             <ChefHat className="w-4 h-4 text-white" />
@@ -170,6 +177,21 @@ export default function Sidebar({
             {restaurantName}
           </span>
         </div>
+        {/* Tablet-only close — only renders if onNavigate is wired
+            (i.e. when the sidebar is mounted inside the tablet
+            overlay). `xl:hidden` keeps it off the desktop sidebar
+            even when the prop is present, so desktop stays
+            visually identical. */}
+        {onNavigate && (
+          <button
+            type="button"
+            onClick={onNavigate}
+            aria-label="Close menu"
+            className="xl:hidden flex-shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* ---- Middle: Navigation links ---- */}
@@ -187,6 +209,7 @@ export default function Sidebar({
             <Link
               key={item.href}
               href={item.href}
+              onClick={onNavigate}
               className={cn(
                 // Base styles that apply to every link
                 'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',

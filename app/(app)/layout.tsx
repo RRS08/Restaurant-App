@@ -21,6 +21,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/sidebar'
+import AppShell from './app-shell'
 import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
 
@@ -78,33 +79,27 @@ export default async function AppLayout({
   const isDev = isDevEmail(user.email)
 
   // ---- Render the shell ----
+  // AppShell is a Client Component that owns the responsive sidebar
+  // state. It receives a render-prop for the sidebar so this server
+  // component can stay clean — auth/data on the server, interaction
+  // state in the client wrapper.
+  //
+  // The sidebar's `onNavigate` prop is wired by AppShell so picking
+  // a nav item on tablet automatically closes the overlay.
   return (
-    <div className="flex min-h-screen bg-gray-50">
-
-      {/*
-        Sidebar receives the data it needs as props.
-        It's a Client Component so it can use usePathname() for active links.
-        Server Components CAN render Client Components — they just can't use
-        hooks themselves.
-      */}
-      <Sidebar
-        restaurantName={restaurant?.name ?? 'My Restaurant'}
-        userFullName={profile?.full_name ?? null}
-        userEmail={user.email ?? ''}
-        operatingMode={operatingMode}
-        isDev={isDev}
-      />
-
-      {/*
-        Main content area.
-        `children` is whatever page is currently active:
-        DashboardPage, SalesPage, SettingsPage, etc.
-        Each page is responsible for its own title and content.
-      */}
-      <main className="flex-1 overflow-y-auto p-8">
-        {children}
-      </main>
-
-    </div>
+    <AppShell
+      sidebar={({ onNavigate }) => (
+        <Sidebar
+          restaurantName={restaurant?.name ?? 'My Restaurant'}
+          userFullName={profile?.full_name ?? null}
+          userEmail={user.email ?? ''}
+          operatingMode={operatingMode}
+          isDev={isDev}
+          onNavigate={onNavigate}
+        />
+      )}
+    >
+      {children}
+    </AppShell>
   )
 }

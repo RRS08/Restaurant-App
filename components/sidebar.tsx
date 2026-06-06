@@ -29,6 +29,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { logout } from '@/app/actions/auth'
+import { useSidebarClose } from '@/app/(app)/app-shell'
 import {
   LayoutDashboard,
   UtensilsCrossed,
@@ -129,11 +130,6 @@ interface SidebarProps {
   /** Dev override — when true, every link is shown regardless of
    *  mode so the testing workflow can hit both surfaces. */
   isDev: boolean
-  /** Tablet-only — fired when a nav item is selected. AppShell uses
-   *  this to close the tablet overlay automatically so the manager
-   *  lands on the new page without an extra dismiss step. No-op on
-   *  desktop where the sidebar is always visible. */
-  onNavigate?: () => void
 }
 
 export default function Sidebar({
@@ -142,8 +138,14 @@ export default function Sidebar({
   userEmail,
   operatingMode,
   isDev,
-  onNavigate,
 }: SidebarProps) {
+  // Tablet overlay close handler — pulled from AppShell's React
+  // Context. `null` on desktop (sidebar always visible) or when
+  // mounted outside AppShell. Called on nav-item click to close
+  // the slide-in overlay so the manager lands cleanly on the new
+  // page. NEVER passed in as a prop — that would put a function
+  // across the server/client boundary and crash the Vercel runtime.
+  const closeSidebar = useSidebarClose()
   // Visibility filter:
   //   • `dev: true` items render for dev accounts only. The page
   //     itself is server-side guarded; this is a convenience.
@@ -177,15 +179,15 @@ export default function Sidebar({
             {restaurantName}
           </span>
         </div>
-        {/* Tablet-only close — only renders if onNavigate is wired
-            (i.e. when the sidebar is mounted inside the tablet
-            overlay). `xl:hidden` keeps it off the desktop sidebar
-            even when the prop is present, so desktop stays
-            visually identical. */}
-        {onNavigate && (
+        {/* Tablet-only close — only renders when AppShell is
+            providing a close handler via Context (i.e. when the
+            sidebar is mounted inside the tablet overlay). The
+            `xl:hidden` class also hides it on desktop even when
+            present, so desktop stays visually identical. */}
+        {closeSidebar && (
           <button
             type="button"
-            onClick={onNavigate}
+            onClick={closeSidebar}
             aria-label="Close menu"
             className="xl:hidden flex-shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
           >
@@ -209,7 +211,7 @@ export default function Sidebar({
             <Link
               key={item.href}
               href={item.href}
-              onClick={onNavigate}
+              onClick={closeSidebar ?? undefined}
               className={cn(
                 // Base styles that apply to every link
                 'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',

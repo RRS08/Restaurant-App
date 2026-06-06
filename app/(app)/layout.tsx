@@ -80,24 +80,23 @@ export default async function AppLayout({
 
   // ---- Render the shell ----
   // AppShell is a Client Component that owns the responsive sidebar
-  // state. It receives a render-prop for the sidebar so this server
-  // component can stay clean — auth/data on the server, interaction
-  // state in the client wrapper.
-  //
-  // The sidebar's `onNavigate` prop is wired by AppShell so picking
-  // a nav item on tablet automatically closes the overlay.
+  // state. The Sidebar element is passed as a serializable JSX
+  // node (NOT a render-prop function) so it can safely cross the
+  // server→client boundary. The "close on nav-item click"
+  // behavior is wired through a React Context inside AppShell;
+  // Sidebar consumes it via the useSidebarClose() hook — no
+  // function ever travels from server to client.
   return (
     <AppShell
-      sidebar={({ onNavigate }) => (
+      sidebar={
         <Sidebar
           restaurantName={restaurant?.name ?? 'My Restaurant'}
           userFullName={profile?.full_name ?? null}
           userEmail={user.email ?? ''}
           operatingMode={operatingMode}
           isDev={isDev}
-          onNavigate={onNavigate}
         />
-      )}
+      }
     >
       {children}
     </AppShell>

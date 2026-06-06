@@ -368,7 +368,7 @@ export default function DashboardClient(props: Props) {
       {/* The left card answers "what should I notice?"; the right       */}
       {/* answers "what can I do right now?".                            */}
       {/* ============================================================ */}
-      <div className="grid gap-4 grid-cols-1 xl:grid-cols-5 mb-5">
+      <div className="grid gap-4 grid-cols-1 lg:grid-cols-5 mb-5">
 
         {/* LEFT — Operating Pressure (col-span-3). A weekly chart
             of derived pressure (sales × demand factor, capped to
@@ -1005,7 +1005,7 @@ function OperatingPressureCard({
     // overflow-visible (not overflow-hidden) so the hover tooltip
     // can extend above the chart without being clipped by the
     // card's rounded mask.
-    <div className="xl:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-visible flex flex-col">
+    <div className="lg:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-visible flex flex-col">
       {/* Header */}
       <div className="border-b border-gray-100 px-5 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
@@ -1195,7 +1195,7 @@ function QuickActionsCard() {
   ]
 
   return (
-    <div className="xl:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
+    <div className="lg:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
           Quick actions
@@ -1533,7 +1533,7 @@ function ManagerTodoDrawer({
         className="absolute inset-0 bg-gray-900/30 z-0"
       />
       {/* Panel — relative + z-10 so it captures its own clicks. */}
-      <aside className="relative z-10 ml-auto h-full w-full max-w-md bg-white shadow-xl flex flex-col">
+      <aside className="relative z-10 ml-auto h-full w-full max-w-md md:max-w-lg lg:max-w-md bg-white shadow-xl flex flex-col">
         {/* Header */}
         <div className="border-b border-gray-100 px-5 py-4 flex items-start justify-between gap-3">
           <div>

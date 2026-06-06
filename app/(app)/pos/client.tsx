@@ -325,7 +325,12 @@ export default function PosClient({
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-6">
+      {/* iPad landscape (≈1024–1180px main width with sidebar) still
+          activates the side-by-side via `lg:`. The right panel
+          narrows to 340px between lg and xl so the item grid has
+          enough room to render 3 tiles per row on iPad landscape;
+          on desktop (xl+) the panel returns to its 400px width. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_400px] lg:gap-6">
 
         {/* ================= LEFT: Menu ================= */}
         <div className="min-w-0">
@@ -355,7 +360,7 @@ export default function PosClient({
               <p className="mt-1 text-xs text-gray-500">Add menu items to start selling.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {visibleItems.map((item) => (
                 <ItemTile key={item.id} item={item} onAdd={() => addItem(item)} />
               ))}
@@ -1314,7 +1319,7 @@ function CheckoutDrawer({
         onClick={onClose}
         className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
       />
-      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
         {/* Header — trimmed. The "N items · pick a method" subtitle
             moved into the hero amount block below; the header now
@@ -1517,7 +1522,7 @@ function OrderItemDrawer({
         onClick={onClose}
         className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
       />
-      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
         {/* Header — single price mention only. Per-unit price reads
             as quiet supporting context under the name. Line total

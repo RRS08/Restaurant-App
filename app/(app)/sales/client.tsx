@@ -588,7 +588,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
         onClick={onClose}
         className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
       />
-      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
         {/* HEADER — Order # + status pill, then a "Status · Source ·
             Payment" meta line so the cashier reads the order's

@@ -299,7 +299,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               All three open drawers — there's no permanent rail
               anymore; the page stays focused on the list. */}
           <div className="mb-5 flex flex-wrap items-center gap-2.5">
-            <div className="relative flex-1 min-w-[280px]">
+            <div className="relative flex-1 min-w-[180px] sm:min-w-[280px]">
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
               </svg>
@@ -595,7 +595,7 @@ function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
       <aside
-        className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
+        className="fixed right-0 top-0 bottom-0 w-full max-w-md md:max-w-lg lg:max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
         aria-label={title}
       >
         <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
@@ -3797,7 +3797,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
     <>
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
       <aside
-        className="fixed right-0 top-0 bottom-0 w-full max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
+        className="fixed right-0 top-0 bottom-0 w-full max-w-md md:max-w-lg lg:max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
         aria-label={`${item.name} workspace`}
       >
         {/* Sticky header — same family as Staffing's drawers. The
@@ -4634,7 +4634,7 @@ function MergeItemsDrawer({
         onClick={onClose}
         className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
       />
-      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
         {/* Header */}
         <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">

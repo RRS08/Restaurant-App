@@ -1148,7 +1148,7 @@ function Drawer({ open, onClose, title, subtitle, children }: {
         aria-hidden={!open}
       />
       <aside
-        className={`fixed top-0 right-0 z-50 h-full w-full sm:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col transform transition-transform duration-200 ${
+        className={`fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col transform transition-transform duration-200 ${
           open ? 'translate-x-0' : 'translate-x-full'
         }`}
         aria-hidden={!open}

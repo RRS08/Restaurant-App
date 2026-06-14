@@ -13,6 +13,7 @@
 import { useActionState } from 'react'
 import Link from 'next/link'
 import { signup } from '@/app/actions/auth'
+import { BrandLockup } from '@/components/brand'
 
 export default function SignupPage() {
   const [state, action, pending] = useActionState(signup, null)
@@ -21,11 +22,14 @@ export default function SignupPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm">
 
-        {/* Header */}
+        {/* Header — brand lockup, then the contextual greeting. */}
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-gray-900">Create your account</h1>
+          <Link href="/" className="inline-flex">
+            <BrandLockup size="md" variant="solid" />
+          </Link>
+          <h1 className="mt-6 text-2xl font-bold text-gray-900 tracking-tight">Create your account</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Get started with your restaurant management app
+            Get started with Checked — operations for your restaurant in one place.
           </p>
         </div>
 

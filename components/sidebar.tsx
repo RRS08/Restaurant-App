@@ -30,6 +30,7 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { logout } from '@/app/actions/auth'
 import { useSidebarClose } from '@/app/(app)/app-shell'
+import { BrandMark, BrandWordmark } from '@/components/brand'
 import {
   LayoutDashboard,
   UtensilsCrossed,
@@ -39,7 +40,6 @@ import {
   DollarSign,
   Settings,
   LogOut,
-  ChefHat,
   ShoppingCart,
   BarChart3,
   Wrench,
@@ -168,17 +168,17 @@ export default function Sidebar({
   return (
     <aside className="w-60 min-h-screen bg-white border-r border-gray-200 flex flex-col">
 
-      {/* ---- Top: Restaurant brand ---- */}
+      {/* ---- Top: Product mark + tenant identity ----
+           The Checked mark is the product brand; the tenant name
+           sits beside it so a manager always sees "this is Checked
+           running for <my restaurant>". Multi-tenant pattern. */}
       <div className="px-4 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2.5 min-w-0">
-          {/* Logo placeholder — replace with an actual logo image later */}
-          <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center flex-shrink-0">
-            <ChefHat className="w-4 h-4 text-white" />
-          </div>
-          <span className="font-semibold text-gray-900 text-sm leading-tight truncate">
+        <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0 group">
+          <BrandMark size={32} variant="solid" className="flex-shrink-0 rounded-lg" />
+          <span className="font-semibold text-gray-900 text-sm leading-tight truncate group-hover:text-gray-700 transition-colors">
             {restaurantName}
           </span>
-        </div>
+        </Link>
         {/* Tablet-only close — only renders when AppShell is
             providing a close handler via Context (i.e. when the
             sidebar is mounted inside the tablet overlay). The
@@ -263,6 +263,16 @@ export default function Sidebar({
             Sign out
           </button>
         </form>
+
+        {/* Product wordmark — calm, small, sits below the user
+            block to anchor the sidebar with the brand without
+            competing with the tenant name at the top. */}
+        <div className="mt-3 px-3 pt-3 border-t border-gray-100 flex items-center justify-between">
+          <BrandWordmark size="sm" className="text-gray-400" />
+          <span className="text-[10px] text-gray-300 font-medium tabular-nums">
+            v1
+          </span>
+        </div>
       </div>
 
     </aside>

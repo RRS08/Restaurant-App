@@ -18,6 +18,7 @@
 import { useActionState } from 'react'
 import Link from 'next/link'
 import { login } from '@/app/actions/auth'
+import { BrandLockup } from '@/components/brand'
 
 export default function LoginPage() {
   const [state, action, pending] = useActionState(login, null)
@@ -26,10 +27,14 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm">
 
-        {/* Header */}
+        {/* Header — brand lockup as the first thing the user sees,
+            then the contextual greeting underneath. */}
         <div className="mb-8 text-center">
-          <h1 className="text-2xl font-bold text-gray-900">Welcome back</h1>
-          <p className="mt-1 text-sm text-gray-500">Sign in to your restaurant account</p>
+          <Link href="/" className="inline-flex">
+            <BrandLockup size="md" variant="solid" />
+          </Link>
+          <h1 className="mt-6 text-2xl font-bold text-gray-900 tracking-tight">Welcome back</h1>
+          <p className="mt-1 text-sm text-gray-500">Sign in to your Checked account</p>
         </div>
 
         {/* Card */}

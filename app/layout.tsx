@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Restaurant App",
-  description: "Multi-tenant restaurant operations platform",
+  title: "Checked — Restaurant operations, checked.",
+  description:
+    "Sales, inventory, staffing, and finance for restaurants — one surface, one truth, one tap to the next thing that needs attention.",
 };
 
 // Viewport meta — required for tablet (iPad) Safari to render at

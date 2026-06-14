@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120" viewBox="0 0 120 120" role="img" aria-label="Checked">
+  <title>Checked</title>
+  <rect width="120" height="120" rx="28" fill="#18181B"/>
+  <g transform="translate(8.8,8.8) scale(1.6)">
+    <path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#FAF9F6"/>
+    <rect x="26" y="16" width="14" height="3" rx="1.5" fill="#18181B"/>
+    <rect x="26" y="23" width="11" height="3" rx="1.5" fill="#18181B"/>
+    <rect x="26" y="30" width="8" height="3" rx="1.5" fill="#18181B"/>
+    <path d="M27 41l4 4 8-9" fill="none" stroke="#18181B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

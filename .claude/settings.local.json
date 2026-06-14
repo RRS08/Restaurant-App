@@ -22,7 +22,9 @@
       "Bash(echo \"TSC_EXIT=$?\")",
       "Bash(npm run *)",
       "Bash(echo \"LINT_EXIT=$?\")",
-      "Bash(echo \"BUILD_EXIT=$?\")"
+      "Bash(echo \"BUILD_EXIT=$?\")",
+      "Bash(echo \"TSC=$?\")",
+      "Bash(echo \"BUILD=$?\")"
     ]
   }
 }

@@ -297,7 +297,7 @@ export default function DashboardClient(props: Props) {
         </div>
         {/* Truthful render-time stamp. Not live — accurate as of the
             request that produced this view. */}
-        <p className="text-[11px] text-gray-500 tabular-nums">
+        <p className="text-[11px] text-gray-500 font-mono tabular-nums">
           Updated {renderedAt}
         </p>
       </div>
@@ -418,7 +418,7 @@ export default function DashboardClient(props: Props) {
         {/* Recent movement — proof the system is alive */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Recent movement
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -518,7 +518,7 @@ function DailyStatusCard({
       className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-4 hover:border-gray-300 hover:shadow-md transition-all block ${accent}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           {label}
         </p>
         <span
@@ -528,7 +528,7 @@ function DailyStatusCard({
           {status}
         </span>
       </div>
-      <p className={`mt-2 text-xl font-bold tabular-nums leading-tight ${valueTone}`}>
+      <p className={`mt-2 text-xl font-bold font-mono tabular-nums leading-tight ${valueTone}`}>
         {value}
       </p>
       <p className="mt-0.5 text-[11px] text-gray-500 truncate">{sub}</p>
@@ -642,7 +642,7 @@ function StatusCarousel({
     >
       {/* Header — identity row stays stable while inner content rotates. */}
       <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           {label}
         </p>
         <span
@@ -666,7 +666,7 @@ function StatusCarousel({
             aria-hidden={i === idx ? undefined : 'true'}
           >
             <p className="text-[10px] font-medium text-gray-500 leading-none">{m.title}</p>
-            <p className="mt-1 text-xl font-bold tabular-nums leading-tight text-gray-900">
+            <p className="mt-1 text-xl font-bold font-mono tabular-nums leading-tight text-gray-900">
               {m.value}
             </p>
             <p className="mt-0.5 text-[11px] text-gray-500 truncate">{m.sub}</p>
@@ -1008,7 +1008,7 @@ function OperatingPressureCard({
     <div className="lg:col-span-3 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-visible flex flex-col">
       {/* Header */}
       <div className="border-b border-gray-100 px-5 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Operating pressure
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1111,20 +1111,20 @@ function OperatingPressureCard({
                     </p>
                     <p className="mt-1.5 text-[10px] text-gray-600">
                       Sales:{' '}
-                      <span className="font-semibold text-gray-800 tabular-nums">{MONEY(d.value)}</span>
+                      <span className="font-semibold text-gray-800 font-mono tabular-nums">{MONEY(d.value)}</span>
                       {d.orders > 0 && (
                         <span className="text-gray-500"> · {d.orders} order{d.orders === 1 ? '' : 's'}</span>
                       )}
                     </p>
                     <p className="text-[10px] text-gray-600">
                       Staffing:{' '}
-                      <span className="font-semibold text-gray-800 tabular-nums">
+                      <span className="font-semibold text-gray-800 font-mono tabular-nums">
                         {shifts === 0 ? 'No shifts' : `${shifts} shift${shifts === 1 ? '' : 's'}`}
                       </span>
                     </p>
                     <p className="text-[10px] text-gray-600">
                       Inventory risk:{' '}
-                      <span className={`font-semibold tabular-nums ${stockPressure > 0 ? 'text-amber-700' : 'text-gray-800'}`}>
+                      <span className={`font-semibold font-mono tabular-nums ${stockPressure > 0 ? 'text-amber-700' : 'text-gray-800'}`}>
                         {stockPressure} item{stockPressure === 1 ? '' : 's'} at risk
                       </span>
                     </p>
@@ -1197,7 +1197,7 @@ function QuickActionsCard() {
   return (
     <div className="lg:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Quick actions
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1354,7 +1354,7 @@ function ManagerTodoCard({
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-4 py-3 flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Manager to-do
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1362,7 +1362,7 @@ function ManagerTodoCard({
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
-          <span className="text-[10px] font-semibold tabular-nums text-gray-500">
+          <span className="text-[10px] font-semibold font-mono tabular-nums text-gray-500">
             {doneCount}/{items.length}
           </span>
           <button
@@ -1427,7 +1427,7 @@ function ManagerTodoCard({
               >
                 ← Prev
               </button>
-              <span className="text-[10px] font-semibold tabular-nums text-gray-500">
+              <span className="text-[10px] font-semibold font-mono tabular-nums text-gray-500">
                 Page {safePage + 1} of {pageCount}
               </span>
               <button
@@ -1537,7 +1537,7 @@ function ManagerTodoDrawer({
         {/* Header */}
         <div className="border-b border-gray-100 px-5 py-4 flex items-start justify-between gap-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Dashboard checklist
             </p>
             <h2 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900">
@@ -1834,7 +1834,7 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
         <>
           {/* Next Shift mode */}
           <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Next shift
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1842,10 +1842,10 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
             </p>
           </div>
           <div className="px-4 py-3 border-b border-gray-100">
-            <p className="text-[12px] tabular-nums font-semibold text-gray-900">
+            <p className="text-[12px] font-mono tabular-nums font-semibold text-gray-900">
               {fmtTime(nextGroup.startTime)} – {fmtTime(nextGroup.endTime)}
             </p>
-            <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+            <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
               {fmtDateShort(nextGroup.startTime)}
             </p>
           </div>
@@ -1861,7 +1861,7 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
       ) : (
         <>
           <div className="border-b border-gray-100 px-4 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Next shift
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1900,11 +1900,11 @@ function MovementRow({
 }) {
   return (
     <li className="px-4 py-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {label}
       </p>
       <p
-        className={`mt-0.5 text-sm tabular-nums truncate ${
+        className={`mt-0.5 text-sm font-mono tabular-nums truncate ${
           value ? 'font-semibold text-gray-900' : 'text-gray-400'
         }`}
       >

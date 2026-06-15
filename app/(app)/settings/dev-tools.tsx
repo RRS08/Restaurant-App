@@ -112,7 +112,7 @@ export default function DevTools({
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="flex items-start justify-between gap-3 mb-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Global access</p>
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Global access</p>
             <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Bypass all setup gating</h3>
             <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
               When enabled, every pillar is forced to <span className="font-semibold">active</span> and Analytics
@@ -141,7 +141,7 @@ export default function DevTools({
       {/* ------------- 2. Per-pillar overrides ------------- */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Readiness overrides</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Readiness overrides</p>
           <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Per-pillar manual state</h3>
           <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
             Pin a pillar to a specific state for onboarding/setup testing. Clear an override with the × button
@@ -217,7 +217,7 @@ export default function DevTools({
       {/* ------------- 3. Reset controls ------------- */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Reset controls</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Reset controls</p>
           <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Wipe setup / override state</h3>
           <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
             These reset only the setup/activation state. Operational data (menu, sales, inventory, employees,
@@ -253,7 +253,7 @@ export default function DevTools({
       {/* ------------- 4. External POS sync (Pilot V1, multi-location) ------------- */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">External POS</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">External POS</p>
           <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Pilot V1 import · per location</h3>
           <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
             Connect a POS provider to each location that uses one. Sync buttons walk every active
@@ -411,7 +411,7 @@ export default function DevTools({
       {/* ------------- 5. CSV import (Pilot V1, one-shot) ------------- */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">CSV import</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">CSV import</p>
           <h3 className="text-sm font-semibold text-gray-900 mt-0.5">One-shot menu / orders CSV</h3>
           <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
             Paste raw CSV below. Imports use the same shared ingest pipeline as every other source,
@@ -491,7 +491,7 @@ ord_0002,2026-04-12T14:00:00Z,12.50,cash,completed,itm_wings,Buffalo Wings,1,9.0
       {/* ------------- 6. Custom JSON import (Pilot V1, one-shot) ------------- */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Custom JSON import</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Custom JSON import</p>
           <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Homemade / custom feed</h3>
           <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
             Paste a JSON payload from a homemade POS or a custom export. Uses the same shared ingest
@@ -608,7 +608,7 @@ function StripeKeysSection() {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 mt-4">
       <div className="mb-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Stripe · test mode</p>
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Stripe · test mode</p>
         <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Configure payment provider</h3>
         <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-md">
           Paste your <code>sk_test_…</code> secret key and <code>pk_test_…</code> publishable key.
@@ -619,7 +619,7 @@ function StripeKeysSection() {
       <form action={action} className="space-y-2">
         <input type="hidden" name="provider" value="stripe" />
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Secret key (sk_test_…)</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Secret key (sk_test_…)</span>
           <input
             type="password"
             name="secret_key"
@@ -630,7 +630,7 @@ function StripeKeysSection() {
           />
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Publishable key (pk_test_…)</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Publishable key (pk_test_…)</span>
           <input
             type="text"
             name="publishable_key"

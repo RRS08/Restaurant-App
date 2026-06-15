@@ -1,39 +1,66 @@
 @import "tailwindcss";
 
 :root {
+  --brand-ink:      #18181B;
+  --brand-paper:    #FAF9F6;
+  --brand-slate:    #6B6B70;
+  --brand-hairline: #E7E6E2;
+
+  /* Canvas is plain white — Paper stays available as a utility
+     (bg-paper) for surfaces that want the warm tone deliberately. */
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: var(--brand-ink);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  /* semantic brand utilities: bg-paper, text-ink, text-slate, border-hairline */
+  --color-ink:      var(--brand-ink);
+  --color-paper:    var(--brand-paper);
+  --color-slate:    var(--brand-slate);
+  --color-hairline: var(--brand-hairline);
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* ---- THE ONE MOVE: remap Tailwind's gray -> warm zinc (whole app) ---- */
+  --color-gray-50:  #FAFAF9;
+  --color-gray-100: #F5F5F3;
+  --color-gray-200: #E7E6E2;   /* hairline */
+  --color-gray-300: #D6D5D1;
+  --color-gray-400: #A1A1A6;
+  --color-gray-500: #71717A;
+  --color-gray-600: #52525B;
+  --color-gray-700: #3F3F46;
+  --color-gray-800: #27272A;
+  --color-gray-900: #18181B;   /* ink */
+
+  /* Blue stays blue — it's the app's "interactive / signal /
+     positive activity" accent (focus rings, active status pills,
+     "Review now" CTAs, chart series, link affordances). Removing
+     it everywhere drained the program of life; keeping it gives
+     indicators and graphs their signal back. */
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
 }
 
-/*
-  Browser inputs do not reliably inherit text color from the body.
-  This rule forces all text inputs, selects, and textareas to use
-  a near-black color (#111827 = Tailwind gray-900) so typed text
-  is always clearly readable. Placeholder text stays lighter because
-  it uses the ::placeholder pseudo-element, which is not affected here.
-*/
 input:not([type='checkbox']):not([type='radio']):not([type='range']),
 select,
 textarea {
-  color: #111827;
+  color: #18181B;  /* brand ink */
 }
+
+/* Ledger figures: all mono text gets tabular, lined numerals */
+.font-mono {
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+}
+
+/* Optional: tighten big headings like the marketing site */
+h1, h2 { letter-spacing: -0.02em; }

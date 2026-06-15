@@ -385,7 +385,7 @@ function SectionBlock({
           {category.name}
         </h2>
         <span className="flex-1 h-px bg-gray-200/70" />
-        <p className="text-[11px] text-gray-500 tabular-nums whitespace-nowrap">
+        <p className="text-[11px] text-gray-500 font-mono tabular-nums whitespace-nowrap">
           {items.length} {items.length === 1 ? 'item' : 'items'}
         </p>
         {!removeMode ? (
@@ -1100,7 +1100,7 @@ function ItemDrawer({
               tint sets it apart from the POS override and Item
               controls cards below without adding loud color. */}
           <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 p-4">
-            <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+            <p className="mb-3 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Recipe
             </p>
 
@@ -1337,7 +1337,7 @@ function ItemDrawer({
               pinned-foot heavy. Internal divide-y keeps the two
               rows tight; small action buttons sit on the right. */}
           <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-3.5 py-2.5">
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Item controls
             </p>
             <div className="divide-y divide-gray-200/60">
@@ -1450,11 +1450,11 @@ function AvailabilitySection({ item }: { item: MenuItem }) {
   return (
     <div>
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           POS override
         </p>
         {isOverrideOn && item.overrideSetAt && (
-          <p className="text-[10px] text-gray-400 tabular-nums">
+          <p className="text-[10px] text-gray-400 font-mono tabular-nums">
             since {new Date(item.overrideSetAt).toLocaleString('en-US', {
               month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
             })}

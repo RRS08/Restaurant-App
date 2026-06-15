@@ -240,7 +240,7 @@ function ConfiguredSummary({
 
       {/* Sync actions row — operational. */}
       <div className="space-y-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Sync from Square
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -356,11 +356,11 @@ function PendingItemsPanel({ items }: { items: PendingItem[] }) {
     <div className="rounded-md border border-gray-200 bg-gray-50/60 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-200">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Pending review
           </p>
           <span
-            className={`inline-flex items-center gap-1.5 text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-full ${
+            className={`inline-flex items-center gap-1.5 text-[10px] font-bold font-mono tabular-nums px-2 py-0.5 rounded-full ${
               items.length === 0
                 ? 'bg-gray-100 text-gray-600'
                 : 'bg-blue-50 text-blue-700'
@@ -420,7 +420,7 @@ function PendingItemsPanel({ items }: { items: PendingItem[] }) {
                     </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold tabular-nums text-gray-900 flex-shrink-0">
+                <p className="text-xs font-bold font-mono tabular-nums text-gray-900 flex-shrink-0">
                   {fmtMoney(it.price)}
                 </p>
               </li>
@@ -617,7 +617,7 @@ function Cell({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      <dt className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {label}
       </dt>
       <dd

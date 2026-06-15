@@ -296,7 +296,7 @@ export default function SalesClient({
                     }`}
                   >
                     {label}
-                    <span className={`text-[10px] tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
+                    <span className={`text-[10px] font-mono tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
                       {count}
                     </span>
                   </button>
@@ -340,7 +340,7 @@ export default function SalesClient({
                   matches the rest of the product family (Inventory,
                   Finance, Restock Orders). */}
               <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
-                <p className="text-[10px] text-gray-500 tabular-nums">
+                <p className="text-[10px] text-gray-500 font-mono tabular-nums">
                   Showing{' '}
                   <span className="font-semibold text-gray-700">
                     {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
@@ -357,7 +357,7 @@ export default function SalesClient({
                   >
                     ←
                   </button>
-                  <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+                  <span className="text-[10px] text-gray-500 px-1.5 font-mono tabular-nums">
                     {safePage + 1} / {pageCount}
                   </span>
                   <button
@@ -451,7 +451,7 @@ function OrderRow({
     >
       <div className="px-6 py-3.5">
         {/* Top — date / time */}
-        <p className="text-[11px] text-gray-500 tabular-nums">
+        <p className="text-[11px] text-gray-500 font-mono tabular-nums">
           {date.day} <span className="text-gray-300">·</span> {date.time}
         </p>
         {/* Item summary — primary identity */}
@@ -461,7 +461,7 @@ function OrderRow({
           {fmtItemPreview(order.lineItems)}
         </p>
         {/* Meta — count + location */}
-        <p className="mt-0.5 text-[11px] text-gray-400 tabular-nums">
+        <p className="mt-0.5 text-[11px] text-gray-400 font-mono tabular-nums">
           {itemCount} {itemCount === 1 ? 'item' : 'items'}
           {order.locationName ? <> · {order.locationName}</> : null}
         </p>
@@ -596,7 +596,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
         <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-bold text-gray-900 tabular-nums">
+              <h2 className="text-base font-bold text-gray-900 font-mono tabular-nums">
                 Order #{shortId(order.id)}
               </h2>
               <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
@@ -611,7 +611,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               <span className="text-gray-300 mx-1">·</span>
               <span className="capitalize">{order.paymentType}</span>
             </p>
-            <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+            <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
               {fmtFullDate(order.createdAt)} <span className="text-gray-300">·</span> {fmtRelative(order.createdAt)}
             </p>
           </div>
@@ -643,7 +643,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               line count, framed by a calm bordered card so it reads
               as the receipt's headline number. */}
           <div className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-5 py-4">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Sale total
             </p>
             <p className={`mt-1 text-[28px] leading-none font-mono tabular-nums font-bold ${
@@ -651,7 +651,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             }`}>
               {fmtMoney(order.total)}
             </p>
-            <p className="mt-2 text-[11px] text-gray-500 tabular-nums">
+            <p className="mt-2 text-[11px] text-gray-500 font-mono tabular-nums">
               {itemCount} {itemCount === 1 ? 'item' : 'items'}
               <span className="text-gray-300"> · </span>
               {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'}
@@ -665,7 +665,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               eyebrow in this drawer) so Ticket reads as the body's
               primary content. */}
           <div>
-            <p className="mb-2.5 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+            <p className="mb-2.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Ticket
             </p>
             <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100">
@@ -680,7 +680,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
                     }`}>
                       {li.name}
                     </p>
-                    <p className="mt-0.5 text-[11px] text-gray-500 tabular-nums">
+                    <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
                       {li.quantity} × {fmtMoney(li.unitPrice)}
                     </p>
                   </div>
@@ -696,7 +696,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
 
           {/* c. Payment — method · status · amount on one line. */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Payment
             </p>
             <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3 flex items-baseline justify-between gap-3">
@@ -720,7 +720,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           {/* d. Source — manager-friendly "In-app POS · Location" /
               "External POS · Location" / "Manual entry · Location". */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Source
             </p>
             <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3">
@@ -734,7 +734,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               order, the section communicates that calmly without
               faking a corrections feed. */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Adjustments
             </p>
             <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-3 text-center">
@@ -748,7 +748,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           {/* f. Note — only when the order carries one. */}
           {order.note && (
             <div>
-              <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+              <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
                 Note
               </p>
               <div className="rounded-lg border border-gray-200 bg-gray-50/40 px-4 py-3">
@@ -763,7 +763,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             the right. Less dominant than the Ticket above, but
             clearly the drawer's destructive resolution. */}
         <div className="border-t border-gray-100 bg-white px-6 py-3.5 flex-shrink-0">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Correction tools
           </p>
           {canVoid ? (
@@ -826,10 +826,10 @@ function LedgerStat({
   const valueColor = tone === 'warn' ? 'text-red-700' : 'text-gray-900'
   return (
     <div className="px-5 py-3.5">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {label}
       </p>
-      <p className={`mt-1 text-[17px] font-bold tabular-nums ${valueColor}`}>{value}</p>
+      <p className={`mt-1 text-[17px] font-bold font-mono tabular-nums ${valueColor}`}>{value}</p>
       <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>
     </div>
   )

@@ -2,6 +2,8 @@
 // PageShell Component
 //
 // A simple wrapper that gives every page a consistent look:
+//   - an optional uppercase mono `eyebrow` (site texture echo of
+//     the marketing surfaces)
 //   - a title at the top
 //   - an optional subtitle
 //   - the page content below
@@ -13,26 +15,33 @@
 //
 // This is a Server Component (no 'use client') because it doesn't
 // need any interactivity — it just wraps content.
+//
+// Brand tokens used:
+//   text-zinc-900   ink, headline weight
+//   text-slate      muted body / eyebrow (from --color-slate)
+//   border-hairline warm divider (from --color-hairline)
 // ----------------------------------------------------------------
 
 interface PageShellProps {
   title: string
-  description?: string       // optional subtitle line
-  children?: React.ReactNode // the page's actual content
+  description?: string
+  /** Optional mono label above the title (site texture). */
+  eyebrow?: string
+  children?: React.ReactNode
 }
 
-export default function PageShell({ title, description, children }: PageShellProps) {
+export default function PageShell({ title, description, eyebrow, children }: PageShellProps) {
   return (
     <div className="max-w-6xl">
-      {/* Page header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
-        {description && (
-          <p className="mt-1 text-gray-500 text-sm">{description}</p>
+        {eyebrow && (
+          <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-slate mb-2">
+            {eyebrow}
+          </div>
         )}
+        <h1 className="text-2xl font-bold tracking-tight text-zinc-900">{title}</h1>
+        {description && <p className="mt-1 text-sm text-slate">{description}</p>}
       </div>
-
-      {/* Page content */}
       {children}
     </div>
   )
@@ -47,9 +56,9 @@ export default function PageShell({ title, description, children }: PageShellPro
 // ----------------------------------------------------------------
 export function ComingSoon({ feature }: { feature: string }) {
   return (
-    <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-16 text-center">
-      <p className="text-lg font-medium text-gray-400">{feature}</p>
-      <p className="mt-1 text-sm text-gray-300">This module is coming soon.</p>
+    <div className="rounded-2xl border-2 border-dashed border-hairline bg-white p-16 text-center">
+      <p className="text-lg font-medium text-zinc-400">{feature}</p>
+      <p className="mt-1 text-sm text-zinc-300">This module is coming soon.</p>
     </div>
   )
 }

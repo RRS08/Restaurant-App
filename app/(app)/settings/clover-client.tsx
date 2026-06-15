@@ -301,7 +301,7 @@ function ConfiguredSummary({
 
       {/* Sync actions row */}
       <div className="space-y-2">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Sync from Clover
         </p>
         <div className="flex flex-wrap items-center gap-2">
@@ -400,7 +400,7 @@ function ConfiguredSummary({
           starts from a clean slate. Adopted user categories (the
           name-match ones) get unbound rather than deleted. */}
       <div className="mt-3 pt-3 border-t border-gray-100">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">
           Dev: reset Clover data
         </p>
         <p className="text-[11px] text-gray-500 leading-relaxed max-w-prose mb-2">
@@ -471,11 +471,11 @@ function PendingItemsPanel({ items }: { items: PendingItem[] }) {
     <div className="rounded-md border border-gray-200 bg-gray-50/60 overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-200">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Pending review
           </p>
           <span
-            className={`inline-flex items-center gap-1.5 text-[10px] font-bold tabular-nums px-2 py-0.5 rounded-full ${
+            className={`inline-flex items-center gap-1.5 text-[10px] font-bold font-mono tabular-nums px-2 py-0.5 rounded-full ${
               items.length === 0
                 ? 'bg-gray-100 text-gray-600'
                 : 'bg-blue-50 text-blue-700'
@@ -535,7 +535,7 @@ function PendingItemsPanel({ items }: { items: PendingItem[] }) {
                     </p>
                   </div>
                 </div>
-                <p className="text-xs font-bold tabular-nums text-gray-900 flex-shrink-0">
+                <p className="text-xs font-bold font-mono tabular-nums text-gray-900 flex-shrink-0">
                   {fmtMoney(it.price)}
                 </p>
               </li>
@@ -610,7 +610,7 @@ function TestOrderPanel({
   if (importedItems.length === 0) {
     return (
       <div className="rounded-md border border-dashed border-gray-300 bg-gray-50/40 px-4 py-3">
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Dev: create Clover test order
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -625,7 +625,7 @@ function TestOrderPanel({
 
   return (
     <div className="rounded-md border border-dashed border-gray-300 bg-gray-50/40 px-4 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         Dev: create Clover test order
       </p>
       <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-prose">
@@ -644,7 +644,7 @@ function TestOrderPanel({
         <div className="flex flex-col gap-1 min-w-[260px] flex-1">
           <label
             htmlFor="cl-test-item"
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate"
           >
             Clover-imported item
           </label>
@@ -667,7 +667,7 @@ function TestOrderPanel({
         <div className="flex flex-col gap-1 w-20">
           <label
             htmlFor="cl-test-qty"
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate"
           >
             Quantity
           </label>
@@ -679,7 +679,7 @@ function TestOrderPanel({
             max={50}
             defaultValue={1}
             required
-            className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs tabular-nums focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
+            className="rounded-md border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-mono tabular-nums focus:outline-none focus:ring-1 focus:ring-gray-400 focus:border-gray-400"
           />
         </div>
 
@@ -814,13 +814,13 @@ function TestOrderPanel({
                       : 'bg-red-50 border border-red-200'
                   }`}
                 >
-                  <p className="font-semibold uppercase tracking-widest text-gray-700 text-[10px]">
+                  <p className="font-semibold font-mono uppercase tracking-[0.14em] text-slate text-[10px]">
                     {p.label}
                   </p>
                   <p className="mt-0.5 font-mono break-all text-gray-600 text-[10px]">
                     {p.url}
                   </p>
-                  <p className="mt-1 tabular-nums">
+                  <p className="mt-1 font-mono tabular-nums">
                     HTTP <span className="font-bold">{p.status}</span> · elements:{' '}
                     <span className="font-bold">{p.elementCount}</span>
                     {p.contentType && (
@@ -995,7 +995,7 @@ function Cell({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      <dt className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {label}
       </dt>
       <dd

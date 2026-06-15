@@ -30,10 +30,13 @@ export default function SimpleLineChart({
   const { resolvedTheme } = useTheme()
   const isDark = resolvedTheme === 'dark'
 
-  const grid = isDark ? '#1f2937' : '#f3f4f6'
-  const tick = isDark ? '#6b7280' : '#9ca3af'
+  // Light-mode values land on the Checked brand palette
+  // (hairline gridlines, slate axis text, hairline tooltip border).
+  // Dark-mode fallbacks kept for future dark-theme support.
+  const grid = isDark ? '#1f2937' : '#E7E6E2'
+  const tick = isDark ? '#6b7280' : '#A1A1A6'
   const tooltipBg = isDark ? '#1f2937' : '#ffffff'
-  const tooltipBorder = isDark ? '#374151' : '#e5e7eb'
+  const tooltipBorder = isDark ? '#374151' : '#E7E6E2'
 
   if (data.length === 0) {
     return (

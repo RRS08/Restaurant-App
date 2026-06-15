@@ -429,7 +429,7 @@ export default function PosClient({
                               <p className="text-[11px] text-gray-500 truncate mt-0.5">{line.notes}</p>
                             )}
                           </div>
-                          <p className="text-sm font-semibold text-blue-600 tabular-nums whitespace-nowrap flex-shrink-0">
+                          <p className="text-sm font-semibold text-blue-600 font-mono tabular-nums whitespace-nowrap flex-shrink-0">
                             {CURRENCY(line.price * line.quantity)}
                           </p>
                         </div>
@@ -653,7 +653,7 @@ function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
       {state === 'low' && item.projectionState === 'low' && item.projectedCount !== null && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold tabular-nums text-gray-400"
+          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold font-mono tabular-nums text-gray-400"
         >
           {item.projectedCount}
         </span>
@@ -661,7 +661,7 @@ function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
       {state === 'out' && (
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold tabular-nums text-gray-400"
+          className="pointer-events-none absolute bottom-1 right-2 text-[10px] font-semibold font-mono tabular-nums text-gray-400"
         >
           0
         </span>
@@ -711,7 +711,7 @@ function CashWorkflow({
       {total > 0 && (
         <>
           <div>
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">Cash received</p>
+            <p className="mb-1.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Cash received</p>
             <div className="grid grid-cols-4 gap-1.5">
               {tenderAmounts.map((amt) => {
                 const active = Math.abs(cashReceived - amt) < 0.005
@@ -720,7 +720,7 @@ function CashWorkflow({
                     key={amt}
                     type="button"
                     onClick={() => onChangeCashRaw(amt.toFixed(2))}
-                    className={`rounded-lg border px-2 py-2 text-xs font-semibold tabular-nums transition-colors ${
+                    className={`rounded-lg border px-2 py-2 text-xs font-semibold font-mono tabular-nums transition-colors ${
                       active
                         ? 'bg-gray-900 text-white border-gray-900'
                         : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
@@ -732,7 +732,7 @@ function CashWorkflow({
               })}
             </div>
             <div className="relative mt-2">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 tabular-nums">$</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-mono tabular-nums">$</span>
               <input
                 type="number"
                 inputMode="decimal"
@@ -1381,7 +1381,7 @@ function CheckoutDrawer({
               edit affordances (the cart panel behind the drawer is
               the editor). */}
           <div>
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-1.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Order summary
             </p>
             <ul className="rounded-lg border border-gray-200/80 bg-white divide-y divide-gray-100 max-h-32 overflow-y-auto">
@@ -1393,12 +1393,12 @@ function CheckoutDrawer({
                   <p className="text-xs font-medium text-gray-900 truncate">
                     {line.name}
                     {line.quantity > 1 && (
-                      <span className="ml-1.5 text-[11px] text-gray-500 tabular-nums">
+                      <span className="ml-1.5 text-[11px] text-gray-500 font-mono tabular-nums">
                         × {line.quantity}
                       </span>
                     )}
                   </p>
-                  <p className="text-xs font-semibold text-gray-900 tabular-nums whitespace-nowrap">
+                  <p className="text-xs font-semibold text-gray-900 font-mono tabular-nums whitespace-nowrap">
                     {CURRENCY(line.price * line.quantity)}
                   </p>
                 </li>
@@ -1409,7 +1409,7 @@ function CheckoutDrawer({
           {/* 3. Payment method — same three options as before, still
               rendered as a 3-column segmented strip. */}
           <div>
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+            <p className="mb-1.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Payment method
             </p>
             <div className="grid grid-cols-3 gap-1.5">
@@ -1561,7 +1561,7 @@ function OrderItemDrawer({
               to text-sm so it reads as a modifier of the item rather
               than the main focus of the drawer. */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Quantity
             </p>
             <div className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white overflow-hidden">
@@ -1574,7 +1574,7 @@ function OrderItemDrawer({
               >
                 −
               </button>
-              <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold tabular-nums text-center text-gray-900 border-x border-gray-200/80">
+              <span className="min-w-[2.25rem] px-2 py-1 text-sm font-bold font-mono tabular-nums text-center text-gray-900 border-x border-gray-200/80">
                 {line.quantity}
               </span>
               <button
@@ -1595,7 +1595,7 @@ function OrderItemDrawer({
               model lands. Structural customization sits ahead of the
               free-text "Special request" below. */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Add-ons / modifiers
             </p>
             <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-5 text-center">
@@ -1610,7 +1610,7 @@ function OrderItemDrawer({
 
           {/* 3. Special request — free-text after structural mods. */}
           <div>
-            <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-700">
+            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
               Special request
             </p>
             <textarea

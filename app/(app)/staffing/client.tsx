@@ -163,7 +163,7 @@ function roleSortIndex(role: string, house: 'foh' | 'boh'): number {
 // HoursIndicator — restrained per-tier text label + optional pill.
 // • normal/caution: text-only color so low-signal cases stay quiet.
 // • near/over: a soft pill so 40+ hour employees pop at a glance.
-// Always tabular-nums so digit columns don't dance between cards.
+// Always font-mono tabular-nums so digit columns don't dance between cards.
 // HoursIndicator — restrained per-tier label. Per the status-
 // signaling rule, no tier relies on lightness alone:
 //   • 0h        → text-gray-600 "Unscheduled" pill (visible, calm)
@@ -173,12 +173,12 @@ function roleSortIndex(role: string, house: 'foh' | 'boh'): number {
 //   • caution   → text-amber-700 plain text (soft warning)
 //   • near (40) → amber pill (text-amber-800, bg-amber-100)
 //   • over (>40)→ red pill (text-red-700, bg-red-50)
-// Always tabular-nums so digit columns line up across cards.
+// Always font-mono tabular-nums so digit columns line up across cards.
 function HoursIndicator({ hours, tier }: { hours: number; tier: HoursTier }) {
   if (hours <= 0) {
     return (
       <span
-        className="text-[10px] font-medium tabular-nums text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0"
+        className="text-[10px] font-medium font-mono tabular-nums text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0"
         aria-label="No shifts scheduled this week"
         title="No shifts scheduled this week"
       >
@@ -203,7 +203,7 @@ function HoursIndicator({ hours, tier }: { hours: number; tier: HoursTier }) {
         : ''
   return (
     <span
-      className={`text-[10px] tabular-nums flex-shrink-0 ${className}`}
+      className={`text-[10px] font-mono tabular-nums flex-shrink-0 ${className}`}
       aria-label={`${formatHours(hours)} this week${ariaSuffix}`}
       title={`${formatHours(hours)} this week${ariaSuffix}`}
     >
@@ -524,7 +524,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
             {totalShiftsThisWeek} shift{totalShiftsThisWeek === 1 ? '' : 's'}
             <span className="opacity-50">·</span>
-            <span className="tabular-nums">{formatHours(totalHoursThisWeek)}</span>
+            <span className="font-mono tabular-nums">{formatHours(totalHoursThisWeek)}</span>
             <span className="opacity-50">·</span>
             {totalShiftsThisWeek > 0 ? (
               <span>{coveredDays} covered day{coveredDays === 1 ? '' : 's'}</span>
@@ -547,7 +547,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                 className={`px-1 py-2.5 text-center border-l border-gray-100 ${isToday ? `${tone.soft} ${tone.todayTop} -mt-[2px]` : ''}`}
               >
                 <p className={`text-[11px] font-medium ${isToday ? tone.todayText : 'text-gray-500'}`}>{DAYS[i]}</p>
-                <p className={`text-sm font-semibold tabular-nums ${isToday ? tone.todayText : 'text-gray-900'}`}>{day.getDate()}</p>
+                <p className={`text-sm font-semibold font-mono tabular-nums ${isToday ? tone.todayText : 'text-gray-900'}`}>{day.getDate()}</p>
               </div>
             )
           })}
@@ -590,7 +590,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                 aria-label={`Edit block ${section.name}`}
               >
                 <p className="text-[12px] font-bold text-gray-900 leading-tight truncate tracking-tight">{section.name}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5 tabular-nums">
+                <p className="text-[10px] text-gray-500 mt-0.5 font-mono tabular-nums">
                   {hL(section.defaultStartHour)}–{hL(section.defaultEndHour)}
                 </p>
               </button>
@@ -653,7 +653,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                           <span className="flex items-center gap-1 leading-[12px] min-w-0">
                             <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
                             <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                            <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
+                            <span className="text-[10px] text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0">
                               {fmt(shift.startTime)}–{fmt(shift.endTime)}
                             </span>
                           </span>
@@ -693,7 +693,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             <div key={role}>
               {groupEntries.length > 1 && (
                 <div className="border-b border-gray-100 px-3 py-1.5">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">{role}</p>
+                  <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{role}</p>
                 </div>
               )}
               {group.map(renderSectionRow)}
@@ -750,7 +750,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                         <span className="flex items-center gap-1 leading-[12px] min-w-0">
                           <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
                           <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                          <span className="text-[10px] text-gray-500 tabular-nums whitespace-nowrap flex-shrink-0">
+                          <span className="text-[10px] text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0">
                             {fmt(shift.startTime)}–{fmt(shift.endTime)}
                           </span>
                         </span>
@@ -1591,7 +1591,7 @@ function Field({ label, htmlFor, optional, hint, children }: {
 // Used to break up otherwise blank-looking drawer forms.
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p className="mt-1 mb-0.5 text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+    <p className="mt-1 mb-0.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
       {children}
     </p>
   )
@@ -1620,7 +1620,7 @@ function PreviewCard({
       {eyebrow && (
         <div className="flex items-center gap-1.5">
           {toneDot && <span className={`w-1.5 h-1.5 rounded-full ${toneDot}`} aria-hidden />}
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             {eyebrow}
           </p>
         </div>
@@ -1631,7 +1631,7 @@ function PreviewCard({
       {meta && meta.length > 0 && (
         <div className="mt-0.5 space-y-0.5">
           {meta.map((m, i) => (
-            <p key={i} className="text-[11px] text-gray-500 leading-snug tabular-nums">{m}</p>
+            <p key={i} className="text-[11px] text-gray-500 leading-snug font-mono tabular-nums">{m}</p>
           ))}
         </div>
       )}
@@ -1653,7 +1653,7 @@ function SummaryCard({ entries }: { entries: Array<{ label: string; value: React
       <dl className="grid grid-cols-2 gap-x-3 gap-y-2">
         {entries.map((e) => (
           <div key={e.label} className="min-w-0">
-            <dt className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{e.label}</dt>
+            <dt className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{e.label}</dt>
             <dd className="mt-0.5 text-xs text-gray-900 truncate">{e.value}</dd>
           </div>
         ))}
@@ -1781,7 +1781,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 required
                 value={startHour}
                 onChange={(e) => setStartHour(Number(e.target.value))}
-                className={`${fieldInputClass} tabular-nums`}
+                className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
             <Field label="End hour" htmlFor="ab-end">
@@ -1795,7 +1795,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 required
                 value={endHour}
                 onChange={(e) => setEndHour(Number(e.target.value))}
-                className={`${fieldInputClass} tabular-nums`}
+                className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
           </div>
@@ -1897,7 +1897,7 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                 step={1}
                 required
                 defaultValue={section.defaultStartHour}
-                className={`${fieldInputClass} tabular-nums`}
+                className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
             <Field label="End hour" htmlFor="eb-end">
@@ -1910,7 +1910,7 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                 step={1}
                 required
                 defaultValue={section.defaultEndHour}
-                className={`${fieldInputClass} tabular-nums`}
+                className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
           </div>
@@ -2178,7 +2178,7 @@ function AddCustomShiftDrawer({
                 required
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className={`${fieldInputClass} tabular-nums`}
+                className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
 
@@ -2190,7 +2190,7 @@ function AddCustomShiftDrawer({
                   required
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
-                  className={`${fieldInputClass} tabular-nums`}
+                  className={`${fieldInputClass} font-mono tabular-nums`}
                 />
               </Field>
               <Field label="End" htmlFor="cs-end">
@@ -2200,7 +2200,7 @@ function AddCustomShiftDrawer({
                   required
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
-                  className={`${fieldInputClass} tabular-nums`}
+                  className={`${fieldInputClass} font-mono tabular-nums`}
                 />
               </Field>
             </div>

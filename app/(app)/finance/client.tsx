@@ -455,7 +455,7 @@ export default function FinanceClient({
                       stable regardless of how full the current page is.
                       Compact arrow style, matching the Inventory family. */}
                   <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
-                    <p className="text-[10px] text-gray-500 tabular-nums">
+                    <p className="text-[10px] text-gray-500 font-mono tabular-nums">
                       {recentExpenses.length === 0
                         ? '0 entries'
                         : (
@@ -482,7 +482,7 @@ export default function FinanceClient({
                       >
                         ←
                       </button>
-                      <span className="text-[10px] text-gray-500 px-1.5 tabular-nums">
+                      <span className="text-[10px] text-gray-500 px-1.5 font-mono tabular-nums">
                         {safeActivityPage + 1} / {activityPageCount}
                       </span>
                       <button
@@ -722,7 +722,7 @@ function SummaryCell({ label, dotClass, value, hint, empty, truth, onOpen }: {
         </div>
         <p className="text-[10px] text-gray-400 whitespace-nowrap flex-shrink-0">Last 7 days</p>
       </div>
-      <p className={`mt-5 text-[30px] leading-none font-semibold tracking-tight tabular-nums ${empty ? 'text-gray-300' : 'text-gray-900'}`}>
+      <p className={`mt-5 text-[30px] leading-none font-semibold tracking-tight font-mono tabular-nums ${empty ? 'text-gray-300' : 'text-gray-900'}`}>
         {value}
       </p>
       <p className="mt-3 text-xs text-gray-500">{hint}</p>
@@ -797,7 +797,7 @@ function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, r
       </div>
       <p className="text-[10px] text-gray-400 mt-1 ml-4">Last 7 days</p>
       <div className="mt-3 flex items-baseline gap-2 flex-wrap">
-        <p className={`text-[36px] leading-none font-semibold tracking-tight tabular-nums ${valueColor}`}>
+        <p className={`text-[36px] leading-none font-semibold tracking-tight font-mono tabular-nums ${valueColor}`}>
           {hasAnyActivity ? `${netPositive ? '' : '−'}${fmt(Math.abs(value))}` : '$0.00'}
         </p>
         <span className="text-[11px] font-medium text-gray-500 lowercase">operating view</span>
@@ -968,7 +968,7 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
           </div>
           <span className="text-[10px] text-gray-400">Optional</span>
         </div>
-        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 tabular-nums">—</p>
+        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed mb-4">
           Connect a bank to surface operating expenses paid through your account — rent, utilities, marketing, subscriptions, fees.
         </p>
@@ -1015,7 +1015,7 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
       </div>
       {bank.state === 'connected_unsynced' ? (
         <>
-          <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-400 tabular-nums">—</p>
+          <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-400 font-mono tabular-nums">—</p>
           <div className="mt-3 flex items-end justify-between gap-2">
             <p className="text-xs text-gray-500 leading-relaxed">Bank linked · awaiting first sync</p>
             <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
@@ -1026,7 +1026,7 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
       ) : (
         <>
           <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">Operating spend · 7 days</p>
-          <p className={`text-[26px] leading-none font-semibold tracking-tight tabular-nums ${operatingSpend === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
+          <p className={`text-[26px] leading-none font-semibold tracking-tight font-mono tabular-nums ${operatingSpend === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
             {fmt(operatingSpend)}
           </p>
           <div className="mt-3 flex items-end justify-between gap-2">
@@ -1075,7 +1075,7 @@ function ClickableDriverCard({
         </div>
         <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
       </div>
-      <p className={`text-[26px] leading-none font-semibold tracking-tight tabular-nums ${valueMuted ? 'text-gray-400' : 'text-gray-900'}`}>
+      <p className={`text-[26px] leading-none font-semibold tracking-tight font-mono tabular-nums ${valueMuted ? 'text-gray-400' : 'text-gray-900'}`}>
         {value}
       </p>
       <div className="mt-3 flex items-end justify-between gap-2">
@@ -1108,7 +1108,7 @@ function ClickableUnavailableCard({
         </div>
         <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
       </div>
-      <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 tabular-nums">—</p>
+      <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
       <div className="mt-3 flex items-end justify-between gap-2">
         <p className="text-xs text-gray-500 leading-relaxed">{reason}</p>
         <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
@@ -1732,8 +1732,8 @@ function DrawerStat({ label, value, tone, muted }: {
           : 'text-gray-900'
   return (
     <div className="px-4 py-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
-      <p className={`mt-1 text-base font-bold tabular-nums truncate ${valueClass}`}>{value}</p>
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{label}</p>
+      <p className={`mt-1 text-base font-bold font-mono tabular-nums truncate ${valueClass}`}>{value}</p>
     </div>
   )
 }
@@ -1741,7 +1741,7 @@ function DrawerStat({ label, value, tone, muted }: {
 function DrawerSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
-      <p className="mb-3 text-[10px] font-semibold uppercase tracking-widest text-gray-500">{title}</p>
+      <p className="mb-3 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{title}</p>
       {children}
     </div>
   )
@@ -2145,15 +2145,15 @@ function NetActivityDrawerContent({
     <div className="space-y-6">
       <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Operating view</p>
-          <p className={`mt-1 text-base font-bold tabular-nums ${opTone}`}>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Operating view</p>
+          <p className={`mt-1 text-base font-bold font-mono tabular-nums ${opTone}`}>
             {operatingNet >= 0 ? '' : '−'}{fmt(Math.abs(operatingNet))}
           </p>
           <p className="text-[10px] text-gray-500 mt-0.5">Revenue − tracked spend</p>
         </div>
         <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Bank view</p>
-          <p className={`mt-1 text-base font-bold tabular-nums ${bankConnected ? bankTone : 'text-gray-300'}`}>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Bank view</p>
+          <p className={`mt-1 text-base font-bold font-mono tabular-nums ${bankConnected ? bankTone : 'text-gray-300'}`}>
             {bankConnected ? `${bankNet >= 0 ? '' : '−'}${fmt(Math.abs(bankNet))}` : '—'}
           </p>
           <p className="text-[10px] text-gray-500 mt-0.5">Bank inflows − outflows</p>
@@ -2236,7 +2236,7 @@ function BankReviewSummaryCard({
           </div>
           <span className="text-[10px] text-gray-400">Not connected</span>
         </div>
-        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 tabular-nums">—</p>
+        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed">
           Connect a bank to start verifying cash reality. Money Review surfaces
           deposits to confirm and exceptions — not every transaction.
@@ -2276,7 +2276,7 @@ function BankReviewSummaryCard({
           exceptions, suggested personal). Auto-classified activity
           stays out of this number so the manager sees the real
           workload, not "236 things to review." */}
-      <p className={`text-[34px] leading-none font-semibold tracking-tight tabular-nums ${noWork ? 'text-gray-300' : 'text-gray-900'}`}>
+      <p className={`text-[34px] leading-none font-semibold tracking-tight font-mono tabular-nums ${noWork ? 'text-gray-300' : 'text-gray-900'}`}>
         {attentionCount}
       </p>
       <p className="mt-2 text-xs text-gray-500">
@@ -2284,7 +2284,7 @@ function BankReviewSummaryCard({
           ? 'All money movement is classified.'
           : `need${attentionCount === 1 ? 's' : ''} attention`}
       </p>
-      <p className="mt-1 text-[11px] text-gray-500 tabular-nums">
+      <p className="mt-1 text-[11px] text-gray-500 font-mono tabular-nums">
         {autoCount} auto-classified
         <span className="text-gray-300 px-1">·</span>
         {counts.unreviewed} transaction{counts.unreviewed === 1 ? '' : 's'} scanned
@@ -2294,11 +2294,11 @@ function BankReviewSummaryCard({
         <div className="mt-5 space-y-2 text-[11px] text-gray-500">
           <div className="flex items-center justify-between">
             <span>Deposits to confirm</span>
-            <span className="font-semibold tabular-nums text-gray-700">{counts.unreviewedInflow}</span>
+            <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedInflow}</span>
           </div>
           <div className="flex items-center justify-between">
             <span>Outgoing exceptions</span>
-            <span className="font-semibold tabular-nums text-gray-700">{counts.unreviewedOutflow}</span>
+            <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedOutflow}</span>
           </div>
         </div>
       )}
@@ -2306,22 +2306,22 @@ function BankReviewSummaryCard({
       <div className="mt-5 pt-4 border-t border-gray-100 space-y-1 text-[10px] text-gray-400">
         <div className="flex items-center justify-between">
           <span>Confirmed</span>
-          <span className="font-medium tabular-nums">{counts.settled}</span>
+          <span className="font-medium font-mono tabular-nums">{counts.settled}</span>
         </div>
         <div className="flex items-center justify-between">
           <span>Marked personal</span>
-          <span className="font-medium tabular-nums">{counts.ignored}</span>
+          <span className="font-medium font-mono tabular-nums">{counts.ignored}</span>
         </div>
         {counts.notAMatch > 0 && (
           <div className="flex items-center justify-between">
             <span>Review later</span>
-            <span className="font-medium tabular-nums">{counts.notAMatch}</span>
+            <span className="font-medium font-mono tabular-nums">{counts.notAMatch}</span>
           </div>
         )}
         {groupCount > 0 && (
           <div className="flex items-center justify-between pt-1 mt-1 border-t border-gray-100">
             <span>Total groups</span>
-            <span className="font-medium tabular-nums">{groupCount}</span>
+            <span className="font-medium font-mono tabular-nums">{groupCount}</span>
           </div>
         )}
       </div>
@@ -2478,7 +2478,7 @@ function BankReviewDrawerContent({
           <button
             type="button"
             onClick={() => setShowAuto((v) => !v)}
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showAuto ? '▾' : '▸'}</span>
             Auto-classified · {autoClassified.length}
@@ -2505,7 +2505,7 @@ function BankReviewDrawerContent({
           <button
             type="button"
             onClick={() => setShowReviewLater((v) => !v)}
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showReviewLater ? '▾' : '▸'}</span>
             Review later · {reviewLater.length}
@@ -2526,7 +2526,7 @@ function BankReviewDrawerContent({
           <button
             type="button"
             onClick={() => setShowSettled((v) => !v)}
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showSettled ? '▾' : '▸'}</span>
             Confirmed · {settled.length}
@@ -2547,7 +2547,7 @@ function BankReviewDrawerContent({
           <button
             type="button"
             onClick={() => setShowIgnored((v) => !v)}
-            className="text-[10px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-700 transition-colors flex items-center gap-1.5"
+            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showIgnored ? '▾' : '▸'}</span>
             Personal · {ignored.length}
@@ -2660,7 +2660,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
       <div className="px-3.5 py-3 flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-gray-900 truncate">{group.label}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5 tabular-nums">
+          <p className="text-[11px] text-gray-500 mt-0.5 font-mono tabular-nums">
             {group.txnCount} transaction{group.txnCount === 1 ? '' : 's'}
           </p>
           <p className="text-[11px] text-gray-500 mt-1.5">
@@ -2669,7 +2669,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
             <span>{group.reason}</span>
           </p>
         </div>
-        <p className={`text-sm font-bold tabular-nums flex-shrink-0 ${amountTone}`}>
+        <p className={`text-sm font-bold font-mono tabular-nums flex-shrink-0 ${amountTone}`}>
           {sign}${group.totalAmount.toFixed(2)}
         </p>
       </div>
@@ -2828,7 +2828,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
             )}
           </p>
         </div>
-        <p className={`text-sm font-bold tabular-nums flex-shrink-0 ${amountTone}`}>
+        <p className={`text-sm font-bold font-mono tabular-nums flex-shrink-0 ${amountTone}`}>
           {arrow}${row.amount.toFixed(2)}
         </p>
       </div>

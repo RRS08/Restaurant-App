@@ -110,7 +110,7 @@ function ConnectForm({ locations }: { locations: { id: string; name: string }[] 
     <form action={action} className="space-y-3">
       <div className="grid gap-2 sm:grid-cols-3">
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Location</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Location</span>
           <select name="location_id" required defaultValue={locations.length === 1 ? locations[0].id : ''}
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
             {locations.length > 1 && <option value="" disabled>Select location…</option>}
@@ -120,7 +120,7 @@ function ConnectForm({ locations }: { locations: { id: string; name: string }[] 
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Provider</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Provider</span>
           <select name="provider" defaultValue="toast"
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
             <option value="toast">Toast</option>
@@ -130,13 +130,13 @@ function ConnectForm({ locations }: { locations: { id: string; name: string }[] 
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">External store id (optional)</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">External store id (optional)</span>
           <input name="external_store_id" type="text" placeholder="e.g. store_123"
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </label>
       </div>
       <label className="block">
-        <span className="block text-[10px] font-semibold uppercase tracking-widest text-gray-500 mb-1">Credentials JSON</span>
+        <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Credentials JSON</span>
         <textarea name="credentials" rows={4}
           placeholder={CREDENTIALS_PLACEHOLDER}
           className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] font-mono placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />

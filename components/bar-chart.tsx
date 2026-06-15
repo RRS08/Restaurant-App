@@ -55,25 +55,25 @@ export default function SimpleBarChart({
   return (
     <ResponsiveContainer width="100%" height={height}>
       <BarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: -10 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+        <CartesianGrid strokeDasharray="3 3" stroke="#E7E6E2" vertical={false} />
         <XAxis
           dataKey="label"
-          tick={{ fontSize: 11, fill: '#9ca3af' }}
+          tick={{ fontSize: 11, fill: '#A1A1A6' }}
           axisLine={false}
           tickLine={false}
         />
         <YAxis
-          tick={{ fontSize: 11, fill: '#9ca3af' }}
+          tick={{ fontSize: 11, fill: '#A1A1A6' }}
           axisLine={false}
           tickLine={false}
-          label={yLabel ? { value: yLabel, angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: '#9ca3af' } } : undefined}
+          label={yLabel ? { value: yLabel, angle: -90, position: 'insideLeft', style: { fontSize: 11, fill: '#A1A1A6' } } : undefined}
           allowDecimals={false}
         />
         <Tooltip
           contentStyle={{
             fontSize: 12,
             borderRadius: 8,
-            border: '1px solid #e5e7eb',
+            border: '1px solid #E7E6E2',
             boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
           }}
           formatter={(value) => [Number(value).toLocaleString(), '']}

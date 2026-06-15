@@ -590,12 +590,12 @@ function DescriptiveStat({
 
   return (
     <div className="px-5 py-4">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {label}
       </p>
       <div className="mt-1.5 flex items-baseline gap-2">
-        <p className="text-xl font-bold tabular-nums text-gray-900 truncate">{value}</p>
-        <span className={`text-[11px] font-bold tabular-nums ${deltaTone}`}>
+        <p className="text-xl font-bold font-mono tabular-nums text-gray-900 truncate">{value}</p>
+        <span className={`text-[11px] font-bold font-mono tabular-nums ${deltaTone}`}>
           {arrow} {delta != null ? `${Math.abs(delta)}%` : '—'}
         </span>
       </div>
@@ -693,7 +693,7 @@ function SignalBlock({
       <div
         className={`border-b border-gray-100 px-5 py-2.5 flex items-center justify-between gap-2 ${t.headerTint}`}
       >
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           {title}
         </p>
         <span
@@ -711,10 +711,10 @@ function SignalBlock({
           <div className="mt-4 pt-3 border-t border-gray-100 grid grid-cols-2 gap-4">
             {evidence.map((e) => (
               <div key={e.label}>
-                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
                   {e.label}
                 </p>
-                <p className="mt-0.5 text-sm font-bold text-gray-900 tabular-nums">
+                <p className="mt-0.5 text-sm font-bold text-gray-900 font-mono tabular-nums">
                   {e.value}
                 </p>
               </div>
@@ -838,7 +838,7 @@ function DriverBar({
           />
         )}
       </div>
-      <span className={`text-[12px] font-bold tabular-nums text-right ${tone}`}>
+      <span className={`text-[12px] font-bold font-mono tabular-nums text-right ${tone}`}>
         {deltaText(value)}
       </span>
     </div>
@@ -874,7 +874,7 @@ function CategoryCarryEvidence({
       className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden ${t.accent}`}
     >
       <div className={`border-b border-gray-100 px-5 py-3 ${t.headerTint}`}>
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Category concentration
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
@@ -901,9 +901,9 @@ function CategoryCarryEvidence({
                 </p>
                 <p className="mt-1 text-[14px] text-gray-900 leading-snug">
                   <span className="font-semibold">{c.topItemName}</span> carried{' '}
-                  <span className="font-semibold tabular-nums">{c.topItemShare}%</span> of revenue.
+                  <span className="font-semibold font-mono tabular-nums">{c.topItemShare}%</span> of revenue.
                 </p>
-                <p className="mt-1 text-[11px] text-gray-500 leading-relaxed tabular-nums">
+                <p className="mt-1 text-[11px] text-gray-500 leading-relaxed font-mono tabular-nums">
                   Rest of category: {SHORT_CURRENCY(c.restPrevious)} → {SHORT_CURRENCY(c.restRevenue)}{' '}
                   <span className={`font-semibold ${restTone}`}>({deltaText(c.restDelta)})</span>
                 </p>
@@ -940,7 +940,7 @@ function SignalBlockMulti({
       className={`rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden ${t.accent}`}
     >
       <div className={`border-b border-gray-100 px-5 py-3 ${t.headerTint}`}>
-        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-600">
+        <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           {title}
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
@@ -992,7 +992,7 @@ function SignalBlockMulti({
 function SupportEyebrow({ children }: { children: string }) {
   return (
     <div className="mt-6 mb-3 flex items-center gap-3">
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
         {children}
       </p>
       <span className="flex-1 h-px bg-gray-100" />
@@ -1021,7 +1021,7 @@ function CategoryMixSnapshot({
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Category mix
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1047,7 +1047,7 @@ function CategoryMixSnapshot({
                   <span className={`truncate ${isLeader ? 'text-gray-900 font-semibold' : 'text-gray-700 font-medium'}`}>
                     {r.name}
                   </span>
-                  <span className="text-gray-900 font-bold tabular-nums flex-shrink-0">
+                  <span className="text-gray-900 font-bold font-mono tabular-nums flex-shrink-0">
                     {pct}%
                   </span>
                 </div>
@@ -1063,10 +1063,10 @@ function CategoryMixSnapshot({
         </ul>
       )}
       <div className="border-t border-gray-100 bg-gray-50/40 px-5 py-2.5 flex items-baseline justify-between gap-3">
-        <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <span className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Tracked total
         </span>
-        <span className="text-[12px] font-bold tabular-nums text-gray-800">
+        <span className="text-[12px] font-bold font-mono tabular-nums text-gray-800">
           ${total.toLocaleString('en-US', { maximumFractionDigits: 0 })}
           {topShare > 0 && (
             <span className="ml-2 text-[10px] font-medium text-gray-500">
@@ -1117,7 +1117,7 @@ function PaymentMixSnapshot({
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Payment mix
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
@@ -1155,11 +1155,11 @@ function PaymentMixSnapshot({
                   <span className="flex items-center gap-2 min-w-0">
                     <span className={`h-2 w-2 rounded-full flex-shrink-0 ${b.tone}`} aria-hidden="true" />
                     <span className="text-gray-800 font-medium">{b.label}</span>
-                    <span className="text-[10px] text-gray-400 tabular-nums truncate">
+                    <span className="text-[10px] text-gray-400 font-mono tabular-nums truncate">
                       {orders} {orders === 1 ? 'order' : 'orders'}
                     </span>
                   </span>
-                  <span className="text-gray-900 font-bold tabular-nums flex-shrink-0">
+                  <span className="text-gray-900 font-bold font-mono tabular-nums flex-shrink-0">
                     {pct}%
                   </span>
                 </li>
@@ -1169,10 +1169,10 @@ function PaymentMixSnapshot({
         </div>
       )}
       <div className="border-t border-gray-100 bg-gray-50/40 px-5 py-2.5 flex items-baseline justify-between gap-3">
-        <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+        <span className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
           Tracked orders
         </span>
-        <span className="text-[12px] font-bold tabular-nums text-gray-800">
+        <span className="text-[12px] font-bold font-mono tabular-nums text-gray-800">
           {mix.totalOrders.toLocaleString()}
           {!empty && (
             <span className="ml-2 text-[10px] font-medium text-gray-500">
@@ -1208,7 +1208,7 @@ function PredictiveRecentWeeks({
     return (
       <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden">
         <div className="border-b border-gray-100 px-6 py-3">
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Recent weekly pace
           </p>
         </div>
@@ -1243,7 +1243,7 @@ function PredictiveRecentWeeks({
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden">
       <div className="border-b border-gray-100 px-6 py-3 flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-500">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
             Recent weekly pace
           </p>
           <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
@@ -1263,7 +1263,7 @@ function PredictiveRecentWeeks({
           return (
             <div key={w.startDate} className="grid grid-cols-[110px_1fr_72px] items-center gap-3">
               <span
-                className={`text-[11px] tabular-nums ${
+                className={`text-[11px] font-mono tabular-nums ${
                   isLatest ? 'text-gray-900 font-semibold' : 'text-gray-500'
                 }`}
               >
@@ -1278,7 +1278,7 @@ function PredictiveRecentWeeks({
                 />
               </div>
               <span
-                className={`text-[12px] font-bold tabular-nums text-right ${
+                className={`text-[12px] font-bold font-mono tabular-nums text-right ${
                   isLatest ? 'text-gray-900' : 'text-gray-700'
                 }`}
               >
@@ -1291,7 +1291,7 @@ function PredictiveRecentWeeks({
       <div className="border-t border-gray-100 bg-gray-50/40 px-6 py-2 flex items-baseline justify-between gap-3 flex-wrap text-[11px]">
         <span className="text-gray-600">
           <span className="text-gray-400 mr-1">{weeks.length}-week average:</span>
-          <span className="tabular-nums font-bold text-gray-800">{SHORT_CURRENCY(avgAll)}</span>
+          <span className="font-mono tabular-nums font-bold text-gray-800">{SHORT_CURRENCY(avgAll)}</span>
         </span>
         <span className="text-[10px] text-gray-400">
           Context for the projection above — not a forecast of next week.
@@ -1359,7 +1359,7 @@ function PredictiveRhythmChart({
                   >
                     {u.dayLabel}
                   </p>
-                  <p className="text-[10px] tabular-nums text-gray-400">
+                  <p className="text-[10px] font-mono tabular-nums text-gray-400">
                     {u.dateLabel}
                   </p>
                   {/* Mini bar: vertical fill scaled to strongest day */}
@@ -1376,7 +1376,7 @@ function PredictiveRhythmChart({
                     )}
                   </div>
                   <p
-                    className={`text-[12px] font-bold tabular-nums ${
+                    className={`text-[12px] font-bold font-mono tabular-nums ${
                       isStrongest ? 'text-indigo-900' : 'text-gray-700'
                     }`}
                   >
@@ -1396,7 +1396,7 @@ function PredictiveRhythmChart({
                 <span className="text-gray-400 mr-1">Strongest:</span>
                 <span className="font-semibold text-gray-800">{outlook.strongest.dayLabel}</span>
                 <span className="text-gray-400 mx-1">·</span>
-                <span className="tabular-nums font-bold text-indigo-700">
+                <span className="font-mono tabular-nums font-bold text-indigo-700">
                   {SHORT_CURRENCY(outlook.strongest.projected)}
                 </span>
               </span>
@@ -1407,7 +1407,7 @@ function PredictiveRhythmChart({
                   <span className="text-gray-400 mr-1">Softest:</span>
                   <span className="font-semibold text-gray-800">{outlook.softest.dayLabel}</span>
                   <span className="text-gray-400 mx-1">·</span>
-                  <span className="tabular-nums font-bold text-gray-700">
+                  <span className="font-mono tabular-nums font-bold text-gray-700">
                     {SHORT_CURRENCY(outlook.softest.projected)}
                   </span>
                 </span>

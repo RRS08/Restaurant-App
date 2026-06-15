@@ -32,18 +32,8 @@ import { logout } from '@/app/actions/auth'
 import { useSidebarClose } from '@/app/(app)/app-shell'
 import { BrandMark, BrandWordmark } from '@/components/brand'
 import {
-  LayoutDashboard,
-  UtensilsCrossed,
-  TrendingUp,
-  Package,
-  Users,
-  DollarSign,
-  Settings,
-  LogOut,
-  ShoppingCart,
-  BarChart3,
-  Wrench,
-  X,
+  LayoutDashboard, UtensilsCrossed, TrendingUp, Package, Users,
+  DollarSign, Settings, LogOut, ShoppingCart, BarChart3, Wrench, X,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
@@ -57,68 +47,20 @@ import {
 // /dev-tools page is also server-side guarded (`isDevEmail`); this
 // flag controls sidebar visibility only — convenience, not security.
 const navItems: Array<{
-  label: string
-  href: string
-  icon: typeof LayoutDashboard
-  dev?: true
+  label: string; href: string; icon: typeof LayoutDashboard; dev?: true
 }> = [
-  {
-    label: 'Dashboard',
-    href: '/dashboard',
-    icon: LayoutDashboard,
-  },
-  {
-    label: 'Menu',
-    href: '/menu',
-    icon: UtensilsCrossed,
-  },
-  {
-    label: 'POS',
-    href: '/pos',
-    icon: ShoppingCart,
-  },
-  {
-    label: 'Sales',
-    href: '/sales',
-    icon: TrendingUp,
-  },
-  {
-    label: 'Inventory',
-    href: '/inventory',
-    icon: Package,
-  },
-  {
-    label: 'Staffing',
-    href: '/staffing',
-    icon: Users,
-  },
-  {
-    label: 'Finance',
-    href: '/finance',
-    icon: DollarSign,
-  },
-  {
-    label: 'Analytics',
-    href: '/analytics',
-    icon: BarChart3,
-  },
-  {
-    label: 'Settings',
-    href: '/settings',
-    icon: Settings,
-  },
-  {
-    label: 'Dev Toolbox',
-    href: '/dev-tools',
-    icon: Wrench,
-    dev: true,
-  },
+  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
+  { label: 'Menu',      href: '/menu',      icon: UtensilsCrossed },
+  { label: 'POS',       href: '/pos',       icon: ShoppingCart },
+  { label: 'Sales',     href: '/sales',     icon: TrendingUp },
+  { label: 'Inventory', href: '/inventory', icon: Package },
+  { label: 'Staffing',  href: '/staffing',  icon: Users },
+  { label: 'Finance',   href: '/finance',   icon: DollarSign },
+  { label: 'Analytics', href: '/analytics', icon: BarChart3 },
+  { label: 'Settings',  href: '/settings',  icon: Settings },
+  { label: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
 ]
 
-// ----------------------------------------------------------------
-// Props type
-// TypeScript "interface" describes the shape of the props object.
-// ----------------------------------------------------------------
 interface SidebarProps {
   restaurantName: string
   userFullName: string | null
@@ -133,11 +75,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({
-  restaurantName,
-  userFullName,
-  userEmail,
-  operatingMode,
-  isDev,
+  restaurantName, userFullName, userEmail, operatingMode, isDev,
 }: SidebarProps) {
   // Tablet overlay close handler — pulled from AppShell's React
   // Context. `null` on desktop (sidebar always visible) or when
@@ -146,6 +84,7 @@ export default function Sidebar({
   // page. NEVER passed in as a prop — that would put a function
   // across the server/client boundary and crash the Vercel runtime.
   const closeSidebar = useSidebarClose()
+
   // Visibility filter:
   //   • `dev: true` items render for dev accounts only. The page
   //     itself is server-side guarded; this is a convenience.
@@ -166,16 +105,13 @@ export default function Sidebar({
   const displayName = userFullName ?? userEmail
 
   return (
-    <aside className="w-60 min-h-screen bg-white border-r border-gray-200 flex flex-col">
+    <aside className="w-60 min-h-screen bg-white border-r border-hairline flex flex-col">
 
-      {/* ---- Top: Product mark + tenant identity ----
-           The Checked mark is the product brand; the tenant name
-           sits beside it so a manager always sees "this is Checked
-           running for <my restaurant>". Multi-tenant pattern. */}
-      <div className="px-4 py-4 border-b border-gray-100 flex items-center justify-between gap-2">
+      {/* Top: product mark + tenant identity */}
+      <div className="px-4 py-4 border-b border-hairline flex items-center justify-between gap-2">
         <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0 group">
           <BrandMark size={32} variant="solid" className="flex-shrink-0 rounded-lg" />
-          <span className="font-semibold text-gray-900 text-sm leading-tight truncate group-hover:text-gray-700 transition-colors">
+          <span className="font-semibold text-zinc-900 text-sm leading-tight truncate group-hover:text-slate transition-colors">
             {restaurantName}
           </span>
         </Link>
@@ -189,14 +125,14 @@ export default function Sidebar({
             type="button"
             onClick={closeSidebar}
             aria-label="Close menu"
-            className="xl:hidden flex-shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+            className="xl:hidden flex-shrink-0 inline-flex items-center justify-center w-8 h-8 rounded-md text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         )}
       </div>
 
-      {/* ---- Middle: Navigation links ---- */}
+      {/* Middle: navigation */}
       <nav className="flex-1 px-3 py-4 space-y-0.5">
         {visibleNavItems.map((item) => {
           // Determine if this link is the currently active page.
@@ -204,27 +140,23 @@ export default function Sidebar({
           //   pathname "/menu/new-item" starts with "/menu" → Menu is active
           //   pathname "/dashboard" starts with "/dashboard" → Dashboard is active
           const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
-
           const Icon = item.icon
-
           return (
             <Link
               key={item.href}
               href={item.href}
               onClick={closeSidebar ?? undefined}
               className={cn(
-                // Base styles that apply to every link
                 'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                // Conditional styles based on whether the link is active
                 isActive
-                  ? 'bg-blue-50 text-blue-700'          // active: blue tint
-                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900' // inactive
+                  ? 'bg-zinc-100 text-zinc-900 font-semibold'                 // active: monochrome ink
+                  : 'text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900'      // inactive
               )}
             >
               <Icon
                 className={cn(
                   'w-4 h-4 flex-shrink-0',
-                  isActive ? 'text-blue-600' : 'text-gray-400'
+                  isActive ? 'text-zinc-900' : 'text-zinc-400'
                 )}
               />
               <span className="flex-1">{item.label}</span>
@@ -241,25 +173,23 @@ export default function Sidebar({
         })}
       </nav>
 
-      {/* ---- Bottom: User info + sign out ---- */}
-      <div className="px-3 py-4 border-t border-gray-100">
-        {/* User info */}
+      {/* Bottom: user + sign out */}
+      <div className="px-3 py-4 border-t border-hairline">
         <div className="px-3 py-2 mb-1">
-          <p className="text-sm font-medium text-gray-900 truncate">{displayName}</p>
+          <p className="text-sm font-medium text-zinc-900 truncate">{displayName}</p>
           {userFullName && (
-            <p className="text-xs text-gray-400 truncate">{userEmail}</p>
+            <p className="text-xs text-zinc-400 truncate">{userEmail}</p>
           )}
         </div>
 
-        {/* Sign out — uses a form so the server action works without JS */}
         <form action={logout}>
           <button
             type="submit"
             className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
-                       font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900
+                       font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900
                        transition-colors"
           >
-            <LogOut className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <LogOut className="w-4 h-4 text-zinc-400 flex-shrink-0" />
             Sign out
           </button>
         </form>
@@ -267,14 +197,11 @@ export default function Sidebar({
         {/* Product wordmark — calm, small, sits below the user
             block to anchor the sidebar with the brand without
             competing with the tenant name at the top. */}
-        <div className="mt-3 px-3 pt-3 border-t border-gray-100 flex items-center justify-between">
-          <BrandWordmark size="sm" className="text-gray-400" />
-          <span className="text-[10px] text-gray-300 font-medium tabular-nums">
-            v1
-          </span>
+        <div className="mt-3 px-3 pt-3 border-t border-hairline flex items-center justify-between">
+          <BrandWordmark size="sm" className="text-slate" />
+          <span className="text-[10px] text-zinc-300 font-medium tabular-nums">v1</span>
         </div>
       </div>
-
     </aside>
   )
 }

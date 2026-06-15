@@ -103,7 +103,7 @@ export default function AppShell({
 
   return (
     <SidebarCloseContext.Provider value={close}>
-      <div className="flex min-h-screen bg-gray-50">
+      <div className="flex min-h-screen bg-white">     {/* app canvas → pure white */}
         {/* ----------------------------------------------------------------
             Sidebar container.
             • xl+      static flex item — same layout as before.
@@ -131,7 +131,7 @@ export default function AppShell({
             type="button"
             aria-label="Close menu"
             onClick={close}
-            className="fixed inset-0 bg-gray-900/30 z-30 xl:hidden"
+            className="fixed inset-0 bg-zinc-900/30 z-30 xl:hidden"
           />
         )}
 
@@ -150,7 +150,7 @@ export default function AppShell({
           onClick={open}
           aria-label="Open navigation menu"
           aria-expanded={isOpen}
-          className="xl:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center w-11 h-11 rounded-lg bg-white border border-gray-200 shadow-sm text-gray-700 hover:bg-gray-50 transition-colors"
+          className="xl:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center w-11 h-11 rounded-lg bg-white border border-hairline shadow-sm text-zinc-700 hover:bg-zinc-50 transition-colors"
         >
           <Menu className="w-5 h-5" />
         </button>

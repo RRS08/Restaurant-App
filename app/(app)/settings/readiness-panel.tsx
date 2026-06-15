@@ -50,7 +50,7 @@ export default function ReadinessPanel({ readiness, isDev = false }: { readiness
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="flex items-start justify-between mb-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Operating mode</p>
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Operating mode</p>
             <h3 className="text-sm font-semibold text-gray-900 mt-0.5">How sales are captured</h3>
           </div>
           <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
@@ -131,7 +131,7 @@ export default function ReadinessPanel({ readiness, isDev = false }: { readiness
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="flex items-start justify-between mb-2">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Inventory tracking</p>
+            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Inventory tracking</p>
             <h3 className="text-sm font-semibold text-gray-900 mt-0.5">
               {inv.activatedAt ? 'Live tracking active' : 'Not activated'}
             </h3>

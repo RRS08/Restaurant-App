@@ -21,7 +21,7 @@ export default function AnalyticsLocked({ readiness }: { readiness: ReadinessSna
   return (
     <div className="max-w-[1400px]">
       <div className="mb-5">
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
+        <h1 className="text-2xl tracking-tight font-bold text-gray-900">Analytics</h1>
         <p className="mt-1 text-sm text-gray-500">
           Patterns, performance, and movement across the business.
         </p>
@@ -80,9 +80,9 @@ export default function AnalyticsLocked({ readiness }: { readiness: ReadinessSna
 function GateRow({ label, current, target, met }: { label: string; current: string; target: string; met: boolean }) {
   return (
     <div className={`rounded-lg border p-3 ${met ? 'bg-green-50 border-green-100' : 'bg-gray-50 border-gray-100'}`}>
-      <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{label}</p>
       <div className="mt-1 flex items-baseline justify-between">
-        <span className={`text-lg font-bold tabular-nums ${met ? 'text-green-700' : 'text-gray-900'}`}>{current}</span>
+        <span className={`text-lg font-bold font-mono tabular-nums ${met ? 'text-green-700' : 'text-gray-900'}`}>{current}</span>
         <span className="text-[10px] text-gray-400">of {target}</span>
       </div>
     </div>

@@ -15,13 +15,18 @@ import type { CSSProperties } from 'react'
 import { BrandLockup } from '@/components/brand'
 import FloorSim from '@/components/marketing/floor-sim'
 import DemoForm from '@/components/marketing/demo-form'
+import ProblemCards from '@/components/marketing/problem-cards'
 
 const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
 const mono = (extra: CSSProperties = {}): CSSProperties => ({ fontFamily: MONO, ...extra })
 
 const wrap = (extra: CSSProperties = {}): CSSProperties => ({ maxWidth: 1160, margin: '0 auto', ...extra })
 const eyebrow: CSSProperties = { ...mono(), fontSize: 11.5, letterSpacing: '0.16em', textTransform: 'uppercase', color: '#6B6B70' }
-const actNum: CSSProperties = { ...mono(), fontSize: 40, fontWeight: 600, lineHeight: 1, color: '#18181B' }
+// Act numbers anchor each section as a chapter marker. Clamped
+// so 01/02/03 scale down on mobile (where the H2 next to them
+// shrinks to ~26px) — without the clamp a fixed 64px act number
+// looms awkwardly over a 26px headline on a phone.
+const actNum: CSSProperties = { ...mono(), fontSize: 'clamp(44px, 6vw, 64px)', fontWeight: 600, lineHeight: 1, color: '#18181B' }
 const card: CSSProperties = { background: '#FFFFFF', border: '1px solid #E7E6E2', borderRadius: 14 }
 
 // Entry-animation helpers — keyframes live in the page's <style>
@@ -41,14 +46,6 @@ const typeIn = (delay: number, duration = 420): CSSProperties => ({
 const popIn = (delay: number): CSSProperties => ({
   animation: `mkPop 480ms cubic-bezier(0.34, 1.56, 0.64, 1) ${delay}ms backwards`,
 })
-
-const PROBLEMS = [
-  { n: '01', t: 'A POS', d: 'Takes the money. Knows nothing about stock.', dark: false },
-  { n: '02', t: 'A spreadsheet', d: 'For stock. Last updated… you’re not sure.', dark: false },
-  { n: '03', t: 'A notebook', d: 'The schedule, in your handwriting.', dark: false },
-  { n: '04', t: 'The bank app', d: 'For money. Two days behind reality.', dark: false },
-  { n: '05', t: 'Your head', d: 'Everything else. Until 11pm.', dark: true },
-]
 
 const PILOT = [
   { t: 'Built end-to-end & deployed', d: 'POS, inventory, staffing, finance, analytics — all working. Not mockups.' },
@@ -204,9 +201,12 @@ export default function MarketingPage() {
         </div>
       </section>
 
-      {/* ACT 1 */}
-      <section id="what" className="mk-sec" style={wrap({ padding: '40px 24px 8px' })}>
-        <div style={{ borderTop: '1px solid #18181B', paddingTop: 24, display: 'flex', alignItems: 'baseline', gap: 20, flexWrap: 'wrap' }}>
+      {/* ACT 1 — slightly tighter top padding (64 vs Acts 2/3's
+          96) because the hero above is full-viewport with vertically
+          centered content. The hero's empty bottom space already
+          contributes breathing room before this section starts. */}
+      <section id="what" className="mk-sec" style={wrap({ padding: '64px 24px 32px' })}>
+        <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
           <span style={actNum}>01</span>
           <div>
             <div style={eyebrow}>What it is &amp; what it fixes</div>
@@ -217,20 +217,15 @@ export default function MarketingPage() {
 
       {/* problem */}
       <section style={wrap({ padding: '36px 24px 8px' })}>
-        <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '0 0 26px', maxWidth: 620 }}>Two things quietly bleed an independent restaurant. First, stock you track by hand — until you run out of pastor in the middle of the rush and start turning tables away. Second, money that never quite squares: credits, invoices, delayed payouts, payroll you estimated but never checked against what actually went out. Every tool you buy to fix it speaks its own language, so the real numbers end up stitched together by hand in a spreadsheet. That&apos;s the mess Checked replaces.</p>
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          {PROBLEMS.map((p) => (
-            <div key={p.n} style={{ flex: '1 1 160px', background: p.dark ? '#18181B' : '#FFFFFF', color: p.dark ? '#FAF9F6' : undefined, border: p.dark ? 'none' : '1px solid #E7E6E2', borderRadius: 13, padding: 18 }}>
-              <div style={mono({ fontSize: 11, color: p.dark ? '#6B6B70' : '#A1A1A6' })}>{p.n}</div>
-              <div style={{ fontSize: 15.5, fontWeight: 600, marginTop: 8 }}>{p.t}</div>
-              <div style={{ fontSize: 13, color: p.dark ? '#C9C9CE' : '#6B6B70', marginTop: 4, lineHeight: 1.45 }}>{p.d}</div>
-            </div>
-          ))}
-        </div>
+        <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '0 0 44px', maxWidth: 620 }}>Two things quietly bleed an independent restaurant. First, stock you track by hand — until you run out of pastor in the middle of the rush and start turning tables away. Second, money that never quite squares: credits, invoices, delayed payouts, payroll you estimated but never checked against what actually went out. Every tool you buy to fix it speaks its own language, so the real numbers end up stitched together by hand in a spreadsheet. That&apos;s the mess Checked replaces.</p>
+        <ProblemCards />
       </section>
 
-      {/* live demo */}
-      <section style={wrap({ padding: '44px 24px 64px' })}>
+      {/* live demo — extra top padding so the pivot from "five
+          disconnected problems" (ProblemCards above) to "one
+          unified solution" (FloorSim below) reads as a deliberate
+          section break, not a continuation. */}
+      <section style={wrap({ padding: '96px 24px 64px' })}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
           <h3 style={{ fontSize: 'clamp(22px,2.8vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: 0, maxWidth: 620 }}>Checked replaces all five with one. Ring up an order and watch the rest catch up — instantly.</h3>
           <p style={mono({ fontSize: 12.5, color: '#6B6B70', maxWidth: 240, lineHeight: 1.6 })}>This is the actual product, running right here. Tap a dish.</p>
@@ -240,8 +235,8 @@ export default function MarketingPage() {
 
       {/* ACT 2 */}
       <section id="why" className="mk-sec" style={{ background: '#F0F0EC' }}>
-        <div style={wrap({ padding: '64px 24px 8px' })}>
-          <div style={{ borderTop: '1px solid #18181B', paddingTop: 24, display: 'flex', alignItems: 'baseline', gap: 20, flexWrap: 'wrap' }}>
+        <div style={wrap({ padding: '96px 24px 32px' })}>
+          <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
             <span style={actNum}>02</span>
             <div>
               <div style={eyebrow}>Why get it from us</div>
@@ -276,8 +271,10 @@ export default function MarketingPage() {
           </div>
         </div>
 
-        {/* setup speed */}
-        <div style={wrap({ padding: '48px 24px 64px' })}>
+        {/* setup speed — extra top padding so the dark mode change
+            from cream Act 2 surface lands as its own beat, not a
+            mid-section interruption. */}
+        <div style={wrap({ padding: '88px 24px 64px' })}>
           <div style={{ background: '#18181B', color: '#FAF9F6', borderRadius: 18, padding: 'clamp(28px,4vw,44px)' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 32px', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 32 }}>
               <div>
@@ -300,8 +297,8 @@ export default function MarketingPage() {
       </section>
 
       {/* ACT 3 */}
-      <section id="trust" className="mk-sec" style={wrap({ padding: '64px 24px 8px' })}>
-        <div style={{ borderTop: '1px solid #18181B', paddingTop: 24, display: 'flex', alignItems: 'baseline', gap: 20, flexWrap: 'wrap' }}>
+      <section id="trust" className="mk-sec" style={wrap({ padding: '96px 24px 32px' })}>
+        <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
           <span style={actNum}>03</span>
           <div>
             <div style={eyebrow}>Can you trust us</div>
@@ -311,7 +308,7 @@ export default function MarketingPage() {
       </section>
 
       {/* pilot */}
-      <section style={wrap({ padding: '40px 24px 0' })}>
+      <section style={wrap({ padding: '56px 24px 0' })}>
         <div style={{ display: 'flex', gap: 44, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 320px' }}>
             <div style={eyebrow}>Where Checked is today</div>
@@ -335,7 +332,7 @@ export default function MarketingPage() {
       </section>
 
       {/* testimonials */}
-      <section style={wrap({ padding: '56px 24px 0' })}>
+      <section style={wrap({ padding: '80px 24px 0' })}>
         <div style={eyebrow}>From the floor</div>
         <h3 style={{ fontSize: 'clamp(24px,3vw,34px)', lineHeight: 1.08, letterSpacing: '-1.1px', fontWeight: 700, margin: '14px 0 0', maxWidth: 680 }}>Real words from real owners — coming soon.</h3>
         <p style={{ fontSize: 16, lineHeight: 1.55, color: '#52525B', margin: '14px 0 0', maxWidth: 600 }}>We&apos;re in pilot, so we don&apos;t have testimonials yet — and we&apos;d rather leave this space honestly empty than fill it with words we made up. As our first partners come on, theirs go right here.</p>
@@ -349,7 +346,7 @@ export default function MarketingPage() {
       </section>
 
       {/* principles */}
-      <section style={wrap({ padding: '48px 24px 0' })}>
+      <section style={wrap({ padding: '72px 24px 0' })}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E7E6E2', borderRadius: 18, padding: 'clamp(28px,4vw,44px)' }}>
           <div style={eyebrow}>How we work · C&oacute;mo trabajamos</div>
           <h3 style={{ fontSize: 'clamp(22px,2.6vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: '12px 0 0', maxWidth: 640 }}>A few things we won&apos;t trade away.</h3>

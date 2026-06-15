@@ -24,7 +24,9 @@
       "Bash(echo \"LINT_EXIT=$?\")",
       "Bash(echo \"BUILD_EXIT=$?\")",
       "Bash(echo \"TSC=$?\")",
-      "Bash(echo \"BUILD=$?\")"
+      "Bash(echo \"BUILD=$?\")",
+      "WebSearch",
+      "WebFetch(domain:support.apple.com)"
     ]
   }
 }

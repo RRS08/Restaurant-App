@@ -62,14 +62,25 @@ export default function LoginPage() {
               />
             </div>
 
-            {/* Password field */}
+            {/* Password field — label row carries the "Forgot
+                password?" link so the recovery path is reachable
+                exactly when a user needs it (next to the field
+                they're about to fumble). */}
             <div>
-              <label
-                htmlFor="password"
-                className="block text-sm font-medium text-gray-700 mb-1.5"
-              >
-                Password
-              </label>
+              <div className="flex items-baseline justify-between mb-1.5">
+                <label
+                  htmlFor="password"
+                  className="block text-sm font-medium text-gray-700"
+                >
+                  Password
+                </label>
+                <Link
+                  href="/forgot-password"
+                  className="text-xs font-medium text-blue-600 hover:text-blue-500"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 id="password"
                 name="password"

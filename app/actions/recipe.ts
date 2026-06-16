@@ -1,7 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { getAuthContext, resolveLocationId, formatError } from '@/lib/auth'
+import { getAuthContext, resolveLocationId, formatError, logAudit } from '@/lib/auth'
 import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
 
 export async function addRecipeComponent(
@@ -10,6 +10,13 @@ export async function addRecipeComponent(
 ) {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  // Owner-only — recipe quantities drive COGS and POS depletion. A
+  // bad-actor manager could under-deduct to hide waste; structural
+  // recipe edits belong with the owner.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can edit recipes.' }
+  }
 
   const menuItemId = formData.get('menu_item_id') as string
   const inventoryItemId = formData.get('inventory_item_id') as string
@@ -32,6 +39,12 @@ export async function addRecipeComponent(
     console.error('Recipe component creation failed:', error)
     return { error: formatError('add ingredient', error) }
   }
+
+  await logAudit(ctx, null, 'add_recipe_component', 'recipe_components', menuItemId, {
+    menu_item_id: menuItemId,
+    inventory_item_id: inventoryItemId,
+    quantity_required: quantity,
+  })
 
   revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
@@ -59,6 +72,11 @@ export async function updateRecipeComponentQuantity(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — see addRecipeComponent above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can edit recipes.' }
+  }
+
   const componentId = ((formData.get('component_id') as string | null) ?? '').trim()
   const menuItemId = ((formData.get('menu_item_id') as string | null) ?? '').trim()
   const quantityRaw = ((formData.get('quantity_required') as string | null) ?? '').trim()
@@ -77,6 +95,11 @@ export async function updateRecipeComponentQuantity(
 
   if (error) return { error: formatError('recipe quantity', error) }
 
+  await logAudit(ctx, null, 'update_recipe_component_quantity', 'recipe_components', componentId, {
+    menu_item_id: menuItemId || null,
+    quantity_required: quantity,
+  })
+
   if (menuItemId) revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
   revalidatePath('/pos')
@@ -87,11 +110,18 @@ export async function removeRecipeComponent(formData: FormData) {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return
 
+  // Owner-only — see addRecipeComponent above. Silent return on
+  // failure matches this action's no-feedback shape.
+  if (ctx.role !== 'owner') return
+
   const componentId = formData.get('component_id') as string
   const menuItemId = formData.get('menu_item_id') as string
   if (!componentId) return
 
   await ctx.supabase.from('recipe_components').delete().eq('id', componentId)
+  await logAudit(ctx, null, 'remove_recipe_component', 'recipe_components', componentId, {
+    menu_item_id: menuItemId || null,
+  })
   revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
 }
@@ -109,6 +139,15 @@ export async function createInlineInventoryItem(
 
   const { locationId, error: locError } = await resolveLocationId(ctx)
   if (locError) return { error: locError }
+
+  // Location enforcement — resolveLocationId returns the manager's
+  // own location when called without a form value, but if a caller
+  // ever threads a `location_id` form field through here we'd want
+  // the same gate that protects inventory_items elsewhere. Belt-and-
+  // suspenders: a manager can only create against their location.
+  if (ctx.role === 'manager' && ctx.locationId && locationId !== ctx.locationId) {
+    return { error: 'You do not have access to this location.' }
+  }
 
   // Normalize on the way in. Display name is what we save; the
   // lookup key powers the duplicate-resolves-to-reuse behavior so

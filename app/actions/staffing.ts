@@ -29,6 +29,13 @@ export async function addStaffingRole(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — staffing structure (roles, sections) is restaurant
+  // config, not operational. Managers schedule within the structure
+  // but don't change what the structure is.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can change staffing structure.' }
+  }
+
   const area = formData.get('area') as 'foh' | 'boh'
   const rawRole = (formData.get('role') as string) ?? ''
   const role = normalizeDisplayName(rawRole)
@@ -97,6 +104,11 @@ export async function createShiftSection(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — see addStaffingRole above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can change staffing structure.' }
+  }
+
   const rawName = (formData.get('name') as string) ?? ''
   const name = normalizeDisplayName(rawName)
   const nameKey = normalizeNameKey(rawName)
@@ -161,6 +173,11 @@ export async function updateShiftSection(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — see addStaffingRole above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can change staffing structure.' }
+  }
+
   const sectionId = (formData.get('section_id') as string)?.trim()
   const rawName = (formData.get('name') as string) ?? ''
   const name = normalizeDisplayName(rawName)
@@ -220,6 +237,11 @@ export async function deleteShiftSection(
 ) {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  // Owner-only — see addStaffingRole above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can change staffing structure.' }
+  }
 
   const sectionId = (formData.get('section_id') as string)?.trim()
   if (!sectionId) return { error: 'No block selected.' }
@@ -350,6 +372,28 @@ export async function updateEmployee(
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
   const employeeId = (formData.get('employee_id') as string)?.trim()
+  if (!employeeId) return { error: 'No employee selected.' }
+
+  // Location enforcement: a manager can only edit an employee
+  // whose primary_location_id matches their managedLocationId.
+  // Owners pass for any location. Without this check a manager at
+  // Location A could craft a form submission to edit an employee
+  // at Location B.
+  const { data: empRow } = await ctx.supabase
+    .from('employees')
+    .select('primary_location_id')
+    .eq('id', employeeId)
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!empRow) return { error: 'Employee not found.' }
+  if (
+    ctx.role === 'manager' &&
+    ctx.locationId &&
+    empRow.primary_location_id !== ctx.locationId
+  ) {
+    return { error: 'You do not have access to this employee’s location.' }
+  }
+
   const rawName = (formData.get('name') as string) ?? ''
   const name = normalizeDisplayName(rawName)
   const nameKey = normalizeNameKey(rawName)
@@ -357,7 +401,6 @@ export async function updateEmployee(
   const role = normalizeDisplayName(rawRole)
   const hourlyRateRaw = formData.get('hourly_rate') as string
 
-  if (!employeeId) return { error: 'No employee selected.' }
   if (!name) return { error: 'Employee name is required.' }
   if (!role) return { error: 'Role is required.' }
 
@@ -415,6 +458,22 @@ export async function archiveEmployee(
 
   const employeeId = (formData.get('employee_id') as string)?.trim()
   if (!employeeId) return { error: 'No employee selected.' }
+
+  // Location enforcement — see updateEmployee above.
+  const { data: empRow } = await ctx.supabase
+    .from('employees')
+    .select('primary_location_id')
+    .eq('id', employeeId)
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!empRow) return { error: 'Employee not found.' }
+  if (
+    ctx.role === 'manager' &&
+    ctx.locationId &&
+    empRow.primary_location_id !== ctx.locationId
+  ) {
+    return { error: 'You do not have access to this employee’s location.' }
+  }
 
   const { error } = await ctx.supabase
     .from('employees')
@@ -529,6 +588,11 @@ export async function clearAllEmployees() {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.', cleared: 0 }
 
+  // Owner-only — destructive restaurant-wide reset.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can clear the roster.', cleared: 0 }
+  }
+
   // Delete all shifts for this restaurant first (FK cascade would handle it, but explicit is clearer)
   await ctx.supabase.from('shifts').delete().eq('restaurant_id', ctx.restaurantId)
 
@@ -545,6 +609,8 @@ export async function clearAllEmployees() {
       .eq('restaurant_id', ctx.restaurantId)
   }
 
+  await logAudit(ctx, null, 'clear_all_employees', 'employees', undefined, { archived_count: count })
+
   revalidatePath('/staffing')
   return { error: null, cleared: count, message: `Archived ${count} employee${count !== 1 ? 's' : ''} and cleared all shifts.` }
 }
@@ -557,11 +623,18 @@ export async function resetStaffingSetup() {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
 
+  // Owner-only — destructive restaurant-wide reset.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can reset staffing.' }
+  }
+
   // Order matters: shifts reference employees + sections, so delete shifts first
   await ctx.supabase.from('shifts').delete().eq('restaurant_id', ctx.restaurantId)
   await ctx.supabase.from('employees').update({ active: false }).eq('restaurant_id', ctx.restaurantId)
   await ctx.supabase.from('shift_sections').delete().eq('restaurant_id', ctx.restaurantId)
   await ctx.supabase.from('staffing_config').delete().eq('restaurant_id', ctx.restaurantId)
+
+  await logAudit(ctx, null, 'reset_staffing_setup')
 
   revalidatePath('/staffing')
   return { error: null, message: 'Staffing reset complete. Visit Staffing to run setup again.' }

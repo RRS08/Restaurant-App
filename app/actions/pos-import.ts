@@ -463,6 +463,13 @@ export async function importCsvMenu(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
 
+  // Owner-only: one-shot imports overwrite menu state directly,
+  // bypassing the external POS connection flow that's already
+  // owner-gated. Without this check a manager/staff could upload
+  // arbitrary CSV and rewrite the menu.
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
+
   const validated = await validateImportInput(formData)
   if ('error' in validated) return { error: validated.error }
 
@@ -511,6 +518,10 @@ export async function importCsvOrders(
 ): Promise<Result> {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  // Owner-only — see importCsvMenu above for rationale.
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
 
   const validated = await validateImportInput(formData)
   if ('error' in validated) return { error: validated.error }
@@ -581,6 +592,10 @@ export async function importCustomJsonMenu(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
 
+  // Owner-only — see importCsvMenu above for rationale.
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
+
   const validated = await validateImportInput(formData)
   if ('error' in validated) return { error: validated.error }
 
@@ -629,6 +644,10 @@ export async function importCustomJsonOrders(
 ): Promise<Result> {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  // Owner-only — see importCsvMenu above for rationale.
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
 
   const validated = await validateImportInput(formData)
   if ('error' in validated) return { error: validated.error }

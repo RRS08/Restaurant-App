@@ -30,6 +30,7 @@ import BusinessCard from './business-card'
 import OperationsCard from './operations-card'
 import IntegrationsCard from './integrations-card'
 import SystemStatusCard from './system-status-card'
+import TeamCard from './team-card'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -57,6 +58,18 @@ export default async function SettingsPage() {
   let posLastMenuSyncAt: string | null = null
   let posLastOrdersSyncAt: string | null = null
   let posPendingReviewCount = 0
+  // Team management payload — only fetched for owners (renders the
+  // invite UI). RLS would also filter for non-owners but we skip the
+  // query entirely to keep the page fast.
+  let teamLocations: Array<{ id: string; name: string }> = []
+  let teamInvitations: Array<{
+    id: string
+    email: string
+    role: 'manager' | 'staff'
+    status: 'pending' | 'accepted' | 'canceled' | 'expired'
+    location_name: string | null
+    created_at: string
+  }> = []
   const userDisplayName =
     (user?.user_metadata as { full_name?: string; name?: string } | undefined)?.full_name ??
     (user?.user_metadata as { full_name?: string; name?: string } | undefined)?.name ??
@@ -156,6 +169,38 @@ export default async function SettingsPage() {
       posLastMenuSyncAt = conn?.last_menu_sync_at ?? null
       posLastOrdersSyncAt = conn?.last_orders_sync_at ?? null
       posPendingReviewCount = Number(pendingCount ?? 0)
+
+      // Team-management fetches — owner-only since the card is
+      // hidden for everyone else.
+      if (isOwner) {
+        const [{ data: locs }, { data: invs }] = await Promise.all([
+          supabase
+            .from('locations')
+            .select('id, name')
+            .eq('restaurant_id', rid)
+            .order('created_at', { ascending: true }),
+          supabase
+            .from('team_invitations')
+            .select(`
+              id, email, role, status, created_at,
+              location:locations ( name )
+            `)
+            .eq('restaurant_id', rid)
+            .order('created_at', { ascending: false }),
+        ])
+        teamLocations = (locs ?? []).map((l) => ({ id: l.id as string, name: l.name as string }))
+        teamInvitations = (invs ?? []).map((row) => {
+          const loc = Array.isArray(row.location) ? row.location[0] : row.location
+          return {
+            id: row.id as string,
+            email: row.email as string,
+            role: row.role as 'manager' | 'staff',
+            status: row.status as 'pending' | 'accepted' | 'canceled' | 'expired',
+            location_name: loc?.name ?? null,
+            created_at: row.created_at as string,
+          }
+        })
+      }
     }
   }
 
@@ -205,6 +250,12 @@ export default async function SettingsPage() {
             posPendingReviewCount={posPendingReviewCount}
             isDev={isDev}
           />
+        )}
+
+        {/* Team management — owner-only. Lets the owner invite a
+            manager (location-scoped) or staff via email. */}
+        {(isOwner && restaurantId) && (
+          <TeamCard locations={teamLocations} invitations={teamInvitations} />
         )}
 
         {readiness && <SystemStatusCard readiness={readiness} />}

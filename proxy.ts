@@ -66,18 +66,41 @@ export default async function proxy(request: NextRequest) {
   // protected without editing this file.
 
   const isPublicPage = path === '/'
-  const isAuthPage = path === '/login' || path === '/signup'
+  // Pages logged-out users are allowed to reach as part of the auth
+  // flow itself. /forgot-password starts a reset; /auth/callback
+  // exchanges the magic-link code for a session; /reset-password
+  // is the form they land on AFTER the callback (the callback gave
+  // them a session). All three must be reachable without an existing
+  // session.
+  const isAuthFlowPage =
+    path === '/login' ||
+    path === '/signup' ||
+    path === '/forgot-password' ||
+    path === '/reset-password' ||
+    path === '/auth/callback' ||
+    // /auth/accept-invite lands an INVITED user immediately after
+    // /auth/callback gave them a session. By the time the proxy
+    // sees this request they SHOULD have a session, but listing
+    // it as an auth-flow page makes the page reachable even if
+    // the session refresh races with the redirect (avoids a
+    // momentary bounce to /login).
+    path === '/auth/accept-invite'
+  // The subset of auth-flow pages that signed-IN users should NOT
+  // sit on. /login and /signup belong here — they should bounce to
+  // the app. /forgot-password and /reset-password DON'T belong here
+  // — a signed-in user may still want to change their password.
+  const isSigninPage = path === '/login' || path === '/signup'
 
-  // Rule 1: Not logged in + not on a public or auth page → go to login.
+  // Rule 1: Not logged in + not on a public or auth-flow page → go to login.
   // This covers /dashboard, /menu, /sales, /onboarding, and any
   // future route automatically.
-  if (!user && !isPublicPage && !isAuthPage) {
+  if (!user && !isPublicPage && !isAuthFlowPage) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Rule 2: Logged in + on an auth page → go to dashboard.
+  // Rule 2: Logged in + on /login or /signup → go to dashboard.
   // (app)/layout.tsx will redirect to /onboarding if they have no restaurant.
-  if (user && isAuthPage) {
+  if (user && isSigninPage) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 

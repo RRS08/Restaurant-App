@@ -13,6 +13,13 @@ export async function createCategory(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — the menu is structural restaurant config, not
+  // operational data. A manager / staff editing the menu changes
+  // pricing and what the POS can sell, which is an owner call.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can edit the menu.' }
+  }
+
   const rawName = (formData.get('name') as string) ?? ''
   const displayName = normalizeDisplayName(rawName)
   const nameKey = normalizeNameKey(rawName)
@@ -82,6 +89,11 @@ export async function createMenuItemInSection(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — see createCategory above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can edit the menu.' }
+  }
+
   const rawName = (formData.get('name') as string) ?? ''
   const displayName = normalizeDisplayName(rawName)
   const nameKey = normalizeNameKey(rawName)
@@ -124,6 +136,11 @@ export async function createMenuItem(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — see createCategory above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can edit the menu.' }
+  }
+
   const rawName = (formData.get('name') as string) ?? ''
   const displayName = normalizeDisplayName(rawName)
   const nameKey = normalizeNameKey(rawName)
@@ -162,11 +179,16 @@ export async function deleteCategory(formData: FormData) {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return
 
+  // Owner-only — see createCategory above. Silent return on
+  // failure matches this action's existing no-feedback shape.
+  if (ctx.role !== 'owner') return
+
   const categoryId = formData.get('category_id') as string
   if (!categoryId) return
 
   // Items in this category get category_id set to null (on delete set null in schema)
   await ctx.supabase.from('menu_categories').delete().eq('id', categoryId)
+  await logAudit(ctx, null, 'delete_menu_category', 'menu_categories', categoryId)
   revalidatePath('/menu')
 }
 
@@ -183,6 +205,13 @@ export async function deleteMenuItem(
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
 
+  // Owner-only — deleting items rewires recipe components and may
+  // hard-fail against order history (we deactivate instead). Either
+  // outcome is structural enough to require owner sign-off.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can delete menu items.' }
+  }
+
   const itemId = formData.get('item_id') as string
   if (!itemId) return { error: 'No item specified.' }
 
@@ -193,12 +222,14 @@ export async function deleteMenuItem(
     // FK violation from order_items — deactivate instead
     if (error.code === '23503') {
       await ctx.supabase.from('menu_items').update({ active: false }).eq('id', itemId)
+      await logAudit(ctx, null, 'deactivate_menu_item', 'menu_items', itemId, { reason: 'order_history' })
       revalidatePath('/menu')
       return { error: 'Item has order history and cannot be fully deleted. It has been deactivated instead.' }
     }
     return { error: error.message }
   }
 
+  await logAudit(ctx, null, 'delete_menu_item', 'menu_items', itemId)
   revalidatePath('/menu')
   return null
 }
@@ -286,6 +317,8 @@ export async function updateMenuItemPrice(
 
   if (error) return { error: formatError('menu item', error) }
 
+  await logAudit(ctx, null, 'update_menu_item_price', 'menu_items', itemId, { price })
+
   revalidatePath('/menu')
   revalidatePath('/pos')
   return null
@@ -313,6 +346,8 @@ export async function setMenuItemActive(
     .eq('restaurant_id', ctx.restaurantId)
 
   if (error) return { error: formatError('menu item', error) }
+
+  await logAudit(ctx, null, 'set_menu_item_active', 'menu_items', itemId, { active })
 
   // POS strip + Menu page both read from menu_items; both need to
   // reflect the flag change immediately.

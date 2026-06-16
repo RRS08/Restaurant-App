@@ -9,7 +9,7 @@
 // ----------------------------------------------------------------
 
 import { revalidatePath } from 'next/cache'
-import { getAuthContext } from '@/lib/auth'
+import { getAuthContext, logAudit } from '@/lib/auth'
 
 // ================================================================
 // SINGLE-PAIR MANUAL MERGE
@@ -34,6 +34,12 @@ export async function mergeInventoryItems(
 ): Promise<{ error: string | null; message: string }> {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.', message: '' }
+
+  // Owner-only — merging rewrites transactions and recipe links
+  // and can span locations. Destructive, structural, owner call.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can merge inventory items.', message: '' }
+  }
 
   if (!canonicalId || !duplicateId) {
     return { error: 'Both items must be selected.', message: '' }
@@ -104,6 +110,13 @@ export async function mergeInventoryItems(
     }
   }
 
+  await logAudit(ctx, null, 'merge_inventory_items', 'inventory_items', canonical.id, {
+    duplicate_id: duplicate.id,
+    canonical_name: canonical.name,
+    duplicate_name: duplicate.name,
+    final_note: finalNote,
+  })
+
   revalidatePath('/inventory')
   revalidatePath('/menu')
   revalidatePath('/pos')
@@ -122,6 +135,12 @@ export async function mergeInventoryItems(
 export async function cleanupDuplicateInventoryItems() {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.', merged: 0 }
+
+  // Owner-only — bulk auto-merge across the restaurant. Even more
+  // destructive than the manual single-pair merge above.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can run cleanup.', merged: 0 }
+  }
 
   const { supabase, restaurantId } = ctx
 
@@ -299,6 +318,12 @@ interface IntegrityIssue {
 export async function runInventoryIntegrityChecks() {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Authentication error.', issues: [] }
+
+  // Owner-only — surfaces and acts on cross-location inventory
+  // state. Managers don't need this view.
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can run integrity checks.', issues: [] }
+  }
 
   const { supabase, restaurantId } = ctx
   const issues: IntegrityIssue[] = []

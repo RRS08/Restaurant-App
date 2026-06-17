@@ -26,6 +26,9 @@ const GREEN = '#16A34A'
 const AMBER = '#B45309'
 const RED = '#DC2626'
 
+// Category KEYS stay stable across languages so all the bar math,
+// state shape, and color maps keep working unchanged. The visible
+// label is resolved per-lang via catLabel() below.
 type Cat = 'Tacos' | 'Mariscos' | 'Sides' | 'Drinks'
 
 interface MenuItem {
@@ -40,7 +43,12 @@ interface MenuItem {
 // bars — each "tile" represents a typical plate-sized order, not a
 // micro-portion. Restaurants buying a demo want to SEE the levers
 // move; tiny depletion math defeats that.
-const MENU: MenuItem[] = [
+//
+// Two language-themed menus share the same internal item IDs + the
+// same category keys so all downstream logic (recipe pulls, category
+// totals, status pills) is identical. ES = Tacos Don Pork. EN = a
+// burgers theme so the demo reads to American diners.
+const MENU_ES: MenuItem[] = [
   { id: 'pastor',   name: 'Tacos al Pastor', price: 3.5,  cat: 'Tacos',    inv: [['pastor', 6], ['tortillas', 10]] },
   { id: 'asada',    name: 'Tacos de Asada',  price: 3.75, cat: 'Tacos',    inv: [['tortillas', 10]] },
   { id: 'birria',   name: 'Quesabirria',     price: 4.75, cat: 'Tacos',    inv: [['birria', 4], ['queso', 3], ['tortillas', 8]] },
@@ -52,6 +60,23 @@ const MENU: MenuItem[] = [
   { id: 'horchata', name: 'Horchata',        price: 3.5,  cat: 'Drinks',   inv: [['horchata', 8]] },
   { id: 'jamaica',  name: 'Agua de Jamaica', price: 3.0,  cat: 'Drinks',   inv: [] },
   { id: 'jarritos', name: 'Jarritos',        price: 2.75, cat: 'Drinks',   inv: [] },
+]
+
+// EN burger theme. Same category keys, same item IDs, same recipe
+// math — only display names + prices shift. The "Tacos" category
+// becomes Burgers, "Mariscos" becomes Sandwiches.
+const MENU_EN: MenuItem[] = [
+  { id: 'pastor',   name: 'Smash Burger',    price: 8.5,  cat: 'Tacos',    inv: [['pastor', 6], ['tortillas', 10]] },
+  { id: 'asada',    name: 'Classic Cheese',  price: 8.75, cat: 'Tacos',    inv: [['tortillas', 10]] },
+  { id: 'birria',   name: 'Bacon Stack',     price: 10.5, cat: 'Tacos',    inv: [['birria', 4], ['queso', 3], ['tortillas', 8]] },
+  { id: 'pollo',    name: 'Crispy Chicken',  price: 9.0,  cat: 'Tacos',    inv: [['tortillas', 10]] },
+  { id: 'ceviche',  name: 'Pulled Pork Sub', price: 9.5,  cat: 'Mariscos', inv: [['limes', 5]] },
+  { id: 'camaron',  name: 'BLT Club',        price: 9.0,  cat: 'Mariscos', inv: [['limes', 4]] },
+  { id: 'elote',    name: 'Loaded Fries',    price: 5.5,  cat: 'Sides',    inv: [['queso', 4]] },
+  { id: 'guac',     name: 'Onion Rings',     price: 4.75, cat: 'Sides',    inv: [] },
+  { id: 'horchata', name: 'Lemonade',        price: 3.5,  cat: 'Drinks',   inv: [['horchata', 8]] },
+  { id: 'jamaica',  name: 'Iced Tea',        price: 3.0,  cat: 'Drinks',   inv: [] },
+  { id: 'jarritos', name: 'Root Beer',       price: 2.75, cat: 'Drinks',   inv: [] },
 ]
 
 const TABS: Cat[] = ['Tacos', 'Mariscos', 'Sides', 'Drinks']
@@ -68,18 +93,27 @@ const HOST_COLOR = '#167C54'
 const SERVER_COLOR = '#7C5CFF'
 // Bench mirrors the real Staffing screen: every staff member shows
 // up in the roster with their weekly hours total in the top-right
-// pill. Three of the four already appear in shift slots above (John
-// in OPEN, LePork in OPEN, Charlie in MID) — they're in both views
+// pill. Three of the four already appear in shift slots above (open1
+// in OPEN, open2 in OPEN, mid1 in MID) — they're in both views
 // because the bench is the full roster, not "available only."
-// Pork Adams is the odd one out: he shows the "Unassigned" pill
-// until the drag-and-drop schedules him.
+// The 4th (id 'pork-adams') is the odd one out: he shows the
+// "Unassigned" pill until the drag-and-drop schedules him.
+//
+// Per-language name sets share the same IDs + roles + colors so the
+// drag-and-drop wiring + role styling never change with language.
 const PORK_ADAMS_SHIFT_HOURS = 7    // MID 12p–7p
 const PORK_ADAMS_WAGE = 11          // $/hour — labor calc anchor
-const BENCH_FOH: BenchStaff[] = [
+const BENCH_FOH_EN: BenchStaff[] = [
   { id: 'john',       name: 'John Pork',    role: 'Host',   color: HOST_COLOR,   hours: 32 },
   { id: 'lepork',     name: 'LePork James', role: 'Server', color: SERVER_COLOR, hours: 28 },
   { id: 'charlie',    name: 'Charlie Pork', role: 'Host',   color: HOST_COLOR,   hours: 24 },
   { id: 'pork-adams', name: 'Pork Adams',   role: 'Server', color: SERVER_COLOR, hours: PORK_ADAMS_SHIFT_HOURS },
+]
+const BENCH_FOH_ES: BenchStaff[] = [
+  { id: 'john',       name: 'Juanito Pork',       role: 'Host',   color: HOST_COLOR,   hours: 32 },
+  { id: 'lepork',     name: 'Carlos Pork',        role: 'Server', color: SERVER_COLOR, hours: 28 },
+  { id: 'charlie',    name: 'Guillermo del Pork', role: 'Host',   color: HOST_COLOR,   hours: 24 },
+  { id: 'pork-adams', name: 'Eugenio DePork',     role: 'Server', color: SERVER_COLOR, hours: PORK_ADAMS_SHIFT_HOURS },
 ]
 // Labor anchor reflects what a real owner could verify: starting at
 // $499 (the 3 already-scheduled staff for the day), adding Pork
@@ -149,7 +183,11 @@ const fmt = (n: number) =>
 //     pastor   16 → 10 OK  → LOW
 //     queso    11 →  7 OK  → LOW
 //     tortillas 88 → 78 OK → OK    (still well clear of reorder)
-function initialInv(): Record<string, InvItem> {
+// Per-language inventory display names. Same keys + same numbers
+// so all the math (status thresholds, depletion deltas, sort order)
+// is identical across languages — only the human-readable label
+// changes.
+function initialInvES(): Record<string, InvItem> {
   return {
     limes:     { name: 'Limes',              u: 7,  cap: 60,  reorder: 14 },
     horchata:  { name: 'Horchata mix',       u: 8,  cap: 20,  reorder: 10 },
@@ -157,6 +195,16 @@ function initialInv(): Record<string, InvItem> {
     tortillas: { name: 'Tortillas',          u: 88, cap: 130, reorder: 40 },
     queso:     { name: 'Queso Oaxaca',       u: 11, cap: 30,  reorder: 7 },
     birria:    { name: 'Birria',             u: 13, cap: 25,  reorder: 8 },
+  }
+}
+function initialInvEN(): Record<string, InvItem> {
+  return {
+    limes:     { name: 'Lemons',         u: 7,  cap: 60,  reorder: 14 },
+    horchata:  { name: 'Lemonade mix',   u: 8,  cap: 20,  reorder: 10 },
+    pastor:    { name: 'Beef patties',   u: 16, cap: 40,  reorder: 10 },
+    tortillas: { name: 'Brioche buns',   u: 88, cap: 130, reorder: 40 },
+    queso:     { name: 'Cheddar slices', u: 11, cap: 30,  reorder: 7 },
+    birria:    { name: 'Bacon',          u: 13, cap: 25,  reorder: 8 },
   }
 }
 
@@ -191,7 +239,42 @@ const SCRIPT: { at: number; step: ScriptStep }[] = [
 // while the bars are still in motion.
 const SCRIPT_END_BUFFER = 3100
 
-export default function FloorSim() {
+type Lang = 'en' | 'es'
+
+interface FloorSimProps {
+  lang?: Lang
+}
+
+export default function FloorSim({ lang = 'en' }: FloorSimProps) {
+  // Inline translation helper. ES wins when lang === 'es' AND the
+  // Spanish string is non-empty; otherwise EN is used as fallback.
+  const t = (en: string, es?: string): string => (lang === 'es' && es ? es : en)
+  // Resolve menu, inventory factory, bench staff, and business name
+  // from lang. Same item IDs + same numbers across both — only the
+  // labels swap.
+  const MENU = lang === 'es' ? MENU_ES : MENU_EN
+  const initialInv = lang === 'es' ? initialInvES : initialInvEN
+  const BENCH_FOH = lang === 'es' ? BENCH_FOH_ES : BENCH_FOH_EN
+  const BIZ_NAME = lang === 'es' ? 'TACOS DON PORK' : 'PORK’S BURGERS'
+  // Category display label — keys stay stable internally, label
+  // resolves per lang.
+  const catLabel = (c: Cat): string => {
+    if (lang === 'es') {
+      if (c === 'Sides') return 'Extras'
+      if (c === 'Drinks') return 'Bebidas'
+      return c
+    }
+    if (c === 'Tacos') return 'Burgers'
+    if (c === 'Mariscos') return 'Sandwiches'
+    return c
+  }
+  // Open-shift + mid-shift staff names. Stay aligned with the BENCH
+  // ordering so the same person who shows up in the schedule also
+  // appears in the bench list.
+  const STAFF = lang === 'es'
+    ? { openHost: 'Juanito Pork', openServer: 'Carlos Pork', midHost: 'Guillermo del Pork', midServer: 'Eugenio DePork' }
+    : { openHost: 'John Pork',    openServer: 'LePork James', midHost: 'Charlie Pork',     midServer: 'Pork Adams' }
+
   const [tab, setTab] = useState<Cat>('Tacos')
   const [order, setOrder] = useState<OrderLine[]>([])
   const [checkout, setCheckout] = useState(false)
@@ -595,19 +678,22 @@ export default function FloorSim() {
     // still scrolling past Chapter 1 and not yet focused on Chapter 2.
     // 0.5 gates the trigger until they're actually looking at it.
     //
-    // We disconnect the observer the moment the script starts, NOT
-    // just rely on the `!c2HasPlayed` gate. The gate's closure
-    // captures c2HasPlayed=false at mount and never sees the state
-    // update — meaning if the user scrolls away and comes back, the
-    // card re-enters view, fires again, and the stale closure lets
-    // it through. Disconnecting on first fire makes that physically
-    // impossible regardless of closure staleness.
+    // We INTENTIONALLY do NOT call observer.disconnect() on fire,
+    // and we INTENTIONALLY let the stale closure for c2HasPlayed
+    // act as a no-op. Combined, this means: every time the staffing
+    // card re-enters the viewport at ≥50% visibility, the script
+    // replays from the top. That matches the loop behavior on
+    // Chapter 1 (POS) — the visitor can scroll back to any chapter
+    // and watch the simulation again without a hard reload.
+    //
+    // `startC2Script` resets all internal state at the top (drag
+    // state, shift filled, confirm/fade flags, labor spend, touch
+    // dots), so re-firing is safe and visually clean.
     const observer = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (e.isIntersecting && e.intersectionRatio >= 0.5 && !c2HasPlayed) {
+          if (e.isIntersecting && e.intersectionRatio >= 0.5) {
             startC2Script()
-            observer.disconnect()
             break
           }
         }
@@ -714,14 +800,17 @@ export default function FloorSim() {
     // the sim fires while the visitor is still scrolling past
     // Chapter 2, so by the time they focus on it the day has
     // already advanced). 0.5 holds until they're actually on it.
-    // Same disconnect-on-first-fire pattern as Chapter 2 — see
-    // the comment there for the stale-closure rationale.
+    //
+    // Same replay-on-re-entry pattern as Chapter 2: NO disconnect,
+    // and the stale-closure no-op intentionally allows the script
+    // to re-fire every time the analytics card re-enters the
+    // viewport. `startC3Script` resets all internal state at the
+    // top, so re-firing replays the time-lapse cleanly.
     const observer = new IntersectionObserver(
       (entries) => {
         for (const e of entries) {
-          if (e.isIntersecting && e.intersectionRatio >= 0.5 && !c3HasPlayed) {
+          if (e.isIntersecting && e.intersectionRatio >= 0.5) {
             startC3Script()
-            observer.disconnect()
             break
           }
         }
@@ -745,21 +834,27 @@ export default function FloorSim() {
     return worst
   }
   const stockColor: Record<string, string> = { OK: '#9CA3AF', Low: AMBER, Out: RED }
+  const stockLabelI18n: Record<string, string> = lang === 'es'
+    ? { OK: '', Low: 'BAJO', Out: 'AGOTADO' }
+    : { OK: '', Low: 'Low', Out: 'Out' }
   const tiles = MENU.filter((m) => m.cat === tab).map((m) => {
     const st = stockFor(m)
-    return { item: m, name: m.name, priceStr: fmt(m.price), stockLabel: st === 'OK' ? '' : st, stockColor: stockColor[st] }
+    return { item: m, name: m.name, priceStr: fmt(m.price), stockLabel: stockLabelI18n[st], stockColor: stockColor[st] }
   })
   const total = order.reduce((a, o) => a + o.price * o.qty, 0)
   const sales = SALES_SEED + salesPaid
   void (ORDERS_SEED + ordersPaid)
 
   const rank: Record<string, number> = { Out: 0, Low: 1, OK: 2 }
+  const statusLabelI18n: Record<string, string> = lang === 'es'
+    ? { OK: 'OK', Low: 'BAJO', Out: 'AGOTADO' }
+    : { OK: 'OK', Low: 'LOW', Out: 'OUT' }
   const invRows = Object.entries(inv).map(([k, it]) => {
     const st = it.u <= 0 ? 'Out' : it.u <= it.reorder ? 'Low' : 'OK'
     const color = st === 'Out' ? RED : st === 'Low' ? AMBER : GREEN
     const pillBg = st === 'Out' ? '#FCECEC' : st === 'Low' ? '#FBF1E3' : '#ECF6EF'
     return {
-      key: k, name: it.name, valStr: it.u.toFixed(2), valColor: color, statusLabel: st.toUpperCase(),
+      key: k, name: it.name, valStr: it.u.toFixed(2), valColor: color, statusLabel: statusLabelI18n[st],
       statusColor: color, pillBg, pct: mounted ? Math.max(3, Math.min(100, Math.round((it.u / it.cap) * 100))) : 0, r: rank[st],
     }
   }).sort((a, b) => a.r - b.r)
@@ -771,7 +866,7 @@ export default function FloorSim() {
     color: i === rawDaily.length - 1 ? '#2563EB' : '#C9D2DE',
   }))
 
-  const catTotal = TABS.reduce((a, t) => a + CAT_SEED[t] + catLive[t], 0)
+  const catTotal = TABS.reduce((a, c) => a + CAT_SEED[c] + catLive[c], 0)
   // Evening = current/standard percentages. The Chapter 3 sim
   // blends MORNING_CAT_MIX toward these using c3LastBarScale, so
   // before the sim plays the chart shows the standard values, and
@@ -779,12 +874,12 @@ export default function FloorSim() {
   // standard. The bars themselves carry a 0.55s width transition
   // so each blend step smoothly slides into the next milestone.
   const c3Blend = c3HasPlayed ? Math.min(1, Math.max(0, c3LastBarScale)) : 1
-  const catBars = TABS.map((t) => {
-    const v = CAT_SEED[t] + catLive[t]
+  const catBars = TABS.map((c) => {
+    const v = CAT_SEED[c] + catLive[c]
     const eveningPct = Math.round((v / catTotal) * 100)
-    const morningPct = MORNING_CAT_MIX[t]
+    const morningPct = MORNING_CAT_MIX[c]
     const pct = Math.round(morningPct * (1 - c3Blend) + eveningPct * c3Blend)
-    return { name: t, pct: mounted ? pct : 0, pctStr: pct + '%', color: CAT_COLOR[t] }
+    return { name: catLabel(c), pct: mounted ? pct : 0, pctStr: pct + '%', color: CAT_COLOR[c] }
   })
 
   const cash = CASH_SEED + cashPaid, card = CARD_SEED + cardPaid, other = OTHER_SEED
@@ -859,17 +954,21 @@ export default function FloorSim() {
       {/* status line */}
       <div style={mono({ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 26, fontSize: 11, letterSpacing: '0.12em', color: GREEN })}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: GREEN, display: 'inline-block', animation: 'fsPulse 1.8s ease-in-out infinite' }} />
-        LIVE DEMO · TACOS DON PORK — WATCH THE PRODUCT RING ITSELF UP
+        {t(`LIVE DEMO · ${BIZ_NAME} — WATCH THE PRODUCT RING ITSELF UP`, `DEMO EN VIVO · ${BIZ_NAME} — MIRA AL PRODUCTO COBRAR SOLO`)}
       </div>
 
       {/* CHAPTER 1 */}
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>1</div>
         <div>
-          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>It starts at the register</div>
-          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>
-            Every sale begins at the counter. A dish gets tapped, the recipe pulls straight from your stock the moment it&apos;s rung — no second screen to update, no end-of-night count. Watch the ingredients on the right move as the order goes in.
-          </p>
+          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
+            'Sell a dish, and your stock counts itself.',
+            'Vendes un platillo, y el inventario se cuenta solo.'
+          )}</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
+            'A tile gets tapped at the counter. The recipe pulls straight from your stock the moment it’s rung — no second screen, no clipboard, no end-of-night count. Watch the ingredients on the right move as the order goes in.',
+            'Tocas un botón en la caja. La receta saca directo del inventario en el momento — sin segunda pantalla, sin tabla, sin conteo a fin de noche. Mira cómo se mueven los ingredientes a la derecha mientras entra la orden.'
+          )}</p>
         </div>
       </div>
 
@@ -879,25 +978,25 @@ export default function FloorSim() {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #EEF0F3' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span style={{ fontSize: 15, fontWeight: 700 }}>POS</span>
-              <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>{isPlaying ? 'demo in progress…' : 'tap an item to ring it up'}</span>
+              <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>{isPlaying ? t('demo in progress…', 'demo en curso…') : t('tap an item to ring it up', 'toca un platillo para cobrarlo')}</span>
             </div>
-            <span style={mono({ fontSize: 11, color: '#2563EB', background: '#EFF4FF', padding: '3px 9px', borderRadius: 6 })}>Counter 1</span>
+            <span style={mono({ fontSize: 11, color: '#2563EB', background: '#EFF4FF', padding: '3px 9px', borderRadius: 6 })}>{t('Counter 1', 'Caja 1')}</span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 0 }}>
             {/* menu */}
             <div style={{ padding: '14px 16px', borderRight: '1px solid #EEF0F3' }}>
               <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 13 }}>
-                {TABS.map((t) => (
+                {TABS.map((c) => (
                   <button
-                    key={t}
-                    ref={(el) => { tabRefs.current[t] = el }}
-                    onClick={() => handleTabClick(t)}
+                    key={c}
+                    ref={(el) => { tabRefs.current[c] = el }}
+                    onClick={() => handleTabClick(c)}
                     style={{
                       cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 13px', borderRadius: 8,
-                      border: `1px solid ${t === tab ? '#18181B' : '#E6E8EC'}`, background: t === tab ? '#18181B' : '#FFFFFF',
-                      color: t === tab ? '#FFFFFF' : '#52525B', transition: 'all .15s',
+                      border: `1px solid ${c === tab ? '#18181B' : '#E6E8EC'}`, background: c === tab ? '#18181B' : '#FFFFFF',
+                      color: c === tab ? '#FFFFFF' : '#52525B', transition: 'all .15s',
                     }}
-                  >{t}</button>
+                  >{catLabel(c)}</button>
                 ))}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 9 }}>
@@ -924,13 +1023,13 @@ export default function FloorSim() {
             {/* order rail */}
             <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', minHeight: 300, position: 'relative' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 }}>
-                <span style={{ fontSize: 13, fontWeight: 700 }}>Current order</span>
-                <span onClick={() => { if (!isPlaying) clearOrder() }} style={mono({ cursor: isPlaying ? 'default' : 'pointer', fontSize: 11, color: '#9CA3AF' })}>Clear</span>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{t('Current order', 'Orden actual')}</span>
+                <span onClick={() => { if (!isPlaying) clearOrder() }} style={mono({ cursor: isPlaying ? 'default' : 'pointer', fontSize: 11, color: '#9CA3AF' })}>{t('Clear', 'Limpiar')}</span>
               </div>
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {order.length === 0 && (
                   <div style={mono({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: '#C3C7CE', fontSize: 11.5, lineHeight: 1.6, padding: '24px 8px' })}>
-                    No items yet.<br />Tap a dish to start the ticket.
+                    {t('No items yet.', 'Sin platillos aún.')}<br />{t('Tap a dish to start the ticket.', 'Toca un platillo para empezar.')}
                   </div>
                 )}
                 {order.map((o, i) => (
@@ -948,13 +1047,13 @@ export default function FloorSim() {
               </div>
               <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #EEF0F3' }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                  <span style={{ fontSize: 13, fontWeight: 700 }}>Total</span>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>{t('Total', 'Total')}</span>
                   <span style={mono({ fontSize: 18, fontWeight: 600 })}>{fmt(total)}</span>
                 </div>
                 {checkout ? (
                   <div style={{ display: 'flex', gap: 8 }}>
-                    <button ref={cashRef} onClick={() => handlePay('Cash')} style={{ flex: 1, cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 11, borderRadius: 10, border: '1px solid #E6E8EC', background: '#FFFFFF', color: '#18181B' }}>Cash</button>
-                    <button ref={cardBtnRef} onClick={() => handlePay('Card')} style={{ flex: 1, cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 11, borderRadius: 10, border: 'none', background: '#18181B', color: '#FFFFFF' }}>Card</button>
+                    <button ref={cashRef} onClick={() => handlePay('Cash')} style={{ flex: 1, cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 11, borderRadius: 10, border: '1px solid #E6E8EC', background: '#FFFFFF', color: '#18181B' }}>{t('Cash', 'Efectivo')}</button>
+                    <button ref={cardBtnRef} onClick={() => handlePay('Card')} style={{ flex: 1, cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, padding: 11, borderRadius: 10, border: 'none', background: '#18181B', color: '#FFFFFF' }}>{t('Card', 'Tarjeta')}</button>
                   </div>
                 ) : (
                   <button
@@ -964,7 +1063,7 @@ export default function FloorSim() {
                       width: '100%', cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 13.5, fontWeight: 600, padding: 12, borderRadius: 10, border: 'none',
                       background: order.length ? '#18181B' : '#EDEFF2', color: order.length ? '#FFFFFF' : '#9CA3AF', transition: 'background .15s',
                     }}
-                  >{order.length ? `Continue to payment · ${fmt(total)}` : 'Add an item to continue'}</button>
+                  >{order.length ? `${t('Continue to payment', 'Continuar al pago')} · ${fmt(total)}` : t('Add an item to continue', 'Agrega un platillo para continuar')}</button>
                 )}
               </div>
               {paid && (
@@ -978,8 +1077,8 @@ export default function FloorSim() {
                   }}
                 >
                   <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 50, height: 50, borderRadius: '50%', background: GREEN, color: '#FFF', fontSize: 24, animation: 'fsPop .4s ease' }}>✓</span>
-                  <span style={{ fontSize: 14, fontWeight: 600 }}>Paid · {paid}</span>
-                  <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>Ticket #{ticket} · posted live</span>
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{t(`Paid · ${paid}`, `Pagado · ${paid === 'Cash' ? 'Efectivo' : 'Tarjeta'}`)}</span>
+                  <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>{t(`Ticket #${ticket} · posted live`, `Ticket #${ticket} · publicado en vivo`)}</span>
                 </div>
               )}
             </div>
@@ -1020,8 +1119,8 @@ export default function FloorSim() {
         {/* Inventory */}
         <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13 }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Inventory</span>
-            <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>sorted by urgency</span>
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Inventory', 'Inventario')}</span>
+            <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('sorted by urgency', 'ordenado por urgencia')}</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {invRows.map((r) => (
@@ -1049,17 +1148,24 @@ export default function FloorSim() {
 
       <div style={connector}>
         <div style={{ width: 30, display: 'flex', justifyContent: 'center', color: '#C3C7CE', fontSize: 19 }}>↓</div>
-        <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>Each ticket depletes ingredients in real time — what you sell tells you what to buy back, and that restock becomes spend.</span>
+        <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>{t(
+          'Each ticket depletes ingredients in real time — what you sell tells you what to buy back, and that restock becomes spend.',
+          'Cada ticket descuenta ingredientes en tiempo real — lo que vendes te dice qué reponer, y esa compra se vuelve gasto.'
+        )}</span>
       </div>
 
       {/* CHAPTER 2 */}
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>2</div>
         <div>
-          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>Stock and people become cost</div>
-          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>
-            Your two biggest levers — who&apos;s on the floor and what&apos;s in the walk-in — flow straight into Finance. Scheduled labor and inventory spend post automatically and get matched against the day&apos;s revenue, so your net is live, with bank context from Plaid.
-          </p>
+          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
+            'Schedule the shift, and your books update themselves.',
+            'Asignas el turno, y los libros se actualizan solos.'
+          )}</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
+            'Labor on the schedule, stock in the walk-in, every other expense — all of it lands in Finance automatically, matched against the day’s revenue, with bank context from Plaid. Your net is live. Your books at month-end aren’t a project; they’re already done.',
+            'Mano de obra en el horario, inventario en la cocina, todos los demás gastos — todo cae en Finanzas automáticamente, comparado contra la venta del día, con contexto del banco vía Plaid. Tu utilidad va en vivo. Cerrar el mes no es un proyecto; ya está hecho.'
+          )}</p>
         </div>
       </div>
 
@@ -1067,41 +1173,43 @@ export default function FloorSim() {
         {/* Staffing */}
         <div ref={staffCardRef} style={{ ...cardStyle, padding: '14px 16px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Staffing</span>
-            <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>Front of House · today</span>
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Staffing', 'Personal')}</span>
+            <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('Front of House · today', 'Salón · hoy')}</span>
           </div>
           <div style={mono({ fontSize: 11, color: '#71717A', marginBottom: 12, transition: 'color .3s' })}>
-            {shiftFilled ? '4 on · 28.0h scheduled · today' : '3 on · 21.0h scheduled · today'}
+            {shiftFilled
+              ? t('4 on · 28.0h scheduled · today', '4 en turno · 28.0h programadas · hoy')
+              : t('3 on · 21.0h scheduled · today', '3 en turno · 21.0h programadas · hoy')}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {/* OPEN shift — fixed across the demo */}
             <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-              <div style={mono({ width: 50, fontSize: 9.5, color: '#9CA3AF', lineHeight: 1.4 })}>OPEN<br />8a–3p</div>
+              <div style={mono({ width: 50, fontSize: 9.5, color: '#9CA3AF', lineHeight: 1.4 })}>{t('OPEN', 'APERT.')}<br />8a–3p</div>
               <div style={{ flex: 1, display: 'flex', gap: 7, flexWrap: 'wrap' }}>
                 <span style={{ borderLeft: `2px solid ${HOST_COLOR}`, background: '#F8F9FB', borderRadius: 5, padding: '5px 9px', lineHeight: 1.25 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>John Pork</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>Host</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>{STAFF.openHost}</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>{t('Host', 'Anfitrión')}</span>
                 </span>
                 <span style={{ borderLeft: `2px solid ${SERVER_COLOR}`, background: '#F8F9FB', borderRadius: 5, padding: '5px 9px', lineHeight: 1.25 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>LePork James</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>Server</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>{STAFF.openServer}</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>{t('Server', 'Mesero')}</span>
                 </span>
               </div>
             </div>
             {/* MID shift — host always present; server slot starts
                 empty and fills when the drag lands. */}
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: '#EFF4FF', border: '1px solid #DCE7FF', borderRadius: 9, padding: '7px 8px' }}>
-              <div style={mono({ width: 50, fontSize: 9.5, color: '#9CA3AF', lineHeight: 1.4 })}>MID<br />12p–7p<br /><span style={{ color: '#2563EB', fontWeight: 600 }}>ON NOW</span></div>
+              <div style={mono({ width: 50, fontSize: 9.5, color: '#9CA3AF', lineHeight: 1.4 })}>{t('MID', 'MEDIO')}<br />12p–7p<br /><span style={{ color: '#2563EB', fontWeight: 600 }}>{t('ON NOW', 'EN TURNO')}</span></div>
               <div style={{ flex: 1, display: 'flex', gap: 7, flexWrap: 'wrap' }}>
                 <span style={{ borderLeft: `2px solid ${HOST_COLOR}`, background: '#FFFFFF', borderRadius: 5, padding: '5px 9px', lineHeight: 1.25 }}>
-                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>Charlie Pork</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>Host</span>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>{STAFF.midHost}</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>{t('Host', 'Anfitrión')}</span>
                 </span>
                 {shiftFilled ? (
                   <span style={{ borderLeft: `2px solid ${SERVER_COLOR}`, background: '#FFFFFF', borderRadius: 5, padding: '5px 9px', lineHeight: 1.25, animation: 'fsPop .4s ease' }}>
-                    <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>Pork Adams</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>Server</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block' }}>{STAFF.midServer}</span><span style={mono({ fontSize: 9, color: '#9CA3AF' })}>{t('Server', 'Mesero')}</span>
                   </span>
                 ) : (
                   <span ref={emptyShiftSlotRef} style={{ border: '1px dashed #B8C0CC', background: 'transparent', borderRadius: 5, padding: '5px 11px', lineHeight: 1.25, color: '#9CA3AF', display: 'inline-block' }}>
-                    <span style={mono({ fontSize: 9.5, display: 'block', letterSpacing: '0.06em' })}>+ SERVER</span>
-                    <span style={mono({ fontSize: 9, color: '#C3C7CE' })}>open</span>
+                    <span style={mono({ fontSize: 9.5, display: 'block', letterSpacing: '0.06em' })}>{t('+ SERVER', '+ MESERO')}</span>
+                    <span style={mono({ fontSize: 9, color: '#C3C7CE' })}>{t('open', 'libre')}</span>
                   </span>
                 )}
               </div>
@@ -1110,8 +1218,8 @@ export default function FloorSim() {
           {/* Bench — drag source for the simulation */}
           <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #E6E8EC' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={mono({ fontSize: 11, color: '#71717A' })}>Bench · Front of House</span>
-              <span style={mono({ fontSize: 10.5, color: '#9CA3AF', transition: 'color .3s' })}>{shiftFilled ? '3 available' : '4 available'}</span>
+              <span style={mono({ fontSize: 11, color: '#71717A' })}>{t('Bench · Front of House', 'Plantilla · Salón')}</span>
+              <span style={mono({ fontSize: 10.5, color: '#9CA3AF', transition: 'color .3s' })}>{shiftFilled ? t('3 available', '3 disponibles') : t('4 available', '4 disponibles')}</span>
             </div>
             {/* Compact row matching the shift-card scale. No hours
                 pills — the drag itself (and the empty MID slot
@@ -1159,7 +1267,7 @@ export default function FloorSim() {
                     }}
                   >
                     <span style={{ fontSize: 11.5, fontWeight: 600, display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.name}</span>
-                    <span style={mono({ fontSize: 9, color: '#9CA3AF', display: 'block' })}>{s.role}</span>
+                    <span style={mono({ fontSize: 9, color: '#9CA3AF', display: 'block' })}>{s.role === 'Host' ? t('Host', 'Anfitrión') : t('Server', 'Mesero')}</span>
                   </div>
                 )
               })}
@@ -1181,8 +1289,8 @@ export default function FloorSim() {
               }}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 50, height: 50, borderRadius: '50%', background: GREEN, color: '#FFF', fontSize: 24, animation: 'fsPop .4s ease' }}>✓</span>
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Shift assigned · MID</span>
-              <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>Pork Adams · Server · 7h</span>
+              <span style={{ fontSize: 14, fontWeight: 600 }}>{t('Shift assigned · MID', 'Turno asignado · MEDIO')}</span>
+              <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>{t(`${STAFF.midServer} · Server · 7h`, `${STAFF.midServer} · Mesero · 7h`)}</span>
             </div>
           )}
 
@@ -1244,26 +1352,26 @@ export default function FloorSim() {
         {/* Finance */}
         <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Finance</span>
+            <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Finance', 'Finanzas')}</span>
             <span style={mono({ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: GREEN })}>
-              <span style={{ width: 6, height: 6, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />live with bank context
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />{t('live with bank context', 'en vivo con contexto del banco')}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
             <div>
-              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>Revenue · live</div>
+              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Revenue · live', 'Ingresos · en vivo')}</div>
               <div style={mono({ fontSize: 18, fontWeight: 600, color: GREEN, marginTop: 5 })}>{fmt(sales)}</div>
             </div>
             <div style={{ borderLeft: '1px solid #EEF0F3', paddingLeft: 20 }}>
-              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>Spend</div>
+              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Spend', 'Gasto')}</div>
               <div style={mono({ fontSize: 18, fontWeight: 600, color: RED, marginTop: 5, transition: 'color .3s' })}>{fmt(totalSpend)}</div>
             </div>
             <div style={{ borderLeft: '1px solid #EEF0F3', paddingLeft: 20 }}>
-              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>Net today</div>
+              <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Net today', 'Neto hoy')}</div>
               <div style={mono({ fontSize: 18, fontWeight: 600, color: netColor, marginTop: 5 })}>{netStr}</div>
             </div>
           </div>
-          <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 10 })}>What&apos;s driving spend</div>
+          <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 10 })}>{t('What’s driving spend', 'Qué está moviendo el gasto')}</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             {/* Labor is flagged "est." inline — it's projected from
                 the schedule, not from posted clock-ins. A real owner
@@ -1271,9 +1379,9 @@ export default function FloorSim() {
                 confirmed spend. Inventory + operating ARE posted
                 (consumption + paid bills), so no tag there. */}
             {[
-              { label: 'Scheduled labor', tag: 'est.', amt: fmt(laborSpend), w: laborPct + '%',     c: '#7C5CFF' },
-              { label: 'Inventory',       tag: null,   amt: fmt(INVENTORY_SPEND), w: inventoryPct + '%', c: '#F59E0B' },
-              { label: 'Operating',       tag: null,   amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#16A34A' },
+              { label: t('Scheduled labor', 'Mano de obra'), tag: t('est.', 'est.'), amt: fmt(laborSpend), w: laborPct + '%',     c: '#7C5CFF' },
+              { label: t('Inventory', 'Inventario'),         tag: null,               amt: fmt(INVENTORY_SPEND), w: inventoryPct + '%', c: '#F59E0B' },
+              { label: t('Operating', 'Operación'),          tag: null,               amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#16A34A' },
             ].map((row) => (
               <div key={row.label}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
@@ -1296,36 +1404,43 @@ export default function FloorSim() {
 
       <div style={connector}>
         <div style={{ width: 30, display: 'flex', justifyContent: 'center', color: '#C3C7CE', fontSize: 19 }}>↓</div>
-        <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>Every ticket, shift, and invoice rolls up on its own — no spreadsheet, no Sunday-night reconstruction.</span>
+        <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>{t(
+          'Every ticket, shift, and invoice rolls up on its own — no spreadsheet, no Sunday-night reconstruction.',
+          'Cada ticket, turno y factura se suma solo — sin hoja de cálculo, sin armar la semana el domingo en la noche.'
+        )}</span>
       </div>
 
       {/* CHAPTER 3 */}
       <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>3</div>
         <div>
-          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>The whole day, in one read</div>
-          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>
-            By close it&apos;s a single honest picture: what sold, how people paid, and where the week is trending. Plain enough to read between the lunch and dinner rush. The chart&apos;s last bar is today — it grows with every order rung above.
-          </p>
+          <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
+            'Hit close, and the day reads itself.',
+            'Cierras el día, y el día se lee solo.'
+          )}</div>
+          <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
+            'What sold, how people paid, where the week is trending — a single honest picture, plain enough to read between the lunch and dinner rush. The chart’s last bar is today; it grew with every order rung above.',
+            'Qué se vendió, cómo pagó la gente, hacia dónde va la semana — una sola foto honesta, clara para leer entre la comida y la cena. La última barra del gráfico es hoy; creció con cada orden que cobraste arriba.'
+          )}</p>
         </div>
       </div>
 
       <div ref={analyticsCardRef} style={{ ...cardStyle, padding: '18px 20px', position: 'relative' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-          <span style={{ fontSize: 14, fontWeight: 700 }}>Analytics</span>
-          <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>last 14 days</span>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Analytics', 'Analíticas')}</span>
+          <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('last 14 days', 'últimos 14 días')}</span>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 32 }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF' })}>Daily rhythm</span>
+              <span style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Daily rhythm', 'Ritmo diario')}</span>
               {/* Time ticker / close badge — counts up during the
                   time-lapse, settles to "Closed · 11:43 PM" with a
                   green check once the day closes. */}
               {c3Closed ? (
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, animation: 'fsPop .4s ease' }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 13, height: 13, borderRadius: '50%', background: GREEN, color: '#FFF', fontSize: 8.5 }}>✓</span>
-                  <span style={mono({ fontSize: 10.5, color: GREEN, fontWeight: 600, letterSpacing: '0.04em' })}>Closed · 11:43 PM</span>
+                  <span style={mono({ fontSize: 10.5, color: GREEN, fontWeight: 600, letterSpacing: '0.04em' })}>{t('Closed · 11:43 PM', 'Cerrado · 11:43 PM')}</span>
                 </span>
               ) : (
                 <span style={mono({ fontSize: 10.5, color: '#9CA3AF', letterSpacing: '0.04em' })}>{c3TimeLabel || '—'}</span>
@@ -1394,29 +1509,32 @@ export default function FloorSim() {
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
-                    <span style={mono({ fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#A1A1A6' })}>Today&apos;s read</span>
-                    <span style={mono({ fontSize: 9.5, letterSpacing: '0.04em', color: '#A1A1A6' })}>Thu · Mar 14</span>
+                    <span style={mono({ fontSize: 9.5, letterSpacing: '0.12em', textTransform: 'uppercase', color: '#A1A1A6' })}>{t('Today’s read', 'Lectura de hoy')}</span>
+                    <span style={mono({ fontSize: 9.5, letterSpacing: '0.04em', color: '#A1A1A6' })}>{t('Thu · Mar 14', 'Jue · 14 mar')}</span>
                   </div>
                   <div style={mono({ fontSize: 22, fontWeight: 600, lineHeight: 1.05, color: '#FAF9F6' })}>{fmt(sales)}</div>
                   <div style={mono({ fontSize: 10.5, color: GREEN, marginTop: 4, letterSpacing: '0.04em' })}>
-                    ↑ +$412.00 vs last Thursday
+                    {t('↑ +$412.00 vs last Thursday', '↑ +$412.00 vs jueves pasado')}
                   </div>
                   <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6, fontSize: 11.5, lineHeight: 1.4 }}>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>Top</span>
-                      <span style={{ color: '#FAF9F6' }}>Tacos · 49% mix &nbsp;<span style={mono({ color: '#A1A1A6' })}>(Pastor #1 · 24 sold)</span></span>
+                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>{t('Top', 'Lo más')}</span>
+                      <span style={{ color: '#FAF9F6' }}>{t(
+                        `${catLabel('Tacos')} · 49% mix`,
+                        `${catLabel('Tacos')} · 49% del mix`
+                      )} &nbsp;<span style={mono({ color: '#A1A1A6' })}>{lang === 'es' ? '(Pastor #1 · 24 vendidos)' : '(Smash Burger #1 · 24 sold)'}</span></span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>Peak</span>
-                      <span style={{ color: '#FAF9F6' }}>1:00 PM &nbsp;<span style={mono({ color: '#A1A1A6' })}>($263 in 30 min)</span></span>
+                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>{t('Peak', 'Pico')}</span>
+                      <span style={{ color: '#FAF9F6' }}>1:00 PM &nbsp;<span style={mono({ color: '#A1A1A6' })}>{t('($263 in 30 min)', '($263 en 30 min)')}</span></span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>Cash</span>
-                      <span style={{ color: '#FAF9F6' }}>59% &nbsp;<span style={mono({ color: '#A1A1A6' })}>(+18 pts vs avg)</span></span>
+                      <span style={mono({ color: '#A1A1A6', width: 60, flexShrink: 0 })}>{t('Cash', 'Efectivo')}</span>
+                      <span style={{ color: '#FAF9F6' }}>59% &nbsp;<span style={mono({ color: '#A1A1A6' })}>{t('(+18 pts vs avg)', '(+18 pts vs promedio)')}</span></span>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                      <span style={mono({ color: AMBER, width: 60, flexShrink: 0 })}>Flag</span>
-                      <span style={{ color: '#FAF9F6' }}>Horchata mix &nbsp;<span style={mono({ color: '#A1A1A6' })}>(out — reorder)</span></span>
+                      <span style={mono({ color: AMBER, width: 60, flexShrink: 0 })}>{t('Flag', 'Alerta')}</span>
+                      <span style={{ color: '#FAF9F6' }}>{lang === 'es' ? 'Horchata' : 'Lemonade mix'} &nbsp;<span style={mono({ color: '#A1A1A6' })}>{t('(out — reorder)', '(agotado — reabastecer)')}</span></span>
                     </div>
                   </div>
                 </div>
@@ -1424,7 +1542,7 @@ export default function FloorSim() {
             </div>
           </div>
           <div>
-            <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 9 })}>Category mix</div>
+            <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 9 })}>{t('Category mix', 'Mix por categoría')}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
               {catBars.map((c) => (
                 <div key={c.name}>
@@ -1441,16 +1559,16 @@ export default function FloorSim() {
                 </div>
               ))}
             </div>
-            <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 9 })}>Payment mix</div>
+            <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 9 })}>{t('Payment mix', 'Mix por pago')}</div>
             <div style={{ display: 'flex', height: 9, borderRadius: 99, overflow: 'hidden', marginBottom: 9 }}>
               <div style={{ width: `${cardPct}%`, background: '#7C5CFF', transition: 'width .5s' }} />
               <div style={{ width: `${cashPct}%`, background: '#F59E0B', transition: 'width .5s' }} />
               <div style={{ width: `${otherPct}%`, background: '#D4D7DD', transition: 'width .5s' }} />
             </div>
             <div style={mono({ display: 'flex', gap: 16, fontSize: 11, color: '#71717A' })}>
-              <span><span style={{ color: '#7C5CFF' }}>■</span> Card {cardPct}%</span>
-              <span><span style={{ color: '#F59E0B' }}>■</span> Cash {cashPct}%</span>
-              <span><span style={{ color: '#D4D7DD' }}>■</span> Other {otherPct}%</span>
+              <span><span style={{ color: '#7C5CFF' }}>■</span> {t('Card', 'Tarjeta')} {cardPct}%</span>
+              <span><span style={{ color: '#F59E0B' }}>■</span> {t('Cash', 'Efectivo')} {cashPct}%</span>
+              <span><span style={{ color: '#D4D7DD' }}>■</span> {t('Other', 'Otro')} {otherPct}%</span>
             </div>
           </div>
         </div>

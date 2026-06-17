@@ -949,16 +949,49 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         @media (prefers-reduced-motion: reduce){
           *,*::before,*::after{animation:none!important;transition:none!important}
         }
+
+        /* ============================================================
+           Mobile redesign — stacks every chapter's grid into a single
+           column at ≤640px. The internal touch-dot system uses
+           position:absolute on the card it sits inside, so as long
+           as the card itself stays one element wide, refs and
+           drag offsets keep working unchanged.
+           ============================================================ */
+        @media (max-width: 640px){
+          /* Chapter 1 — POS card on top, Inventory below. */
+          .fs-ch1{grid-template-columns:1fr!important}
+          /* Inside the POS card: menu on top, order rail below
+             instead of side-by-side. The order rail loses its
+             min-height so it flows with content. */
+          .fs-pos{grid-template-columns:1fr!important}
+          .fs-pos-menu{border-right:none!important;border-bottom:1px solid #EEF0F3!important}
+          .fs-pos-order{min-height:auto!important}
+          /* Chapter 2 — Staffing on top, Finance below. */
+          .fs-ch2{grid-template-columns:1fr!important}
+          /* Chapter 3 — chart on top, category + payment mix below. */
+          .fs-ch3{grid-template-columns:1fr!important;gap:24px!important}
+          /* Connectors — keep but reduce vertical room. */
+          .fs-connector{margin:36px 0!important}
+          /* Chapter heads — wrap title to two lines naturally. */
+          .fs-chap{margin-bottom:20px!important}
+          /* Status line — let the long all-caps text wrap on small
+             screens instead of overflowing. */
+          .fs-status{flex-wrap:wrap!important;letter-spacing:0.08em!important;line-height:1.5!important}
+          /* Finance card top row — three KPIs go on multiple lines
+             instead of cramming. */
+          .fs-fin-kpis{gap:14px!important}
+          .fs-fin-kpis>div{flex:1 1 100px!important}
+        }
       `}</style>
 
       {/* status line */}
-      <div style={mono({ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 26, fontSize: 11, letterSpacing: '0.12em', color: GREEN })}>
+      <div className="fs-status" style={mono({ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 26, fontSize: 11, letterSpacing: '0.12em', color: GREEN })}>
         <span style={{ width: 7, height: 7, borderRadius: '50%', background: GREEN, display: 'inline-block', animation: 'fsPulse 1.8s ease-in-out infinite' }} />
         {t(`LIVE DEMO · ${BIZ_NAME} — WATCH THE PRODUCT RING ITSELF UP`, `DEMO EN VIVO · ${BIZ_NAME} — MIRA AL PRODUCTO COBRAR SOLO`)}
       </div>
 
       {/* CHAPTER 1 */}
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
+      <div className="fs-chap" style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>1</div>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
@@ -972,7 +1005,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14 }}>
+      <div className="fs-ch1" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14 }}>
         {/* POS */}
         <div ref={posCardRef} style={{ ...cardStyle, overflow: 'hidden', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #EEF0F3' }}>
@@ -982,9 +1015,9 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             </div>
             <span style={mono({ fontSize: 11, color: '#2563EB', background: '#EFF4FF', padding: '3px 9px', borderRadius: 6 })}>{t('Counter 1', 'Caja 1')}</span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 0 }}>
+          <div className="fs-pos" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 0 }}>
             {/* menu */}
-            <div style={{ padding: '14px 16px', borderRight: '1px solid #EEF0F3' }}>
+            <div className="fs-pos-menu" style={{ padding: '14px 16px', borderRight: '1px solid #EEF0F3' }}>
               <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 13 }}>
                 {TABS.map((c) => (
                   <button
@@ -1021,7 +1054,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
               </div>
             </div>
             {/* order rail */}
-            <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', minHeight: 300, position: 'relative' }}>
+            <div className="fs-pos-order" style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', minHeight: 300, position: 'relative' }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11 }}>
                 <span style={{ fontSize: 13, fontWeight: 700 }}>{t('Current order', 'Orden actual')}</span>
                 <span onClick={() => { if (!isPlaying) clearOrder() }} style={mono({ cursor: isPlaying ? 'default' : 'pointer', fontSize: 11, color: '#9CA3AF' })}>{t('Clear', 'Limpiar')}</span>
@@ -1146,7 +1179,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
       </div>
 
-      <div style={connector}>
+      <div className="fs-connector" style={connector}>
         <div style={{ width: 30, display: 'flex', justifyContent: 'center', color: '#C3C7CE', fontSize: 19 }}>↓</div>
         <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>{t(
           'Each ticket depletes ingredients in real time — what you sell tells you what to buy back, and that restock becomes spend.',
@@ -1155,7 +1188,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       </div>
 
       {/* CHAPTER 2 */}
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
+      <div className="fs-chap" style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>2</div>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
@@ -1169,7 +1202,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div className="fs-ch2" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         {/* Staffing */}
         <div ref={staffCardRef} style={{ ...cardStyle, padding: '14px 16px', position: 'relative' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -1357,7 +1390,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />{t('live with bank context', 'en vivo con contexto del banco')}
             </span>
           </div>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
+          <div className="fs-fin-kpis" style={{ display: 'flex', gap: 20, flexWrap: 'wrap', marginBottom: 16 }}>
             <div>
               <div style={mono({ fontSize: 9.5, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Revenue · live', 'Ingresos · en vivo')}</div>
               <div style={mono({ fontSize: 18, fontWeight: 600, color: GREEN, marginTop: 5 })}>{fmt(sales)}</div>
@@ -1402,7 +1435,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
       </div>
 
-      <div style={connector}>
+      <div className="fs-connector" style={connector}>
         <div style={{ width: 30, display: 'flex', justifyContent: 'center', color: '#C3C7CE', fontSize: 19 }}>↓</div>
         <span style={mono({ fontSize: 12, color: '#9CA3AF', lineHeight: 1.5 })}>{t(
           'Every ticket, shift, and invoice rolls up on its own — no spreadsheet, no Sunday-night reconstruction.',
@@ -1411,7 +1444,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       </div>
 
       {/* CHAPTER 3 */}
-      <div style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
+      <div className="fs-chap" style={{ display: 'flex', gap: 14, alignItems: 'flex-start', marginBottom: 28 }}>
         <div style={chapterNum}>3</div>
         <div>
           <div style={{ fontSize: 19, fontWeight: 700, letterSpacing: '-0.5px' }}>{t(
@@ -1430,7 +1463,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Analytics', 'Analíticas')}</span>
           <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('last 14 days', 'últimos 14 días')}</span>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 32 }}>
+        <div className="fs-ch3" style={{ display: 'grid', gridTemplateColumns: '1.15fr 0.85fr', gap: 32 }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10 }}>
               <span style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF' })}>{t('Daily rhythm', 'Ritmo diario')}</span>

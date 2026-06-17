@@ -25,12 +25,22 @@ import type { CSSProperties } from 'react'
 
 const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
 
-const CONCEPTS = [
+const CONCEPTS_EN = [
   'Taqueria / tacos', 'Mariscos', 'Panadería / bakery', 'BBQ',
   'Breakfast / cafe', 'Burgers', 'Other',
 ]
+const CONCEPTS_ES = [
+  'Taquería / tacos', 'Mariscos', 'Panadería', 'BBQ',
+  'Desayunos / café', 'Hamburguesas', 'Otro',
+]
 
-export default function DemoForm() {
+interface Props {
+  lang?: 'en' | 'es'
+}
+
+export default function DemoForm({ lang = 'en' }: Props) {
+  const t = (en: string, es?: string): string => (lang === 'es' && es ? es : en)
+  const CONCEPTS = lang === 'es' ? CONCEPTS_ES : CONCEPTS_EN
   const [email, setEmail] = useState('')
   const [concept, setConcept] = useState(CONCEPTS[0])
   const [error, setError] = useState('')
@@ -38,7 +48,7 @@ export default function DemoForm() {
 
   const submit = () => {
     const ok = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-    if (!ok) { setError('Enter a valid email so I can reach you.'); return }
+    if (!ok) { setError(t('Enter a valid email so I can reach you.', 'Pon un correo válido para poder contactarte.')); return }
     // TODO(LEAD-DELIVERY): wire { email, concept } to Supabase + email.
     //   See the file-level note above for the recommended path. Today
     //   this submission shows the success screen but the payload is
@@ -59,8 +69,11 @@ export default function DemoForm() {
       <div style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
         <div style={{ textAlign: 'center', padding: '24px 8px' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: '#FAF9F6', color: '#18181B', fontSize: 24 }}>✓</div>
-          <div style={{ fontSize: 21, fontWeight: 700, marginTop: 18 }}>You&apos;re on the list.</div>
-          <p style={{ fontSize: 15, color: '#C9C9CE', margin: '10px 0 0', lineHeight: 1.5 }}>I&apos;ll reach out within a day to set up your demo. Talk soon. — Renato Ruiz</p>
+          <div style={{ fontSize: 21, fontWeight: 700, marginTop: 18 }}>{t('You’re on the list.', 'Ya quedaste en la lista.')}</div>
+          <p style={{ fontSize: 15, color: '#C9C9CE', margin: '10px 0 0', lineHeight: 1.5 }}>{t(
+            'I’ll reach out within a day to set up your demo. Talk soon. — Renato Ruiz',
+            'Te contacto en menos de un día para agendar tu demo. Hablamos pronto. — Renato Ruiz'
+          )}</p>
         </div>
       </div>
     )
@@ -68,23 +81,26 @@ export default function DemoForm() {
 
   return (
     <div style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
-      <label style={label}>Your email</label>
+      <label style={label}>{t('Your email', 'Tu correo')}</label>
       <input
         type="email"
         value={email}
         onChange={(e) => { setEmail(e.target.value); setError('') }}
-        placeholder="you@yourrestaurant.com"
+        placeholder={t('you@yourrestaurant.com', 'tu@turestaurante.com')}
         style={{ ...field, border: `1px solid ${error ? '#E5A3A3' : '#34343A'}` }}
       />
-      <label style={{ ...label, display: 'block', marginTop: 16 }}>Your concept</label>
+      <label style={{ ...label, display: 'block', marginTop: 16 }}>{t('Your concept', 'Tu concepto')}</label>
       <select value={concept} onChange={(e) => setConcept(e.target.value)} style={{ ...field, border: '1px solid #34343A' }}>
         {CONCEPTS.map((c) => <option key={c} value={c}>{c}</option>)}
       </select>
       <div style={{ fontSize: 12.5, color: '#E5A3A3', height: 16, marginTop: 9, opacity: error ? 1 : 0 }}>{error}</div>
       <button onClick={submit} style={{ width: '100%', marginTop: 6, cursor: 'pointer', background: '#FAF9F6', color: '#18181B', border: 'none', fontSize: 16, fontWeight: 600, fontFamily: 'inherit', padding: 15, borderRadius: 11 }}>
-        Book my demo →
+        {t('Book my demo →', 'Agendar mi demo →')}
       </button>
-      <p style={{ fontSize: 11.5, color: '#6B6B70', textAlign: 'center', margin: '14px 0 0', lineHeight: 1.5 }}>No spam. I read every one of these myself.</p>
+      <p style={{ fontSize: 11.5, color: '#6B6B70', textAlign: 'center', margin: '14px 0 0', lineHeight: 1.5 }}>{t(
+        'No spam. I read every one of these myself.',
+        'Sin spam. Yo leo cada uno personalmente.'
+      )}</p>
     </div>
   )
 }

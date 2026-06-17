@@ -271,18 +271,84 @@ export default async function MarketingPage() {
         html{scroll-behavior:smooth}
         .mk-marquee:hover{animation-play-state:paused}
         .mk-sec{scroll-margin-top:96px}
+
+        /* ============================================================
+           Mobile redesign — single breakpoint at 640px. The page is
+           already wrap-friendly via clamp() font sizes and flex 1 1
+           basis values; mobile-only tightening focuses on the three
+           areas that don't degrade gracefully:
+             1. Nav row — secondary links hide on phone; the signup
+                button and "Book a demo" CTA stay reachable.
+             2. Hero — section padding + min-height shrink so the
+                receipt motif doesn't get pushed below the fold; the
+                receipt itself caps its width so it doesn't overflow.
+             3. Section padding — Act 2/3 + dark setup card lose
+                their desktop-sized vertical padding.
+           Plus a few small fixes for sections where the desktop flex
+           gap is too tight or too wide for phone width.
+           ============================================================ */
+        @media (max-width: 640px){
+          /* Nav — hide deep-section links; keep brand, Book a demo,
+             Sign up. A real phone visitor doesn't need 4 anchor
+             links — they scroll, and the CTA is always one tap
+             away via the Book a demo link. */
+          .mk-nav-row{padding:11px 18px!important;gap:10px!important}
+          .mk-nav-links{gap:14px!important}
+          .mk-nav-deep{display:none!important}
+          .mk-nav-cta{font-size:13px!important;padding:8px 13px!important}
+
+          /* Hero — tighter side padding, shorter min-height so the
+             receipt sits in view without scrolling. The clamp() on
+             the h1 already handles type sizing. */
+          .mk-hero{padding:28px 18px 32px!important;min-height:auto!important}
+          .mk-hero-grid{gap:32px!important}
+          .mk-hero-receipt{max-width:320px!important;margin:0 auto!important}
+          .mk-hero-p{font-size:16.5px!important;line-height:1.55!important}
+          .mk-hero-cta{padding:14px 22px!important;font-size:15.5px!important}
+
+          /* Section padding — Act 1/2/3, pilot, testimonials,
+             principles all share generous vertical padding by
+             default; halve it on phone. */
+          .mk-section{padding-left:18px!important;padding-right:18px!important}
+          .mk-act-pad-top{padding-top:56px!important}
+          .mk-act-pad-bottom{padding-bottom:24px!important}
+
+          /* Act 2 One/One/One — the title and description sit
+             side-by-side on desktop; on mobile they stack with
+             extra row padding for breathing room. */
+          .mk-act2-row{gap:8px!important;padding:18px 0!important}
+          .mk-act2-row-title{min-width:0!important}
+
+          /* Dark setup card — tighter padding so the four step
+             tiles don't get cramped between the wall and the
+             edge of the card. */
+          .mk-setup-card{padding:24px!important}
+          .mk-setup-head{flex-direction:column!important;align-items:flex-start!important;gap:14px!important;margin-bottom:24px!important}
+
+          /* Final CTA — stack form below text; tighter padding. */
+          .mk-cta-section{padding:60px 18px!important}
+          .mk-cta-grid{gap:32px!important}
+
+          /* Footer — center-align on phone so the brand + tagline
+             + copyright stack vertically. */
+          .mk-footer{flex-direction:column!important;text-align:center!important;gap:10px!important;padding:28px 18px 38px!important}
+
+          /* Language toggle — slightly smaller and tucked further
+             into the corner so it doesn't sit over the CTA. */
+          .mk-lang-toggle{bottom:14px!important;right:14px!important}
+        }
       `}</style>
 
       {/* NAV */}
       <nav style={{ position: 'sticky', top: 0, zIndex: 50, backdropFilter: 'saturate(1.4) blur(10px)', background: 'rgba(250,249,246,0.82)', borderBottom: '1px solid #E7E6E2' }}>
-        <div style={wrap({ padding: '13px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' })}>
+        <div className="mk-nav-row" style={wrap({ padding: '13px 24px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 18, flexWrap: 'wrap' })}>
           <Link href="/" style={{ display: 'flex', alignItems: 'center', textDecoration: 'none' }}><BrandLockup size="md" /></Link>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
-            <a href="#what" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('The Platform', 'La Plataforma')}</a>
-            <a href="#why" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('The Difference', 'La Diferencia')}</a>
-            <a href="#trust" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Our Commitment', 'Nuestro Compromiso')}</a>
+          <div className="mk-nav-links" style={{ display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
+            <a className="mk-nav-deep" href="#what" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('The Platform', 'La Plataforma')}</a>
+            <a className="mk-nav-deep" href="#why" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('The Difference', 'La Diferencia')}</a>
+            <a className="mk-nav-deep" href="#trust" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Our Commitment', 'Nuestro Compromiso')}</a>
             <a href="#book" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Book a demo', 'Pide una demo')}</a>
-            <Link href="/signup" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>{t('Sign up', 'Crear cuenta')}</Link>
+            <Link className="mk-nav-cta" href="/signup" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>{t('Sign up', 'Crear cuenta')}</Link>
           </div>
         </div>
       </nav>
@@ -292,15 +358,15 @@ export default async function MarketingPage() {
           reach the first section, which gives the entrance
           animation room to land and naturally separates the
           marketing tagline from the rest of the page. */}
-      <section style={wrap({ padding: '40px 24px', minHeight: 'calc(100vh - 60px)', display: 'flex', alignItems: 'center' })}>
-        <div style={{ width: '100%', display: 'flex', flexWrap: 'wrap', gap: 48, alignItems: 'center' }}>
+      <section className="mk-hero" style={wrap({ padding: '40px 24px', minHeight: 'calc(100vh - 60px)', display: 'flex', alignItems: 'center' })}>
+        <div className="mk-hero-grid" style={{ width: '100%', display: 'flex', flexWrap: 'wrap', gap: 48, alignItems: 'center' }}>
           <div style={{ flex: '1 1 440px' }}>
             <div style={{ ...eyebrow, ...enter(0) }}>{t('Daily operating system · Made for owners', 'Sistema operativo del día · Hecho para dueños')}</div>
             <h1 style={{ fontSize: 'clamp(38px,5.4vw,66px)', lineHeight: 0.98, letterSpacing: '-2.2px', fontWeight: 700, margin: '22px 0 0', ...enter(120) }}>{t('Run the whole place from the counter you’re already standing at.', 'Maneja todo tu lugar desde el mostrador donde ya estás parado.')}</h1>
-            <p style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, your cash, and your books at the same time. So “what happened today” stops being a Sunday-night guess with a calculator and a shoebox of receipts.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo. Así “qué pasó hoy” deja de ser una adivinanza del domingo en la noche con una calculadora y una caja de recibos.')}</p>
+            <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, your cash, and your books at the same time. So “what happened today” stops being a Sunday-night guess with a calculator and a shoebox of receipts.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo. Así “qué pasó hoy” deja de ser una adivinanza del domingo en la noche con una calculadora y una caja de recibos.')}</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 30, ...enter(400) }}>
-              <Link href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
-              <a href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
+              <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
+              <a className="mk-hero-cta" href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
             </div>
             <div style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>
               <span>{t('Owner-operator first', 'Hecho para dueños')}</span><span style={{ color: '#D0D0CC' }}>·</span>
@@ -326,7 +392,7 @@ export default async function MarketingPage() {
                 — 100ms pause —
                 5040 / 700  Next morning · reconciled          (section 4)
                 5840        ✓ check mark pops                                 */}
-          <div style={{ flex: '0 1 300px', minWidth: 260, margin: '0 auto', ...enter(280) }}>
+          <div className="mk-hero-receipt" style={{ flex: '0 1 300px', minWidth: 260, margin: '0 auto', ...enter(280) }}>
             <div style={mono({ background: '#FFFFFF', border: '1px solid #E7E6E2', borderRadius: '14px 14px 0 0', boxShadow: '0 28px 60px -32px rgba(24,24,27,0.30)', padding: 22, color: '#18181B' })}>
               <div style={{ textAlign: 'center', borderBottom: '1px dashed #D8D8D4', paddingBottom: 14, ...typeIn(1100, 800) }}>
                 <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: 1 }}>{lang === 'es' ? 'TACOS DON PORK' : 'PORK’S BURGERS'}</div>
@@ -365,7 +431,7 @@ export default async function MarketingPage() {
           96) because the hero above is full-viewport with vertically
           centered content. The hero's empty bottom space already
           contributes breathing room before this section starts. */}
-      <section id="what" className="mk-sec" style={wrap({ padding: '64px 24px 32px' })}>
+      <section id="what" className="mk-sec mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '64px 24px 32px' })}>
         <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
           <span style={actNum}>01</span>
           <div>
@@ -376,7 +442,7 @@ export default async function MarketingPage() {
       </section>
 
       {/* problem */}
-      <section style={wrap({ padding: '36px 24px 8px' })}>
+      <section className="mk-section" style={wrap({ padding: '36px 24px 8px' })}>
         <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '0 0 44px', maxWidth: 620 }}>{t(
           'An independent restaurant runs on five different things at once — sales at the counter, labor on the schedule, inventory in the walk-in, money in the bank, and your head holding all of it together. None of them talk to each other. So stock gets tracked by hand until you run out of your bestseller in the middle of the rush. Money never quite squares because credits, invoices, delayed payouts, and payroll all live somewhere different. And the real picture — how today\'s sales actually compared to today\'s labor and today\'s stock burn — gets stitched together by hand in a spreadsheet at 11 PM on a Sunday. That\'s the mess Checked replaces. Not by being one more app, but by making one screen where a sale moves inventory, inventory moves finance, and finance answers the question you actually have: am I making money tonight.',
           'Un restaurante independiente corre con cinco cosas a la vez — ventas en la caja, personal en el horario, inventario en la cocina, dinero en el banco, y tu cabeza aguantando todo. Ninguno se habla con el otro. Por eso el inventario se lleva a mano hasta que se acaba tu platillo estrella en plena hora pico. El dinero nunca cuadra del todo porque las propinas, las facturas, los depósitos atrasados y la nómina viven cada uno por su lado. Y la foto real — cómo se compararon de verdad las ventas de hoy contra el costo de mano de obra y el consumo de inventario — la armas a mano en una hoja de cálculo a las 11 PM un domingo. Ese es el desorden que Checked reemplaza. No siendo una app más, sino haciendo una sola pantalla donde una venta mueve el inventario, el inventario mueve las finanzas, y las finanzas responden la pregunta que de verdad tienes: ¿estoy ganando dinero esta noche?'
@@ -388,7 +454,7 @@ export default async function MarketingPage() {
           disconnected problems" (ProblemCards above) to "one
           unified solution" (FloorSim below) reads as a deliberate
           section break, not a continuation. */}
-      <section style={wrap({ padding: '96px 24px 64px' })}>
+      <section className="mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 64px' })}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
           <h3 style={{ fontSize: 'clamp(22px,2.8vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: 0, maxWidth: 620 }}>{t(
             'Here’s what that looks like in motion. The same restaurant, on one screen, across one real day.',
@@ -404,7 +470,7 @@ export default async function MarketingPage() {
 
       {/* ACT 2 */}
       <section id="why" className="mk-sec" style={{ background: '#F0F0EC' }}>
-        <div style={wrap({ padding: '96px 24px 32px' })}>
+        <div className="mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 32px' })}>
           <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
             <span style={actNum}>02</span>
             <div>
@@ -414,7 +480,7 @@ export default async function MarketingPage() {
           </div>
         </div>
 
-        <div style={wrap({ padding: '34px 24px 0' })}>
+        <div className="mk-section" style={wrap({ padding: '34px 24px 0' })}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {['POS', 'Spreadsheet', 'Notebook', 'Bank app', 'Whiteboard'].map((x, i) => (
@@ -453,8 +519,8 @@ export default async function MarketingPage() {
                 bottom: true,
               },
             ].map((row) => (
-              <div key={row.t} style={{ display: 'flex', gap: 'clamp(16px,4vw,44px)', flexWrap: 'wrap', alignItems: 'baseline', borderTop: '1px solid #E2E0DA', borderBottom: row.bottom ? '1px solid #E2E0DA' : undefined, padding: '24px 0' }}>
-                <div style={{ flex: '0 0 auto', minWidth: 230, fontSize: 'clamp(34px,5vw,56px)', fontWeight: 700, letterSpacing: '-2.2px', lineHeight: 0.92 }}>{row.t}</div>
+              <div key={row.t} className="mk-act2-row" style={{ display: 'flex', gap: 'clamp(16px,4vw,44px)', flexWrap: 'wrap', alignItems: 'baseline', borderTop: '1px solid #E2E0DA', borderBottom: row.bottom ? '1px solid #E2E0DA' : undefined, padding: '24px 0' }}>
+                <div className="mk-act2-row-title" style={{ flex: '0 0 auto', minWidth: 230, fontSize: 'clamp(34px,5vw,56px)', fontWeight: 700, letterSpacing: '-2.2px', lineHeight: 0.92 }}>{row.t}</div>
                 <p style={{ flex: '1 1 320px', fontSize: 17, lineHeight: 1.5, color: '#52525B', margin: 0 }}>{row.d}</p>
               </div>
             ))}
@@ -464,9 +530,9 @@ export default async function MarketingPage() {
         {/* setup speed — extra top padding so the dark mode change
             from cream Act 2 surface lands as its own beat, not a
             mid-section interruption. */}
-        <div style={wrap({ padding: '88px 24px 64px' })}>
-          <div style={{ background: '#18181B', color: '#FAF9F6', borderRadius: 18, padding: 'clamp(28px,4vw,44px)' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 32px', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 32 }}>
+        <div className="mk-section mk-act-pad-bottom" style={wrap({ padding: '88px 24px 64px' })}>
+          <div className="mk-setup-card" style={{ background: '#18181B', color: '#FAF9F6', borderRadius: 18, padding: 'clamp(28px,4vw,44px)' }}>
+            <div className="mk-setup-head" style={{ display: 'flex', flexWrap: 'wrap', gap: '16px 32px', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 32 }}>
               <div>
                 <div style={mono({ fontSize: 11.5, letterSpacing: '0.14em', textTransform: 'uppercase', color: '#A1A1A6' })}>{t('Setup, done together', 'Instalación, juntos')}</div>
                 <h3 style={{ fontSize: 'clamp(24px,3.2vw,38px)', lineHeight: 1.05, letterSpacing: '-1.2px', fontWeight: 700, margin: '14px 0 0', maxWidth: 620 }}>{t('Setup isn’t a project. It’s where the partnership starts.', 'La instalación no es un proyecto. Es donde empieza nuestra relación.')}</h3>
@@ -490,7 +556,7 @@ export default async function MarketingPage() {
       </section>
 
       {/* ACT 3 */}
-      <section id="trust" className="mk-sec" style={wrap({ padding: '96px 24px 32px' })}>
+      <section id="trust" className="mk-sec mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 32px' })}>
         <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
           <span style={actNum}>03</span>
           <div>
@@ -501,7 +567,7 @@ export default async function MarketingPage() {
       </section>
 
       {/* pilot */}
-      <section style={wrap({ padding: '56px 24px 0' })}>
+      <section className="mk-section" style={wrap({ padding: '56px 24px 0' })}>
         <div style={{ display: 'flex', gap: 44, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <div style={{ flex: '1 1 320px' }}>
             <div style={eyebrow}>{t('Where Checked is today', 'Dónde está Checked hoy')}</div>
@@ -534,7 +600,7 @@ export default async function MarketingPage() {
       </section>
 
       {/* testimonials */}
-      <section style={wrap({ padding: '80px 24px 0' })}>
+      <section className="mk-section" style={wrap({ padding: '80px 24px 0' })}>
         <div style={eyebrow}>{t('From the floor', 'Desde el piso')}</div>
         <h3 style={{ fontSize: 'clamp(24px,3vw,34px)', lineHeight: 1.08, letterSpacing: '-1.1px', fontWeight: 700, margin: '14px 0 0', maxWidth: 680 }}>{t(
           'Real words from real owners — coming soon.',
@@ -554,7 +620,7 @@ export default async function MarketingPage() {
       </section>
 
       {/* principles */}
-      <section style={wrap({ padding: '72px 24px 0' })}>
+      <section className="mk-section" style={wrap({ padding: '72px 24px 0' })}>
         <div style={{ background: '#FFFFFF', border: '1px solid #E7E6E2', borderRadius: 18, padding: 'clamp(28px,4vw,44px)' }}>
           <div style={eyebrow}>{t('How we work', 'Cómo trabajamos')}</div>
           <h3 style={{ fontSize: 'clamp(22px,2.6vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: '12px 0 0', maxWidth: 640 }}>{t('A few things we won’t trade away.', 'Algunas cosas que no vamos a negociar.')}</h3>
@@ -574,8 +640,8 @@ export default async function MarketingPage() {
 
       {/* FINAL CTA */}
       <section id="book" className="mk-sec" style={{ background: '#18181B', color: '#FAF9F6', marginTop: 64 }}>
-        <div style={wrap({ padding: '84px 24px' })}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 48, alignItems: 'center' }}>
+        <div className="mk-cta-section" style={wrap({ padding: '84px 24px' })}>
+          <div className="mk-cta-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: 48, alignItems: 'center' }}>
             <div style={{ flex: '1 1 380px' }}>
               <h2 style={{ fontSize: 'clamp(32px,4.2vw,52px)', lineHeight: 1.0, letterSpacing: '-1.8px', fontWeight: 700, margin: 0 }}>{t('Let’s get your place ', 'Pongamos tu lugar en orden. Con ')}<span style={{ color: '#FFFFFF' }}>Checked</span>.</h2>
               <p style={{ fontSize: 18, lineHeight: 1.55, color: '#C9C9CE', margin: '20px 0 0', maxWidth: 440 }}>{t('Tell us a bit about your place and we’ll set up a quick walkthrough. We’ll figure out together if it’s the right fit.', 'Cuéntanos un poco de tu lugar y agendamos una llamada rápida. Decidimos juntos si es la solución para ti.')}</p>
@@ -585,13 +651,13 @@ export default async function MarketingPage() {
                 <span>{t('No pressure', 'Sin presión')}</span>
               </div>
             </div>
-            <DemoForm />
+            <DemoForm lang={lang} />
           </div>
         </div>
       </section>
 
       {/* FOOTER */}
-      <footer style={wrap({ padding: '34px 24px 48px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 18 })}>
+      <footer className="mk-footer" style={wrap({ padding: '34px 24px 48px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 18 })}>
         <BrandLockup size="sm" />
         <div style={mono({ fontSize: 12, color: '#A1A1A6' })}>{t('The daily operating system for independent restaurants.', 'El sistema operativo del día a día para restaurantes independientes.')}</div>
         <div style={mono({ fontSize: 12, color: '#A1A1A6' })}>© 2026 Checked</div>

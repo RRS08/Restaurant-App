@@ -56,6 +56,7 @@ export default function LanguageToggle({ currentLang }: Props) {
     <div
       role="group"
       aria-label="Language"
+      className="mk-lang-toggle"
       style={{
         position: 'fixed',
         bottom: 20,

@@ -26,7 +26,10 @@
       "Bash(echo \"TSC=$?\")",
       "Bash(echo \"BUILD=$?\")",
       "WebSearch",
-      "WebFetch(domain:support.apple.com)"
+      "WebFetch(domain:support.apple.com)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

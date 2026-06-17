@@ -1,6 +1,5 @@
 'use server'
 
-import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRestaurantOwner, AuthzError } from '@/lib/authz'
@@ -18,100 +17,6 @@ import {
   isRoleSelectionValid,
 } from '@/lib/onboarding/defaults'
 import { normalizeDisplayName } from '@/lib/strings/names'
-
-export async function createRestaurantAndLocation(
-  prevState: { error: string } | null,
-  formData: FormData
-) {
-  const supabase = await createClient()
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return { error: 'You must be logged in to complete setup.' }
-  }
-
-  // Restaurant + location names are user-created business identifiers
-  // and follow the system-wide naming-normalization rule (title case,
-  // collapsed whitespace) so the database stays clean.
-  //
-  // Address stays raw — street addresses contain semantically
-  // meaningful capitalization (e.g. "PO Box", "McAllen") and casing
-  // rules are locale-specific. Same for timezone (IANA identifier).
-  const restaurantName = normalizeDisplayName(
-    (formData.get('restaurant_name') as string) ?? '',
-  )
-  const locationName = normalizeDisplayName(
-    (formData.get('location_name') as string) ?? '',
-  )
-  const address = (formData.get('address') as string)?.trim()
-  const timezone = (formData.get('timezone') as string) || 'UTC'
-
-  if (!restaurantName) {
-    return { error: 'Restaurant name is required.' }
-  }
-  if (!locationName) {
-    return { error: 'Location name is required.' }
-  }
-
-  // ---- Step 1: Create the restaurant ----
-  const { data: restaurant, error: restaurantError } = await supabase
-    .from('restaurants')
-    .insert({
-      name: restaurantName,
-      owner_user_id: user.id,
-    })
-    .select()
-    .single()
-
-  if (restaurantError || !restaurant) {
-    console.error('Restaurant creation failed:', restaurantError)
-    return { error: formatError('restaurant', restaurantError) }
-  }
-
-  // ---- Step 2: Assign the owner role ----
-  //
-  // THIS MUST HAPPEN BEFORE creating the location.
-  //
-  // Why: the RLS policy on `locations` for INSERT is:
-  //   with check (restaurant_id = public.my_restaurant_id())
-  //
-  // my_restaurant_id() reads from user_roles. If user_roles doesn't
-  // exist yet when we try to insert the location, my_restaurant_id()
-  // returns NULL, the check fails, and the insert is blocked by RLS.
-  //
-  // Creating user_roles first means my_restaurant_id() returns the
-  // correct restaurant.id when the location insert runs.
-  const { error: roleError } = await supabase.from('user_roles').insert({
-    user_id: user.id,
-    restaurant_id: restaurant.id,
-    role: 'owner',
-  })
-
-  if (roleError) {
-    console.error('Role assignment failed:', roleError)
-    return { error: formatError('owner role', roleError) }
-  }
-
-  // ---- Step 3: Create the first location ----
-  // Now that user_roles exists, my_restaurant_id() returns restaurant.id
-  // and the RLS check passes.
-  const { error: locationError } = await supabase.from('locations').insert({
-    restaurant_id: restaurant.id,
-    name: locationName,
-    address: address || null,
-    timezone,
-  })
-
-  if (locationError) {
-    console.error('Location creation failed:', locationError)
-    return { error: formatError('location', locationError) }
-  }
-
-  redirect('/dashboard')
-}
 
 // ----------------------------------------------------------------
 // setOperatingMode

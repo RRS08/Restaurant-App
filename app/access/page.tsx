@@ -22,6 +22,8 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
+import { BrandLockup } from '@/components/brand'
 import AccessForm from './form'
 
 interface Props {
@@ -70,16 +72,23 @@ export default async function AccessPage({ searchParams }: Props) {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#FAF9F6] p-6">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4 py-10">
       <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="text-xs uppercase tracking-[0.16em] text-zinc-500 mb-3">
-            {r?.name ?? 'Checked'}
-          </div>
-          <h1 className="text-2xl font-semibold text-zinc-900">
+        {/* Brand + contextual greeting — same shape as /login so the
+            auth-adjacent screens read as one family. */}
+        <div className="mb-8 text-center">
+          <Link href="/" className="inline-flex">
+            <BrandLockup size="md" variant="solid" />
+          </Link>
+          {r?.name && (
+            <div className="mt-5 text-xs font-mono uppercase tracking-[0.16em] text-gray-400">
+              {r.name}
+            </div>
+          )}
+          <h1 className="mt-3 text-2xl font-bold text-gray-900 tracking-tight">
             {signout ? 'Sign out' : 'Enter your code'}
           </h1>
-          <p className="text-sm text-zinc-500 mt-2">
+          <p className="mt-1 text-sm text-gray-500">
             {signout
               ? 'The owner code is required to end this session.'
               : r?.staff_passcode_hash
@@ -87,7 +96,22 @@ export default async function AccessPage({ searchParams }: Props) {
                 : 'Enter the owner code to continue.'}
           </p>
         </div>
-        <AccessForm signout={signout} />
+
+        {/* Card — matches login/signup chrome (white, rounded-2xl,
+            subtle border + shadow). The 4-digit input lives inside. */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
+          <AccessForm signout={signout} />
+        </div>
+
+        {/* Cancel link only on the signout flow — the default flow has
+            no escape (user is gated until they enter a code). */}
+        {signout && (
+          <div className="text-center mt-5">
+            <Link href="/dashboard" className="text-sm text-gray-500 hover:text-gray-700">
+              Cancel and go back
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -41,30 +41,41 @@ export default function AccessForm({ signout }: Props) {
   }
 
   return (
-    <form ref={formRef} action={formAction} className="flex flex-col gap-4">
-      <input
-        ref={inputRef}
-        name="passcode"
-        type="text"
-        inputMode="numeric"
-        autoComplete="one-time-code"
-        pattern="\d{4}"
-        maxLength={4}
-        onInput={handleInput}
-        disabled={isPending}
-        className="w-full text-center text-3xl tracking-[0.6em] font-mono py-4 px-3 rounded-xl border border-zinc-300 bg-white focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-zinc-900 disabled:opacity-60"
-        placeholder="••••"
-        aria-label="Passcode"
-      />
+    <form ref={formRef} action={formAction} className="space-y-5">
+      <div>
+        <label
+          htmlFor="passcode"
+          className="block text-sm font-medium text-gray-700 mb-2"
+        >
+          4-digit code
+        </label>
+        <input
+          ref={inputRef}
+          id="passcode"
+          name="passcode"
+          type="text"
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          pattern="\d{4}"
+          maxLength={4}
+          onInput={handleInput}
+          disabled={isPending}
+          placeholder="••••"
+          aria-label="Passcode"
+          className="w-full text-center text-3xl tracking-[0.6em] font-mono py-4 rounded-lg border border-gray-300 bg-white placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-60"
+        />
+      </div>
+
       {state?.error && (
-        <div className="text-sm text-rose-600 text-center" role="alert">
+        <div className="text-sm text-red-600 text-center" role="alert">
           {state.error}
         </div>
       )}
+
       <button
         type="submit"
         disabled={isPending}
-        className="w-full bg-zinc-900 text-white font-medium py-3 rounded-xl hover:bg-zinc-800 transition-colors disabled:opacity-60"
+        className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
       >
         {isPending ? 'Checking…' : signout ? 'Sign out' : 'Enter'}
       </button>

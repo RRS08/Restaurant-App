@@ -11,8 +11,13 @@
 // We never display the current codes — only whether they're set.
 // The hashes sit on `restaurants` behind RLS but we don't surface
 // them in the UI either. Leaving an input blank means "keep the
-// current code"; the explicit "Disable staff mode" button is the
+// current code"; the explicit "Disable staff code" button is the
 // only way to clear a code without setting a new one.
+//
+// Chrome matches the other Settings cards (BusinessCard,
+// OperationsCard, etc.) — same rounded-xl + soft shadow, same
+// eyebrow type, same gray-* palette — so the page reads as one
+// surface, not a patchwork.
 // ----------------------------------------------------------------
 
 import { useActionState } from 'react'
@@ -23,101 +28,115 @@ interface Props {
   staffSet: boolean
 }
 
-// Mode line that explains both "set codes" and "lock now" sit side
-// by side. Saving doesn't lock the device — the owner has to
-// explicitly hand it off via the lock button. This is what lets
-// the owner stay in owner mode after configuring codes.
 export default function AccessCodesCard({ ownerSet, staffSet }: Props) {
   const [state, formAction, pending] = useActionState(setPasscodes, null)
 
   return (
-    <div className="bg-white border border-zinc-200 rounded-2xl p-5">
-      <div className="flex items-baseline justify-between mb-1">
-        <h2 className="text-base font-semibold text-zinc-900">Access codes</h2>
-        <span className="text-xs font-mono uppercase tracking-wider text-zinc-400">
+    <section className="rounded-xl border border-gray-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+          Access codes
+        </p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">
           Kiosk mode
-        </span>
+        </p>
       </div>
-      <p className="text-sm text-zinc-500 mb-5 leading-relaxed">
+      <p className="mt-1.5 text-base font-semibold text-gray-900">
+        Lock the floor to POS only.
+      </p>
+      <p className="mt-1 text-[13px] leading-relaxed text-gray-500">
         A short 4-digit code controls who sees what on this device. The owner code
-        unlocks everything. The staff code locks the device to POS only — no
-        finance, no inventory, no settings. Sign-out always requires the owner code.
+        unlocks everything. The staff code locks the device to POS — no finance,
+        no inventory, no settings. Sign-out always requires the owner code.
       </p>
 
-      <form action={formAction} className="space-y-4">
-        <div>
-          <label className="block text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">
-            Owner code {ownerSet && <span className="text-emerald-600 normal-case font-sans">· set</span>}
-          </label>
-          <input
-            name="owner_passcode"
-            type="text"
-            inputMode="numeric"
-            pattern="\d{4}"
-            maxLength={4}
-            placeholder={ownerSet ? '••••  (keep current)' : '4 digits'}
-            className="w-40 text-center text-lg tracking-[0.4em] font-mono py-2.5 px-3 rounded-lg border border-zinc-300 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-zinc-900"
-          />
+      <form action={formAction} className="mt-4 space-y-4">
+        <div className="flex items-center gap-4 flex-wrap">
+          <div className="flex-1 min-w-[140px]">
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500 mb-1.5">
+              Owner code
+              {ownerSet && (
+                <span className="ml-1.5 normal-case font-normal tracking-normal text-emerald-600">
+                  · set
+                </span>
+              )}
+            </label>
+            <input
+              name="owner_passcode"
+              type="text"
+              inputMode="numeric"
+              pattern="\d{4}"
+              maxLength={4}
+              placeholder={ownerSet ? '••••' : '4 digits'}
+              className="w-32 text-center text-base tracking-[0.4em] font-mono py-2 px-2 rounded-lg border border-gray-300 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+          <div className="flex-1 min-w-[140px]">
+            <label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500 mb-1.5">
+              Staff code
+              {staffSet && (
+                <span className="ml-1.5 normal-case font-normal tracking-normal text-emerald-600">
+                  · set
+                </span>
+              )}
+            </label>
+            <input
+              name="staff_passcode"
+              type="text"
+              inputMode="numeric"
+              pattern="\d{4}"
+              maxLength={4}
+              placeholder={staffSet ? '••••' : '4 digits'}
+              className="w-32 text-center text-base tracking-[0.4em] font-mono py-2 px-2 rounded-lg border border-gray-300 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
         </div>
-
-        <div>
-          <label className="block text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">
-            Staff code {staffSet && <span className="text-emerald-600 normal-case font-sans">· set</span>}
-          </label>
-          <input
-            name="staff_passcode"
-            type="text"
-            inputMode="numeric"
-            pattern="\d{4}"
-            maxLength={4}
-            placeholder={staffSet ? '••••  (keep current)' : '4 digits'}
-            className="w-40 text-center text-lg tracking-[0.4em] font-mono py-2.5 px-3 rounded-lg border border-zinc-300 focus:outline-none focus:ring-2 focus:ring-zinc-900 focus:border-zinc-900"
-          />
-          <p className="text-xs text-zinc-500 mt-2">
-            Leave blank to keep the current code.
-          </p>
-        </div>
+        <p className="text-[11px] text-gray-500">
+          Leave a field blank to keep its current code.
+        </p>
 
         {state?.error && (
-          <div className="text-sm text-rose-600" role="alert">
+          <p className="text-[13px] text-red-600" role="alert">
             {state.error}
-          </div>
+          </p>
         )}
         {state?.ok && !state.error && (
-          <div className="text-sm text-emerald-600">Saved.</div>
+          <p className="text-[13px] text-emerald-600">Saved.</p>
         )}
 
         <button
           type="submit"
           disabled={pending}
-          className="bg-zinc-900 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-zinc-800 transition-colors disabled:opacity-60"
+          className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {pending ? 'Saving…' : 'Save'}
         </button>
       </form>
 
-      <div className="mt-4 pt-4 border-t border-zinc-100 flex items-center gap-4 flex-wrap">
-        {ownerSet && (
-          <form action={lockDevice}>
-            <button
-              type="submit"
-              className="text-sm font-medium text-zinc-900 hover:text-zinc-700 transition-colors"
-            >
-              Lock device now →
-            </button>
-          </form>
-        )}
-        {staffSet && (
-          <form action={clearStaffPasscode}>
-            <button
-              type="submit"
-              className="text-sm text-zinc-500 hover:text-zinc-900 transition-colors"
-            >
-              Disable staff code
-            </button>
-          </form>
-        )}
-      </div>
-    </div>
+      {(ownerSet || staffSet) && (
+        <div className="mt-4 pt-3 border-t border-gray-100 flex items-center gap-5 flex-wrap">
+          {ownerSet && (
+            <form action={lockDevice}>
+              <button
+                type="submit"
+                className="text-[13px] font-medium text-gray-900 hover:text-gray-600 transition-colors"
+              >
+                Lock device now →
+              </button>
+            </form>
+          )}
+          {staffSet && (
+            <form action={clearStaffPasscode}>
+              <button
+                type="submit"
+                className="text-[13px] text-gray-500 hover:text-gray-900 transition-colors"
+              >
+                Disable staff code
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+    </section>
   )
 }

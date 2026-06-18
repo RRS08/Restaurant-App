@@ -217,8 +217,8 @@ export default function PosClient({
       setCashReceivedRaw('')
       setCheckoutOpen(false)
       setConfirmation(`${t('Sale complete', 'Venta completada')} · ${CURRENCY(lastSubtotalRef.current)}`)
-      const t = setTimeout(() => setConfirmation(null), 2000)
-      return () => clearTimeout(t)
+      const dismissTimer = setTimeout(() => setConfirmation(null), 2000)
+      return () => clearTimeout(dismissTimer)
     }
     wasPendingRef.current = pending
   }, [pending, state, cart])

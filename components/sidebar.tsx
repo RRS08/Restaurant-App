@@ -30,9 +30,11 @@ import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useSidebarClose } from '@/app/(app)/app-shell'
 import { BrandMark, BrandWordmark } from '@/components/brand'
+import { lockDevice } from '@/app/actions/access'
+import { makeT, type Lang } from '@/lib/i18n'
 import {
   LayoutDashboard, UtensilsCrossed, TrendingUp, Package, Users,
-  DollarSign, Settings, LogOut, ShoppingCart, BarChart3, Wrench, X,
+  DollarSign, Settings, LogOut, Lock, ShoppingCart, BarChart3, Wrench, X,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
@@ -45,19 +47,23 @@ import {
 // `dev: true` items are filtered out for non-dev viewers. The
 // /dev-tools page is also server-side guarded (`isDevEmail`); this
 // flag controls sidebar visibility only — convenience, not security.
+//
+// labelEn + labelEs feed makeT() at render time so the same item
+// list serves both languages. Spanish strings stay inline next to
+// English so future translators can scan the file once.
 const navItems: Array<{
-  label: string; href: string; icon: typeof LayoutDashboard; dev?: true
+  labelEn: string; labelEs: string; href: string; icon: typeof LayoutDashboard; dev?: true
 }> = [
-  { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
-  { label: 'Menu',      href: '/menu',      icon: UtensilsCrossed },
-  { label: 'POS',       href: '/pos',       icon: ShoppingCart },
-  { label: 'Sales',     href: '/sales',     icon: TrendingUp },
-  { label: 'Inventory', href: '/inventory', icon: Package },
-  { label: 'Staffing',  href: '/staffing',  icon: Users },
-  { label: 'Finance',   href: '/finance',   icon: DollarSign },
-  { label: 'Analytics', href: '/analytics', icon: BarChart3 },
-  { label: 'Settings',  href: '/settings',  icon: Settings },
-  { label: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
+  { labelEn: 'Dashboard',   labelEs: 'Panel',         href: '/dashboard', icon: LayoutDashboard },
+  { labelEn: 'Menu',        labelEs: 'Menú',          href: '/menu',      icon: UtensilsCrossed },
+  { labelEn: 'POS',         labelEs: 'POS',           href: '/pos',       icon: ShoppingCart },
+  { labelEn: 'Sales',       labelEs: 'Ventas',        href: '/sales',     icon: TrendingUp },
+  { labelEn: 'Inventory',   labelEs: 'Inventario',    href: '/inventory', icon: Package },
+  { labelEn: 'Staffing',    labelEs: 'Personal',      href: '/staffing',  icon: Users },
+  { labelEn: 'Finance',     labelEs: 'Finanzas',      href: '/finance',   icon: DollarSign },
+  { labelEn: 'Analytics',   labelEs: 'Analíticas',    href: '/analytics', icon: BarChart3 },
+  { labelEn: 'Settings',    labelEs: 'Ajustes',       href: '/settings',  icon: Settings },
+  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox',   href: '/dev-tools', icon: Wrench, dev: true },
 ]
 
 interface SidebarProps {
@@ -71,11 +77,14 @@ interface SidebarProps {
   /** Dev override — when true, every link is shown regardless of
    *  mode so the testing workflow can hit both surfaces. */
   isDev: boolean
+  /** Active language for this device. Set via Settings → Language. */
+  lang: Lang
 }
 
 export default function Sidebar({
-  restaurantName, userFullName, userEmail, operatingMode, isDev,
+  restaurantName, userFullName, userEmail, operatingMode, isDev, lang,
 }: SidebarProps) {
+  const t = makeT(lang)
   // Tablet overlay close handler — pulled from AppShell's React
   // Context. `null` on desktop (sidebar always visible) or when
   // mounted outside AppShell. Called on nav-item click to close
@@ -158,7 +167,7 @@ export default function Sidebar({
                   isActive ? 'text-zinc-900' : 'text-zinc-400'
                 )}
               />
-              <span className="flex-1">{item.label}</span>
+              <span className="flex-1">{t(item.labelEn, item.labelEs)}</span>
               {item.dev && (
                 <span
                   className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded"
@@ -181,6 +190,24 @@ export default function Sidebar({
           )}
         </div>
 
+        {/* Lock device — calls the lockDevice server action which
+            clears the pos_mode cookie without ending the auth
+            session. Used when the owner hands the device to a
+            server: next request lands on /access for the staff
+            code prompt. Same affordance as the Lock button in
+            Settings → Access codes, just reachable from any page. */}
+        <form action={lockDevice}>
+          <button
+            type="submit"
+            className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
+                       font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900
+                       transition-colors"
+          >
+            <Lock className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+            {t('Lock device', 'Bloquear dispositivo')}
+          </button>
+        </form>
+
         {/* Sign-out routes through /access?signout=1 — the owner
             passcode is required to actually end the session. This
             is the kiosk model: staff can't unilaterally sign the
@@ -192,7 +219,7 @@ export default function Sidebar({
                      transition-colors"
         >
           <LogOut className="w-4 h-4 text-zinc-400 flex-shrink-0" />
-          Sign out
+          {t('Sign out', 'Cerrar sesión')}
         </Link>
 
         {/* Product wordmark — calm, small, sits below the user

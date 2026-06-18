@@ -21,12 +21,15 @@
 
 import { useActionState, useEffect, useRef, useState } from 'react'
 import { enterAccessMode, signOutWithPasscode } from '@/app/actions/access'
+import { makeT, type Lang } from '@/lib/i18n'
 
 interface Props {
   signout: boolean
+  lang: Lang
 }
 
-export default function AccessForm({ signout }: Props) {
+export default function AccessForm({ signout, lang }: Props) {
+  const t = makeT(lang)
   const action = signout ? signOutWithPasscode : enterAccessMode
   const [state, formAction, isPending] = useActionState(action, null)
   const formRef = useRef<HTMLFormElement>(null)
@@ -130,7 +133,7 @@ export default function AccessForm({ signout }: Props) {
           type="button"
           onClick={backspace}
           disabled={isPending || digits.length === 0}
-          aria-label="Backspace"
+          aria-label={t('Backspace', 'Borrar')}
           className="h-16 rounded-xl bg-white border border-gray-200 text-gray-500 hover:bg-gray-50 active:bg-gray-100 active:scale-[0.97] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
         >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -143,7 +146,7 @@ export default function AccessForm({ signout }: Props) {
 
       {isPending && (
         <p className="text-[12px] text-center text-gray-400 font-mono uppercase tracking-[0.12em]">
-          Checking…
+          {t('Checking…', 'Verificando…')}
         </p>
       )}
     </form>

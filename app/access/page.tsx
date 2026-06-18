@@ -24,6 +24,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { BrandLockup } from '@/components/brand'
+import { getLang, getT } from '@/lib/i18n'
 import AccessForm from './form'
 
 interface Props {
@@ -33,6 +34,9 @@ interface Props {
 export default async function AccessPage({ searchParams }: Props) {
   const params = await searchParams
   const signout = params.signout === '1'
+
+  const lang = await getLang()
+  const t = await getT()
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -86,21 +90,21 @@ export default async function AccessPage({ searchParams }: Props) {
             </div>
           )}
           <h1 className="mt-3 text-2xl font-bold text-gray-900 tracking-tight">
-            {signout ? 'Sign out' : 'Enter your code'}
+            {signout ? t('Sign out', 'Cerrar sesión') : t('Enter your code', 'Ingresa tu código')}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
             {signout
-              ? 'The owner code is required to end this session.'
+              ? t('The owner code is required to end this session.', 'Se requiere el código del dueño para cerrar la sesión.')
               : r?.staff_passcode_hash
-                ? 'Owner or staff code, whichever applies.'
-                : 'Enter the owner code to continue.'}
+                ? t('Owner or staff code, whichever applies.', 'Código del dueño o del personal, según corresponda.')
+                : t('Enter the owner code to continue.', 'Ingresa el código del dueño para continuar.')}
           </p>
         </div>
 
         {/* Card — matches login/signup chrome (white, rounded-2xl,
             subtle border + shadow). The 4-digit input lives inside. */}
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
-          <AccessForm signout={signout} />
+          <AccessForm signout={signout} lang={lang} />
         </div>
 
         {/* Cancel link only on the signout flow — the default flow has
@@ -108,7 +112,7 @@ export default async function AccessPage({ searchParams }: Props) {
         {signout && (
           <div className="text-center mt-5">
             <Link href="/dashboard" className="text-sm text-gray-500 hover:text-gray-700">
-              Cancel and go back
+              {t('Cancel and go back', 'Cancelar y volver')}
             </Link>
           </div>
         )}

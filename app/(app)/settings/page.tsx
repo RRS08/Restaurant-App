@@ -32,10 +32,13 @@ import IntegrationsCard from './integrations-card'
 import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
 import AccessCodesCard from './access-codes-card'
+import LanguageCard from './language-card'
+import { getLang } from '@/lib/i18n'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const lang = await getLang()
 
   let readiness: ReadinessSnapshot | null = null
   let isDev = false
@@ -265,6 +268,12 @@ export default async function SettingsPage() {
         {(isOwner && restaurantId) && (
           <AccessCodesCard ownerSet={accessOwnerSet} staffSet={accessStaffSet} />
         )}
+
+        {/* Language — device-level preference (same cookie as the
+            marketing site). Visible to everyone with access to
+            Settings; not gated on role since changing language is
+            personal preference, not a configuration change. */}
+        <LanguageCard currentLang={lang} />
 
         {/* Team management — owner-only. Lets the owner invite a
             manager (location-scoped) or staff via email. */}

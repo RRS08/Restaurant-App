@@ -27,6 +27,7 @@ import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
 import { BrandMark } from '@/components/brand'
 import { Lock } from 'lucide-react'
+import { getLang, getT } from '@/lib/i18n'
 
 export default async function AppLayout({
   children,
@@ -58,6 +59,13 @@ export default async function AppLayout({
   if (!userRole) {
     redirect('/onboarding')
   }
+
+  // Language is cookie-driven (same `lang` cookie as the marketing
+  // site), set via the toggle in Settings → Language. Fetched once
+  // here and passed down so both the sidebar and the kiosk header
+  // share a single source of truth.
+  const lang = await getLang()
+  const t = await getT()
 
   // ---- Staff kiosk mode ----
   //
@@ -96,7 +104,7 @@ export default async function AppLayout({
               className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-[0.16em] text-gray-500 hover:text-gray-900 transition-colors px-2 py-1 rounded-md hover:bg-gray-50"
             >
               <Lock className="w-3.5 h-3.5" />
-              Lock
+              {t('Lock', 'Bloquear')}
             </a>
           </div>
         </header>
@@ -151,6 +159,7 @@ export default async function AppLayout({
           userEmail={user.email ?? ''}
           operatingMode={operatingMode}
           isDev={isDev}
+          lang={lang}
         />
       }
     >

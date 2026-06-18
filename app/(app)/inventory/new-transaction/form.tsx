@@ -19,6 +19,7 @@
 import { useActionState } from 'react'
 import Link from 'next/link'
 import { createInventoryTransaction } from '@/app/actions/inventory'
+import { makeT, type Lang } from '@/lib/i18n'
 
 interface InventoryItem {
   id: string
@@ -26,18 +27,19 @@ interface InventoryItem {
   unit_of_measure: string
 }
 
-export default function NewTransactionForm({ items }: { items: InventoryItem[] }) {
+export default function NewTransactionForm({ items, lang }: { items: InventoryItem[]; lang: Lang }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createInventoryTransaction, null)
 
   if (items.length === 0) {
     return (
       <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-16 text-center">
-        <p className="text-lg font-medium text-gray-400">No inventory items yet</p>
+        <p className="text-lg font-medium text-gray-400">{t('No inventory items yet', 'Sin artículos de inventario aún')}</p>
         <p className="mt-1 text-sm text-gray-300">
           <Link href="/inventory/new-item" className="text-blue-600 hover:underline">
-            Create an inventory item
+            {t('Create an inventory item', 'Crear un artículo de inventario')}
           </Link>{' '}
-          before logging a transaction.
+          {t('before logging a transaction.', 'antes de registrar un movimiento.')}
         </p>
       </div>
     )
@@ -50,7 +52,7 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
         {/* Inventory item */}
         <div>
           <label htmlFor="inventory_item_id" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Inventory item
+            {t('Inventory item', 'Artículo de inventario')}
           </label>
           <select
             id="inventory_item_id"
@@ -59,7 +61,7 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="">Select an item…</option>
+            <option value="">{t('Select an item…', 'Selecciona un artículo…')}</option>
             {items.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} ({item.unit_of_measure})
@@ -71,7 +73,7 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
         {/* Transaction type */}
         <div>
           <label htmlFor="transaction_type" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Type
+            {t('Type', 'Tipo')}
           </label>
           <select
             id="transaction_type"
@@ -81,16 +83,16 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="purchase">Purchase (received stock)</option>
-            <option value="waste">Waste (discarded)</option>
-            <option value="adjustment">Adjustment (correction)</option>
+            <option value="purchase">{t('Purchase (received stock)', 'Compra (stock recibido)')}</option>
+            <option value="waste">{t('Waste (discarded)', 'Desperdicio (descartado)')}</option>
+            <option value="adjustment">{t('Adjustment (correction)', 'Ajuste (corrección)')}</option>
           </select>
         </div>
 
         {/* Quantity */}
         <div>
           <label htmlFor="quantity_change" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Quantity
+            {t('Quantity', 'Cantidad')}
           </label>
           <input
             id="quantity_change"
@@ -105,15 +107,15 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           />
           <p className="mt-1 text-xs text-gray-400">
-            Enter a positive number. The sign is set automatically based on the type.
+            {t('Enter a positive number. The sign is set automatically based on the type.', 'Ingresa un número positivo. El signo se asigna automáticamente según el tipo.')}
           </p>
         </div>
 
         {/* Unit cost (optional) */}
         <div>
           <label htmlFor="unit_cost" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Unit cost{' '}
-            <span className="text-gray-400 font-normal">(optional)</span>
+            {t('Unit cost', 'Costo unitario')}{' '}
+            <span className="text-gray-400 font-normal">{t('(optional)', '(opcional)')}</span>
           </label>
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
@@ -134,14 +136,14 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
         {/* Reference note (optional) */}
         <div>
           <label htmlFor="reference_note" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Note{' '}
-            <span className="text-gray-400 font-normal">(optional)</span>
+            {t('Note', 'Nota')}{' '}
+            <span className="text-gray-400 font-normal">{t('(optional)', '(opcional)')}</span>
           </label>
           <input
             id="reference_note"
             name="reference_note"
             type="text"
-            placeholder="e.g. Supplier invoice #1234, expired batch"
+            placeholder={t('e.g. Supplier invoice #1234, expired batch', 'ej. Factura del proveedor #1234, lote vencido')}
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                        placeholder:text-gray-400
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -162,7 +164,7 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
             className="flex-1 text-center rounded-lg border border-gray-300 px-4 py-2.5
                        text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('Cancel', 'Cancelar')}
           </Link>
           <button
             type="submit"
@@ -171,7 +173,7 @@ export default function NewTransactionForm({ items }: { items: InventoryItem[] }
                        text-white hover:bg-gray-800 transition-colors
                        disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {pending ? 'Saving…' : 'Log transaction'}
+            {pending ? t('Saving…', 'Guardando…') : t('Log transaction', 'Registrar movimiento')}
           </button>
         </div>
 

@@ -26,10 +26,12 @@ import {
   computeAvailability,
   type AvailabilityOverride,
 } from '@/lib/menu/availability'
+import { getLang } from '@/lib/i18n-server'
 import MenuClient from './client'
 
 export default async function MenuPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   const { data: { user } } = await supabase.auth.getUser()
   const isDev = isDevEmail(user?.email)
@@ -397,6 +399,7 @@ export default async function MenuPage() {
       externalConnections={externalConnections}
       isDev={isDev}
       inventoryActive={inventoryActive}
+      lang={lang}
     />
   )
 }

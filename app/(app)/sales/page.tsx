@@ -11,11 +11,13 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getLang } from '@/lib/i18n-server'
 import { getOperatingMode } from '@/lib/readiness'
 import SalesClient from './client'
 
 export default async function SalesPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   // Resolve the caller's restaurant once so we can look up
   // operating_mode alongside the orders fetch. RLS still scopes the
@@ -73,5 +75,5 @@ export default async function SalesPage() {
   // inside SalesClient now, mirroring the Finance pattern. Keeping
   // it there means the chip can sit beside the h1 and the band reads
   // as one thing.
-  return <SalesClient orders={normalized} operatingMode={operatingMode} />
+  return <SalesClient lang={lang} orders={normalized} operatingMode={operatingMode} />
 }

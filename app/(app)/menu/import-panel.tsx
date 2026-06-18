@@ -30,6 +30,9 @@ import {
   disconnectExternalPos,
   syncExternalPosMenu,
 } from '@/app/actions/pos-import'
+import { makeT, type Lang } from '@/lib/i18n'
+
+type T = (en: string, es?: string) => string
 
 interface Connection {
   id: string
@@ -45,6 +48,7 @@ interface Props {
   locations: { id: string; name: string }[]
   connections: Connection[]
   isDev?: boolean
+  lang: Lang
 }
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -60,7 +64,8 @@ const CREDENTIALS_PLACEHOLDER =
   'Clover: { "api_token": "...", "merchant_id": "...", "base_url": "https://apisandbox.dev.clover.com" }\n' +
   'Square: { "access_token": "...", "location_id": "...", "base_url": "https://connect.squareupsandbox.com" }'
 
-export default function MenuImportPanel({ locations, connections, isDev = false }: Props) {
+export default function MenuImportPanel({ locations, connections, isDev = false, lang }: Props) {
+  const t = makeT(lang)
   const activeConnections = connections.filter((c) => c.active)
   const hasConnection = activeConnections.length > 0
 
@@ -68,25 +73,26 @@ export default function MenuImportPanel({ locations, connections, isDev = false 
     <section className="mb-8 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-700">External POS</p>
-          <h2 className="text-sm font-semibold text-gray-900 mt-0.5">Import your menu from your connected POS</h2>
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-700">{t('External POS', 'POS externo')}</p>
+          <h2 className="text-sm font-semibold text-gray-900 mt-0.5">{t('Import your menu from your connected POS', 'Importa tu menú desde tu POS conectado')}</h2>
           <p className="text-xs text-gray-600 mt-1 leading-relaxed max-w-xl">
-            Your restaurant is set up to use an external POS. Connect your provider and we&rsquo;ll import
-            categories and items for you. You can still add or tweak items below — imported items are
-            tagged so you can tell them apart.
+            {t(
+              "Your restaurant is set up to use an external POS. Connect your provider and we'll import categories and items for you. You can still add or tweak items below — imported items are tagged so you can tell them apart.",
+              'Tu restaurante está configurado para usar un POS externo. Conecta tu proveedor e importaremos categorías y artículos por ti. Aún puedes agregar o ajustar artículos abajo — los artículos importados están etiquetados para distinguirlos.',
+            )}
           </p>
         </div>
         {isDev && (
           <span className="flex-shrink-0 text-[9px] font-bold uppercase tracking-widest text-amber-700 bg-amber-100 px-2 py-0.5 rounded">
-            Dev tools available in Settings
+            {t('Dev tools available in Settings', 'Herramientas de dev disponibles en Configuración')}
           </span>
         )}
       </div>
 
       {hasConnection ? (
-        <ActiveConnections connections={activeConnections} locations={locations} />
+        <ActiveConnections connections={activeConnections} locations={locations} t={t} />
       ) : (
-        <ConnectForm locations={locations} />
+        <ConnectForm locations={locations} t={t} />
       )}
     </section>
   )
@@ -95,13 +101,13 @@ export default function MenuImportPanel({ locations, connections, isDev = false 
 // ================================================================
 // ConnectForm — first-time setup
 // ================================================================
-function ConnectForm({ locations }: { locations: { id: string; name: string }[] }) {
+function ConnectForm({ locations, t }: { locations: { id: string; name: string }[]; t: T }) {
   const [state, action, pending] = useActionState(connectExternalPos, null)
 
   if (locations.length === 0) {
     return (
       <p className="text-xs text-red-600">
-        No locations found. Set up a location in onboarding before connecting a POS.
+        {t('No locations found. Set up a location in onboarding before connecting a POS.', 'No se encontraron ubicaciones. Configura una ubicación en el onboarding antes de conectar un POS.')}
       </p>
     )
   }
@@ -110,44 +116,44 @@ function ConnectForm({ locations }: { locations: { id: string; name: string }[] 
     <form action={action} className="space-y-3">
       <div className="grid gap-2 sm:grid-cols-3">
         <label className="block">
-          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Location</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">{t('Location', 'Ubicación')}</span>
           <select name="location_id" required defaultValue={locations.length === 1 ? locations[0].id : ''}
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
-            {locations.length > 1 && <option value="" disabled>Select location…</option>}
+            {locations.length > 1 && <option value="" disabled>{t('Select location…', 'Selecciona ubicación…')}</option>}
             {locations.map((loc) => (
               <option key={loc.id} value={loc.id}>{loc.name}</option>
             ))}
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Provider</span>
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">{t('Provider', 'Proveedor')}</span>
           <select name="provider" defaultValue="toast"
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
             <option value="toast">Toast</option>
             <option value="clover">Clover</option>
             <option value="square">Square</option>
-            <option value="mock">Mock (testing)</option>
+            <option value="mock">{t('Mock (testing)', 'Mock (pruebas)')}</option>
           </select>
         </label>
         <label className="block">
-          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">External store id (optional)</span>
-          <input name="external_store_id" type="text" placeholder="e.g. store_123"
+          <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">{t('External store id (optional)', 'ID de tienda externa (opcional)')}</span>
+          <input name="external_store_id" type="text" placeholder={t('e.g. store_123', 'p. ej. store_123')}
             className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </label>
       </div>
       <label className="block">
-        <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">Credentials JSON</span>
+        <span className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1">{t('Credentials JSON', 'JSON de credenciales')}</span>
         <textarea name="credentials" rows={4}
           placeholder={CREDENTIALS_PLACEHOLDER}
           className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-[11px] font-mono placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
       </label>
       <div className="flex items-center justify-between gap-3">
         <p className="text-[10px] text-gray-500 leading-relaxed">
-          Credentials stay server-side. After connecting, click Sync menu to pull categories and items.
+          {t('Credentials stay server-side. After connecting, click Sync menu to pull categories and items.', 'Las credenciales permanecen del lado del servidor. Después de conectar, haz clic en Sincronizar menú para traer categorías y artículos.')}
         </p>
         <button type="submit" disabled={pending}
           className="rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-60 transition-colors">
-          {pending ? 'Connecting…' : 'Connect POS'}
+          {pending ? t('Connecting…', 'Conectando…') : t('Connect POS', 'Conectar POS')}
         </button>
       </div>
       {state && 'ok' in state && <p className="text-[11px] text-green-700">{state.message}</p>}
@@ -162,9 +168,11 @@ function ConnectForm({ locations }: { locations: { id: string; name: string }[] 
 function ActiveConnections({
   connections,
   locations,
+  t,
 }: {
   connections: Connection[]
   locations: { id: string; name: string }[]
+  t: T
 }) {
   const [syncState, syncAction, syncPending] = useActionState(syncExternalPosMenu, null)
   const [discState, discAction, discPending] = useActionState(disconnectExternalPos, null)
@@ -187,8 +195,8 @@ function ActiveConnections({
                 </p>
                 <p className="text-[10px] text-gray-500 mt-0.5">
                   {conn.lastMenuSyncAt
-                    ? <>Last menu sync {new Date(conn.lastMenuSyncAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</>
-                    : <>Not synced yet — click Sync menu to import</>}
+                    ? <>{t('Last menu sync', 'Última sincronización del menú')} {new Date(conn.lastMenuSyncAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</>
+                    : <>{t('Not synced yet — click Sync menu to import', 'Aún no se ha sincronizado — haz clic en Sincronizar menú para importar')}</>}
                   {conn.lastError && <span className="text-red-500"> · {conn.lastError}</span>}
                 </p>
               </div>
@@ -196,7 +204,7 @@ function ActiveConnections({
                 <input type="hidden" name="location_id" value={conn.locationId} />
                 <button type="submit" disabled={discPending}
                   className="text-[10px] font-semibold text-gray-400 hover:text-red-600 px-2 py-1 rounded border border-gray-200 hover:border-red-200 hover:bg-red-50 transition-colors">
-                  Disconnect
+                  {t('Disconnect', 'Desconectar')}
                 </button>
               </form>
             </li>
@@ -206,12 +214,12 @@ function ActiveConnections({
 
       <div className="flex items-center justify-between gap-3">
         <div className="text-[10px] text-gray-500 leading-relaxed">
-          Menu sync pulls categories + items from every active connection. Run it whenever your provider menu changes.
+          {t('Menu sync pulls categories + items from every active connection. Run it whenever your provider menu changes.', 'La sincronización del menú trae categorías + artículos de cada conexión activa. Ejecútala cada vez que cambie el menú de tu proveedor.')}
         </div>
         <form action={syncAction}>
           <button type="submit" disabled={syncPending}
             className="rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 shadow-sm disabled:opacity-60 transition-colors">
-            {syncPending ? 'Syncing menu…' : 'Sync menu now'}
+            {syncPending ? t('Syncing menu…', 'Sincronizando menú…') : t('Sync menu now', 'Sincronizar menú ahora')}
           </button>
         </form>
       </div>

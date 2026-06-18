@@ -14,10 +14,13 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getT, getLang } from '@/lib/i18n-server'
 import NewItemForm from './form'
 
 export default async function NewItemPage() {
   const supabase = await createClient()
+  const t = await getT()
+  const lang = await getLang()
 
   // Fetch categories for the dropdown.
   // RLS filters to the current user's restaurant automatically.
@@ -32,14 +35,14 @@ export default async function NewItemPage() {
 
       {/* Page header */}
       <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">New menu item</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{t('New menu item', 'Nuevo artículo del menú')}</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Add a dish, drink, or product to your menu.
+          {t('Add a dish, drink, or product to your menu.', 'Agrega un platillo, bebida o producto a tu menú.')}
         </p>
       </div>
 
       {/* The form is a Client Component — it handles useActionState */}
-      <NewItemForm categories={categories ?? []} />
+      <NewItemForm categories={categories ?? []} lang={lang} />
 
     </div>
   )

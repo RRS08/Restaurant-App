@@ -10,6 +10,7 @@
 import { useActionState } from 'react'
 import Link from 'next/link'
 import { createInventoryCount } from '@/app/actions/inventory'
+import { makeT, type Lang } from '@/lib/i18n'
 
 interface InventoryItem {
   id: string
@@ -17,18 +18,19 @@ interface InventoryItem {
   unit_of_measure: string
 }
 
-export default function NewCountForm({ items }: { items: InventoryItem[] }) {
+export default function NewCountForm({ items, lang }: { items: InventoryItem[]; lang: Lang }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createInventoryCount, null)
 
   if (items.length === 0) {
     return (
       <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-16 text-center">
-        <p className="text-lg font-medium text-gray-400">No inventory items yet</p>
+        <p className="text-lg font-medium text-gray-400">{t('No inventory items yet', 'Sin artículos de inventario aún')}</p>
         <p className="mt-1 text-sm text-gray-300">
           <Link href="/inventory/new-item" className="text-blue-600 hover:underline">
-            Create an inventory item
+            {t('Create an inventory item', 'Crear un artículo de inventario')}
           </Link>{' '}
-          before recording a count.
+          {t('before recording a count.', 'antes de registrar un conteo.')}
         </p>
       </div>
     )
@@ -41,7 +43,7 @@ export default function NewCountForm({ items }: { items: InventoryItem[] }) {
         {/* Inventory item dropdown */}
         <div>
           <label htmlFor="inventory_item_id" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Inventory item
+            {t('Inventory item', 'Artículo de inventario')}
           </label>
           <select
             id="inventory_item_id"
@@ -50,7 +52,7 @@ export default function NewCountForm({ items }: { items: InventoryItem[] }) {
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
-            <option value="">Select an item…</option>
+            <option value="">{t('Select an item…', 'Selecciona un artículo…')}</option>
             {items.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name} ({item.unit_of_measure})
@@ -62,7 +64,7 @@ export default function NewCountForm({ items }: { items: InventoryItem[] }) {
         {/* Quantity on hand */}
         <div>
           <label htmlFor="quantity_on_hand" className="block text-sm font-medium text-gray-700 mb-1.5">
-            Quantity on hand
+            {t('Quantity on hand', 'Cantidad disponible')}
           </label>
           <input
             id="quantity_on_hand"
@@ -92,7 +94,7 @@ export default function NewCountForm({ items }: { items: InventoryItem[] }) {
             className="flex-1 text-center rounded-lg border border-gray-300 px-4 py-2.5
                        text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('Cancel', 'Cancelar')}
           </Link>
           <button
             type="submit"
@@ -101,7 +103,7 @@ export default function NewCountForm({ items }: { items: InventoryItem[] }) {
                        text-white hover:bg-gray-800 transition-colors
                        disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {pending ? 'Saving…' : 'Save count'}
+            {pending ? t('Saving…', 'Guardando…') : t('Save count', 'Guardar conteo')}
           </button>
         </div>
 

@@ -670,7 +670,8 @@ function CategoryChip({ label, active, onClick }: { label: string; active: boole
 // ================================================================
 // ItemTile — left-side menu item button.
 // ================================================================
-function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
+function ItemTile({ item, onAdd, lang }: { item: Item; onAdd: () => void; lang: Lang }) {
+  const t = makeT(lang)
   // Tile communicates status through subtle card styling — no
   // visible labels on the face. Four states, all calm:
   //
@@ -704,13 +705,13 @@ function ItemTile({ item, onAdd }: { item: Item; onAdd: () => void }) {
 
   const ariaSuffix =
     state === 'out'
-      ? ' (out of stock)'
+      ? ` (${t('out of stock', 'agotado')})`
       : state === 'disabled'
-        ? ' (unavailable)'
+        ? ` (${t('unavailable', 'no disponible')})`
         : state === 'low'
           ? item.projectionState === 'low' && item.projectedCount !== null
-            ? ` (low stock, ${item.projectedCount} left)`
-            : ' (low stock)'
+            ? ` (${t('low stock', 'stock bajo')}, ${item.projectedCount} ${t('left', 'restantes')})`
+            : ` (${t('low stock', 'stock bajo')})`
           : ''
 
   // Card + text styling per state. Every card is white with a

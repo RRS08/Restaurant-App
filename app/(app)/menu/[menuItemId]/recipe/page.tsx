@@ -14,6 +14,7 @@
 
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { getT, getLang } from '@/lib/i18n-server'
 import RecipeForm from './form'
 
 export default async function RecipePage({
@@ -23,6 +24,8 @@ export default async function RecipePage({
 }) {
   const { menuItemId } = await params
   const supabase = await createClient()
+  const t = await getT()
+  const lang = await getLang()
 
   // Fetch the menu item (to show its name in the header).
   const { data: menuItem } = await supabase
@@ -34,9 +37,9 @@ export default async function RecipePage({
   if (!menuItem) {
     return (
       <div className="max-w-md">
-        <p className="text-gray-500">Menu item not found.</p>
+        <p className="text-gray-500">{t('Menu item not found.', 'Artículo del menú no encontrado.')}</p>
         <Link href="/menu" className="text-blue-600 hover:underline text-sm mt-2 inline-block">
-          Back to menu
+          {t('Back to menu', 'Volver al menú')}
         </Link>
       </div>
     )
@@ -62,13 +65,13 @@ export default async function RecipePage({
       {/* Header */}
       <div className="mb-8">
         <Link href="/menu" className="text-sm text-gray-500 hover:text-gray-700 transition-colors">
-          &larr; Back to menu
+          &larr; {t('Back to menu', 'Volver al menú')}
         </Link>
         <h1 className="text-2xl font-bold text-gray-900 mt-2">
-          Recipe: {menuItem.name}
+          {t('Recipe', 'Receta')}: {menuItem.name}
         </h1>
         <p className="mt-1 text-sm text-gray-500">
-          Define which inventory ingredients this item uses and how much of each.
+          {t('Define which inventory ingredients this item uses and how much of each.', 'Define qué ingredientes del inventario usa este artículo y cuánto de cada uno.')}
         </p>
       </div>
 
@@ -80,6 +83,7 @@ export default async function RecipePage({
           inventory_items: c.inventory_items as unknown as { id: string; name: string; unit_of_measure: string } | null,
         }))}
         inventoryItems={inventoryItems ?? []}
+        lang={lang}
       />
 
     </div>

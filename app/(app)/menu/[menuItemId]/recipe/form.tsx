@@ -19,6 +19,7 @@ import {
   removeRecipeComponent,
   createInlineInventoryItem,
 } from '@/app/actions/recipe'
+import { makeT, type Lang } from '@/lib/i18n'
 
 interface InventoryItem {
   id: string
@@ -36,13 +37,16 @@ interface RecipeFormProps {
   menuItemId: string
   components: Component[]
   inventoryItems: InventoryItem[]
+  lang: Lang
 }
 
 export default function RecipeForm({
   menuItemId,
   components,
   inventoryItems,
+  lang,
 }: RecipeFormProps) {
+  const t = makeT(lang)
   // State for the "add ingredient" form
   const [addState, addAction, addPending] = useActionState(addRecipeComponent, null)
 
@@ -62,7 +66,7 @@ export default function RecipeForm({
       {/* ---- Section 1: Current recipe ---- */}
       <section>
         <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
-          Ingredients
+          {t('Ingredients', 'Ingredientes')}
           {components.length > 0 && (
             <span className="ml-2 text-gray-300">({components.length})</span>
           )}
@@ -71,7 +75,7 @@ export default function RecipeForm({
         {components.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-200 bg-white p-8 text-center">
             <p className="text-sm text-gray-400">
-              No ingredients yet. Add inventory items below to build this recipe.
+              {t('No ingredients yet. Add inventory items below to build this recipe.', 'Aún no hay ingredientes. Agrega artículos del inventario abajo para armar esta receta.')}
             </p>
           </div>
         ) : (
@@ -82,7 +86,7 @@ export default function RecipeForm({
                 <div key={comp.id} className="flex items-center justify-between px-5 py-3">
                   <div>
                     <span className="text-sm font-medium text-gray-900">
-                      {inv?.name ?? 'Unknown item'}
+                      {inv?.name ?? t('Unknown item', 'Artículo desconocido')}
                     </span>
                     <span className="ml-2 text-xs text-gray-400">
                       {Number(comp.quantity_required)} {inv?.unit_of_measure ?? ''}
@@ -97,7 +101,7 @@ export default function RecipeForm({
                       type="submit"
                       className="text-xs text-red-500 hover:text-red-700 transition-colors"
                     >
-                      Remove
+                      {t('Remove', 'Eliminar')}
                     </button>
                   </form>
                 </div>
@@ -110,7 +114,7 @@ export default function RecipeForm({
       {/* ---- Section 2: Add ingredient ---- */}
       <section>
         <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-3">
-          Add ingredient
+          {t('Add ingredient', 'Agregar ingrediente')}
         </h2>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
@@ -120,7 +124,7 @@ export default function RecipeForm({
             {/* Inventory item dropdown */}
             <div>
               <label htmlFor="inventory_item_id" className="block text-sm font-medium text-gray-700 mb-1.5">
-                Inventory item
+                {t('Inventory item', 'Artículo de inventario')}
               </label>
               {availableItems.length > 0 ? (
                 <select
@@ -130,7 +134,7 @@ export default function RecipeForm({
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                              focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value="">Select an ingredient…</option>
+                  <option value="">{t('Select an ingredient…', 'Selecciona un ingrediente…')}</option>
                   {availableItems.map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.name} ({item.unit_of_measure})
@@ -139,13 +143,13 @@ export default function RecipeForm({
                 </select>
               ) : (
                 <p className="text-sm text-gray-400 py-2">
-                  No more inventory items available.{' '}
+                  {t('No more inventory items available.', 'No hay más artículos de inventario disponibles.')}{' '}
                   <button
                     type="button"
                     onClick={() => setShowCreate(true)}
                     className="text-blue-600 hover:underline"
                   >
-                    Create one below
+                    {t('Create one below', 'Crea uno abajo')}
                   </button>
                 </p>
               )}
@@ -154,7 +158,7 @@ export default function RecipeForm({
             {/* Quantity */}
             <div>
               <label htmlFor="quantity_required" className="block text-sm font-medium text-gray-700 mb-1.5">
-                Quantity per 1 unit sold
+                {t('Quantity per 1 unit sold', 'Cantidad por 1 unidad vendida')}
               </label>
               <input
                 id="quantity_required"
@@ -163,13 +167,13 @@ export default function RecipeForm({
                 required
                 min="0.0001"
                 step="0.0001"
-                placeholder="e.g. 2"
+                placeholder={t('e.g. 2', 'p. ej. 2')}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                            placeholder:text-gray-400
                            focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
               <p className="mt-1 text-xs text-gray-400">
-                How much of this ingredient is used to make one of this menu item.
+                {t('How much of this ingredient is used to make one of this menu item.', 'Cuánto de este ingrediente se usa para preparar uno de este artículo del menú.')}
               </p>
             </div>
 
@@ -187,7 +191,7 @@ export default function RecipeForm({
                          text-white hover:bg-gray-800 transition-colors
                          disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              {addPending ? 'Adding…' : 'Add to recipe'}
+              {addPending ? t('Adding…', 'Agregando…') : t('Add to recipe', 'Agregar a la receta')}
             </button>
           </form>
         </div>
@@ -201,20 +205,20 @@ export default function RecipeForm({
             onClick={() => setShowCreate(true)}
             className="text-sm text-blue-600 hover:text-blue-500 transition-colors"
           >
-            + Create a new inventory item
+            {t('+ Create a new inventory item', '+ Crear un nuevo artículo de inventario')}
           </button>
         ) : (
           <div className="bg-gray-50 rounded-2xl border border-gray-200 p-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-widest">
-                Quick-create inventory item
+                {t('Quick-create inventory item', 'Crear artículo de inventario rápido')}
               </h2>
               <button
                 type="button"
                 onClick={() => setShowCreate(false)}
                 className="text-xs text-gray-400 hover:text-gray-600"
               >
-                Cancel
+                {t('Cancel', 'Cancelar')}
               </button>
             </div>
 
@@ -223,14 +227,14 @@ export default function RecipeForm({
 
               <div>
                 <label htmlFor="create_name" className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Item name
+                  {t('Item name', 'Nombre del artículo')}
                 </label>
                 <input
                   id="create_name"
                   name="name"
                   type="text"
                   required
-                  placeholder="e.g. Tequila, Grapefruit Soda"
+                  placeholder={t('e.g. Tequila, Grapefruit Soda', 'p. ej. Tequila, Refresco de Toronja')}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                              placeholder:text-gray-400
                              focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -239,7 +243,7 @@ export default function RecipeForm({
 
               <div>
                 <label htmlFor="create_uom" className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Unit of measure
+                  {t('Unit of measure', 'Unidad de medida')}
                 </label>
                 <select
                   id="create_uom"
@@ -248,14 +252,14 @@ export default function RecipeForm({
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                              focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
-                  <option value="units">Units (each)</option>
-                  <option value="kg">Kilograms (kg)</option>
-                  <option value="lbs">Pounds (lbs)</option>
-                  <option value="liters">Liters</option>
-                  <option value="gallons">Gallons</option>
-                  <option value="oz">Ounces (oz)</option>
-                  <option value="cases">Cases</option>
-                  <option value="bags">Bags</option>
+                  <option value="units">{t('Units (each)', 'Unidades (cada uno)')}</option>
+                  <option value="kg">{t('Kilograms (kg)', 'Kilogramos (kg)')}</option>
+                  <option value="lbs">{t('Pounds (lbs)', 'Libras (lbs)')}</option>
+                  <option value="liters">{t('Liters', 'Litros')}</option>
+                  <option value="gallons">{t('Gallons', 'Galones')}</option>
+                  <option value="oz">{t('Ounces (oz)', 'Onzas (oz)')}</option>
+                  <option value="cases">{t('Cases', 'Cajas')}</option>
+                  <option value="bags">{t('Bags', 'Bolsas')}</option>
                 </select>
               </div>
 
@@ -272,11 +276,10 @@ export default function RecipeForm({
                            text-white hover:bg-gray-800 transition-colors
                            disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {createPending ? 'Creating…' : 'Create item'}
+                {createPending ? t('Creating…', 'Creando…') : t('Create item', 'Crear artículo')}
               </button>
               <p className="text-xs text-gray-400">
-                This creates a new inventory item. After creation, select it
-                from the dropdown above to add it to this recipe.
+                {t('This creates a new inventory item. After creation, select it from the dropdown above to add it to this recipe.', 'Esto crea un nuevo artículo de inventario. Después de crearlo, selecciónalo en el menú desplegable de arriba para agregarlo a esta receta.')}
               </p>
             </form>
           </div>

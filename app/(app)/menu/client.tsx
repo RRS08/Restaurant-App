@@ -55,7 +55,10 @@ import {
   type EffectiveSellability,
   type ProjectionState,
 } from '@/lib/menu/availability'
+import { makeT, type Lang } from '@/lib/i18n'
 import MenuImportPanel from './import-panel'
+
+type T = (en: string, es?: string) => string
 
 // ================================================================
 // Domain types
@@ -105,6 +108,7 @@ interface Props {
    *  drawer can surface honest projection counts vs. an "inventory
    *  not active yet" note. */
   inventoryActive?: boolean
+  lang: Lang
 }
 
 type OperatingMode = 'native_pos' | 'external_pos' | null
@@ -157,14 +161,16 @@ export default function MenuClient({
   externalConnections = [],
   isDev = false,
   inventoryActive = false,
+  lang,
 }: Props) {
+  const t = makeT(lang)
   const isExternal = operatingMode === 'external_pos'
 
   const subtitle = isExternal
-    ? 'Review imported items and shape the menu your guests see.'
+    ? t('Review imported items and shape the menu your guests see.', 'Revisa los artículos importados y da forma al menú que ven tus clientes.')
     : operatingMode === 'native_pos'
-      ? 'Build the menu your in-app POS reads from.'
-      : 'Manage sections, items, and recipe links.'
+      ? t('Build the menu your in-app POS reads from.', 'Construye el menú que lee tu POS integrado.')
+      : t('Manage sections, items, and recipe links.', 'Administra secciones, artículos y vínculos de receta.')
 
   const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [addItemTo, setAddItemTo] = useState<string | null>(null)
@@ -227,10 +233,10 @@ export default function MenuClient({
       {/* ================================================================ */}
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Menu</h1>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Menu', 'Menú')}</h1>
           <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
         </div>
-        <SourceChip operatingMode={operatingMode} />
+        <SourceChip operatingMode={operatingMode} t={t} />
       </div>
 
       {/* External-branch import panel (unchanged behavior). */}
@@ -239,6 +245,7 @@ export default function MenuClient({
           locations={locations}
           connections={externalConnections}
           isDev={isDev}
+          lang={lang}
         />
       )}
 
@@ -252,7 +259,7 @@ export default function MenuClient({
       {/* menu-building surface.                                            */}
       {/* ================================================================ */}
       {categories.length === 0 ? (
-        <EmptyMenuState onAddSection={() => setAddSectionOpen(true)} />
+        <EmptyMenuState onAddSection={() => setAddSectionOpen(true)} t={t} />
       ) : (
         <>
           <div className="mb-4 flex items-center justify-end">
@@ -262,11 +269,11 @@ export default function MenuClient({
                 onClick={() => setAddSectionOpen((o) => !o)}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
               >
-                + Add section
+                {t('+ Add section', '+ Agregar sección')}
               </button>
               {addSectionOpen && (
                 <Popover onClose={() => setAddSectionOpen(false)} className="right-0 top-full mt-1.5 w-72">
-                  <AddSectionForm onClose={() => setAddSectionOpen(false)} />
+                  <AddSectionForm onClose={() => setAddSectionOpen(false)} t={t} />
                 </Popover>
               )}
             </div>
@@ -283,8 +290,9 @@ export default function MenuClient({
                   selectedItemId={selectedItemId}
                   onOpenItem={setSelectedItemId}
                   addItemOpen={addItemTo === cat.id}
-                  onToggleAddItem={() => setAddItemTo((t) => (t === cat.id ? null : cat.id))}
+                  onToggleAddItem={() => setAddItemTo((tt) => (tt === cat.id ? null : cat.id))}
                   onCloseAddItem={() => setAddItemTo(null)}
+                  t={t}
                 />
               )
             })}
@@ -300,6 +308,7 @@ export default function MenuClient({
           inventoryItems={inventoryItems}
           inventoryActive={inventoryActive}
           onClose={() => setSelectedItemId(null)}
+          t={t}
         />
       )}
     </div>
@@ -309,11 +318,11 @@ export default function MenuClient({
 // ================================================================
 // SourceChip — page-level data-origin pill, parallel to Sales'.
 // ================================================================
-function SourceChip({ operatingMode }: { operatingMode: OperatingMode }) {
+function SourceChip({ operatingMode, t }: { operatingMode: OperatingMode; t: T }) {
   const variants: Record<NonNullable<OperatingMode> | 'unset', { label: string; tone: string; dot: string }> = {
-    native_pos: { label: 'Native menu', tone: 'text-blue-700', dot: 'bg-blue-500' },
-    external_pos: { label: 'Imported menu', tone: 'text-indigo-700', dot: 'bg-indigo-500' },
-    unset: { label: 'Operating mode not set', tone: 'text-gray-600', dot: 'bg-gray-400' },
+    native_pos: { label: t('Native menu', 'Menú nativo'), tone: 'text-blue-700', dot: 'bg-blue-500' },
+    external_pos: { label: t('Imported menu', 'Menú importado'), tone: 'text-indigo-700', dot: 'bg-indigo-500' },
+    unset: { label: t('Operating mode not set', 'Modo de operación no configurado'), tone: 'text-gray-600', dot: 'bg-gray-400' },
   }
   const v = variants[operatingMode ?? 'unset']
   return (
@@ -327,19 +336,19 @@ function SourceChip({ operatingMode }: { operatingMode: OperatingMode }) {
 // ================================================================
 // EmptyMenuState — the no-sections nudge.
 // ================================================================
-function EmptyMenuState({ onAddSection }: { onAddSection: () => void }) {
+function EmptyMenuState({ onAddSection, t }: { onAddSection: () => void; t: T }) {
   return (
     <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white px-6 py-16 text-center">
-      <p className="text-sm font-semibold text-gray-700">No menu sections yet</p>
+      <p className="text-sm font-semibold text-gray-700">{t('No menu sections yet', 'Aún no hay secciones de menú')}</p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
-        Sections group items the way they appear at the POS. Add one to start.
+        {t('Sections group items the way they appear at the POS. Add one to start.', 'Las secciones agrupan los artículos como aparecen en el POS. Agrega una para comenzar.')}
       </p>
       <button
         type="button"
         onClick={onAddSection}
         className="mt-4 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
       >
-        + Add section
+        {t('+ Add section', '+ Agregar sección')}
       </button>
     </div>
   )
@@ -356,6 +365,7 @@ function SectionBlock({
   addItemOpen,
   onToggleAddItem,
   onCloseAddItem,
+  t,
 }: {
   category: Category
   items: MenuItem[]
@@ -364,6 +374,7 @@ function SectionBlock({
   addItemOpen: boolean
   onToggleAddItem: () => void
   onCloseAddItem: () => void
+  t: T
 }) {
   // deleteCategory is a direct (formData) -> void server action — not
   // a useActionState-shaped one — so we use a plain <form action={...}>
@@ -386,14 +397,14 @@ function SectionBlock({
         </h2>
         <span className="flex-1 h-px bg-gray-200/70" />
         <p className="text-[11px] text-gray-500 font-mono tabular-nums whitespace-nowrap">
-          {items.length} {items.length === 1 ? 'item' : 'items'}
+          {items.length} {items.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
         </p>
         {!removeMode ? (
           <button
             type="button"
             onClick={() => setRemoveMode(true)}
-            aria-label="Remove section"
-            title="Remove section"
+            aria-label={t('Remove section', 'Eliminar sección')}
+            title={t('Remove section', 'Eliminar sección')}
             className="text-gray-300 hover:text-red-500 transition-colors p-1 rounded-md hover:bg-red-50"
           >
             <XIcon size={14} />
@@ -405,14 +416,14 @@ function SectionBlock({
               type="submit"
               className="text-[10px] font-semibold px-2 py-1 rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 transition-colors"
             >
-              Remove section
+              {t('Remove section', 'Eliminar sección')}
             </button>
             <button
               type="button"
               onClick={() => setRemoveMode(false)}
               className="text-[10px] font-medium px-2 py-1 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 transition-colors"
             >
-              Cancel
+              {t('Cancel', 'Cancelar')}
             </button>
           </form>
         )}
@@ -421,18 +432,18 @@ function SectionBlock({
       {/* Section body */}
       {items.length === 0 ? (
         <div className="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-8 text-center">
-          <p className="text-xs text-gray-500">No items in this section yet.</p>
+          <p className="text-xs text-gray-500">{t('No items in this section yet.', 'Aún no hay artículos en esta sección.')}</p>
           <div className="relative inline-block mt-2">
             <button
               type="button"
               onClick={onToggleAddItem}
               className="text-[11px] font-medium text-blue-600 hover:text-blue-500 transition-colors"
             >
-              + Add first item
+              {t('+ Add first item', '+ Agregar primer artículo')}
             </button>
             {addItemOpen && (
               <Popover onClose={onCloseAddItem} className="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72">
-                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} />
+                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} t={t} />
               </Popover>
             )}
           </div>
@@ -446,6 +457,7 @@ function SectionBlock({
                 item={item}
                 selected={selectedItemId === item.id}
                 onClick={() => onOpenItem(item.id)}
+                t={t}
               />
             ))}
           </div>
@@ -459,11 +471,11 @@ function SectionBlock({
               onClick={onToggleAddItem}
               className="text-[11px] font-medium text-blue-600 hover:text-blue-500 transition-colors"
             >
-              + Add item
+              {t('+ Add item', '+ Agregar artículo')}
             </button>
             {addItemOpen && (
               <Popover onClose={onCloseAddItem} className="left-0 top-full mt-1.5 w-72">
-                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} />
+                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} t={t} />
               </Popover>
             )}
           </div>
@@ -480,10 +492,12 @@ function ItemCard({
   item,
   selected,
   onClick,
+  t,
 }: {
   item: MenuItem
   selected: boolean
   onClick: () => void
+  t: T
 }) {
   const isInactive = !item.active
   const isImported = isImportedSource(item.source)
@@ -530,15 +544,21 @@ function ItemCard({
   type BadgeTone = 'red' | 'amber' | 'gray'
   let status: { label: string; tone: BadgeTone } | null = null
   if (isImported && !mapped) {
-    status = { label: 'Needs review', tone: 'amber' }
+    status = { label: t('Needs review', 'Pendiente de revisión'), tone: 'amber' }
   } else if (isInactive) {
-    status = { label: 'Inactive', tone: 'gray' }
+    status = { label: t('Inactive', 'Inactivo'), tone: 'gray' }
   } else if (availabilityCue?.label === 'Disabled') {
-    status = { label: 'Disabled', tone: 'gray' }
+    status = { label: t('Disabled', 'Desactivado'), tone: 'gray' }
   } else if (availabilityCue?.label.startsWith('Out')) {
-    status = { label: availabilityCue.label, tone: availabilityCue.tone === 'red' ? 'red' : 'amber' }
+    // availabilityCue.label may be "Out" or "Out · Override on" — translate the prefix.
+    const translated = availabilityCue.label.replace(/^Out/, t('Out', 'Agotado')).replace('Override on', t('Override on', 'Sobrescribir activo'))
+    status = { label: translated, tone: availabilityCue.tone === 'red' ? 'red' : 'amber' }
   } else if (availabilityCue?.label.startsWith('Low')) {
-    status = { label: availabilityCue.label, tone: 'amber' }
+    // "Low · N left" → translate "Low" and "left".
+    const translated = availabilityCue.label
+      .replace(/^Low/, t('Low', 'Bajo'))
+      .replace(/\bleft\b/, t('left', 'restantes'))
+    status = { label: translated, tone: 'amber' }
   }
 
   // ---- Metadata line (always rendered) ----
@@ -557,12 +577,15 @@ function ItemCard({
   // dominant call to action when something needs review.
   const metadata = mapped
     ? {
-        text: `Recipe · ${item.recipe.length} ingredient${item.recipe.length !== 1 ? 's' : ''}`,
+        text: t(
+          `Recipe · ${item.recipe.length} ingredient${item.recipe.length !== 1 ? 's' : ''}`,
+          `Receta · ${item.recipe.length} ingrediente${item.recipe.length !== 1 ? 's' : ''}`,
+        ),
         kind: 'pill' as const,
       }
     : isImported
-      ? { text: 'Imported item · No recipe', kind: 'text' as const, tone: 'amber' as const }
-      : { text: 'No recipe', kind: 'text' as const, tone: 'amber' as const }
+      ? { text: t('Imported item · No recipe', 'Artículo importado · Sin receta'), kind: 'text' as const, tone: 'amber' as const }
+      : { text: t('No recipe', 'Sin receta'), kind: 'text' as const, tone: 'amber' as const }
 
   return (
     <button
@@ -662,17 +685,17 @@ function Popover({
 // ================================================================
 // AddSectionForm — popover, dark-filled primary commit.
 // ================================================================
-function AddSectionForm({ onClose }: { onClose: () => void }) {
+function AddSectionForm({ onClose, t }: { onClose: () => void; t: T }) {
   const [state, action, pending] = useActionState(createCategory, null)
   return (
     <form action={(fd) => { action(fd); if (!state?.error) onClose() }} className="space-y-3">
-      <p className="text-xs font-semibold text-gray-900">New section</p>
+      <p className="text-xs font-semibold text-gray-900">{t('New section', 'Nueva sección')}</p>
       <input
         name="name"
         type="text"
         required
         autoFocus
-        placeholder="Section name"
+        placeholder={t('Section name', 'Nombre de la sección')}
         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
       />
       {state?.error && <p className="text-[11px] text-red-600">{state.error}</p>}
@@ -682,14 +705,14 @@ function AddSectionForm({ onClose }: { onClose: () => void }) {
           disabled={pending}
           className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
         >
-          {pending ? 'Adding…' : 'Add section'}
+          {pending ? t('Adding…', 'Agregando…') : t('Add section', 'Agregar sección')}
         </button>
         <button
           type="button"
           onClick={onClose}
           className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
         >
-          Cancel
+          {t('Cancel', 'Cancelar')}
         </button>
       </div>
     </form>
@@ -699,18 +722,18 @@ function AddSectionForm({ onClose }: { onClose: () => void }) {
 // ================================================================
 // AddItemForm — popover, dark-filled primary commit.
 // ================================================================
-function AddItemForm({ categoryId, onClose }: { categoryId: string; onClose: () => void }) {
+function AddItemForm({ categoryId, onClose, t }: { categoryId: string; onClose: () => void; t: T }) {
   const [state, action, pending] = useActionState(createMenuItemInSection, null)
   return (
     <form action={(fd) => { action(fd); if (!state?.error) onClose() }} className="space-y-3">
-      <p className="text-xs font-semibold text-gray-900">New item</p>
+      <p className="text-xs font-semibold text-gray-900">{t('New item', 'Nuevo artículo')}</p>
       <input type="hidden" name="category_id" value={categoryId} />
       <input
         name="name"
         type="text"
         required
         autoFocus
-        placeholder="Item name"
+        placeholder={t('Item name', 'Nombre del artículo')}
         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
       />
       <div className="relative">
@@ -727,7 +750,7 @@ function AddItemForm({ categoryId, onClose }: { categoryId: string; onClose: () 
       </div>
       {state?.error && <p className="text-[11px] text-red-600">{state.error}</p>}
       <p className="text-[10px] text-gray-400 leading-relaxed">
-        Map ingredients to inventory once the item is open in the drawer.
+        {t('Map ingredients to inventory once the item is open in the drawer.', 'Vincula los ingredientes al inventario una vez que el artículo esté abierto en el panel.')}
       </p>
       <div className="flex gap-2">
         <button
@@ -735,14 +758,14 @@ function AddItemForm({ categoryId, onClose }: { categoryId: string; onClose: () 
           disabled={pending}
           className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
         >
-          {pending ? 'Adding…' : 'Add item'}
+          {pending ? t('Adding…', 'Agregando…') : t('Add item', 'Agregar artículo')}
         </button>
         <button
           type="button"
           onClick={onClose}
           className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
         >
-          Cancel
+          {t('Cancel', 'Cancelar')}
         </button>
       </div>
     </form>
@@ -770,12 +793,14 @@ function ItemDrawer({
   inventoryItems,
   inventoryActive,
   onClose,
+  t,
 }: {
   item: MenuItem
   sectionName: string | null
   inventoryItems: InventoryItem[]
   inventoryActive: boolean
   onClose: () => void
+  t: T
 }) {
   const [addState, addAction, addPending] = useActionState(addRecipeComponent, null)
   const [createState, createAction, createPending] = useActionState(createInlineInventoryItem, null)
@@ -871,8 +896,8 @@ function ItemDrawer({
   }, [addPending, addState])
 
   const sourceLabel =
-    item.source === 'manual' ? 'Manual' :
-    item.source === 'imported' || item.source === 'external' ? 'Imported'
+    item.source === 'manual' ? t('Manual', 'Manual') :
+    item.source === 'imported' || item.source === 'external' ? t('Imported', 'Importado')
       : item.source
 
   return (
@@ -911,7 +936,7 @@ function ItemDrawer({
                     <span className="text-gray-300">·</span>
                   </>
                 )}
-                <HeaderPriceEditor item={item} />
+                <HeaderPriceEditor item={item} t={t} />
                 <span className="text-gray-300">·</span>
                 <span>{sourceLabel}</span>
               </div>
@@ -921,7 +946,7 @@ function ItemDrawer({
               onClick={onClose}
               className="flex-shrink-0 rounded-lg border border-gray-200/80 px-2 py-1 text-[11px] font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors -mt-1 -mr-1"
             >
-              Close
+              {t('Close', 'Cerrar')}
             </button>
           </div>
           {/* Top status pills — up to three:
@@ -945,7 +970,7 @@ function ItemDrawer({
 
                 // Pill 1 — Active state
                 pills.push({
-                  label: item.active ? 'Active' : 'Inactive',
+                  label: item.active ? t('Active', 'Activo') : t('Inactive', 'Inactivo'),
                   tone: item.active ? 'green' : 'gray',
                 })
 
@@ -955,13 +980,13 @@ function ItemDrawer({
                   // already says "Out".)
                   switch (item.effectiveSellability) {
                     case 'enabled':
-                      pills.push({ label: 'Sellable', tone: 'blue' })
+                      pills.push({ label: t('Sellable', 'Vendible'), tone: 'blue' })
                       break
                     case 'manually_enabled':
-                      pills.push({ label: 'Sellable · override on', tone: 'amber' })
+                      pills.push({ label: t('Sellable · override on', 'Vendible · sobrescribir activo'), tone: 'amber' })
                       break
                     case 'manually_disabled':
-                      pills.push({ label: 'Hidden by override', tone: 'gray' })
+                      pills.push({ label: t('Hidden by override', 'Oculto por sobrescribir'), tone: 'gray' })
                       break
                     case 'auto_disabled':
                       // Stock pill below carries the signal — no
@@ -974,20 +999,20 @@ function ItemDrawer({
                   // Pill 3 — Stock state
                   switch (item.projectionState) {
                     case 'healthy':
-                      pills.push({ label: 'Healthy', tone: 'green' })
+                      pills.push({ label: t('Healthy', 'Saludable'), tone: 'green' })
                       break
                     case 'low':
                       pills.push({
-                        label: item.projectedCount !== null ? `Low · ${item.projectedCount} left` : 'Low',
+                        label: item.projectedCount !== null ? t(`Low · ${item.projectedCount} left`, `Bajo · ${item.projectedCount} restantes`) : t('Low', 'Bajo'),
                         tone: 'amber',
                       })
                       break
                     case 'out':
-                      pills.push({ label: 'Out', tone: 'red' })
+                      pills.push({ label: t('Out', 'Agotado'), tone: 'red' })
                       break
                     case 'unavailable_to_project':
                       pills.push({
-                        label: hasRecipe(item) ? 'Stock unknown' : 'No recipe',
+                        label: hasRecipe(item) ? t('Stock unknown', 'Inventario desconocido') : t('No recipe', 'Sin receta'),
                         tone: 'gray',
                       })
                       break
@@ -1024,7 +1049,7 @@ function ItemDrawer({
               item.bottleneckInventoryItemName &&
               (item.projectionState === 'low' || item.projectionState === 'out') && (
                 <p className="text-[11px] text-gray-500 leading-relaxed">
-                  Limited by{' '}
+                  {t('Limited by', 'Limitado por')}{' '}
                   <span className="font-medium text-gray-700">
                     {item.bottleneckInventoryItemName}
                   </span>
@@ -1042,8 +1067,10 @@ function ItemDrawer({
           <div className="border-b border-amber-200/60 bg-amber-50/40 px-6 py-2.5 flex items-center gap-3 flex-shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />
             <p className="text-[11px] text-amber-700 flex-1 leading-relaxed">
-              Inactive · this item won&apos;t appear at the POS until it&apos;s
-              activated.
+              {t(
+                "Inactive · this item won't appear at the POS until it's activated.",
+                'Inactivo · este artículo no aparecerá en el POS hasta que se active.',
+              )}
             </p>
             <form action={activeAction}>
               <input type="hidden" name="item_id" value={item.id} />
@@ -1053,7 +1080,7 @@ function ItemDrawer({
                 disabled={activePending}
                 className="rounded-md bg-amber-600 px-3 py-1 text-[11px] font-semibold text-white hover:bg-amber-700 disabled:opacity-60 transition-colors whitespace-nowrap"
               >
-                {activePending ? 'Activating…' : 'Activate'}
+                {activePending ? t('Activating…', 'Activando…') : t('Activate', 'Activar')}
               </button>
             </form>
           </div>
@@ -1075,9 +1102,10 @@ function ItemDrawer({
           <div className="border-b border-blue-200/60 bg-blue-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
             <p className="text-[11px] text-blue-700 leading-relaxed">
-              Imported from {capitalizeProvider(item.externalProvider)} · local-only
-              controls. Manage availability for sale in the{' '}
-              {capitalizeProvider(item.externalProvider)} dashboard.
+              {t(
+                `Imported from ${capitalizeProvider(item.externalProvider)} · local-only controls. Manage availability for sale in the ${capitalizeProvider(item.externalProvider)} dashboard.`,
+                `Importado desde ${capitalizeProvider(item.externalProvider)} · controles solo locales. Administra la disponibilidad para venta en el panel de ${capitalizeProvider(item.externalProvider)}.`,
+              )}
             </p>
           </div>
         )}
@@ -1101,20 +1129,20 @@ function ItemDrawer({
               controls cards below without adding loud color. */}
           <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 p-4">
             <p className="mb-3 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Recipe
+              {t('Recipe', 'Receta')}
             </p>
 
             {item.recipe.length > 0 && (
               <ul className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] divide-y divide-gray-100 mb-3 overflow-hidden">
                 {item.recipe.map((rc) => (
-                  <RecipeRow key={rc.id} rc={rc} menuItemId={item.id} />
+                  <RecipeRow key={rc.id} rc={rc} menuItemId={item.id} t={t} />
                 ))}
               </ul>
             )}
 
             {item.recipe.length === 0 && !addOpen && (
               <p className="mb-3 text-xs text-gray-500 leading-relaxed">
-                No ingredients yet. Map inventory to deplete stock when this sells.
+                {t('No ingredients yet. Map inventory to deplete stock when this sells.', 'Aún no hay ingredientes. Vincula el inventario para descontar existencias cuando se venda este artículo.')}
               </p>
             )}
 
@@ -1135,7 +1163,7 @@ function ItemDrawer({
                 onClick={() => setAddOpen(true)}
                 className="w-full rounded-lg bg-gray-900 px-3 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
               >
-                + Add ingredient
+                {t('+ Add ingredient', '+ Agregar ingrediente')}
               </button>
             ) : (
               <div className="rounded-xl border border-gray-200 bg-gray-50/60 overflow-hidden">
@@ -1148,14 +1176,14 @@ function ItemDrawer({
                   <p className={`text-[10px] font-semibold uppercase tracking-widest ${
                     creatingNew ? 'text-blue-700' : 'text-gray-500'
                   }`}>
-                    {creatingNew ? 'New ingredient' : 'Add ingredient'}
+                    {creatingNew ? t('New ingredient', 'Nuevo ingrediente') : t('Add ingredient', 'Agregar ingrediente')}
                   </p>
                   <button
                     type="button"
                     onClick={closeAddSurface}
                     className="text-[10px] font-medium text-gray-500 hover:text-gray-700 transition-colors"
                   >
-                    Cancel
+                    {t('Cancel', 'Cancelar')}
                   </button>
                 </div>
 
@@ -1167,35 +1195,35 @@ function ItemDrawer({
 
                     <label className="block mb-2.5">
                       <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
-                        Name
+                        {t('Name', 'Nombre')}
                       </span>
                       <input
                         type="text"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         autoFocus
-                        placeholder="Ingredient name"
+                        placeholder={t('Ingredient name', 'Nombre del ingrediente')}
                         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                       />
                     </label>
 
                     <label className="block mb-3">
                       <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
-                        Unit
+                        {t('Unit', 'Unidad')}
                       </span>
                       <select
                         name="unit_of_measure"
                         defaultValue="units"
                         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                       >
-                        <option value="units">Units (each)</option>
-                        <option value="kg">Kilograms</option>
-                        <option value="lbs">Pounds</option>
-                        <option value="liters">Liters</option>
-                        <option value="oz">Ounces</option>
-                        <option value="gallons">Gallons</option>
-                        <option value="cases">Cases</option>
-                        <option value="bags">Bags</option>
+                        <option value="units">{t('Units (each)', 'Unidades (cada uno)')}</option>
+                        <option value="kg">{t('Kilograms', 'Kilogramos')}</option>
+                        <option value="lbs">{t('Pounds', 'Libras')}</option>
+                        <option value="liters">{t('Liters', 'Litros')}</option>
+                        <option value="oz">{t('Ounces', 'Onzas')}</option>
+                        <option value="gallons">{t('Gallons', 'Galones')}</option>
+                        <option value="cases">{t('Cases', 'Cajas')}</option>
+                        <option value="bags">{t('Bags', 'Bolsas')}</option>
                       </select>
                     </label>
 
@@ -1205,14 +1233,14 @@ function ItemDrawer({
                         disabled={createPending || !query.trim()}
                         className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
                       >
-                        {createPending ? 'Creating…' : 'Create ingredient'}
+                        {createPending ? t('Creating…', 'Creando…') : t('Create ingredient', 'Crear ingrediente')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setCreatingNew(false)}
                         className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        Back
+                        {t('Back', 'Atrás')}
                       </button>
                     </div>
                     {createState?.error && (
@@ -1234,7 +1262,7 @@ function ItemDrawer({
                     {/* Quantity input — only after selection */}
                     <label className="block mb-3">
                       <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
-                        Quantity per dish
+                        {t('Quantity per dish', 'Cantidad por platillo')}
                       </span>
                       <div className="flex items-center gap-2">
                         <input
@@ -1258,14 +1286,14 @@ function ItemDrawer({
                         disabled={addPending}
                         className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
                       >
-                        {addPending ? 'Adding…' : 'Add ingredient'}
+                        {addPending ? t('Adding…', 'Agregando…') : t('Add ingredient', 'Agregar ingrediente')}
                       </button>
                       <button
                         type="button"
                         onClick={closeAddSurface}
                         className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                       >
-                        Cancel
+                        {t('Cancel', 'Cancelar')}
                       </button>
                     </div>
                     {addState?.error && (
@@ -1280,7 +1308,7 @@ function ItemDrawer({
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       autoFocus
-                      placeholder="Search ingredient..."
+                      placeholder={t('Search ingredient...', 'Buscar ingrediente...')}
                       className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
                     />
 
@@ -1305,7 +1333,7 @@ function ItemDrawer({
                           ))
                         ) : (
                           <p className="px-3 py-2.5 text-xs text-gray-400">
-                            {available.length === 0 ? 'All items already in recipe.' : 'No matches.'}
+                            {available.length === 0 ? t('All items already in recipe.', 'Todos los artículos ya están en la receta.') : t('No matches.', 'Sin coincidencias.')}
                           </p>
                         )}
                       </div>
@@ -1314,7 +1342,7 @@ function ItemDrawer({
                         onClick={startCreate}
                         className="w-full text-left px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors border-t border-gray-200"
                       >
-                        + Create new ingredient
+                        {t('+ Create new ingredient', '+ Crear nuevo ingrediente')}
                       </button>
                     </div>
                   </div>
@@ -1328,7 +1356,7 @@ function ItemDrawer({
               now comes from the gap between cards (space-y-4) plus
               the distinct hue, not from a hairline divider. */}
           <section className="rounded-xl border border-blue-200/60 bg-blue-50/30 p-4">
-            <AvailabilitySection item={item} />
+            <AvailabilitySection item={item} t={t} />
           </section>
 
           {/* Item controls card — compact destructive zone. Renamed
@@ -1338,15 +1366,15 @@ function ItemDrawer({
               rows tight; small action buttons sit on the right. */}
           <section className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-3.5 py-2.5">
             <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Item controls
+              {t('Item controls', 'Controles del artículo')}
             </p>
             <div className="divide-y divide-gray-200/60">
               {item.active && (
                 <div className="flex items-center justify-between gap-3 py-2">
                   <div className="min-w-0">
-                    <p className="text-[12px] font-medium text-gray-900">Deactivate this item</p>
+                    <p className="text-[12px] font-medium text-gray-900">{t('Deactivate this item', 'Desactivar este artículo')}</p>
                     <p className="text-[10px] text-gray-500 leading-snug mt-0.5">
-                      Hides from POS and analytics. Recipe links stay saved.
+                      {t('Hides from POS and analytics. Recipe links stay saved.', 'Lo oculta del POS y de los análisis. Los vínculos de receta se conservan.')}
                     </p>
                   </div>
                   <form action={activeAction} className="flex-shrink-0">
@@ -1357,7 +1385,7 @@ function ItemDrawer({
                       disabled={activePending}
                       className="rounded-md border border-amber-200 bg-white text-amber-700 hover:bg-amber-50 hover:border-amber-300 px-2.5 py-1 text-[10px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
                     >
-                      {activePending ? 'Deactivating…' : 'Deactivate'}
+                      {activePending ? t('Deactivating…', 'Desactivando…') : t('Deactivate', 'Desactivar')}
                     </button>
                   </form>
                 </div>
@@ -1365,9 +1393,9 @@ function ItemDrawer({
 
               <div className="flex items-center justify-between gap-3 py-2">
                 <div className="min-w-0">
-                  <p className="text-[12px] font-medium text-gray-900">Remove this item</p>
+                  <p className="text-[12px] font-medium text-gray-900">{t('Remove this item', 'Eliminar este artículo')}</p>
                   <p className="text-[10px] text-gray-500 leading-snug mt-0.5">
-                    Removes the item and clears its recipe links. Past orders stay in Sales.
+                    {t('Removes the item and clears its recipe links. Past orders stay in Sales.', 'Elimina el artículo y borra sus vínculos de receta. Las órdenes pasadas se conservan en Ventas.')}
                   </p>
                 </div>
                 {!removeMode ? (
@@ -1376,7 +1404,7 @@ function ItemDrawer({
                     onClick={() => setRemoveMode(true)}
                     className="flex-shrink-0 rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-2.5 py-1 text-[10px] font-semibold transition-colors whitespace-nowrap"
                   >
-                    Remove
+                    {t('Remove', 'Eliminar')}
                   </button>
                 ) : (
                   <form action={deleteAction} className="flex-shrink-0 flex items-center gap-1">
@@ -1386,7 +1414,7 @@ function ItemDrawer({
                       disabled={deletePending}
                       className="rounded-md border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 px-2 py-1 text-[10px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
                     >
-                      {deletePending ? 'Removing…' : 'Confirm'}
+                      {deletePending ? t('Removing…', 'Eliminando…') : t('Confirm', 'Confirmar')}
                     </button>
                     <button
                       type="button"
@@ -1394,7 +1422,7 @@ function ItemDrawer({
                       disabled={deletePending}
                       className="rounded-md border border-gray-200 bg-white text-[10px] font-medium text-gray-600 px-2 py-1 hover:bg-gray-50 transition-colors"
                     >
-                      Cancel
+                      {t('Cancel', 'Cancelar')}
                     </button>
                   </form>
                 )}
@@ -1428,7 +1456,7 @@ function ItemDrawer({
 // and the `setMenuItemAvailabilityOverride` action are unchanged —
 // POS availability logic is untouched. Only the rendering compacted.
 // ================================================================
-function AvailabilitySection({ item }: { item: MenuItem }) {
+function AvailabilitySection({ item, t }: { item: MenuItem; t: T }) {
   const [state, action, pending] = useActionState(setMenuItemAvailabilityOverride, null)
 
   // Override option set. Internal AvailabilityOverride values
@@ -1436,9 +1464,9 @@ function AvailabilitySection({ item }: { item: MenuItem }) {
   // setMenuItemAvailabilityOverride keeps working — only the user-
   // facing labels/copy were updated per the polish spec.
   const overrideOptions: { value: AvailabilityOverride; label: string; hint: string }[] = [
-    { value: 'none',           label: 'System default',    hint: 'System default follows inventory availability.' },
-    { value: 'force_enabled',  label: 'Force available',   hint: 'Stay sellable at the POS even when stock projects out.' },
-    { value: 'force_disabled', label: 'Force unavailable', hint: 'Hide from the POS regardless of stock.' },
+    { value: 'none',           label: t('System default', 'Predeterminado del sistema'),    hint: t('System default follows inventory availability.', 'El predeterminado del sistema sigue la disponibilidad del inventario.') },
+    { value: 'force_enabled',  label: t('Force available', 'Forzar disponible'),   hint: t('Stay sellable at the POS even when stock projects out.', 'Mantenerlo vendible en el POS incluso cuando el inventario proyecte agotado.') },
+    { value: 'force_disabled', label: t('Force unavailable', 'Forzar no disponible'), hint: t('Hide from the POS regardless of stock.', 'Ocultarlo del POS sin importar el inventario.') },
   ]
 
   // Active override hint — surfaces the consequence of the current
@@ -1451,11 +1479,11 @@ function AvailabilitySection({ item }: { item: MenuItem }) {
     <div>
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
         <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          POS override
+          {t('POS override', 'Sobrescribir POS')}
         </p>
         {isOverrideOn && item.overrideSetAt && (
           <p className="text-[10px] text-gray-400 font-mono tabular-nums">
-            since {new Date(item.overrideSetAt).toLocaleString('en-US', {
+            {t('since', 'desde')} {new Date(item.overrideSetAt).toLocaleString('en-US', {
               month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
             })}
           </p>
@@ -1521,7 +1549,7 @@ function XIcon({ size = 16 }: { size?: number }) {
 // page revalidates, `item.currentPrice` updates, and the editor
 // closes automatically (no manual prop-sync race).
 // ================================================================
-function HeaderPriceEditor({ item }: { item: MenuItem }) {
+function HeaderPriceEditor({ item, t }: { item: MenuItem; t: T }) {
   const [state, action, pending] = useActionState(updateMenuItemPrice, null)
   const [editing, setEditing] = useState(false)
   const [val, setVal] = useState(item.currentPrice.toFixed(2))
@@ -1551,7 +1579,7 @@ function HeaderPriceEditor({ item }: { item: MenuItem }) {
           }}
           className="text-[10px] font-medium text-blue-700 hover:text-blue-900 px-1.5 py-0.5 rounded hover:bg-blue-50 transition-colors"
         >
-          Edit
+          {t('Edit', 'Editar')}
         </button>
       </span>
     )
@@ -1579,7 +1607,7 @@ function HeaderPriceEditor({ item }: { item: MenuItem }) {
         disabled={pending}
         className="text-[10px] font-semibold text-white bg-gray-900 hover:bg-gray-800 px-2 py-1 rounded disabled:opacity-60 transition-colors"
       >
-        {pending ? 'Saving…' : 'Save price'}
+        {pending ? t('Saving…', 'Guardando…') : t('Save price', 'Guardar precio')}
       </button>
       <button
         type="button"
@@ -1590,7 +1618,7 @@ function HeaderPriceEditor({ item }: { item: MenuItem }) {
         disabled={pending}
         className="text-[10px] font-medium text-gray-600 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100 disabled:opacity-60 transition-colors"
       >
-        Cancel
+        {t('Cancel', 'Cancelar')}
       </button>
       {state?.error && (
         <span className="basis-full text-[10px] text-red-600 mt-0.5">{state.error}</span>
@@ -1615,7 +1643,7 @@ function HeaderPriceEditor({ item }: { item: MenuItem }) {
 // in place; no useActionState forms here because we want the
 // pending state to apply to whichever button was clicked.
 // ================================================================
-function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) {
+function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string; t: T }) {
   const [pending, startTransition] = useTransition()
   const [qty, setQty] = useState(String(rc.quantityRequired))
   const [err, setErr] = useState<string | null>(null)
@@ -1632,7 +1660,7 @@ function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) 
 
   function save() {
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      setErr('Quantity must be greater than 0.')
+      setErr(t('Quantity must be greater than 0.', 'La cantidad debe ser mayor que 0.'))
       return
     }
     setErr(null)
@@ -1668,11 +1696,11 @@ function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) 
             value={qty}
             onChange={(e) => setQty(e.target.value)}
             disabled={pending}
-            aria-label={`Quantity per sale for ${rc.inventoryItemName}`}
+            aria-label={t(`Quantity per sale for ${rc.inventoryItemName}`, `Cantidad por venta para ${rc.inventoryItemName}`)}
             className="w-16 h-7 rounded border border-gray-200 bg-white px-1.5 text-[11px] font-mono tabular-nums text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60"
           />
           <span className="text-[11px] text-gray-500 whitespace-nowrap">
-            {rc.unitOfMeasure} used per sale
+            {rc.unitOfMeasure} {t('used per sale', 'por venta')}
           </span>
           {dirty && (
             <button
@@ -1681,7 +1709,7 @@ function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) 
               disabled={pending}
               className="text-[10px] font-semibold text-blue-700 hover:text-blue-900 px-1.5 py-0.5 rounded hover:bg-blue-50 disabled:opacity-60 transition-colors whitespace-nowrap"
             >
-              {pending ? 'Saving…' : 'Save'}
+              {pending ? t('Saving…', 'Guardando…') : t('Save', 'Guardar')}
             </button>
           )}
         </div>
@@ -1689,10 +1717,10 @@ function RecipeRow({ rc, menuItemId }: { rc: RecipeEntry; menuItemId: string }) 
           type="button"
           onClick={remove}
           disabled={pending}
-          aria-label={`Remove ${rc.inventoryItemName} from recipe`}
+          aria-label={t(`Remove ${rc.inventoryItemName} from recipe`, `Eliminar ${rc.inventoryItemName} de la receta`)}
           className="text-[10px] font-medium text-gray-500 hover:text-red-600 px-1.5 py-0.5 rounded hover:bg-red-50 disabled:opacity-60 transition-colors whitespace-nowrap flex-shrink-0"
         >
-          Remove
+          {t('Remove', 'Eliminar')}
         </button>
       </div>
       {err && <p className="mt-1 text-[10px] text-red-600">{err}</p>}

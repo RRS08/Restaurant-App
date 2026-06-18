@@ -34,8 +34,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { PillarKey, PillarState } from '@/lib/readiness'
+import { makeT, type Lang } from '@/lib/i18n'
+
+type T = (en: string, es?: string) => string
 
 interface Props {
+  lang: Lang
   firstName: string | null
   /** Server-rendered freshness stamp, e.g. "1:14 PM". Truthful: this
    *  is the request time the server produced the view at. */
@@ -152,13 +156,20 @@ interface Props {
 // Default checklist for the Manager To-Do card. Seeds first-load
 // state when localStorage is empty. The manager can edit, add,
 // remove via the Manage drawer; their changes persist.
-const DEFAULT_TODO_ITEMS: { id: string; label: string; hint?: string }[] = [
-  { id: 'pos-ready',      label: 'Confirm POS is ready',           hint: 'Hardware, network, signed in.' },
-  { id: 'stock-check',    label: 'Check low-stock and out items',  hint: 'Review the Inventory card alerts.' },
-  { id: 'staffing-today', label: "Confirm today's staffing",       hint: 'All blocks covered or gaps acknowledged.' },
-  { id: 'sales-check',    label: 'Review recent sales activity',   hint: 'Look at last 7 days vs today.' },
-  { id: 'money-review',   label: 'Check money review / deposits',  hint: 'Confirm deposits and resolve exceptions.' },
-]
+//
+// Factory function (vs. constant) so the labels respect the current
+// language at first-render time. After the items are saved to
+// localStorage, they're frozen in whichever language was active —
+// honest, since the manager can edit them freely.
+function defaultTodoItems(t: T): { id: string; label: string; hint?: string }[] {
+  return [
+    { id: 'pos-ready',      label: t('Confirm POS is ready', 'Confirmar que el POS está listo'),                        hint: t('Hardware, network, signed in.', 'Hardware, red e inicio de sesión.') },
+    { id: 'stock-check',    label: t('Check low-stock and out items', 'Revisar artículos bajos y agotados'),            hint: t('Review the Inventory card alerts.', 'Revisa las alertas de la tarjeta de Inventario.') },
+    { id: 'staffing-today', label: t("Confirm today's staffing", 'Confirmar el personal de hoy'),                       hint: t('All blocks covered or gaps acknowledged.', 'Todos los bloques cubiertos o huecos identificados.') },
+    { id: 'sales-check',    label: t('Review recent sales activity', 'Revisar actividad reciente de ventas'),           hint: t('Look at last 7 days vs today.', 'Compara los últimos 7 días con hoy.') },
+    { id: 'money-review',   label: t('Check money review / deposits', 'Revisar dinero / depósitos'),                    hint: t('Confirm deposits and resolve exceptions.', 'Confirma depósitos y resuelve excepciones.') },
+  ]
+}
 
 // ================================================================
 // Formatting helpers
@@ -170,21 +181,21 @@ const MONEY = (n: number, withCents = false): string =>
     maximumFractionDigits: withCents ? 2 : 0,
   })}`
 
-function fmtRelative(iso: string, now: Date = new Date()): string {
+function fmtRelative(iso: string, t: T, now: Date = new Date()): string {
   const diffMs = now.getTime() - new Date(iso).getTime()
   const diffMin = Math.round(diffMs / 60000)
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
+  if (diffMin < 1) return t('just now', 'justo ahora')
+  if (diffMin < 60) return `${diffMin}${t('m ago', 'm atrás')}`
   const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
+  if (diffHr < 24) return `${diffHr}${t('h ago', 'h atrás')}`
   const diffDay = Math.round(diffHr / 24)
-  if (diffDay < 7) return `${diffDay}d ago`
+  if (diffDay < 7) return `${diffDay}${t('d ago', 'd atrás')}`
   const diffWk = Math.round(diffDay / 7)
-  return `${diffWk}w ago`
+  return `${diffWk}${t('w ago', 'sem atrás')}`
 }
 
-function fmtDateOnly(iso: string): string {
-  return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+function fmtDateOnly(iso: string, locale: string = 'en-US'): string {
+  return new Date(iso).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 // ================================================================
@@ -193,6 +204,7 @@ function fmtDateOnly(iso: string): string {
 
 export default function DashboardClient(props: Props) {
   const {
+    lang,
     firstName,
     renderedAt,
     inventory,
@@ -211,6 +223,7 @@ export default function DashboardClient(props: Props) {
     inventoryWriteLive,
     topCards,
   } = props
+  const t = makeT(lang)
 
   // Today's Mon..Sun index (0=Mon, 6=Sun). Used by Operating
   // Pressure to anchor today's column with a stronger fill.
@@ -233,10 +246,10 @@ export default function DashboardClient(props: Props) {
     staffing.shiftsToday > 0 && staffing.employeeCount > 0 ? 'ready' : 'warn'
   const staffStatus =
     staffing.employeeCount === 0
-      ? 'No team yet'
+      ? t('No team yet', 'Sin equipo aún')
       : staffing.shiftsToday === 0
-        ? 'No shifts today'
-        : 'Ready'
+        ? t('No shifts today', 'Sin turnos hoy')
+        : t('Ready', 'Listo')
 
   const inventoryState: 'critical' | 'warn' | 'ready' =
     inventory.outOfStockCount > 0
@@ -246,12 +259,12 @@ export default function DashboardClient(props: Props) {
         : 'ready'
   const inventoryStatus =
     inventory.outOfStockCount > 0
-      ? 'Needs attention'
+      ? t('Needs attention', 'Requiere atención')
       : stockAlerts > 0
-        ? 'Watch items'
+        ? t('Watch items', 'Vigilar artículos')
         : !inventoryWriteLive
-          ? 'Setup only'
-          : 'Stable'
+          ? t('Setup only', 'Solo configuración')
+          : t('Stable', 'Estable')
 
   const financeState: 'ready' | 'limited' | 'pending' =
     readiness?.finance === 'active'
@@ -261,12 +274,12 @@ export default function DashboardClient(props: Props) {
         : 'pending'
   const financeStatus =
     financeState === 'ready'
-      ? 'Bank synced'
+      ? t('Bank synced', 'Banco sincronizado')
       : bankConnectedUnsynced
-        ? 'Awaiting sync'
+        ? t('Awaiting sync', 'Esperando sincronización')
         : financeState === 'limited'
-          ? 'Internal only'
-          : 'Needs setup'
+          ? t('Internal only', 'Solo interno')
+          : t('Needs setup', 'Requiere configuración')
 
   return (
     // Constrained content width — same family standard as Staffing,
@@ -285,20 +298,20 @@ export default function DashboardClient(props: Props) {
         <div>
           {firstName && (
             <p className="text-[11px] text-gray-500 mb-1">
-              Welcome back, {firstName}
+              {t('Welcome back,', 'Bienvenido de vuelta,')} {firstName}
             </p>
           )}
           <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">
-            Today&apos;s Operations
+            {t("Today's Operations", 'Operaciones de hoy')}
           </h1>
           <p className="mt-1.5 text-sm text-gray-500">
-            A quick read on sales, stock, staffing, and finance.
+            {t('A quick read on sales, stock, staffing, and finance.', 'Una lectura rápida de ventas, inventario, personal y finanzas.')}
           </p>
         </div>
         {/* Truthful render-time stamp. Not live — accurate as of the
             request that produced this view. */}
         <p className="text-[11px] text-gray-500 font-mono tabular-nums">
-          Updated {renderedAt}
+          {t('Updated', 'Actualizado')} {renderedAt}
         </p>
       </div>
 
@@ -317,23 +330,23 @@ export default function DashboardClient(props: Props) {
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4 mb-5">
         <StatusCarousel
           href="/sales"
-          label="Sales"
-          status={topCards.sales.ordersToday === 0 ? 'No sales yet' : 'Active'}
+          label={t('Sales', 'Ventas')}
+          status={topCards.sales.ordersToday === 0 ? t('No sales yet', 'Sin ventas aún') : t('Active', 'Activo')}
           tone={salesState === 'ready' ? 'normal' : 'neutral'}
           rotateOffsetMs={0}
-          metrics={buildSalesMetrics(topCards.sales)}
+          metrics={buildSalesMetrics(topCards.sales, t)}
         />
         <StatusCarousel
           href="/staffing"
-          label="Staffing"
+          label={t('Staffing', 'Personal')}
           status={staffStatus}
           tone={staffState === 'ready' ? 'normal' : 'warn'}
           rotateOffsetMs={1500}
-          metrics={buildStaffingMetrics(topCards.staffing)}
+          metrics={buildStaffingMetrics(topCards.staffing, t)}
         />
         <StatusCarousel
           href="/inventory"
-          label="Inventory"
+          label={t('Inventory', 'Inventario')}
           status={inventoryStatus}
           tone={
             inventoryState === 'critical'
@@ -343,11 +356,11 @@ export default function DashboardClient(props: Props) {
                 : 'normal'
           }
           rotateOffsetMs={3000}
-          metrics={buildInventoryMetrics(topCards.inventory)}
+          metrics={buildInventoryMetrics(topCards.inventory, t)}
         />
         <StatusCarousel
           href="/finance"
-          label="Finance"
+          label={t('Finance', 'Finanzas')}
           status={financeStatus}
           tone={
             financeState === 'ready'
@@ -357,7 +370,7 @@ export default function DashboardClient(props: Props) {
                 : 'warn'
           }
           rotateOffsetMs={4500}
-          metrics={buildFinanceMetrics(topCards.finance)}
+          metrics={buildFinanceMetrics(topCards.finance, t)}
         />
       </div>
 
@@ -380,13 +393,14 @@ export default function DashboardClient(props: Props) {
           todayIdx={todayIdx}
           outItems={inventory.outOfStockCount}
           lowItems={inventory.lowStockCount}
+          t={t}
         />
 
         {/* RIGHT — Quick Actions (col-span-2). Action-oriented
             shortcuts to the most-used manager flows. Each row
             navigates to the relevant page (some with a query
             param that opens the relevant drawer on landing). */}
-        <QuickActionsCard />
+        <QuickActionsCard t={t} />
 
       </div>
 
@@ -403,8 +417,9 @@ export default function DashboardClient(props: Props) {
             checklist; the manager can edit, add, or remove from
             there. See ManagerTodoCard. */}
         <ManagerTodoCard
-          defaultItems={DEFAULT_TODO_ITEMS}
+          defaultItems={defaultTodoItems(t)}
           onOpenManager={() => setTodoDrawerOpen(true)}
+          t={t}
         />
 
         {/* Next Shift / Clock-In Check — replaces the static "Next
@@ -413,27 +428,28 @@ export default function DashboardClient(props: Props) {
             scheduled staff for that shift. Outside that window,
             shows the next upcoming shift group (everyone starting
             at the same time, regardless of role/house). */}
-        <NextShiftCard upcomingShifts={upcomingShifts} />
+        <NextShiftCard upcomingShifts={upcomingShifts} t={t} />
 
         {/* Recent movement — proof the system is alive */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Recent movement
+              {t('Recent movement', 'Movimiento reciente')}
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Latest activity across the system.
+              {t('Latest activity across the system.', 'Última actividad en el sistema.')}
             </p>
           </div>
           <ul className="divide-y divide-gray-100">
             <MovementRow
-              label="Latest sale"
+              label={t('Latest sale', 'Última venta')}
               value={latestSale ? MONEY(latestSale.amount, true) : null}
               when={latestSale?.datetime ?? null}
               relative
+              t={t}
             />
             <MovementRow
-              label="Inventory move"
+              label={t('Inventory move', 'Movimiento de inventario')}
               value={
                 latestInventoryMovement
                   ? `${latestInventoryMovement.itemName} · ${latestInventoryMovement.quantityChange > 0 ? '+' : ''}${latestInventoryMovement.quantityChange}`
@@ -441,12 +457,14 @@ export default function DashboardClient(props: Props) {
               }
               when={latestInventoryMovement?.datetime ?? null}
               relative
+              t={t}
             />
             <MovementRow
-              label="Latest expense"
+              label={t('Latest expense', 'Último gasto')}
               value={latestExpense ? MONEY(latestExpense.amount, true) : null}
               when={latestExpense?.date ?? null}
               relative={false}
+              t={t}
             />
           </ul>
         </div>
@@ -459,6 +477,7 @@ export default function DashboardClient(props: Props) {
       <ManagerTodoDrawer
         open={todoDrawerOpen}
         onClose={() => setTodoDrawerOpen(false)}
+        t={t}
       />
     </div>
   )
@@ -705,39 +724,44 @@ function StatusCarousel({
 // Inventory speaks sellability, Finance speaks money truth).
 // ================================================================
 
-function buildSalesMetrics(s: Props['topCards']['sales']): CarouselMetric[] {
+function buildSalesMetrics(s: Props['topCards']['sales'], t: T): CarouselMetric[] {
+  const orderWord = (n: number) =>
+    n === 1 ? t('order', 'orden') : t('orders', 'órdenes')
+  const completedOrderWord = (n: number) =>
+    n === 1 ? t('completed order', 'orden completada') : t('completed orders', 'órdenes completadas')
+
   const salesTodayMetric: CarouselMetric = {
-    title: 'Sales today',
+    title: t('Sales today', 'Ventas de hoy'),
     value: MONEY(s.salesToday),
     sub: s.ordersToday === 0
-      ? 'No completed orders yet'
-      : `${s.ordersToday} completed order${s.ordersToday === 1 ? '' : 's'} today`,
+      ? t('No completed orders yet', 'Sin órdenes completadas aún')
+      : `${s.ordersToday} ${completedOrderWord(s.ordersToday)} ${t('today', 'hoy')}`,
   }
 
   // Average ticket — falls back when there are no orders.
   const avgTicketMetric: CarouselMetric = s.ordersToday > 0
     ? {
-        title: 'Average ticket size',
+        title: t('Average ticket size', 'Ticket promedio'),
         value: MONEY(s.avgTicketToday),
-        sub: 'Per completed order',
+        sub: t('Per completed order', 'Por orden completada'),
       }
     : {
-        title: 'Average ticket size',
+        title: t('Average ticket size', 'Ticket promedio'),
         value: '—',
-        sub: 'No ticket data yet',
+        sub: t('No ticket data yet', 'Sin datos de ticket aún'),
       }
 
   // Best seller today — top menu item by quantity today.
   const bestSellerMetric: CarouselMetric = s.bestSeller
     ? {
-        title: 'Best seller today',
+        title: t('Best seller today', 'Más vendido hoy'),
         value: s.bestSeller.name,
-        sub: `${s.bestSeller.count} sold today`,
+        sub: `${s.bestSeller.count} ${t('sold today', 'vendidos hoy')}`,
       }
     : {
-        title: 'Best seller today',
+        title: t('Best seller today', 'Más vendido hoy'),
         value: '—',
-        sub: 'No items sold yet',
+        sub: t('No items sold yet', 'Sin artículos vendidos aún'),
       }
 
   // Payment mix — card / cash percentages from today's orders.
@@ -745,7 +769,7 @@ function buildSalesMetrics(s: Props['topCards']['sales']): CarouselMetric[] {
   // when it's meaningful so the line stays calm.
   const paymentMixMetric: CarouselMetric = (() => {
     if (!s.paymentMix || s.paymentMix.total === 0) {
-      return { title: 'Payment mix', value: '—', sub: 'No payment data yet' }
+      return { title: t('Payment mix', 'Mezcla de pagos'), value: '—', sub: t('No payment data yet', 'Sin datos de pago aún') }
     }
     const total = s.paymentMix.total
     const pct = (n: number) => Math.round((n / total) * 100)
@@ -753,34 +777,37 @@ function buildSalesMetrics(s: Props['topCards']['sales']): CarouselMetric[] {
     const cashPct = pct(s.paymentMix.cash)
     const otherPct = pct(s.paymentMix.other)
     return {
-      title: 'Payment mix',
-      value: `Card ${cardPct}% · Cash ${cashPct}%`,
+      title: t('Payment mix', 'Mezcla de pagos'),
+      value: `${t('Card', 'Tarjeta')} ${cardPct}% · ${t('Cash', 'Efectivo')} ${cashPct}%`,
       sub: s.paymentMix.other > 0
-        ? `Other ${otherPct}% · ${total} order${total === 1 ? '' : 's'} today`
-        : `${total} order${total === 1 ? '' : 's'} today`,
+        ? `${t('Other', 'Otro')} ${otherPct}% · ${total} ${orderWord(total)} ${t('today', 'hoy')}`
+        : `${total} ${orderWord(total)} ${t('today', 'hoy')}`,
     }
   })()
 
   return [salesTodayMetric, avgTicketMetric, bestSellerMetric, paymentMixMetric]
 }
 
-function buildStaffingMetrics(s: Props['topCards']['staffing']): CarouselMetric[] {
+function buildStaffingMetrics(s: Props['topCards']['staffing'], t: T): CarouselMetric[] {
+  const shiftWord = (n: number) =>
+    n === 1 ? t('shift', 'turno') : t('shifts', 'turnos')
+
   const shiftsTodayMetric: CarouselMetric = {
-    title: 'Shifts today',
+    title: t('Shifts today', 'Turnos hoy'),
     value: s.shiftsToday === 0
       ? '—'
-      : `${s.shiftsToday} shift${s.shiftsToday === 1 ? '' : 's'}`,
+      : `${s.shiftsToday} ${shiftWord(s.shiftsToday)}`,
     sub: s.shiftsToday === 0
-      ? 'No shifts today'
-      : `${s.hoursToday.toFixed(1)}h scheduled`,
+      ? t('No shifts today', 'Sin turnos hoy')
+      : `${s.hoursToday.toFixed(1)}h ${t('scheduled', 'programadas')}`,
   }
 
   const activeEmployeesMetric: CarouselMetric = {
-    title: 'Active employees',
-    value: s.activeStaff === 0 ? '—' : `${s.activeStaff} active`,
+    title: t('Active employees', 'Empleados activos'),
+    value: s.activeStaff === 0 ? '—' : `${s.activeStaff} ${t('active', 'activos')}`,
     sub: s.activeStaff === 0
-      ? 'No active employees'
-      : 'Available on the team',
+      ? t('No active employees', 'Sin empleados activos')
+      : t('Available on the team', 'Disponibles en el equipo'),
   }
 
   // Labor estimate today — hours × hourly_rate over today's rated
@@ -788,43 +815,43 @@ function buildStaffingMetrics(s: Props['topCards']['staffing']): CarouselMetric[
   // with bank-settled labor cost (Finance owns that).
   const laborEstimateMetric: CarouselMetric = s.laborEstimateToday !== null
     ? {
-        title: 'Labor estimate',
+        title: t('Labor estimate', 'Estimación de mano de obra'),
         value: MONEY(s.laborEstimateToday),
-        sub: 'Scheduled labor estimate',
+        sub: t('Scheduled labor estimate', 'Mano de obra programada estimada'),
       }
     : {
-        title: 'Labor estimate',
+        title: t('Labor estimate', 'Estimación de mano de obra'),
         value: '—',
-        sub: 'Labor estimate unavailable',
+        sub: t('Labor estimate unavailable', 'Estimación de mano de obra no disponible'),
       }
 
   // House coverage — FOH / BOH split of today's shifts. Falls back
   // when no shift carries a section.area so we don't fake a split.
   const houseCoverageMetric: CarouselMetric = s.houseCoverage
     ? {
-        title: 'House coverage',
+        title: t('House coverage', 'Cobertura de salón'),
         value: `FOH ${s.houseCoverage.foh} · BOH ${s.houseCoverage.boh}`,
-        sub: 'Scheduled by house',
+        sub: t('Scheduled by house', 'Programado por área'),
       }
     : {
-        title: 'House coverage',
+        title: t('House coverage', 'Cobertura de salón'),
         value: '—',
-        sub: 'No house coverage yet',
+        sub: t('No house coverage yet', 'Sin cobertura aún'),
       }
 
   return [shiftsTodayMetric, activeEmployeesMetric, laborEstimateMetric, houseCoverageMetric]
 }
 
-function buildInventoryMetrics(i: Props['topCards']['inventory']): CarouselMetric[] {
+function buildInventoryMetrics(i: Props['topCards']['inventory'], t: T): CarouselMetric[] {
   const outMetric: CarouselMetric = {
-    title: 'Out items',
-    value: i.outItems === 0 ? '—' : `${i.outItems} out`,
-    sub: i.outItems === 0 ? 'No out items' : 'Needs attention',
+    title: t('Out items', 'Artículos agotados'),
+    value: i.outItems === 0 ? '—' : `${i.outItems} ${t('out', 'agotados')}`,
+    sub: i.outItems === 0 ? t('No out items', 'Sin artículos agotados') : t('Needs attention', 'Requiere atención'),
   }
   const lowMetric: CarouselMetric = {
-    title: 'Low stock',
-    value: i.lowItems === 0 ? '—' : `${i.lowItems} low`,
-    sub: i.lowItems === 0 ? 'No low-stock items' : 'Below threshold',
+    title: t('Low stock', 'Bajo inventario'),
+    value: i.lowItems === 0 ? '—' : `${i.lowItems} ${t('low', 'bajos')}`,
+    sub: i.lowItems === 0 ? t('No low-stock items', 'Sin artículos bajos') : t('Below threshold', 'Bajo el umbral'),
   }
 
   // Inventory cost — explicitly labeled "Recorded" since this comes
@@ -832,14 +859,14 @@ function buildInventoryMetrics(i: Props['topCards']['inventory']): CarouselMetri
   // settled inventory cost (no separable settled figure exposed).
   const inventoryCostMetric: CarouselMetric = i.recordedInventoryCost30d > 0
     ? {
-        title: 'Inventory cost',
+        title: t('Inventory cost', 'Costo de inventario'),
         value: MONEY(i.recordedInventoryCost30d),
-        sub: 'Recorded inventory cost · last 30d',
+        sub: t('Recorded inventory cost · last 30d', 'Costo de inventario registrado · últimos 30d'),
       }
     : {
-        title: 'Inventory cost',
+        title: t('Inventory cost', 'Costo de inventario'),
         value: '—',
-        sub: 'No inventory cost yet',
+        sub: t('No inventory cost yet', 'Sin costo de inventario aún'),
       }
 
   // Pending restock orders — draft + ordered are both "pending"
@@ -848,46 +875,48 @@ function buildInventoryMetrics(i: Props['topCards']['inventory']): CarouselMetri
   const pendingTotal = i.pendingRestocks.drafts + i.pendingRestocks.ordered
   const restockMetric: CarouselMetric = pendingTotal === 0
     ? {
-        title: 'Pending restock orders',
+        title: t('Pending restock orders', 'Reabastecimientos pendientes'),
         value: '—',
-        sub: 'No pending restocks',
+        sub: t('No pending restocks', 'Sin reabastecimientos pendientes'),
       }
     : {
-        title: 'Pending restock orders',
-        value: `${pendingTotal} pending`,
+        title: t('Pending restock orders', 'Reabastecimientos pendientes'),
+        value: `${pendingTotal} ${t('pending', 'pendientes')}`,
         sub: i.pendingRestocks.ordered > 0
-          ? `${i.pendingRestocks.ordered} awaiting receipt${
-              i.pendingRestocks.drafts > 0 ? ` · ${i.pendingRestocks.drafts} in cart` : ''
+          ? `${i.pendingRestocks.ordered} ${t('awaiting receipt', 'esperando recepción')}${
+              i.pendingRestocks.drafts > 0 ? ` · ${i.pendingRestocks.drafts} ${t('in cart', 'en carrito')}` : ''
             }`
-          : `${i.pendingRestocks.drafts} in cart`,
+          : `${i.pendingRestocks.drafts} ${t('in cart', 'en carrito')}`,
       }
 
   return [outMetric, lowMetric, inventoryCostMetric, restockMetric]
 }
 
-function buildFinanceMetrics(f: Props['topCards']['finance']): CarouselMetric[] {
+function buildFinanceMetrics(f: Props['topCards']['finance'], t: T): CarouselMetric[] {
   const reviewMetric: CarouselMetric = f.moneyReview.attention === 0
     ? {
-        title: 'Money review',
+        title: t('Money review', 'Revisión de dinero'),
         value: '—',
-        sub: 'No money items need review',
+        sub: t('No money items need review', 'Sin elementos por revisar'),
       }
     : {
-        title: 'Money review',
-        value: `${f.moneyReview.attention} need${f.moneyReview.attention === 1 ? 's' : ''} attention`,
-        sub: 'Deposits, exceptions, or mismatches',
+        title: t('Money review', 'Revisión de dinero'),
+        value: f.moneyReview.attention === 1
+          ? `${f.moneyReview.attention} ${t('needs attention', 'requiere atención')}`
+          : `${f.moneyReview.attention} ${t('need attention', 'requieren atención')}`,
+        sub: t('Deposits, exceptions, or mismatches', 'Depósitos, excepciones o discrepancias'),
       }
 
   const depositsMetric: CarouselMetric = f.depositsToConfirm === 0
     ? {
-        title: 'Deposits to confirm',
+        title: t('Deposits to confirm', 'Depósitos por confirmar'),
         value: '—',
-        sub: 'No deposits pending',
+        sub: t('No deposits pending', 'Sin depósitos pendientes'),
       }
     : {
-        title: 'Deposits to confirm',
-        value: `${f.depositsToConfirm} pending`,
-        sub: 'Sales deposits to match',
+        title: t('Deposits to confirm', 'Depósitos por confirmar'),
+        value: `${f.depositsToConfirm} ${t('pending', 'pendientes')}`,
+        sub: t('Sales deposits to match', 'Depósitos de ventas por conciliar'),
       }
 
   // Estimated operating expense — non-inventory expense rows in
@@ -897,26 +926,26 @@ function buildFinanceMetrics(f: Props['topCards']['finance']): CarouselMetric[] 
   // estimate" so this card avoids repeating them.
   const operatingMetric: CarouselMetric = f.operatingEstimate30d > 0
     ? {
-        title: 'Estimated operating expense',
-        value: `${MONEY(f.operatingEstimate30d)} estimated`,
-        sub: 'Operating spend estimate · last 30d',
+        title: t('Estimated operating expense', 'Gasto operativo estimado'),
+        value: `${MONEY(f.operatingEstimate30d)} ${t('estimated', 'estimado')}`,
+        sub: t('Operating spend estimate · last 30d', 'Estimación de gasto operativo · últimos 30d'),
       }
     : {
-        title: 'Estimated operating expense',
+        title: t('Estimated operating expense', 'Gasto operativo estimado'),
         value: '—',
-        sub: 'No operating estimate yet',
+        sub: t('No operating estimate yet', 'Sin estimación operativa aún'),
       }
 
   const syncMetric: CarouselMetric = f.bankSyncedAt
     ? {
-        title: 'Last bank sync',
-        value: `Synced ${formatTime(f.bankSyncedAt)}`,
-        sub: 'Bank context current',
+        title: t('Last bank sync', 'Última sincronización bancaria'),
+        value: `${t('Synced', 'Sincronizado')} ${formatTime(f.bankSyncedAt)}`,
+        sub: t('Bank context current', 'Contexto bancario actualizado'),
       }
     : {
-        title: 'Last bank sync',
+        title: t('Last bank sync', 'Última sincronización bancaria'),
         value: '—',
-        sub: 'Bank not synced yet',
+        sub: t('Bank not synced yet', 'Banco aún no sincronizado'),
       }
 
   return [reviewMetric, depositsMetric, operatingMetric, syncMetric]
@@ -975,13 +1004,22 @@ function OperatingPressureCard({
   todayIdx,
   outItems,
   lowItems,
+  t,
 }: {
   salesByDay: { label: string; value: number; orders: number; date: string }[]
   shiftsByDay: { label: string; value: number; employees: number; date: string }[]
   todayIdx: number
   outItems: number
   lowItems: number
+  t: T
 }) {
+  // English short day labels → Spanish short day labels.
+  // Server ships English keys ('Mon'..'Sun'); we localize for render.
+  const DAY_LABEL_ES: Record<string, string> = {
+    Mon: 'Lun', Tue: 'Mar', Wed: 'Mié', Thu: 'Jue',
+    Fri: 'Vie', Sat: 'Sáb', Sun: 'Dom',
+  }
+  const localDayLabel = (en: string) => t(en, DAY_LABEL_ES[en] ?? en)
   const [hoverIdx, setHoverIdx] = useState<number | null>(null)
   const stockPressure = outItems + lowItems
   const inventoryMultiplier = Math.min(1.5, 1 + 0.05 * stockPressure)
@@ -998,8 +1036,12 @@ function OperatingPressureCard({
     return Math.min(1, salesNorm * inventoryMultiplier)
   })
 
+  // Detect language from the translator (a tiny sentinel: only the
+  // Spanish branch returns the alternate string).
+  const isEs = t('__lang_probe__', 'es') === 'es'
+  const localeForDate = isEs ? 'es-ES' : 'en-US'
   const formatDayDate = (iso: string) =>
-    new Date(iso).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+    new Date(iso).toLocaleDateString(localeForDate, { weekday: 'long', month: 'short', day: 'numeric' })
 
   return (
     // overflow-visible (not overflow-hidden) so the hover tooltip
@@ -1009,10 +1051,10 @@ function OperatingPressureCard({
       {/* Header */}
       <div className="border-b border-gray-100 px-5 py-3">
         <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          Operating pressure
+          {t('Operating pressure', 'Presión operativa')}
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-          Where sales, coverage, and stock risk overlap.
+          {t('Where sales, coverage, and stock risk overlap.', 'Donde ventas, cobertura y riesgo de inventario coinciden.')}
         </p>
       </div>
 
@@ -1021,7 +1063,7 @@ function OperatingPressureCard({
       <div className="flex-1 px-5 pt-10 pb-4 relative">
         {!hasAnySales && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <p className="text-[11px] text-gray-400 italic">Not enough activity yet</p>
+            <p className="text-[11px] text-gray-400 italic">{t('Not enough activity yet', 'Aún no hay actividad suficiente')}</p>
           </div>
         )}
 
@@ -1055,7 +1097,7 @@ function OperatingPressureCard({
                 onFocus={() => setHoverIdx(i)}
                 onBlur={() => setHoverIdx((cur) => (cur === i ? null : cur))}
                 className="group relative flex flex-col items-center justify-end h-full focus:outline-none"
-                aria-label={`${d.label} ${formatDayDate(d.date)} — pressure ${Math.round(score * 100)}%`}
+                aria-label={`${localDayLabel(d.label)} ${formatDayDate(d.date)} — ${t('pressure', 'presión')} ${Math.round(score * 100)}%`}
               >
                 {/* Risk marker — small amber chip above the bar
                     when there's a sales day with zero coverage.
@@ -1077,7 +1119,7 @@ function OperatingPressureCard({
                     isToday ? 'text-gray-900' : 'text-gray-400'
                   }`}
                 >
-                  {d.label}
+                  {localDayLabel(d.label)}
                 </p>
 
                 {/* Tooltip — dynamically anchored to the bar.
@@ -1110,36 +1152,36 @@ function OperatingPressureCard({
                       {formatDayDate(d.date)}
                     </p>
                     <p className="mt-1.5 text-[10px] text-gray-600">
-                      Sales:{' '}
+                      {t('Sales', 'Ventas')}:{' '}
                       <span className="font-semibold text-gray-800 font-mono tabular-nums">{MONEY(d.value)}</span>
                       {d.orders > 0 && (
-                        <span className="text-gray-500"> · {d.orders} order{d.orders === 1 ? '' : 's'}</span>
+                        <span className="text-gray-500"> · {d.orders} {d.orders === 1 ? t('order', 'orden') : t('orders', 'órdenes')}</span>
                       )}
                     </p>
                     <p className="text-[10px] text-gray-600">
-                      Staffing:{' '}
+                      {t('Staffing', 'Personal')}:{' '}
                       <span className="font-semibold text-gray-800 font-mono tabular-nums">
-                        {shifts === 0 ? 'No shifts' : `${shifts} shift${shifts === 1 ? '' : 's'}`}
+                        {shifts === 0 ? t('No shifts', 'Sin turnos') : `${shifts} ${shifts === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}`}
                       </span>
                     </p>
                     <p className="text-[10px] text-gray-600">
-                      Inventory risk:{' '}
+                      {t('Inventory risk', 'Riesgo de inventario')}:{' '}
                       <span className={`font-semibold font-mono tabular-nums ${stockPressure > 0 ? 'text-amber-700' : 'text-gray-800'}`}>
-                        {stockPressure} item{stockPressure === 1 ? '' : 's'} at risk
+                        {stockPressure} {stockPressure === 1 ? t('item at risk', 'artículo en riesgo') : t('items at risk', 'artículos en riesgo')}
                       </span>
                     </p>
                     <p className="mt-1.5 text-[10px] text-gray-500">
-                      Pressure:{' '}
+                      {t('Pressure', 'Presión')}:{' '}
                       <span className="font-semibold text-gray-800">
                         {!hasAnySales || d.value === 0
-                          ? 'None'
+                          ? t('None', 'Ninguna')
                           : score > 0.75
-                            ? 'High'
+                            ? t('High', 'Alta')
                             : score > 0.5
-                              ? 'Elevated'
+                              ? t('Elevated', 'Elevada')
                               : score > 0.25
-                                ? 'Moderate'
-                                : 'Low'}
+                                ? t('Moderate', 'Moderada')
+                                : t('Low', 'Baja')}
                       </span>
                     </p>
                   </div>
@@ -1162,7 +1204,7 @@ function OperatingPressureCard({
 // page already handles by opening the Log Expense drawer on
 // mount. Designed to be scannable rather than dense.
 // ================================================================
-function QuickActionsCard() {
+function QuickActionsCard({ t }: { t: T }) {
   // Four manager flows. `/finance?log=1` deep-links into the
   // Log Expense drawer that the Finance client already handles on
   // mount; the other three land on their pillar page where the
@@ -1174,23 +1216,23 @@ function QuickActionsCard() {
   }> = [
     {
       href: '/finance?log=1',
-      title: 'Log Expense',
-      description: 'Record a cash, owner-paid, or one-off expense.',
+      title: t('Log Expense', 'Registrar gasto'),
+      description: t('Record a cash, owner-paid, or one-off expense.', 'Registra un gasto en efectivo, pagado por el dueño o único.'),
     },
     {
       href: '/inventory',
-      title: 'Create Restock Order',
-      description: 'Replenish low or out items.',
+      title: t('Create Restock Order', 'Crear orden de reabastecimiento'),
+      description: t('Replenish low or out items.', 'Reabastece artículos bajos o agotados.'),
     },
     {
       href: '/staffing',
-      title: 'Add Shift',
-      description: 'Fill a schedule gap.',
+      title: t('Add Shift', 'Agregar turno'),
+      description: t('Fill a schedule gap.', 'Cubre un hueco en el horario.'),
     },
     {
       href: '/finance',
-      title: 'Review Bank Transactions',
-      description: 'Review deposits, exceptions, and bank activity.',
+      title: t('Review Bank Transactions', 'Revisar transacciones bancarias'),
+      description: t('Review deposits, exceptions, and bank activity.', 'Revisa depósitos, excepciones y actividad bancaria.'),
     },
   ]
 
@@ -1198,10 +1240,10 @@ function QuickActionsCard() {
     <div className="lg:col-span-2 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3">
         <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          Quick actions
+          {t('Quick actions', 'Acciones rápidas')}
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-          Jump into common manager tasks.
+          {t('Jump into common manager tasks.', 'Acceso directo a tareas comunes del gerente.')}
         </p>
       </div>
       <ul className="flex-1 divide-y divide-gray-100">
@@ -1220,7 +1262,7 @@ function QuickActionsCard() {
                 </p>
               </div>
               <span className="text-[11px] font-medium text-blue-700 group-hover:text-blue-800 group-hover:translate-x-0.5 transition-all flex-shrink-0 mt-0.5 whitespace-nowrap">
-                Open →
+                {t('Open', 'Abrir')} →
               </span>
             </Link>
           </li>
@@ -1257,16 +1299,16 @@ function todayKey(): string {
 
 // Read items + per-day completion from localStorage. Returns
 // defaults if nothing is stored or the stored value is malformed.
-function loadTodoItems(): TodoItem[] {
-  if (typeof window === 'undefined') return DEFAULT_TODO_ITEMS
+function loadTodoItems(defaults: TodoItem[]): TodoItem[] {
+  if (typeof window === 'undefined') return defaults
   try {
     const raw = window.localStorage.getItem(TODO_ITEMS_KEY)
-    if (!raw) return DEFAULT_TODO_ITEMS
+    if (!raw) return defaults
     const parsed = JSON.parse(raw) as TodoItem[]
-    if (!Array.isArray(parsed) || parsed.length === 0) return DEFAULT_TODO_ITEMS
+    if (!Array.isArray(parsed) || parsed.length === 0) return defaults
     return parsed
   } catch {
-    return DEFAULT_TODO_ITEMS
+    return defaults
   }
 }
 function saveTodoItems(items: TodoItem[]): void {
@@ -1305,9 +1347,11 @@ const TODO_PAGE_SIZE = 5
 function ManagerTodoCard({
   defaultItems,
   onOpenManager,
+  t,
 }: {
   defaultItems: TodoItem[]
   onOpenManager: () => void
+  t: T
 }) {
   const [items, setItems] = useState<TodoItem[]>(defaultItems)
   const [completed, setCompleted] = useState<Set<string>>(new Set())
@@ -1315,13 +1359,13 @@ function ManagerTodoCard({
   // Hydration-safe: read storage after mount so SSR / first render
   // matches between server and client.
   useEffect(() => {
-    setItems(loadTodoItems())
+    setItems(loadTodoItems(defaultItems))
     setCompleted(loadCompletedIds())
     // If the saved list shrinks between visits, snap back to page 0
     // so we never land on a now-empty page.
     setPage(0)
     const onChange = () => {
-      setItems(loadTodoItems())
+      setItems(loadTodoItems(defaultItems))
       setPage(0)
     }
     window.addEventListener(TODO_CHANGE_EVENT, onChange)
@@ -1355,10 +1399,10 @@ function ManagerTodoCard({
       <div className="border-b border-gray-100 px-4 py-3 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Manager to-do
+            {t('Manager to-do', 'Pendientes del gerente')}
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-            Opening, closing, and daily checks.
+            {t('Opening, closing, and daily checks.', 'Apertura, cierre y revisiones diarias.')}
           </p>
         </div>
         <div className="flex flex-col items-end gap-1 flex-shrink-0">
@@ -1370,19 +1414,19 @@ function ManagerTodoCard({
             onClick={onOpenManager}
             className="text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-700 hover:text-blue-800 transition-colors"
           >
-            Manage
+            {t('Manage', 'Gestionar')}
           </button>
         </div>
       </div>
       {items.length === 0 ? (
         <div className="px-4 py-6 text-center">
-          <p className="text-xs text-gray-400">No checklist items yet.</p>
+          <p className="text-xs text-gray-400">{t('No checklist items yet.', 'Sin elementos aún.')}</p>
           <button
             type="button"
             onClick={onOpenManager}
             className="mt-2 text-[11px] font-semibold text-blue-700 hover:text-blue-800"
           >
-            Add the first item →
+            {t('Add the first item', 'Agregar el primer elemento')} →
           </button>
         </div>
       ) : (
@@ -1425,10 +1469,10 @@ function ManagerTodoCard({
                 disabled={safePage === 0}
                 className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:text-gray-800 disabled:text-gray-300 disabled:cursor-not-allowed"
               >
-                ← Prev
+                ← {t('Prev', 'Atrás')}
               </button>
               <span className="text-[10px] font-semibold font-mono tabular-nums text-gray-500">
-                Page {safePage + 1} of {pageCount}
+                {t('Page', 'Página')} {safePage + 1} {t('of', 'de')} {pageCount}
               </span>
               <button
                 type="button"
@@ -1436,7 +1480,7 @@ function ManagerTodoCard({
                 disabled={safePage >= pageCount - 1}
                 className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:text-gray-800 disabled:text-gray-300 disabled:cursor-not-allowed"
               >
-                Next →
+                {t('Next', 'Siguiente')} →
               </button>
             </div>
           )}
@@ -1459,9 +1503,11 @@ function ManagerTodoCard({
 function ManagerTodoDrawer({
   open,
   onClose,
+  t,
 }: {
   open: boolean
   onClose: () => void
+  t: T
 }) {
   // The drawer is a *live* view of the persisted list: every add /
   // delete / edit commits immediately to localStorage and fires the
@@ -1475,11 +1521,11 @@ function ManagerTodoDrawer({
 
   useEffect(() => {
     if (open) {
-      setItems(loadTodoItems())
+      setItems(loadTodoItems(defaultTodoItems(t)))
       setCompleted(loadCompletedIds())
       setEditingId(null)
     }
-  }, [open])
+  }, [open, t])
 
   // Single commit path — writes through to localStorage and lets
   // the dashboard card refresh from the same source of truth.
@@ -1502,7 +1548,7 @@ function ManagerTodoDrawer({
   }
   function addItem() {
     const id = `custom-${Date.now()}`
-    const newItem: TodoItem = { id, label: 'New task', hint: undefined }
+    const newItem: TodoItem = { id, label: t('New task', 'Nueva tarea'), hint: undefined }
     const next = [...items, newItem]
     commit(next)
     // Auto-open the new row in edit mode so the manager can type
@@ -1528,7 +1574,7 @@ function ManagerTodoDrawer({
           on top of the panel and swallow every click. */}
       <button
         type="button"
-        aria-label="Close drawer"
+        aria-label={t('Close drawer', 'Cerrar panel')}
         onClick={onClose}
         className="absolute inset-0 bg-gray-900/30 z-0"
       />
@@ -1538,13 +1584,13 @@ function ManagerTodoDrawer({
         <div className="border-b border-gray-100 px-5 py-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Dashboard checklist
+              {t('Dashboard checklist', 'Lista del panel')}
             </p>
             <h2 className="mt-0.5 text-base font-semibold tracking-tight text-gray-900">
-              Manage To-Do List
+              {t('Manage To-Do List', 'Gestionar lista de pendientes')}
             </h2>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Tap a row to edit. Changes save automatically to this browser.
+              {t('Tap a row to edit. Changes save automatically to this browser.', 'Toca una fila para editar. Los cambios se guardan automáticamente en este navegador.')}
             </p>
           </div>
           <button
@@ -1552,7 +1598,7 @@ function ManagerTodoDrawer({
             onClick={onClose}
             className="text-[11px] font-semibold text-gray-500 hover:text-gray-700"
           >
-            Close
+            {t('Close', 'Cerrar')}
           </button>
         </div>
 
@@ -1560,7 +1606,7 @@ function ManagerTodoDrawer({
         <div className="flex-1 overflow-y-auto">
           {items.length === 0 ? (
             <div className="px-5 py-8 text-center">
-              <p className="text-xs text-gray-400 italic">No items yet — add one below.</p>
+              <p className="text-xs text-gray-400 italic">{t('No items yet — add one below.', 'Sin elementos aún — agrega uno abajo.')}</p>
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">
@@ -1575,6 +1621,7 @@ function ManagerTodoDrawer({
                         onChange={(patch) => updateItem(it.id, patch)}
                         onRemove={() => removeItem(it.id)}
                         onDone={() => setEditingId(null)}
+                        t={t}
                       />
                     </li>
                   )
@@ -1588,7 +1635,7 @@ function ManagerTodoDrawer({
                         checked={isDone}
                         onChange={() => toggleCompleted(it.id)}
                         className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40 flex-shrink-0"
-                        aria-label={`Toggle ${it.label}`}
+                        aria-label={`${t('Toggle', 'Alternar')} ${it.label}`}
                       />
                       <button
                         type="button"
@@ -1605,7 +1652,7 @@ function ManagerTodoDrawer({
                         )}
                       </button>
                       <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-300 group-hover:text-gray-500 transition-colors flex-shrink-0 mt-1">
-                        Edit
+                        {t('Edit', 'Editar')}
                       </span>
                     </div>
                   </li>
@@ -1622,7 +1669,7 @@ function ManagerTodoDrawer({
               onClick={addItem}
               className="inline-flex items-center text-[11px] font-semibold rounded-md bg-gray-900 text-white px-3 py-1.5 hover:bg-gray-800 transition-colors"
             >
-              + Add to list
+              + {t('Add to list', 'Agregar a la lista')}
             </button>
           </div>
         </div>
@@ -1642,11 +1689,13 @@ function TodoEditRow({
   onChange,
   onRemove,
   onDone,
+  t,
 }: {
   item: TodoItem
   onChange: (patch: Partial<TodoItem>) => void
   onRemove: () => void
   onDone: () => void
+  t: T
 }) {
   const titleRef = useRef<HTMLInputElement>(null)
   useEffect(() => {
@@ -1660,7 +1709,7 @@ function TodoEditRow({
           htmlFor={`todo-title-${item.id}`}
           className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-gray-400 mb-1"
         >
-          Title
+          {t('Title', 'Título')}
         </label>
         <input
           ref={titleRef}
@@ -1681,7 +1730,7 @@ function TodoEditRow({
             }
           }}
           className="w-full text-xs font-semibold text-gray-900 bg-white border border-gray-200 rounded-md px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
-          placeholder="Task title"
+          placeholder={t('Task title', 'Título de la tarea')}
         />
       </div>
       <div>
@@ -1689,7 +1738,7 @@ function TodoEditRow({
           htmlFor={`todo-hint-${item.id}`}
           className="block text-[9px] font-semibold uppercase tracking-[0.12em] text-gray-400 mb-1"
         >
-          Description <span className="text-gray-300 normal-case tracking-normal font-normal">(optional)</span>
+          {t('Description', 'Descripción')} <span className="text-gray-300 normal-case tracking-normal font-normal">({t('optional', 'opcional')})</span>
         </label>
         <input
           id={`todo-hint-${item.id}`}
@@ -1703,7 +1752,7 @@ function TodoEditRow({
             }
           }}
           className="w-full text-[11px] text-gray-700 bg-white border border-gray-200 rounded-md px-2 py-1.5 outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 placeholder:text-gray-400"
-          placeholder="Helper text shown under the title"
+          placeholder={t('Helper text shown under the title', 'Texto de ayuda mostrado bajo el título')}
         />
       </div>
       <div className="flex items-center justify-between pt-0.5">
@@ -1712,14 +1761,14 @@ function TodoEditRow({
           onClick={onRemove}
           className="text-[10px] font-semibold uppercase tracking-[0.06em] text-red-600 hover:text-red-700"
         >
-          Remove
+          {t('Remove', 'Eliminar')}
         </button>
         <button
           type="button"
           onClick={onDone}
           className="text-[11px] font-semibold rounded-md bg-gray-900 text-white px-3 py-1.5 hover:bg-gray-800 transition-colors"
         >
-          Done
+          {t('Done', 'Listo')}
         </button>
       </div>
     </div>
@@ -1771,7 +1820,7 @@ function groupByStartTime(shifts: UpcomingShift[]): { startTime: string; endTime
   return [...groups.values()]
 }
 
-function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) {
+function NextShiftCard({ upcomingShifts, t }: { upcomingShifts: UpcomingShift[]; t: T }) {
   // Re-evaluate every 60s so the card flips between modes without
   // a refresh. `tick` is just a dependency to force re-render.
   const [, setTick] = useState(0)
@@ -1790,10 +1839,12 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
     ? null
     : grouped.find((g) => new Date(g.startTime).getTime() > now) ?? null
 
+  const isEs = t('__lang_probe__', 'es') === 'es'
+  const locale = isEs ? 'es-ES' : 'en-US'
   const fmtTime = (iso: string) =>
-    new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+    new Date(iso).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
   const fmtDateShort = (iso: string) =>
-    new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    new Date(iso).toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })
 
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
@@ -1803,15 +1854,15 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
           <div className="border-b border-gray-100 px-4 py-3 flex items-start justify-between gap-2">
             <div>
               <p className="text-[10px] font-semibold uppercase tracking-widest text-blue-700">
-                Clock-in check
+                {t('Clock-in check', 'Verificación de entrada')}
               </p>
               <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-                {fmtTime(activeGroup.startTime)} shift · staff scheduled to clock in.
+                {fmtTime(activeGroup.startTime)} {t('shift · staff scheduled to clock in.', 'turno · personal programado para entrar.')}
               </p>
             </div>
             <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 flex-shrink-0">
               <span className="h-1 w-1 rounded-full bg-blue-500" />
-              Active
+              {t('Active', 'Activo')}
             </span>
           </div>
           <ul className="divide-y divide-gray-100">
@@ -1821,13 +1872,13 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
                 <p className="mt-0.5 text-[11px] text-gray-500">
                   {s.role || '—'}
                   <span className="text-gray-300 px-1">·</span>
-                  Scheduled to clock in
+                  {t('Scheduled to clock in', 'Programado para entrar')}
                 </p>
               </li>
             ))}
           </ul>
           <p className="px-4 py-2.5 text-[10px] text-gray-400 italic border-t border-gray-100">
-            Clock-in tracking coming soon — showing scheduled staff.
+            {t('Clock-in tracking coming soon — showing scheduled staff.', 'Seguimiento de entrada próximamente — mostrando personal programado.')}
           </p>
         </>
       ) : nextGroup ? (
@@ -1835,10 +1886,10 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
           {/* Next Shift mode */}
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Next shift
+              {t('Next shift', 'Próximo turno')}
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Upcoming scheduled staff.
+              {t('Upcoming scheduled staff.', 'Personal próximamente programado.')}
             </p>
           </div>
           <div className="px-4 py-3 border-b border-gray-100">
@@ -1862,16 +1913,16 @@ function NextShiftCard({ upcomingShifts }: { upcomingShifts: UpcomingShift[] }) 
         <>
           <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Next shift
+              {t('Next shift', 'Próximo turno')}
             </p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Upcoming scheduled staff.
+              {t('Upcoming scheduled staff.', 'Personal próximamente programado.')}
             </p>
           </div>
           <div className="px-4 py-4">
-            <p className="text-sm font-semibold text-gray-900">No upcoming shifts</p>
+            <p className="text-sm font-semibold text-gray-900">{t('No upcoming shifts', 'Sin próximos turnos')}</p>
             <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-              Schedule is clear for the selected window.
+              {t('Schedule is clear for the selected window.', 'El horario está libre en la ventana seleccionada.')}
             </p>
           </div>
         </>
@@ -1892,11 +1943,13 @@ function MovementRow({
   value,
   when,
   relative,
+  t,
 }: {
   label: string
   value: string | null
   when: string | null
   relative: boolean
+  t: T
 }) {
   return (
     <li className="px-4 py-2.5">
@@ -1912,7 +1965,7 @@ function MovementRow({
       </p>
       {when && (
         <p className="mt-0.5 text-[11px] text-gray-500">
-          {relative ? fmtRelative(when) : fmtDateOnly(when)}
+          {relative ? fmtRelative(when, t) : fmtDateOnly(when)}
         </p>
       )}
     </li>

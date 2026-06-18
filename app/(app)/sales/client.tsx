@@ -20,6 +20,9 @@
 
 import { useState, useMemo, useActionState, useEffect } from 'react'
 import { voidOrder } from '@/app/actions/sales'
+import { makeT, type Lang } from '@/lib/i18n'
+
+type T = (en: string, es?: string) => string
 
 // ================================================================
 // Domain types
@@ -56,10 +59,12 @@ interface Order {
 // Source / status vocab — same per-branch, just a label
 // ================================================================
 
-const SOURCE_LABEL: Record<Source, string> = {
-  manual: 'Manual',
-  native_pos: 'POS',
-  external_pos: 'External',
+function sourceLabel(t: T): Record<Source, string> {
+  return {
+    manual: t('Manual', 'Manual'),
+    native_pos: t('POS', 'POS'),
+    external_pos: t('External', 'Externo'),
+  }
 }
 
 // Soft text tints for the source column. Restraint over chrome:
@@ -85,9 +90,11 @@ const PAYMENT_TEXT: Record<PaymentType, string> = {
   other: 'text-gray-700',
 }
 
-const STATUS_META: Record<OrderStatus, { label: string; chip: string; dot: string }> = {
-  completed: { label: 'Completed', chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
-  voided:    { label: 'Voided',    chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
+function statusMeta(t: T): Record<OrderStatus, { label: string; chip: string; dot: string }> {
+  return {
+    completed: { label: t('Completed', 'Completada'), chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
+    voided:    { label: t('Voided', 'Anulada'),       chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
+  }
 }
 
 // ================================================================
@@ -114,40 +121,40 @@ function fmtMoney(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function fmtRowDate(iso: string): { day: string; time: string } {
+function fmtRowDate(iso: string, locale: string = 'en-US'): { day: string; time: string } {
   const d = new Date(iso)
   return {
-    day: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    time: d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }),
+    day: d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }),
+    time: d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }),
   }
 }
 
-function fmtFullDate(iso: string): string {
-  return new Date(iso).toLocaleString('en-US', {
+function fmtFullDate(iso: string, locale: string = 'en-US'): string {
+  return new Date(iso).toLocaleString(locale, {
     month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit',
   })
 }
 
-function fmtRelative(iso: string, now: Date = new Date()): string {
+function fmtRelative(iso: string, t: T, now: Date = new Date()): string {
   const diffMs = now.getTime() - new Date(iso).getTime()
   const diffMin = Math.round(diffMs / 60000)
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin} min ago`
+  if (diffMin < 1) return t('just now', 'justo ahora')
+  if (diffMin < 60) return `${diffMin} ${t('min ago', 'min atrás')}`
   const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr} hour${diffHr === 1 ? '' : 's'} ago`
+  if (diffHr < 24) return `${diffHr} ${diffHr === 1 ? t('hour ago', 'hora atrás') : t('hours ago', 'horas atrás')}`
   const diffDay = Math.round(diffHr / 24)
-  if (diffDay < 7) return `${diffDay} day${diffDay === 1 ? '' : 's'} ago`
+  if (diffDay < 7) return `${diffDay} ${diffDay === 1 ? t('day ago', 'día atrás') : t('days ago', 'días atrás')}`
   const diffWk = Math.round(diffDay / 7)
-  return `${diffWk} week${diffWk === 1 ? '' : 's'} ago`
+  return `${diffWk} ${diffWk === 1 ? t('week ago', 'semana atrás') : t('weeks ago', 'semanas atrás')}`
 }
 
 // First two item names, joined by · with an N more suffix.
-function fmtItemPreview(items: LineItem[]): string {
+function fmtItemPreview(items: LineItem[], t: T): string {
   if (items.length === 0) return '—'
   const visible = items.slice(0, 2).map((i) => i.name).join(' · ')
   const extra = items.length - 2
-  return extra > 0 ? `${visible} · +${extra} more` : visible
+  return extra > 0 ? `${visible} · +${extra} ${t('more', 'más')}` : visible
 }
 
 // Short, read-only order id (last 6 of a uuid). Lets the drawer
@@ -167,12 +174,15 @@ function shortId(id: string): string {
 const PAGE_SIZE = 6
 
 export default function SalesClient({
+  lang,
   orders,
   operatingMode = null,
 }: {
+  lang: Lang
   orders: Order[]
   operatingMode?: OperatingMode
 }) {
+  const t = makeT(lang)
   const [filter, setFilter] = useState<Filter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
   const [page, setPage] = useState(0)
@@ -215,10 +225,10 @@ export default function SalesClient({
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
   const subtitle = operatingMode === 'external_pos'
-    ? 'Imported orders from your connected POS.'
+    ? t('Imported orders from your connected POS.', 'Órdenes importadas desde tu POS conectado.')
     : operatingMode === 'native_pos'
-      ? 'Native sales from the in-app POS.'
-      : 'Recent orders for review.'
+      ? t('Native sales from the in-app POS.', 'Ventas nativas desde el POS de la app.')
+      : t('Recent orders for review.', 'Órdenes recientes para revisar.')
 
   return (
     <div className="max-w-[1200px]">
@@ -228,10 +238,10 @@ export default function SalesClient({
       {/* ================================================================ */}
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Sales</h1>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Sales', 'Ventas')}</h1>
           <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
         </div>
-        <SourceChip operatingMode={operatingMode} />
+        <SourceChip operatingMode={operatingMode} t={t} />
       </div>
 
       {/* ================================================================ */}
@@ -247,24 +257,24 @@ export default function SalesClient({
         <div className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
             <LedgerStat
-              label="Sales total"
+              label={t('Sales total', 'Total de ventas')}
               value={fmtMoney(salesTotal)}
-              hint="completed in view"
+              hint={t('completed in view', 'completadas en vista')}
             />
             <LedgerStat
-              label="Orders"
+              label={t('Orders', 'Órdenes')}
               value={`${orderCount}`}
-              hint={orderCount === 1 ? 'completed order' : 'completed orders'}
+              hint={orderCount === 1 ? t('completed order', 'orden completada') : t('completed orders', 'órdenes completadas')}
             />
             <LedgerStat
-              label="Average ticket"
+              label={t('Average ticket', 'Ticket promedio')}
               value={fmtMoney(avgTicket)}
-              hint={orderCount === 0 ? 'no completed orders' : 'per completed order'}
+              hint={orderCount === 0 ? t('no completed orders', 'sin órdenes completadas') : t('per completed order', 'por orden completada')}
             />
             <LedgerStat
-              label="Voids"
+              label={t('Voids', 'Anulaciones')}
               value={`${voidCount}`}
-              hint={voidCount === 0 ? 'none' : 'in current view'}
+              hint={voidCount === 0 ? t('none', 'ninguna') : t('in current view', 'en la vista actual')}
               tone={voidCount > 0 ? 'warn' : 'neutral'}
             />
           </div>
@@ -281,9 +291,9 @@ export default function SalesClient({
                 const active = filter === f
                 const count = f === 'all' ? orders.length : orders.filter((o) => o.source === f).length
                 const label =
-                  f === 'all' ? 'All' :
-                  f === 'manual' ? 'Manual' :
-                  f === 'native_pos' ? 'POS' : 'External'
+                  f === 'all' ? t('All', 'Todas') :
+                  f === 'manual' ? t('Manual', 'Manual') :
+                  f === 'native_pos' ? t('POS', 'POS') : t('External', 'Externo')
                 return (
                   <button
                     key={f}
@@ -315,7 +325,7 @@ export default function SalesClient({
             surface — no filler rows, no shrinking. */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[680px]">
           {visible.length === 0 ? (
-            <EmptyLedger orders={orders.length} filter={filter} />
+            <EmptyLedger orders={orders.length} filter={filter} t={t} />
           ) : (
             <>
               {/* Card-list order feed. The table chrome (thead /
@@ -331,6 +341,7 @@ export default function SalesClient({
                     order={o}
                     selected={openId === o.id}
                     onOpen={() => setOpenId(o.id)}
+                    t={t}
                   />
                 ))}
               </ul>
@@ -341,18 +352,18 @@ export default function SalesClient({
                   Finance, Restock Orders). */}
               <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
                 <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                  Showing{' '}
+                  {t('Showing', 'Mostrando')}{' '}
                   <span className="font-semibold text-gray-700">
                     {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
                   </span>{' '}
-                  of <span className="font-semibold text-gray-700">{visible.length}</span>
+                  {t('of', 'de')} <span className="font-semibold text-gray-700">{visible.length}</span>
                 </p>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(0, p - 1))}
                     disabled={safePage === 0}
-                    aria-label="Previous orders"
+                    aria-label={t('Previous orders', 'Órdenes anteriores')}
                     className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     ←
@@ -364,7 +375,7 @@ export default function SalesClient({
                     type="button"
                     onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
                     disabled={safePage >= pageCount - 1}
-                    aria-label="Next orders"
+                    aria-label={t('Next orders', 'Siguientes órdenes')}
                     className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     →
@@ -376,7 +387,7 @@ export default function SalesClient({
         </div>
       </section>
 
-      {selected && <OrderDrawer order={selected} onClose={() => setOpenId(null)} />}
+      {selected && <OrderDrawer order={selected} onClose={() => setOpenId(null)} t={t} />}
     </div>
   )
 }
@@ -384,20 +395,20 @@ export default function SalesClient({
 // ================================================================
 // SourceChip — page-level data-origin pill (Finance pattern)
 // ================================================================
-function SourceChip({ operatingMode }: { operatingMode: OperatingMode }) {
+function SourceChip({ operatingMode, t }: { operatingMode: OperatingMode; t: T }) {
   const variants: Record<NonNullable<OperatingMode> | 'unset', { label: string; tone: string; dot: string }> = {
     native_pos: {
-      label: 'Native POS ledger',
+      label: t('Native POS ledger', 'Libro POS nativo'),
       tone: 'text-blue-700',
       dot: 'bg-blue-500',
     },
     external_pos: {
-      label: 'External POS ledger',
+      label: t('External POS ledger', 'Libro POS externo'),
       tone: 'text-indigo-700',
       dot: 'bg-indigo-500',
     },
     unset: {
-      label: 'Operating mode not set',
+      label: t('Operating mode not set', 'Modo de operación no configurado'),
       tone: 'text-gray-600',
       dot: 'bg-gray-400',
     },
@@ -429,15 +440,26 @@ function OrderRow({
   order,
   selected,
   onOpen,
+  t,
 }: {
   order: Order
   selected: boolean
   onOpen: () => void
+  t: T
 }) {
-  const date = fmtRowDate(order.createdAt)
+  const isEs = t('__lang_probe__', 'es') === 'es'
+  const locale = isEs ? 'es-ES' : 'en-US'
+  const date = fmtRowDate(order.createdAt, locale)
   const isVoided = order.status === 'voided'
+  const STATUS_META = statusMeta(t)
+  const SOURCE_LABEL = sourceLabel(t)
   const status = STATUS_META[order.status]
   const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
+  // Localized payment-type and capitalized label for the bottom row.
+  const paymentLabel =
+    order.paymentType === 'cash' ? t('Cash', 'Efectivo')
+      : order.paymentType === 'card' ? t('Card', 'Tarjeta')
+        : t('Other', 'Otro')
 
   return (
     <li
@@ -458,11 +480,11 @@ function OrderRow({
         <p className={`mt-0.5 text-sm font-semibold truncate ${
           isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
         }`}>
-          {fmtItemPreview(order.lineItems)}
+          {fmtItemPreview(order.lineItems, t)}
         </p>
         {/* Meta — count + location */}
         <p className="mt-0.5 text-[11px] text-gray-400 font-mono tabular-nums">
-          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
           {order.locationName ? <> · {order.locationName}</> : null}
         </p>
         {/* Bottom — Source · Payment · Status, total on the right */}
@@ -472,8 +494,8 @@ function OrderRow({
               {SOURCE_LABEL[order.source]}
             </span>
             <span className="text-gray-300">·</span>
-            <span className={`capitalize ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
-              {order.paymentType}
+            <span className={isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}>
+              {paymentLabel}
             </span>
             <span className="text-gray-300">·</span>
             <span className={`inline-flex items-center gap-1 ${
@@ -485,7 +507,7 @@ function OrderRow({
             {order.paymentStatus === 'unpaid' && !isVoided && (
               <>
                 <span className="text-gray-300">·</span>
-                <span className="text-amber-700">Unpaid</span>
+                <span className="text-amber-700">{t('Unpaid', 'No pagada')}</span>
               </>
             )}
           </div>
@@ -503,17 +525,17 @@ function OrderRow({
 // ================================================================
 // EmptyLedger — calm, branch-aware empty state
 // ================================================================
-function EmptyLedger({ orders, filter }: { orders: number; filter: Filter }) {
+function EmptyLedger({ orders, filter, t }: { orders: number; filter: Filter; t: T }) {
   const isFilterEmpty = orders > 0 && filter !== 'all'
   return (
     <div className="px-6 py-20 text-center">
       <p className="text-sm font-semibold text-gray-700">
-        {isFilterEmpty ? 'Nothing matches this filter' : 'No orders in the ledger yet'}
+        {isFilterEmpty ? t('Nothing matches this filter', 'Nada coincide con este filtro') : t('No orders in the ledger yet', 'Sin órdenes en el libro aún')}
       </p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
         {isFilterEmpty
-          ? 'Switch back to All to see every order, or pick a different source.'
-          : 'Completed sales appear here for review and correction. The first order will land in this list automatically.'}
+          ? t('Switch back to All to see every order, or pick a different source.', 'Vuelve a Todas para ver todas las órdenes, o elige otra fuente.')
+          : t('Completed sales appear here for review and correction. The first order will land in this list automatically.', 'Las ventas completadas aparecen aquí para revisar y corregir. La primera orden se mostrará automáticamente.')}
       </p>
     </div>
   )
@@ -545,11 +567,15 @@ function EmptyLedger({ orders, filter }: { orders: number; filter: Filter }) {
 // The Adjustments section calls out that future capability so the
 // manager doesn't expect it from this build.
 // ================================================================
-function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) {
+function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void; t: T }) {
   const [state, action, pending] = useActionState(voidOrder, null)
   const canVoid = order.status === 'completed'
+  const STATUS_META = statusMeta(t)
+  const SOURCE_LABEL = sourceLabel(t)
   const status = STATUS_META[order.status]
   const isVoided = order.status === 'voided'
+  const isEs = t('__lang_probe__', 'es') === 'es'
+  const locale = isEs ? 'es-ES' : 'en-US'
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -566,20 +592,28 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
   // Manager-friendly source phrasing: "In-app POS · Location" /
   // "External POS · Location" / "Manual entry · Location".
   const sourceTitle =
-    order.source === 'native_pos' ? 'In-app POS'
-      : order.source === 'external_pos' ? 'External POS'
-        : 'Manual entry'
+    order.source === 'native_pos' ? t('In-app POS', 'POS de la app')
+      : order.source === 'external_pos' ? t('External POS', 'POS externo')
+        : t('Manual entry', 'Entrada manual')
   const sourceLine = order.locationName
     ? `${sourceTitle} · ${order.locationName}`
     : sourceTitle
-  const paymentTypeLabel = order.paymentType.charAt(0).toUpperCase() + order.paymentType.slice(1)
+  const paymentTypeLabel =
+    order.paymentType === 'cash' ? t('Cash', 'Efectivo')
+      : order.paymentType === 'card' ? t('Card', 'Tarjeta')
+        : t('Other', 'Otro')
+  // English-keyed status code for tone selection, then translated label.
+  const paymentStatusCode: 'voided' | 'paid' | 'unpaid' =
+    isVoided ? 'voided'
+      : order.paymentStatus === 'paid' ? 'paid'
+        : 'unpaid'
   const paymentStatusLabel =
-    isVoided ? 'Voided'
-      : order.paymentStatus === 'paid' ? 'Paid'
-        : 'Unpaid'
+    paymentStatusCode === 'voided' ? t('Voided', 'Anulada')
+      : paymentStatusCode === 'paid' ? t('Paid', 'Pagada')
+        : t('Unpaid', 'No pagada')
   const paymentStatusTone =
-    paymentStatusLabel === 'Voided' ? 'text-red-700'
-      : paymentStatusLabel === 'Paid' ? 'text-green-700'
+    paymentStatusCode === 'voided' ? 'text-red-700'
+      : paymentStatusCode === 'paid' ? 'text-green-700'
         : 'text-amber-700'
 
   return (
@@ -597,7 +631,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-bold text-gray-900 font-mono tabular-nums">
-                Order #{shortId(order.id)}
+                {t('Order', 'Orden')} #{shortId(order.id)}
               </h2>
               <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
@@ -609,10 +643,10 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               <span className="text-gray-300 mx-1">·</span>
               {SOURCE_LABEL[order.source]}
               <span className="text-gray-300 mx-1">·</span>
-              <span className="capitalize">{order.paymentType}</span>
+              <span>{paymentTypeLabel}</span>
             </p>
             <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
-              {fmtFullDate(order.createdAt)} <span className="text-gray-300">·</span> {fmtRelative(order.createdAt)}
+              {fmtFullDate(order.createdAt, locale)} <span className="text-gray-300">·</span> {fmtRelative(order.createdAt, t)}
             </p>
           </div>
           <button
@@ -620,7 +654,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             onClick={onClose}
             className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
           >
-            Close
+            {t('Close', 'Cerrar')}
           </button>
         </div>
 
@@ -630,7 +664,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           <div className="border-b border-red-200/60 bg-red-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
             <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
             <p className="text-[11px] text-red-700">
-              Voided · the original record stays in the ledger for audit history.
+              {t('Voided · the original record stays in the ledger for audit history.', 'Anulada · el registro original se mantiene en el libro para historial de auditoría.')}
             </p>
           </div>
         )}
@@ -644,7 +678,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               as the receipt's headline number. */}
           <div className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-5 py-4">
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Sale total
+              {t('Sale total', 'Total de venta')}
             </p>
             <p className={`mt-1 text-[28px] leading-none font-mono tabular-nums font-bold ${
               isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
@@ -652,9 +686,9 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               {fmtMoney(order.total)}
             </p>
             <p className="mt-2 text-[11px] text-gray-500 font-mono tabular-nums">
-              {itemCount} {itemCount === 1 ? 'item' : 'items'}
+              {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
               <span className="text-gray-300"> · </span>
-              {order.lineItems.length} {order.lineItems.length === 1 ? 'line' : 'lines'}
+              {order.lineItems.length} {order.lineItems.length === 1 ? t('line', 'línea') : t('lines', 'líneas')}
             </p>
           </div>
 
@@ -666,7 +700,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               primary content. */}
           <div>
             <p className="mb-2.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Ticket
+              {t('Ticket', 'Ticket')}
             </p>
             <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100">
               {order.lineItems.map((li) => (
@@ -697,7 +731,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           {/* c. Payment — method · status · amount on one line. */}
           <div>
             <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Payment
+              {t('Payment', 'Pago')}
             </p>
             <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3 flex items-baseline justify-between gap-3">
               <p className="text-[13px] min-w-0 flex flex-wrap items-baseline gap-x-1.5">
@@ -721,7 +755,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               "External POS · Location" / "Manual entry · Location". */}
           <div>
             <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Source
+              {t('Source', 'Fuente')}
             </p>
             <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3">
               <p className="text-[13px] text-gray-900">{sourceLine}</p>
@@ -735,12 +769,12 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
               faking a corrections feed. */}
           <div>
             <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Adjustments
+              {t('Adjustments', 'Ajustes')}
             </p>
             <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-3 text-center">
-              <p className="text-[12px] text-gray-600">No adjustments yet.</p>
+              <p className="text-[12px] text-gray-600">{t('No adjustments yet.', 'Sin ajustes aún.')}</p>
               <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
-                Item-level voids, refunds, and comp tools are coming in a future update.
+                {t('Item-level voids, refunds, and comp tools are coming in a future update.', 'Las anulaciones por artículo, reembolsos y cortesías llegarán en una próxima actualización.')}
               </p>
             </div>
           </div>
@@ -749,7 +783,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
           {order.note && (
             <div>
               <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-                Note
+                {t('Note', 'Nota')}
               </p>
               <div className="rounded-lg border border-gray-200 bg-gray-50/40 px-4 py-3">
                 <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
@@ -764,15 +798,15 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             clearly the drawer's destructive resolution. */}
         <div className="border-t border-gray-100 bg-white px-6 py-3.5 flex-shrink-0">
           <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Correction tools
+            {t('Correction tools', 'Herramientas de corrección')}
           </p>
           {canVoid ? (
             <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-[12px] font-semibold text-gray-900">Void order</p>
+                  <p className="text-[12px] font-semibold text-gray-900">{t('Void order', 'Anular orden')}</p>
                   <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                    Use when the full sale was rung in error or refunded outside the system. The original ticket stays in the ledger.
+                    {t('Use when the full sale was rung in error or refunded outside the system. The original ticket stays in the ledger.', 'Úsalo cuando la venta completa se registró por error o se reembolsó fuera del sistema. El ticket original se mantiene en el libro.')}
                   </p>
                 </div>
                 <form action={action} className="flex-shrink-0">
@@ -782,7 +816,7 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
                     disabled={pending}
                     className="rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 text-[11px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
                   >
-                    {pending ? 'Voiding…' : 'Void order'}
+                    {pending ? t('Voiding…', 'Anulando…') : t('Void order', 'Anular orden')}
                   </button>
                 </form>
               </div>
@@ -792,9 +826,9 @@ function OrderDrawer({ order, onClose }: { order: Order; onClose: () => void }) 
             </div>
           ) : (
             <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
-              <p className="text-[12px] font-semibold text-gray-700">Already voided</p>
+              <p className="text-[12px] font-semibold text-gray-700">{t('Already voided', 'Ya anulada')}</p>
               <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                The record stays in the ledger for audit history.
+                {t('The record stays in the ledger for audit history.', 'El registro se mantiene en el libro para historial de auditoría.')}
               </p>
             </div>
           )}

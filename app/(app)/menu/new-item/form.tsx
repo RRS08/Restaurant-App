@@ -16,13 +16,15 @@
 import { useActionState } from 'react'
 import Link from 'next/link'
 import { createMenuItem } from '@/app/actions/menu'
+import { makeT, type Lang } from '@/lib/i18n'
 
 interface Category {
   id: string
   name: string
 }
 
-export default function NewItemForm({ categories }: { categories: Category[] }) {
+export default function NewItemForm({ categories, lang }: { categories: Category[]; lang: Lang }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createMenuItem, null)
 
   return (
@@ -35,7 +37,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             htmlFor="name"
             className="block text-sm font-medium text-gray-700 mb-1.5"
           >
-            Item name
+            {t('Item name', 'Nombre del artículo')}
           </label>
           <input
             id="name"
@@ -43,7 +45,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             type="text"
             required
             autoFocus
-            placeholder="e.g. Margherita Pizza"
+            placeholder={t('e.g. Margherita Pizza', 'p. ej. Pizza Margarita')}
             className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                        placeholder:text-gray-400
                        focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -56,7 +58,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             htmlFor="price"
             className="block text-sm font-medium text-gray-700 mb-1.5"
           >
-            Price
+            {t('Price', 'Precio')}
           </label>
           <div className="relative">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
@@ -81,7 +83,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             htmlFor="category_id"
             className="block text-sm font-medium text-gray-700 mb-1.5"
           >
-            Category
+            {t('Category', 'Categoría')}
           </label>
           {categories.length > 0 ? (
             <select
@@ -90,7 +92,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
               className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                          focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
-              <option value="">No category</option>
+              <option value="">{t('No category', 'Sin categoría')}</option>
               {categories.map((cat) => (
                 <option key={cat.id} value={cat.id}>
                   {cat.name}
@@ -99,9 +101,9 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             </select>
           ) : (
             <p className="text-sm text-gray-400 py-2">
-              No categories yet.{' '}
+              {t('No categories yet.', 'Aún no hay categorías.')}{' '}
               <Link href="/menu/new-category" className="text-blue-600 hover:underline">
-                Create one first
+                {t('Create one first', 'Crea una primero')}
               </Link>
             </p>
           )}
@@ -121,7 +123,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
             className="flex-1 text-center rounded-lg border border-gray-300 px-4 py-2.5
                        text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('Cancel', 'Cancelar')}
           </Link>
           <button
             type="submit"
@@ -130,7 +132,7 @@ export default function NewItemForm({ categories }: { categories: Category[] }) 
                        text-white hover:bg-gray-800 transition-colors
                        disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {pending ? 'Adding…' : 'Add to menu'}
+            {pending ? t('Adding…', 'Agregando…') : t('Add to menu', 'Agregar al menú')}
           </button>
         </div>
 

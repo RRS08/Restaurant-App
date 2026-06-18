@@ -26,6 +26,7 @@
 // ----------------------------------------------------------------
 
 import { useState, useMemo } from 'react'
+import { makeT, type Lang } from '@/lib/i18n'
 import SimpleBarChart from '@/components/bar-chart'
 
 interface DailyBucket {
@@ -73,6 +74,7 @@ interface AtRiskItem {
 }
 
 interface Props {
+  lang: Lang
   dailyBuckets: DailyBucket[]
   itemAggregates: ItemAggregate[]
   categoryAggregates: CategoryAggregate[]
@@ -91,35 +93,38 @@ type Mode = 'descriptive' | 'diagnostic' | 'predictive'
 // identity (title), and a single-line context description used as
 // the mode intro under the switch. Predictive's eyebrow keeps the →
 // cue so the forward intent reads in the segmented control itself.
-const MODES: {
+function buildModes(lang: Lang): {
   id: Mode
   eyebrow: string
   label: string
   title: string
   sub: string
-}[] = [
-  {
-    id: 'descriptive',
-    eyebrow: '01',
-    label: 'Descriptive',
-    title: 'What happened',
-    sub: 'The numbers, plain — for the selected window.',
-  },
-  {
-    id: 'diagnostic',
-    eyebrow: '02',
-    label: 'Diagnostic',
-    title: 'Why it happened',
-    sub: "What's driving the headline number.",
-  },
-  {
-    id: 'predictive',
-    eyebrow: '03 →',
-    label: 'Predictive',
-    title: "What's likely next",
-    sub: 'Where current direction points if conditions hold.',
-  },
-]
+}[] {
+  const t = makeT(lang)
+  return [
+    {
+      id: 'descriptive',
+      eyebrow: '01',
+      label: t('Descriptive', 'Descriptivo'),
+      title: t('What happened', 'Qué pasó'),
+      sub: t('The numbers, plain — for the selected window.', 'Los números, simples — para la ventana seleccionada.'),
+    },
+    {
+      id: 'diagnostic',
+      eyebrow: '02',
+      label: t('Diagnostic', 'Diagnóstico'),
+      title: t('Why it happened', 'Por qué pasó'),
+      sub: t("What's driving the headline number.", 'Qué está impulsando el número principal.'),
+    },
+    {
+      id: 'predictive',
+      eyebrow: '03 →',
+      label: t('Predictive', 'Predictivo'),
+      title: t("What's likely next", 'Qué es probable que siga'),
+      sub: t('Where current direction points if conditions hold.', 'A dónde apunta la dirección actual si las condiciones se mantienen.'),
+    },
+  ]
+}
 
 const CURRENCY = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -128,6 +133,7 @@ const SHORT_CURRENCY = (n: number) =>
   n >= 1000 ? `$${(n / 1000).toFixed(1)}k` : `$${n.toFixed(0)}`
 
 export default function AnalyticsClient({
+  lang,
   dailyBuckets,
   itemAggregates,
   categoryAggregates,
@@ -137,6 +143,10 @@ export default function AnalyticsClient({
   paymentMix30d,
   atRiskInventory,
 }: Props) {
+  // atRiskInventory currently consumed only for prop-shape compatibility.
+  void atRiskInventory
+  const t = makeT(lang)
+  const MODES = useMemo(() => buildModes(lang), [lang])
   const [win, setWin] = useState<Window>('30d')
   const [metric, setMetric] = useState<Metric>('revenue')
   // Default mode is Descriptive — the entry orientation, "what
@@ -336,10 +346,10 @@ export default function AnalyticsClient({
           the control band below, alongside the mode switch. */}
       <div className="mb-7 pb-5 border-b border-gray-100">
         <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">
-          Analytics
+          {t('Analytics', 'Analíticas')}
         </h1>
         <p className="mt-1.5 text-sm text-gray-500 leading-relaxed">
-          Patterns, drivers, and what&apos;s likely next.
+          {t("Patterns, drivers, and what's likely next.", 'Patrones, impulsores y qué es probable que siga.')}
         </p>
       </div>
 
@@ -351,7 +361,7 @@ export default function AnalyticsClient({
       <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
         <div
           role="tablist"
-          aria-label="Analytics mode"
+          aria-label={t('Analytics mode', 'Modo de analíticas')}
           className="grid grid-cols-3 gap-1 rounded-xl bg-gray-100 p-1 w-full sm:w-auto sm:max-w-2xl"
         >
           {MODES.map((m) => (
@@ -365,7 +375,7 @@ export default function AnalyticsClient({
           ))}
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-gray-500">Last</span>
+          <span className="text-[11px] text-gray-500">{t('Last', 'Últimos')}</span>
           <div className="inline-flex items-center gap-0.5 rounded-lg bg-gray-100 p-0.5">
             <Toggle label="7d" active={win === '7d'} onClick={() => setWin('7d')} small />
             <Toggle label="30d" active={win === '30d'} onClick={() => setWin('30d')} small />
@@ -382,36 +392,36 @@ export default function AnalyticsClient({
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
         <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
           <DescriptiveStat
-            label="Revenue"
+            label={t('Revenue', 'Ingresos')}
             value={CURRENCY(currentRevenue)}
             delta={revDelta}
-            hint={`vs previous ${size} days`}
+            hint={t(`vs previous ${size} days`, `vs ${size} días anteriores`)}
           />
           <DescriptiveStat
-            label="Orders"
+            label={t('Orders', 'Pedidos')}
             value={currentOrders.toLocaleString()}
             delta={ordDelta}
-            hint={`vs previous ${size} days`}
+            hint={t(`vs previous ${size} days`, `vs ${size} días anteriores`)}
           />
           <DescriptiveStat
-            label="Avg ticket"
+            label={t('Avg ticket', 'Ticket promedio')}
             value={CURRENCY(ticketCurrent)}
             delta={ticketDelta}
-            hint={`vs previous ${size} days`}
+            hint={t(`vs previous ${size} days`, `vs ${size} días anteriores`)}
           />
         </div>
 
         <div className="border-t border-gray-100 bg-gray-50/40 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-          <p className="text-[11px] font-medium text-gray-500">Daily rhythm</p>
+          <p className="text-[11px] font-medium text-gray-500">{t('Daily rhythm', 'Ritmo diario')}</p>
           <div className="inline-flex items-center gap-0.5 rounded-lg bg-white border border-gray-200 p-0.5">
             <Toggle
-              label="Revenue"
+              label={t('Revenue', 'Ingresos')}
               active={metric === 'revenue'}
               onClick={() => setMetric('revenue')}
               small
             />
             <Toggle
-              label="Orders"
+              label={t('Orders', 'Pedidos')}
               active={metric === 'orders'}
               onClick={() => setMetric('orders')}
               small
@@ -430,10 +440,10 @@ export default function AnalyticsClient({
         {/* Supporting surfaces — composition snapshots that sit
             beneath the lead overview. Window-responsive: switching
             7d / 30d updates both. */}
-        <SupportEyebrow>Composition</SupportEyebrow>
+        <SupportEyebrow>{t('Composition', 'Composición')}</SupportEyebrow>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <CategoryMixSnapshot rows={topCategoryMix.rows} total={topCategoryMix.total} size={size} />
-          <PaymentMixSnapshot mix={activePaymentMix} size={size} />
+          <CategoryMixSnapshot rows={topCategoryMix.rows} total={topCategoryMix.total} size={size} lang={lang} />
+          <PaymentMixSnapshot mix={activePaymentMix} size={size} lang={lang} />
         </div>
         </>
       )}
@@ -456,27 +466,29 @@ export default function AnalyticsClient({
             revDelta={revDelta}
             ordDelta={ordDelta}
             ticketDelta={ticketDelta}
+            lang={lang}
           />
 
-          <SupportEyebrow>Supporting signals</SupportEyebrow>
+          <SupportEyebrow>{t('Supporting signals', 'Señales de apoyo')}</SupportEyebrow>
 
           {/* 2a · Category concentration — evidence-row layout per
               category. */}
-          <CategoryCarryEvidence items={categoryCarry} />
+          <CategoryCarryEvidence items={categoryCarry} lang={lang} />
 
           {/* 2b · Mix shift — kept as a small supporting signal when
               material. Same calculation + threshold as before. */}
           {mixShiftMaterial && (
             <SignalBlock
-              title="Mix shift"
+              title={t('Mix shift', 'Cambio de mix')}
               tone="mix"
-              verdict={(mixShift.delta ?? 0) < 0 ? 'Cheaper mix' : 'Pricier mix'}
-              headline={`Average item price moved ${CURRENCY(mixShift.prevAvg)} → ${CURRENCY(mixShift.curAvg)} (${deltaText(mixShift.delta)}). A subtle composition shift beneath the surface — guests are buying ${
-                (mixShift.delta ?? 0) < 0 ? 'lower' : 'higher'
-              }-priced items independent of how many items per order.`}
+              verdict={(mixShift.delta ?? 0) < 0 ? t('Cheaper mix', 'Mix más barato') : t('Pricier mix', 'Mix más caro')}
+              headline={t(
+                `Average item price moved ${CURRENCY(mixShift.prevAvg)} → ${CURRENCY(mixShift.curAvg)} (${deltaText(mixShift.delta)}). A subtle composition shift beneath the surface — guests are buying ${(mixShift.delta ?? 0) < 0 ? 'lower' : 'higher'}-priced items independent of how many items per order.`,
+                `El precio promedio por artículo pasó de ${CURRENCY(mixShift.prevAvg)} → ${CURRENCY(mixShift.curAvg)} (${deltaText(mixShift.delta)}). Un cambio sutil de composición bajo la superficie — los huéspedes están comprando artículos de ${(mixShift.delta ?? 0) < 0 ? 'menor' : 'mayor'} precio independientemente de cuántos artículos por pedido.`
+              )}
               evidence={[
-                { label: 'Previous avg', value: CURRENCY(mixShift.prevAvg) },
-                { label: 'Current avg', value: CURRENCY(mixShift.curAvg) },
+                { label: t('Previous avg', 'Promedio anterior'), value: CURRENCY(mixShift.prevAvg) },
+                { label: t('Current avg', 'Promedio actual'), value: CURRENCY(mixShift.curAvg) },
               ]}
             />
           )}
@@ -495,8 +507,8 @@ export default function AnalyticsClient({
           and where it's coming from. */}
       {mode === 'predictive' && (
         <>
-          <PredictiveRhythmChart outlook={next7Outlook} />
-          <PredictiveRecentWeeks weeks={recentWeeks} />
+          <PredictiveRhythmChart outlook={next7Outlook} lang={lang} />
+          <PredictiveRecentWeeks weeks={recentWeeks} lang={lang} />
         </>
       )}
     </div>
@@ -746,15 +758,18 @@ function DiagnosticDriverChart({
   revDelta,
   ordDelta,
   ticketDelta,
+  lang,
 }: {
   revDelta: number | null
   ordDelta: number | null
   ticketDelta: number | null
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const rows: { label: string; value: number | null }[] = [
-    { label: 'Revenue', value: revDelta },
-    { label: 'Orders', value: ordDelta },
-    { label: 'Avg ticket', value: ticketDelta },
+    { label: t('Revenue', 'Ingresos'), value: revDelta },
+    { label: t('Orders', 'Pedidos'), value: ordDelta },
+    { label: t('Avg ticket', 'Ticket promedio'), value: ticketDelta },
   ]
   // Shared scale across the three bars so the visual is honest about
   // relative magnitudes. Floor at 1% so a single zero-delta row
@@ -770,15 +785,15 @@ function DiagnosticDriverChart({
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden border-l-2 border-l-blue-300">
       <div className="border-b border-gray-100 px-6 py-3 bg-blue-50/30">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-blue-700">
-          Driver chart
+          {t('Driver chart', 'Gráfico de impulsores')}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-          What moved the headline number — visually, side by side.
+          {t('What moved the headline number — visually, side by side.', 'Qué movió el número principal — visualmente, lado a lado.')}
         </p>
       </div>
       {allNull ? (
         <p className="px-6 py-8 text-xs text-gray-400 text-center">
-          Not enough history yet to decompose the move.
+          {t('Not enough history yet to decompose the move.', 'Aún no hay suficiente historial para descomponer el movimiento.')}
         </p>
       ) : (
         <div className="px-6 py-5 space-y-3.5">
@@ -857,6 +872,7 @@ function DriverBar({
 // ================================================================
 function CategoryCarryEvidence({
   items,
+  lang,
 }: {
   items: {
     categoryId: string
@@ -867,7 +883,9 @@ function CategoryCarryEvidence({
     restPrevious: number
     restDelta: number | null
   }[]
+  lang: Lang
 }) {
+  const tr = makeT(lang)
   const t = SIGNAL_TONE.category
   return (
     <div
@@ -875,15 +893,15 @@ function CategoryCarryEvidence({
     >
       <div className={`border-b border-gray-100 px-5 py-3 ${t.headerTint}`}>
         <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          Category concentration
+          {tr('Category concentration', 'Concentración de categoría')}
         </p>
         <p className="mt-1 text-[11px] text-gray-500 leading-relaxed max-w-2xl">
-          These categories leaned on a single item for most of their revenue.
+          {tr('These categories leaned on a single item for most of their revenue.', 'Estas categorías se apoyaron en un solo artículo para la mayor parte de sus ingresos.')}
         </p>
       </div>
       {items.length === 0 ? (
         <p className="px-5 py-6 text-xs text-gray-400">
-          No category leans on a single item. Revenue is spread across the lineup.
+          {tr('No category leans on a single item. Revenue is spread across the lineup.', 'Ninguna categoría se apoya en un solo artículo. Los ingresos están distribuidos en toda la lista.')}
         </p>
       ) : (
         <ul className="divide-y divide-gray-100">
@@ -900,11 +918,11 @@ function CategoryCarryEvidence({
                   {c.categoryName}
                 </p>
                 <p className="mt-1 text-[14px] text-gray-900 leading-snug">
-                  <span className="font-semibold">{c.topItemName}</span> carried{' '}
-                  <span className="font-semibold font-mono tabular-nums">{c.topItemShare}%</span> of revenue.
+                  <span className="font-semibold">{c.topItemName}</span> {tr('carried', 'aportó')}{' '}
+                  <span className="font-semibold font-mono tabular-nums">{c.topItemShare}%</span> {tr('of revenue.', 'de los ingresos.')}
                 </p>
                 <p className="mt-1 text-[11px] text-gray-500 leading-relaxed font-mono tabular-nums">
-                  Rest of category: {SHORT_CURRENCY(c.restPrevious)} → {SHORT_CURRENCY(c.restRevenue)}{' '}
+                  {tr('Rest of category:', 'Resto de la categoría:')} {SHORT_CURRENCY(c.restPrevious)} → {SHORT_CURRENCY(c.restRevenue)}{' '}
                   <span className={`font-semibold ${restTone}`}>({deltaText(c.restDelta)})</span>
                 </p>
               </li>
@@ -1011,30 +1029,33 @@ function CategoryMixSnapshot({
   rows,
   total,
   size,
+  lang,
 }: {
   rows: { id: string; name: string; revenue: number; share: number }[]
   total: number
   size: number
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const topShare = rows[0]?.share ?? 0
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col">
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Category mix
+            {t('Category mix', 'Mix de categorías')}
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-            Top categories by revenue share.
+            {t('Top categories by revenue share.', 'Categorías top por participación de ingresos.')}
           </p>
         </div>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full whitespace-nowrap">
-          Last {size}d
+          {t(`Last ${size}d`, `Últimos ${size}d`)}
         </span>
       </div>
       {rows.length === 0 ? (
         <p className="flex-1 px-5 py-8 text-xs text-gray-400 text-center">
-          No category revenue in this window yet.
+          {t('No category revenue in this window yet.', 'Sin ingresos por categoría en esta ventana aún.')}
         </p>
       ) : (
         <ul className="flex-1 px-5 py-4 space-y-3">
@@ -1064,13 +1085,13 @@ function CategoryMixSnapshot({
       )}
       <div className="border-t border-gray-100 bg-gray-50/40 px-5 py-2.5 flex items-baseline justify-between gap-3">
         <span className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          Tracked total
+          {t('Tracked total', 'Total rastreado')}
         </span>
         <span className="text-[12px] font-bold font-mono tabular-nums text-gray-800">
-          ${total.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+          ${total.toLocaleString(lang === 'es' ? 'es-ES' : 'en-US', { maximumFractionDigits: 0 })}
           {topShare > 0 && (
             <span className="ml-2 text-[10px] font-medium text-gray-500">
-              · leader {Math.round(topShare * 100)}%
+              · {t('leader', 'líder')} {Math.round(topShare * 100)}%
             </span>
           )}
         </span>
@@ -1090,6 +1111,7 @@ function CategoryMixSnapshot({
 function PaymentMixSnapshot({
   mix,
   size,
+  lang,
 }: {
   mix: {
     cash: { revenue: number; orders: number }
@@ -1099,11 +1121,13 @@ function PaymentMixSnapshot({
     totalOrders: number
   }
   size: number
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const buckets = [
-    { key: 'card' as const, label: 'Card', tone: 'bg-purple-400' },
-    { key: 'cash' as const, label: 'Cash', tone: 'bg-orange-400' },
-    { key: 'other' as const, label: 'Other', tone: 'bg-gray-300' },
+    { key: 'card' as const, label: t('Card', 'Tarjeta'), tone: 'bg-purple-400' },
+    { key: 'cash' as const, label: t('Cash', 'Efectivo'), tone: 'bg-orange-400' },
+    { key: 'other' as const, label: t('Other', 'Otro'), tone: 'bg-gray-300' },
   ]
   const empty = mix.totalRevenue === 0
   // Order buckets by share descending so the legend reads in the
@@ -1118,19 +1142,19 @@ function PaymentMixSnapshot({
       <div className="border-b border-gray-100 px-5 py-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Payment mix
+            {t('Payment mix', 'Mix de pagos')}
           </p>
           <p className="mt-1 text-[11px] text-gray-500 leading-relaxed">
-            How guests paid.
+            {t('How guests paid.', 'Cómo pagaron los huéspedes.')}
           </p>
         </div>
         <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full whitespace-nowrap">
-          Last {size}d
+          {t(`Last ${size}d`, `Últimos ${size}d`)}
         </span>
       </div>
       {empty ? (
         <p className="flex-1 px-5 py-8 text-xs text-gray-400 text-center">
-          No payments in this window yet.
+          {t('No payments in this window yet.', 'Sin pagos en esta ventana aún.')}
         </p>
       ) : (
         <div className="flex-1 px-5 py-4">
@@ -1156,7 +1180,7 @@ function PaymentMixSnapshot({
                     <span className={`h-2 w-2 rounded-full flex-shrink-0 ${b.tone}`} aria-hidden="true" />
                     <span className="text-gray-800 font-medium">{b.label}</span>
                     <span className="text-[10px] text-gray-400 font-mono tabular-nums truncate">
-                      {orders} {orders === 1 ? 'order' : 'orders'}
+                      {orders} {lang === 'es' ? (orders === 1 ? 'pedido' : 'pedidos') : (orders === 1 ? 'order' : 'orders')}
                     </span>
                   </span>
                   <span className="text-gray-900 font-bold font-mono tabular-nums flex-shrink-0">
@@ -1170,13 +1194,13 @@ function PaymentMixSnapshot({
       )}
       <div className="border-t border-gray-100 bg-gray-50/40 px-5 py-2.5 flex items-baseline justify-between gap-3">
         <span className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-          Tracked orders
+          {t('Tracked orders', 'Pedidos rastreados')}
         </span>
         <span className="text-[12px] font-bold font-mono tabular-nums text-gray-800">
           {mix.totalOrders.toLocaleString()}
           {!empty && (
             <span className="ml-2 text-[10px] font-medium text-gray-500">
-              · {leader.label.toLowerCase()} leads {Math.round(leaderShare)}%
+              · {leader.label.toLowerCase()} {t('leads', 'lidera')} {Math.round(leaderShare)}%
             </span>
           )}
         </span>
@@ -1201,19 +1225,22 @@ function PaymentMixSnapshot({
 // ================================================================
 function PredictiveRecentWeeks({
   weeks,
+  lang,
 }: {
   weeks: { total: number; startDate: string; endDate: string }[]
+  lang: Lang
 }) {
+  const t = makeT(lang)
   if (weeks.length === 0) {
     return (
       <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden">
         <div className="border-b border-gray-100 px-6 py-3">
           <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Recent weekly pace
+            {t('Recent weekly pace', 'Ritmo semanal reciente')}
           </p>
         </div>
         <p className="px-6 py-8 text-xs text-gray-400 text-center">
-          Not enough history yet to show recent weekly pace.
+          {t('Not enough history yet to show recent weekly pace.', 'Aún no hay suficiente historial para mostrar el ritmo semanal reciente.')}
         </p>
       </div>
     )
@@ -1226,15 +1253,15 @@ function PredictiveRecentWeeks({
 
   // Trend classification: latest vs earliest, with a 15% deadband
   // so small wiggles don't read as "trending" anything.
-  let trendLabel = 'Steady'
+  let trendLabel = t('Steady', 'Estable')
   let trendTone = 'text-gray-700 bg-gray-100'
   if (earliest > 0) {
     const change = (latest - earliest) / earliest
     if (change > 0.15) {
-      trendLabel = 'Rising'
+      trendLabel = t('Rising', 'Subiendo')
       trendTone = 'text-green-800 bg-green-50'
     } else if (change < -0.15) {
-      trendLabel = 'Softening'
+      trendLabel = t('Softening', 'Suavizando')
       trendTone = 'text-red-700 bg-red-50'
     }
   }
@@ -1244,10 +1271,10 @@ function PredictiveRecentWeeks({
       <div className="border-b border-gray-100 px-6 py-3 flex items-start justify-between gap-3">
         <div>
           <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            Recent weekly pace
+            {t('Recent weekly pace', 'Ritmo semanal reciente')}
           </p>
           <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-            The last four weeks leading into the projected rhythm above.
+            {t('The last four weeks leading into the projected rhythm above.', 'Las últimas cuatro semanas que llevan al ritmo proyectado arriba.')}
           </p>
         </div>
         <span
@@ -1267,7 +1294,7 @@ function PredictiveRecentWeeks({
                   isLatest ? 'text-gray-900 font-semibold' : 'text-gray-500'
                 }`}
               >
-                {formatWeekLabel(w.startDate, w.endDate)}
+                {formatWeekLabel(w.startDate, w.endDate, lang)}
               </span>
               <div className="relative h-2.5 bg-gray-50 rounded-full overflow-hidden">
                 <div
@@ -1290,11 +1317,11 @@ function PredictiveRecentWeeks({
       </div>
       <div className="border-t border-gray-100 bg-gray-50/40 px-6 py-2 flex items-baseline justify-between gap-3 flex-wrap text-[11px]">
         <span className="text-gray-600">
-          <span className="text-gray-400 mr-1">{weeks.length}-week average:</span>
+          <span className="text-gray-400 mr-1">{t(`${weeks.length}-week average:`, `Promedio de ${weeks.length} semanas:`)}</span>
           <span className="font-mono tabular-nums font-bold text-gray-800">{SHORT_CURRENCY(avgAll)}</span>
         </span>
         <span className="text-[10px] text-gray-400">
-          Context for the projection above — not a forecast of next week.
+          {t('Context for the projection above — not a forecast of next week.', 'Contexto para la proyección de arriba — no es un pronóstico de la próxima semana.')}
         </span>
       </div>
     </div>
@@ -1313,6 +1340,7 @@ function PredictiveRecentWeeks({
 // ================================================================
 function PredictiveRhythmChart({
   outlook,
+  lang,
 }: {
   outlook: {
     upcoming: { dayLabel: string; dateLabel: string; projected: number; sampleSize: number }[]
@@ -1320,22 +1348,24 @@ function PredictiveRhythmChart({
     softest: { dayLabel: string; dateLabel: string; projected: number; sampleSize: number } | null
     total: number
   }
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const empty = !outlook.strongest || outlook.total === 0
   const max = outlook.strongest ? outlook.strongest.projected : 0
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] mb-3 overflow-hidden border-l-2 border-l-indigo-300">
       <div className="border-b border-gray-100 px-6 py-3 bg-indigo-50/30">
         <p className="text-[10px] font-semibold uppercase tracking-widest text-indigo-700">
-          Next 7 days rhythm
+          {t('Next 7 days rhythm', 'Ritmo de los próximos 7 días')}
         </p>
         <p className="mt-0.5 text-[11px] text-gray-500 leading-relaxed">
-          Day-by-day projected shape based on weekday averages from recent history.
+          {t('Day-by-day projected shape based on weekday averages from recent history.', 'Forma proyectada día a día basada en promedios por día de la semana del historial reciente.')}
         </p>
       </div>
       {empty ? (
         <p className="px-6 py-10 text-xs text-gray-400 text-center">
-          Not enough weekday history yet to project a day-by-day rhythm.
+          {t('Not enough weekday history yet to project a day-by-day rhythm.', 'Aún no hay suficiente historial por día de la semana para proyectar un ritmo día a día.')}
         </p>
       ) : (
         <div className="px-6 py-5">
@@ -1393,7 +1423,7 @@ function PredictiveRhythmChart({
           <div className="flex items-center gap-4">
             {outlook.strongest && (
               <span className="text-gray-600">
-                <span className="text-gray-400 mr-1">Strongest:</span>
+                <span className="text-gray-400 mr-1">{t('Strongest:', 'Más fuerte:')}</span>
                 <span className="font-semibold text-gray-800">{outlook.strongest.dayLabel}</span>
                 <span className="text-gray-400 mx-1">·</span>
                 <span className="font-mono tabular-nums font-bold text-indigo-700">
@@ -1404,7 +1434,7 @@ function PredictiveRhythmChart({
             {outlook.softest &&
               outlook.softest.projected !== outlook.strongest?.projected && (
                 <span className="text-gray-600">
-                  <span className="text-gray-400 mr-1">Softest:</span>
+                  <span className="text-gray-400 mr-1">{t('Softest:', 'Más suave:')}</span>
                   <span className="font-semibold text-gray-800">{outlook.softest.dayLabel}</span>
                   <span className="text-gray-400 mx-1">·</span>
                   <span className="font-mono tabular-nums font-bold text-gray-700">
@@ -1414,7 +1444,7 @@ function PredictiveRhythmChart({
               )}
           </div>
           <p className="text-[10px] text-gray-400 leading-relaxed">
-            Directional read · seasonality, holidays, and one-offs not factored.
+            {t('Directional read · seasonality, holidays, and one-offs not factored.', 'Lectura direccional · estacionalidad, feriados y eventos únicos no considerados.')}
           </p>
         </div>
       )}
@@ -1483,14 +1513,15 @@ function formatDayLabel(dateKey: string): string {
 // Format a "May 4 – May 10" / "May 25 – Jun 1" week range from
 // two ISO date keys. Used by PredictiveRecentWeeks to label each
 // trailing-week bar.
-function formatWeekLabel(startDate: string, endDate: string): string {
+function formatWeekLabel(startDate: string, endDate: string, lang: Lang = 'en'): string {
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
   const [y1, m1, d1] = startDate.split('-').map(Number)
   const [y2, m2, d2] = endDate.split('-').map(Number)
   const start = new Date(y1, m1 - 1, d1)
   const end = new Date(y2, m2 - 1, d2)
   if (m1 === m2) {
-    return `${start.toLocaleDateString('en-US', { month: 'short' })} ${d1}–${d2}`
+    return `${start.toLocaleDateString(locale, { month: 'short' })} ${d1}–${d2}`
   }
-  return `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+  return `${start.toLocaleDateString(locale, { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString(locale, { month: 'short', day: 'numeric' })}`
 }
 

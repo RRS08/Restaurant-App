@@ -30,6 +30,7 @@
 
 import { useEffect, useState, useActionState, useMemo, useTransition } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { makeT, type Lang } from '@/lib/i18n'
 import { createExpense } from '@/app/actions/finance'
 import {
   connectSandboxItem,
@@ -82,6 +83,7 @@ interface LaborByRole { role: string; hours: number; cost: number; shiftCount: n
 interface LaborByEmployee { name: string; hours: number; cost: number; shiftCount: number; hourlyRate: number | null }
 
 interface Props {
+  lang: Lang
   locations: { id: string; name: string }[]
   defaultLocationId: string | null
   plaidConfigured: boolean
@@ -163,6 +165,7 @@ type DrawerKind =
   | null
 
 export default function FinanceClient({
+  lang,
   locations: _locations,
   defaultLocationId,
   plaidConfigured,
@@ -174,6 +177,7 @@ export default function FinanceClient({
   bank,
   recentExpenses,
 }: Props) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createExpense, null)
   const [locationId] = useState(defaultLocationId ?? '')
   const [drawer, setDrawer] = useState<DrawerKind>(null)
@@ -303,12 +307,12 @@ export default function FinanceClient({
       {/* ================================================================ */}
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Finance</h1>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Finance', 'Finanzas')}</h1>
           <p className="mt-1.5 text-sm text-gray-500">
-            Money in, money out, and where pressure is building.
+            {t('Money in, money out, and where pressure is building.', 'Dinero que entra, dinero que sale, y dónde se acumula la presión.')}
           </p>
         </div>
-        <DataSourceChip state={bank.state} />
+        <DataSourceChip state={bank.state} lang={lang} />
       </div>
 
       {/* ================================================================ */}
@@ -318,22 +322,24 @@ export default function FinanceClient({
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           <div className="grid grid-cols-1 sm:grid-cols-3">
             <SummaryCell
-              label="Revenue"
+              label={t('Revenue', 'Ingresos')}
               dotClass="bg-green-500"
               value={fmt(cards.revenue7d)}
-              hint="Sales recorded · card and cash settlement handled separately"
+              hint={t('Sales recorded · card and cash settlement handled separately', 'Ventas registradas · liquidación de tarjeta y efectivo gestionada por separado')}
               empty={cards.revenue7d === 0}
               truth="Recorded"
               onOpen={() => setDrawer('revenue')}
+              lang={lang}
             />
             <SummaryCell
-              label="Spend"
+              label={t('Spend', 'Gasto')}
               dotClass="bg-red-400"
               value={fmt(totalSpend7d)}
-              hint="Labor · inventory · operating · verification via Bank Review"
+              hint={t('Labor · inventory · operating · verification via Bank Review', 'Mano de obra · inventario · operación · verificación vía Revisión bancaria')}
               empty={totalSpend7d === 0}
               truth="Tracked"
               onOpen={() => setDrawer('spend')}
+              lang={lang}
             />
             <NetActivityCell
               value={netActivity}
@@ -343,6 +349,7 @@ export default function FinanceClient({
               spend={totalSpend7d}
               recognizedOperatingSpend={bank.recognizedExternalSpend7d}
               onOpen={() => setDrawer('net')}
+              lang={lang}
             />
           </div>
         </div>
@@ -354,9 +361,9 @@ export default function FinanceClient({
       <section className="mb-7">
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="text-sm font-semibold text-gray-900 tracking-tight">
-            What&apos;s driving spend
+            {t("What's driving spend", 'Qué está impulsando el gasto')}
           </h2>
-          <span className="text-[11px] text-gray-400">Last 7 days</span>
+          <span className="text-[11px] text-gray-400">{t('Last 7 days', 'Últimos 7 días')}</span>
         </div>
         <div className="grid gap-4 lg:grid-cols-3 sm:grid-cols-2">
           <LaborDriverCard
@@ -364,6 +371,7 @@ export default function FinanceClient({
             laborSpend={laborSpend}
             sharePct={pctOfSpend(laborSpend)}
             onOpen={() => setDrawer('labor')}
+            lang={lang}
           />
           <InventoryDriverCard
             value={inventorySpend}
@@ -371,6 +379,7 @@ export default function FinanceClient({
             hasManual={cards.inventorySpend7d > 0}
             hasBankConfirm={bank.bankInventoryConfirmed7d > 0}
             onOpen={() => setDrawer('inventory')}
+            lang={lang}
           />
           <OperatingCard
             bank={bank}
@@ -378,6 +387,7 @@ export default function FinanceClient({
             sharePct={pctOfSpend(operatingSpend)}
             plaidConfigured={plaidConfigured}
             onOpen={() => setDrawer('operating')}
+            lang={lang}
           />
         </div>
       </section>
@@ -402,15 +412,15 @@ export default function FinanceClient({
                 making it dominant. */}
             <div className="border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold tracking-tight text-gray-900">Recent activity</h2>
-                <p className="mt-0.5 text-[11px] text-gray-500">Latest expenses logged or imported.</p>
+                <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Recent activity', 'Actividad reciente')}</h2>
+                <p className="mt-0.5 text-[11px] text-gray-500">{t('Latest expenses logged or imported.', 'Últimos gastos registrados o importados.')}</p>
               </div>
               <button
                 type="button"
                 onClick={() => setDrawer('log_expense')}
                 className="flex-shrink-0 text-[11px] font-medium text-blue-700 hover:text-blue-900 hover:underline transition-colors"
               >
-                + Log manual expense
+                {t('+ Log manual expense', '+ Registrar gasto manual')}
               </button>
             </div>
 
@@ -419,18 +429,18 @@ export default function FinanceClient({
             <div className="flex-1 flex flex-col">
               {recentExpenses.length === 0 ? (
                 <EmptyWorkspacePrompt
-                  title="No activity yet"
-                  body="Log an expense or receive a restock order — entries land here."
+                  title={t('No activity yet', 'Sin actividad aún')}
+                  body={t('Log an expense or receive a restock order — entries land here.', 'Registra un gasto o recibe una orden de reposición — las entradas aparecerán aquí.')}
                 />
               ) : (
                 <>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-100 text-left">
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Date</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Category</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">Vendor</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500 text-right">Amount</th>
+                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Date', 'Fecha')}</th>
+                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Category', 'Categoría')}</th>
+                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Vendor', 'Proveedor')}</th>
+                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500 text-right">{t('Amount', 'Monto')}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50">
@@ -457,10 +467,10 @@ export default function FinanceClient({
                   <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
                     <p className="text-[10px] text-gray-500 font-mono tabular-nums">
                       {recentExpenses.length === 0
-                        ? '0 entries'
+                        ? t('0 entries', '0 entradas')
                         : (
                           <>
-                            Showing{' '}
+                            {t('Showing', 'Mostrando')}{' '}
                             <span className="font-semibold text-gray-700">
                               {safeActivityPage * ACTIVITY_PAGE_SIZE + 1}–
                               {Math.min(
@@ -468,7 +478,7 @@ export default function FinanceClient({
                                 recentExpenses.length,
                               )}
                             </span>{' '}
-                            of <span className="font-semibold text-gray-700">{recentExpenses.length}</span>
+                            {t('of', 'de')} <span className="font-semibold text-gray-700">{recentExpenses.length}</span>
                           </>
                         )}
                     </p>
@@ -477,7 +487,7 @@ export default function FinanceClient({
                         type="button"
                         onClick={() => setActivityPage((p) => Math.max(0, p - 1))}
                         disabled={safeActivityPage === 0}
-                        aria-label="Previous activity page"
+                        aria-label={t('Previous activity page', 'Página anterior de actividad')}
                         className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         ←
@@ -489,7 +499,7 @@ export default function FinanceClient({
                         type="button"
                         onClick={() => setActivityPage((p) => Math.min(activityPageCount - 1, p + 1))}
                         disabled={safeActivityPage >= activityPageCount - 1}
-                        aria-label="Next activity page"
+                        aria-label={t('Next activity page', 'Página siguiente de actividad')}
                         className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         →
@@ -513,6 +523,7 @@ export default function FinanceClient({
             }
             bankState={bank.state}
             onOpen={() => setDrawer('bank_review')}
+            lang={lang}
           />
         </div>
       </section>
@@ -523,21 +534,24 @@ export default function FinanceClient({
       <Drawer
         open={drawer === 'revenue'}
         onClose={() => setDrawer(null)}
-        title="Revenue"
-        subtitle="How recorded sales become settled money"
+        title={t('Revenue', 'Ingresos')}
+        subtitle={t('How recorded sales become settled money', 'Cómo las ventas registradas se convierten en dinero liquidado')}
+        lang={lang}
       >
         <RevenueDrawerContent
           revenue7d={cards.revenue7d}
           reviewRows={bank.review.rows}
           bankState={bank.state}
+          lang={lang}
         />
       </Drawer>
 
       <Drawer
         open={drawer === 'spend'}
         onClose={() => setDrawer(null)}
-        title="Spend"
-        subtitle="What is included, and how true is it"
+        title={t('Spend', 'Gasto')}
+        subtitle={t('What is included, and how true is it', 'Qué está incluido y qué tan cierto es')}
+        lang={lang}
       >
         <SpendDrawerContent
           laborSpend={laborSpend}
@@ -546,14 +560,16 @@ export default function FinanceClient({
           totalSpend7d={totalSpend7d}
           reviewCounts={bank.review.counts}
           bankState={bank.state}
+          lang={lang}
         />
       </Drawer>
 
       <Drawer
         open={drawer === 'net'}
         onClose={() => setDrawer(null)}
-        title="Net activity"
-        subtitle="Why operating net and bank net differ"
+        title={t('Net activity', 'Actividad neta')}
+        subtitle={t('Why operating net and bank net differ', 'Por qué el neto operativo y el neto bancario difieren')}
+        lang={lang}
       >
         <NetActivityDrawerContent
           revenue={cards.revenue7d}
@@ -564,46 +580,52 @@ export default function FinanceClient({
           inventorySpend={inventorySpend}
           reviewCounts={bank.review.counts}
           bankState={bank.state}
+          lang={lang}
         />
       </Drawer>
 
       <Drawer
         open={drawer === 'labor'}
         onClose={() => setDrawer(null)}
-        title="Scheduled labor"
-        subtitle="This week · projected from schedule × hourly rate"
+        title={t('Scheduled labor', 'Mano de obra programada')}
+        subtitle={t('This week · projected from schedule × hourly rate', 'Esta semana · proyectado desde el horario × tarifa por hora')}
+        lang={lang}
       >
-        <LaborDrawerContent cards={cards} breakdown={laborBreakdown} />
+        <LaborDrawerContent cards={cards} breakdown={laborBreakdown} lang={lang} />
       </Drawer>
 
       <Drawer
         open={drawer === 'inventory'}
         onClose={() => setDrawer(null)}
-        title="Inventory spend"
-        subtitle="Last 7 days · inventory purchases"
+        title={t('Inventory spend', 'Gasto en inventario')}
+        subtitle={t('Last 7 days · inventory purchases', 'Últimos 7 días · compras de inventario')}
+        lang={lang}
       >
         <InventoryDrawerContent
           total={cards.inventorySpend7d}
           breakdown={inventoryBreakdown}
           recentItems={recentInventoryExpenses}
+          lang={lang}
         />
       </Drawer>
 
       <Drawer
         open={drawer === 'operating'}
         onClose={() => setDrawer(null)}
-        title="Operating"
+        title={t('Operating', 'Operación')}
         subtitle={
           bank.state === 'not_connected'
-            ? 'Business expenses outside labor and inventory'
-            : 'Last 7 days · business expenses outside labor and inventory'
+            ? t('Business expenses outside labor and inventory', 'Gastos del negocio fuera de mano de obra e inventario')
+            : t('Last 7 days · business expenses outside labor and inventory', 'Últimos 7 días · gastos del negocio fuera de mano de obra e inventario')
         }
+        lang={lang}
       >
         <OperatingDrawerContent
           bank={bank}
           plaidConfigured={plaidConfigured}
           plaidSandbox={plaidSandbox}
           isDev={isDev}
+          lang={lang}
         />
       </Drawer>
 
@@ -615,15 +637,19 @@ export default function FinanceClient({
       <Drawer
         open={drawer === 'bank_review'}
         onClose={() => setDrawer(null)}
-        title="Money Review"
+        title={t('Money Review', 'Revisión de dinero')}
         subtitle={
           bank.state === 'not_connected'
-            ? 'Connect a bank to start verifying cash reality'
+            ? t('Connect a bank to start verifying cash reality', 'Conecta un banco para empezar a verificar la realidad del efectivo')
             : (() => {
                 const attention = reviewGroups.filter((g) => g.triage !== 'auto').length
-                return `${attention} need${attention === 1 ? 's' : ''} attention · ${reviewGroups.filter((g) => g.triage === 'auto').length} auto-classified`
+                const auto = reviewGroups.filter((g) => g.triage === 'auto').length
+                return lang === 'es'
+                  ? `${attention} necesita${attention === 1 ? '' : 'n'} atención · ${auto} clasificados automáticamente`
+                  : `${attention} need${attention === 1 ? 's' : ''} attention · ${auto} auto-classified`
               })()
         }
+        lang={lang}
       >
         <BankReviewDrawerContent
           groups={reviewGroups}
@@ -631,6 +657,7 @@ export default function FinanceClient({
           counts={bank.review.counts}
           bankState={bank.state}
           plaidConfigured={plaidConfigured}
+          lang={lang}
         />
       </Drawer>
 
@@ -641,14 +668,16 @@ export default function FinanceClient({
       <Drawer
         open={drawer === 'log_expense'}
         onClose={() => setDrawer(null)}
-        title="Log manual expense"
-        subtitle="Cash, owner-paid, or one-off expenses"
+        title={t('Log manual expense', 'Registrar gasto manual')}
+        subtitle={t('Cash, owner-paid, or one-off expenses', 'Efectivo, pagado por el dueño, o gastos puntuales')}
+        lang={lang}
       >
         <LogExpenseDrawerContent
           action={action}
           pending={pending}
           error={state?.error}
           locationId={locationId}
+          lang={lang}
         />
       </Drawer>
     </div>
@@ -684,7 +713,19 @@ export default function FinanceClient({
 // ----------------------------------------------------------------
 type TruthLabel = 'Recorded' | 'Estimated' | 'Verified' | 'Tracked' | 'Needs review'
 
-function TruthChip({ label }: { label: TruthLabel }) {
+function translateTruth(label: TruthLabel, lang: Lang): string {
+  if (lang !== 'es') return label
+  const map: Record<TruthLabel, string> = {
+    'Recorded': 'Registrado',
+    'Estimated': 'Estimado',
+    'Verified': 'Verificado',
+    'Tracked': 'Rastreado',
+    'Needs review': 'Necesita revisión',
+  }
+  return map[label]
+}
+
+function TruthChip({ label, lang }: { label: TruthLabel; lang?: Lang }) {
   const toneMap: Record<TruthLabel, string> = {
     'Recorded':     'bg-gray-100 text-gray-600',
     'Estimated':    'bg-amber-50 text-amber-700',
@@ -696,7 +737,7 @@ function TruthChip({ label }: { label: TruthLabel }) {
     <span
       className={`inline-flex text-[9px] font-semibold uppercase tracking-[0.12em] px-1.5 py-0.5 rounded ${toneMap[label]}`}
     >
-      {label}
+      {translateTruth(label, lang ?? 'en')}
     </span>
   )
 }
@@ -707,20 +748,22 @@ function TruthChip({ label }: { label: TruthLabel }) {
 // declares what kind of fact it is. `onOpen` makes the cell
 // clickable — each top card opens a drawer that explains the
 // number in detail (Prompt 4: "Every Finance drawer has a job").
-function SummaryCell({ label, dotClass, value, hint, empty, truth, onOpen }: {
+function SummaryCell({ label, dotClass, value, hint, empty, truth, onOpen, lang }: {
   label: string; dotClass: string; value: string; hint: string; empty: boolean
   truth: TruthLabel
   onOpen?: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const body = (
     <>
       <div className="flex items-baseline justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full ${dotClass} flex-shrink-0`} />
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{label}</p>
-          <TruthChip label={truth} />
+          <TruthChip label={truth} lang={lang} />
         </div>
-        <p className="text-[10px] text-gray-400 whitespace-nowrap flex-shrink-0">Last 7 days</p>
+        <p className="text-[10px] text-gray-400 whitespace-nowrap flex-shrink-0">{t('Last 7 days', 'Últimos 7 días')}</p>
       </div>
       <p className={`mt-5 text-[30px] leading-none font-semibold tracking-tight font-mono tabular-nums ${empty ? 'text-gray-300' : 'text-gray-900'}`}>
         {value}
@@ -759,11 +802,13 @@ function SummaryCell({ label, dotClass, value, hint, empty, truth, onOpen }: {
 // without a verification engine would double-count and mislead.
 // The Bank Review workflow planned for a later pass is what will
 // reconcile the two views honestly.
-function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, recognizedOperatingSpend, onOpen }: {
+function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, recognizedOperatingSpend, onOpen, lang }: {
   value: number; hasAnyActivity: boolean; netPositive: boolean
   revenue: number; spend: number; recognizedOperatingSpend: number
   onOpen?: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const valueColor = !hasAnyActivity ? 'text-gray-300' : (netPositive ? 'text-green-700' : 'text-red-600')
   const dotClass = !hasAnyActivity ? 'bg-gray-300' : (netPositive ? 'bg-green-500' : 'bg-red-500')
   const hasRecognizedOperating = recognizedOperatingSpend > 0
@@ -771,13 +816,13 @@ function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, r
     if (revenue > 0 && spend > 0) {
       const pct = Math.round((spend / revenue) * 100)
       const base = spend > revenue
-        ? `Spending exceeds revenue · ${pct}% ratio`
-        : `Spending is ${pct}% of revenue`
-      return hasRecognizedOperating ? `${base} · incl. operating` : base
+        ? t(`Spending exceeds revenue · ${pct}% ratio`, `El gasto excede los ingresos · razón ${pct}%`)
+        : t(`Spending is ${pct}% of revenue`, `El gasto es ${pct}% de los ingresos`)
+      return hasRecognizedOperating ? `${base} · ${t('incl. operating', 'incl. operación')}` : base
     }
-    if (revenue > 0) return 'No spend recorded yet'
-    if (spend > 0) return 'No sales recorded yet'
-    return 'Log an expense or connect a bank to begin'
+    if (revenue > 0) return t('No spend recorded yet', 'Sin gasto registrado aún')
+    if (spend > 0) return t('No sales recorded yet', 'Sin ventas registradas aún')
+    return t('Log an expense or connect a bank to begin', 'Registra un gasto o conecta un banco para comenzar')
   })()
 
   const body = (
@@ -785,26 +830,26 @@ function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, r
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${dotClass}`} />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Net activity</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{t('Net activity', 'Actividad neta')}</p>
         </div>
         {hasAnyActivity && (
           <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
             netPositive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
           }`}>
-            {netPositive ? 'Positive' : 'Negative'}
+            {netPositive ? t('Positive', 'Positivo') : t('Negative', 'Negativo')}
           </span>
         )}
       </div>
-      <p className="text-[10px] text-gray-400 mt-1 ml-4">Last 7 days</p>
+      <p className="text-[10px] text-gray-400 mt-1 ml-4">{t('Last 7 days', 'Últimos 7 días')}</p>
       <div className="mt-3 flex items-baseline gap-2 flex-wrap">
         <p className={`text-[36px] leading-none font-semibold tracking-tight font-mono tabular-nums ${valueColor}`}>
           {hasAnyActivity ? `${netPositive ? '' : '−'}${fmt(Math.abs(value))}` : '$0.00'}
         </p>
-        <span className="text-[11px] font-medium text-gray-500 lowercase">operating view</span>
+        <span className="text-[11px] font-medium text-gray-500 lowercase">{t('operating view', 'vista operativa')}</span>
       </div>
       <p className="mt-3 text-xs text-gray-500">{hint}</p>
       <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
-        Bank-settled view coming via Bank Review.
+        {t('Bank-settled view coming via Bank Review.', 'La vista liquidada por banco llegará vía Revisión bancaria.')}
       </p>
     </>
   )
@@ -826,7 +871,7 @@ function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, r
 // Driver cards (middle row)
 // ================================================================
 
-function LaborDriverCard({ cards, laborSpend, sharePct, onOpen }: {
+function LaborDriverCard({ cards, laborSpend, sharePct, onOpen, lang }: {
   cards: {
     laborEstimate: number
     laborRatedShiftCount: number
@@ -837,7 +882,9 @@ function LaborDriverCard({ cards, laborSpend, sharePct, onOpen }: {
   laborSpend: number
   sharePct: number
   onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const accent = 'bg-purple-500'
   // Labor is an Estimate — scheduled hours × rate. Once clock-in/out
   // and payroll detection land, this card moves from Estimated to
@@ -845,24 +892,27 @@ function LaborDriverCard({ cards, laborSpend, sharePct, onOpen }: {
   // Until then the truth chip and the supporting copy both say
   // estimated so the value can't be misread as a settled payroll
   // figure.
-  const shareTag = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
+  const shareTag = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
+  const laborLabel = t('Scheduled labor', 'Mano de obra programada')
+  const thisWeek = t('This week', 'Esta semana')
 
   switch (cards.laborState) {
     case 'ok': {
       const baseHint =
         cards.laborUnratedShiftCount > 0
-          ? `From scheduled shifts · ${cards.laborRatedShiftCount} of ${cards.totalShiftCount} costed`
-          : `From scheduled shifts · ${cards.laborRatedShiftCount} costed`
+          ? t(`From scheduled shifts · ${cards.laborRatedShiftCount} of ${cards.totalShiftCount} costed`, `Desde turnos programados · ${cards.laborRatedShiftCount} de ${cards.totalShiftCount} costeados`)
+          : t(`From scheduled shifts · ${cards.laborRatedShiftCount} costed`, `Desde turnos programados · ${cards.laborRatedShiftCount} costeados`)
       return (
         <ClickableDriverCard
           accent={accent}
-          label="Scheduled labor"
-          period="This week"
+          label={laborLabel}
+          period={thisWeek}
           value={fmt(laborSpend)}
           valueMuted={false}
           hint={`${baseHint}${shareTag}`}
           truth="Estimated"
           onOpen={onOpen}
+          lang={lang}
         />
       )
     }
@@ -870,67 +920,73 @@ function LaborDriverCard({ cards, laborSpend, sharePct, onOpen }: {
       return (
         <ClickableDriverCard
           accent={accent}
-          label="Scheduled labor"
-          period="This week"
+          label={laborLabel}
+          period={thisWeek}
           value="$0.00"
           valueMuted={true}
-          hint="No shifts scheduled"
+          hint={t('No shifts scheduled', 'Sin turnos programados')}
           truth="Estimated"
           onOpen={onOpen}
+          lang={lang}
         />
       )
     case 'no_employees':
       return (
         <ClickableUnavailableCard
           accent={accent}
-          label="Scheduled labor"
-          period="This week"
-          reason="Add hourly rates to staff"
+          label={laborLabel}
+          period={thisWeek}
+          reason={t('Add hourly rates to staff', 'Añade tarifas por hora al personal')}
           onOpen={onOpen}
+          lang={lang}
         />
       )
     case 'missing_rates':
       return (
         <ClickableUnavailableCard
           accent={accent}
-          label="Scheduled labor"
-          period="This week"
-          reason={`${cards.totalShiftCount} shift${cards.totalShiftCount !== 1 ? 's' : ''} · employees missing rates`}
+          label={laborLabel}
+          period={thisWeek}
+          reason={t(`${cards.totalShiftCount} shift${cards.totalShiftCount !== 1 ? 's' : ''} · employees missing rates`, `${cards.totalShiftCount} turno${cards.totalShiftCount !== 1 ? 's' : ''} · empleados sin tarifas`)}
           onOpen={onOpen}
+          lang={lang}
         />
       )
   }
 }
 
-function InventoryDriverCard({ value, sharePct, hasManual, hasBankConfirm, onOpen }: {
+function InventoryDriverCard({ value, sharePct, hasManual, hasBankConfirm, onOpen, lang }: {
   value: number
   sharePct: number
   hasManual: boolean
   hasBankConfirm: boolean
   onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   // Inventory is Recorded — received restock orders + manually
   // logged inventory expenses. Bank PFC overlap exists but is NOT
   // a true line-level match against specific received orders, so
   // we don't claim verification yet. Subtext leads with the
   // settlement gap so the truth chip and the supporting copy align.
   const baseHint = (() => {
-    if (!hasManual && !hasBankConfirm) return 'Mark expenses as inventory-related'
-    if (hasManual && hasBankConfirm)   return 'Awaiting bank settlement · bank context available'
-    if (hasBankConfirm)                return 'Awaiting bank settlement · bank context available'
-    return 'Awaiting bank settlement'
+    if (!hasManual && !hasBankConfirm) return t('Mark expenses as inventory-related', 'Marca los gastos como relacionados con inventario')
+    if (hasManual && hasBankConfirm)   return t('Awaiting bank settlement · bank context available', 'Esperando liquidación bancaria · contexto bancario disponible')
+    if (hasBankConfirm)                return t('Awaiting bank settlement · bank context available', 'Esperando liquidación bancaria · contexto bancario disponible')
+    return t('Awaiting bank settlement', 'Esperando liquidación bancaria')
   })()
-  const shareTag = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
+  const shareTag = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
   return (
     <ClickableDriverCard
       accent="bg-amber-500"
-      label="Inventory spend"
-      period="Last 7 days"
+      label={t('Inventory spend', 'Gasto en inventario')}
+      period={t('Last 7 days', 'Últimos 7 días')}
       value={fmt(value)}
       valueMuted={value === 0}
       hint={`${baseHint}${shareTag}`}
       truth="Recorded"
       onOpen={onOpen}
+      lang={lang}
     />
   )
 }
@@ -946,7 +1002,7 @@ function InventoryDriverCard({ value, sharePct, hasManual, hasBankConfirm, onOpe
 //
 // Bank Review is a separate verification workflow, planned later —
 // do not conflate it with the Operating expense category.
-function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen }: {
+function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen, lang }: {
   bank: {
     externalSpend7d: number
     externalSpendCount7d: number
@@ -957,20 +1013,22 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
   sharePct: number
   plaidConfigured: boolean
   onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   if (bank.state === 'not_connected') {
     return (
       <div className="rounded-xl border border-gray-200/80 bg-gradient-to-br from-white to-teal-50/30 p-6 flex flex-col shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-teal-500" />
-            <p className="text-xs font-semibold text-gray-900">Operating</p>
+            <p className="text-xs font-semibold text-gray-900">{t('Operating', 'Operación')}</p>
           </div>
-          <span className="text-[10px] text-gray-400">Optional</span>
+          <span className="text-[10px] text-gray-400">{t('Optional', 'Opcional')}</span>
         </div>
         <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed mb-4">
-          Connect a bank to surface operating expenses paid through your account — rent, utilities, marketing, subscriptions, fees.
+          {t('Connect a bank to surface operating expenses paid through your account — rent, utilities, marketing, subscriptions, fees.', 'Conecta un banco para mostrar los gastos de operación pagados a través de tu cuenta — renta, servicios, marketing, suscripciones, cuotas.')}
         </p>
         <div className="mt-auto" onClick={(e) => e.stopPropagation()}>
           <ConnectBankButton configured={plaidConfigured} />
@@ -983,7 +1041,7 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
   // The state pill (Live / Awaiting sync) shows operational state
   // separately so the two readings don't fight each other.
   const identityDot = 'bg-teal-500'
-  const stateLabel = bank.state === 'connected_synced' ? 'Live' : 'Awaiting sync'
+  const stateLabel = bank.state === 'connected_synced' ? t('Live', 'En vivo') : t('Awaiting sync', 'Esperando sincronización')
   const stateLabelTone = bank.state === 'connected_synced' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
   const stateDot = bank.state === 'connected_synced' ? 'bg-green-500' : 'bg-amber-500'
 
@@ -1005,8 +1063,8 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
       <div className="flex items-center justify-between mb-3 gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full ${identityDot} flex-shrink-0`} />
-          <p className="text-xs font-semibold text-gray-900">Operating</p>
-          {bank.state === 'connected_synced' && <TruthChip label={operatingTruth} />}
+          <p className="text-xs font-semibold text-gray-900">{t('Operating', 'Operación')}</p>
+          {bank.state === 'connected_synced' && <TruthChip label={operatingTruth} lang={lang} />}
         </div>
         <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${stateLabelTone}`}>
           <span className={`w-1.5 h-1.5 rounded-full ${stateDot}`} />
@@ -1017,36 +1075,39 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
         <>
           <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-400 font-mono tabular-nums">—</p>
           <div className="mt-3 flex items-end justify-between gap-2">
-            <p className="text-xs text-gray-500 leading-relaxed">Bank linked · awaiting first sync</p>
+            <p className="text-xs text-gray-500 leading-relaxed">{t('Bank linked · awaiting first sync', 'Banco vinculado · esperando primera sincronización')}</p>
             <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-              View →
+              {t('View →', 'Ver →')}
             </span>
           </div>
         </>
       ) : (
         <>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">Operating spend · 7 days</p>
+          <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">{t('Operating spend · 7 days', 'Gasto de operación · 7 días')}</p>
           <p className={`text-[26px] leading-none font-semibold tracking-tight font-mono tabular-nums ${operatingSpend === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
             {fmt(operatingSpend)}
           </p>
           <div className="mt-3 flex items-end justify-between gap-2">
             <p className="text-xs text-gray-500 leading-relaxed">
               {(() => {
-                const sharePart = sharePct > 0 ? ` · ${sharePct}% of spend` : ''
-                const reviewPart = bank.unresolvedCount7d > 0 ? ' · bank review needed' : ''
+                const sharePart = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
+                const reviewPart = bank.unresolvedCount7d > 0 ? ` · ${t('bank review needed', 'revisión bancaria necesaria')}` : ''
                 if (bank.externalSpendCount7d === 0 && operatingSpend === 0) {
-                  return 'No operating spend detected'
+                  return t('No operating spend detected', 'Sin gasto de operación detectado')
                 }
+                const txnLabel = lang === 'es'
+                  ? `${bank.externalSpendCount7d} transacci${bank.externalSpendCount7d !== 1 ? 'ones' : 'ón'} bancaria${bank.externalSpendCount7d !== 1 ? 's' : ''}`
+                  : `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''}`
                 const txnPart = bank.externalSpendCount7d === 0
                   ? null
                   : bank.unresolvedCount7d > 0
-                    ? `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''} · ${bank.unresolvedCount7d} unresolved`
-                    : `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''} · all categorized`
-                return txnPart ? `${txnPart}${sharePart}${reviewPart}` : `Manual entries${sharePart}`
+                    ? `${txnLabel} · ${bank.unresolvedCount7d} ${t('unresolved', 'sin resolver')}`
+                    : `${txnLabel} · ${t('all categorized', 'todas categorizadas')}`
+                return txnPart ? `${txnPart}${sharePart}${reviewPart}` : `${t('Manual entries', 'Entradas manuales')}${sharePart}`
               })()}
             </p>
             <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-              View →
+              {t('View →', 'Ver →')}
             </span>
           </div>
         </>
@@ -1056,11 +1117,13 @@ function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen
 }
 
 function ClickableDriverCard({
-  accent, label, period, value, valueMuted, hint, truth, onOpen,
+  accent, label, period, value, valueMuted, hint, truth, onOpen, lang,
 }: {
   accent: string; label: string; period: string; value: string
   valueMuted: boolean; hint: string; truth?: TruthLabel; onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   return (
     <button
       type="button"
@@ -1071,7 +1134,7 @@ function ClickableDriverCard({
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full ${accent} flex-shrink-0`} />
           <p className="text-xs font-semibold text-gray-900">{label}</p>
-          {truth && <TruthChip label={truth} />}
+          {truth && <TruthChip label={truth} lang={lang} />}
         </div>
         <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
       </div>
@@ -1081,7 +1144,7 @@ function ClickableDriverCard({
       <div className="mt-3 flex items-end justify-between gap-2">
         <p className="text-xs text-gray-500 leading-relaxed">{hint}</p>
         <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-          View →
+          {t('View →', 'Ver →')}
         </span>
       </div>
     </button>
@@ -1089,11 +1152,13 @@ function ClickableDriverCard({
 }
 
 function ClickableUnavailableCard({
-  accent, label, period, reason, truth, onOpen,
+  accent, label, period, reason, truth, onOpen, lang,
 }: {
   accent: string; label: string; period: string; reason: string
   truth?: TruthLabel; onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   return (
     <button
       type="button"
@@ -1104,7 +1169,7 @@ function ClickableUnavailableCard({
         <div className="flex items-center gap-2 min-w-0">
           <span className={`w-2 h-2 rounded-full ${accent} opacity-50 flex-shrink-0`} />
           <p className="text-xs font-semibold text-gray-900">{label}</p>
-          {truth && <TruthChip label={truth} />}
+          {truth && <TruthChip label={truth} lang={lang} />}
         </div>
         <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
       </div>
@@ -1112,7 +1177,7 @@ function ClickableUnavailableCard({
       <div className="mt-3 flex items-end justify-between gap-2">
         <p className="text-xs text-gray-500 leading-relaxed">{reason}</p>
         <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-          View →
+          {t('View →', 'Ver →')}
         </span>
       </div>
     </button>
@@ -1123,9 +1188,10 @@ function ClickableUnavailableCard({
 // Drawer — right-side slide-over
 // ================================================================
 
-function Drawer({ open, onClose, title, subtitle, children }: {
-  open: boolean; onClose: () => void; title: string; subtitle?: string; children: React.ReactNode
+function Drawer({ open, onClose, title, subtitle, children, lang }: {
+  open: boolean; onClose: () => void; title: string; subtitle?: string; children: React.ReactNode; lang: Lang
 }) {
+  const t = makeT(lang)
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -1163,7 +1229,7 @@ function Drawer({ open, onClose, title, subtitle, children }: {
             onClick={onClose}
             className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
           >
-            Close
+            {t('Close', 'Cerrar')}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -1177,10 +1243,12 @@ function Drawer({ open, onClose, title, subtitle, children }: {
 // ----------------------------------------------------------------
 // Labor drawer — interpretive: stats strip + breakdowns + caveat
 // ----------------------------------------------------------------
-function LaborDrawerContent({ cards, breakdown }: {
+function LaborDrawerContent({ cards, breakdown, lang }: {
   cards: { laborEstimate: number; laborState: LaborState; totalShiftCount: number; laborRatedShiftCount: number; laborUnratedShiftCount: number }
   breakdown: { byArea: LaborByArea[]; byRole: LaborByRole[]; byEmployee: LaborByEmployee[] }
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const totalHours = breakdown.byEmployee.reduce((s, e) => s + e.hours, 0)
   const employeeCount = breakdown.byEmployee.length
   const showByArea = breakdown.byArea.some((a) => a.area === 'foh' || a.area === 'boh')
@@ -1191,20 +1259,22 @@ function LaborDrawerContent({ cards, breakdown }: {
     ? Math.round((topArea.cost / cards.laborEstimate) * 100)
     : 0
 
+  const shiftLabel = (n: number) => lang === 'es' ? `${n} turno${n !== 1 ? 's' : ''}` : `${n} shift${n !== 1 ? 's' : ''}`
+
   return (
     <div className="space-y-6">
       {/* 3-stat strip — interpretive top line */}
       <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Cost" value={fmt(cards.laborEstimate)} muted={cards.laborEstimate === 0} />
-        <DrawerStat label="Hours" value={fmtHours(totalHours)} muted={totalHours === 0} />
-        <DrawerStat label="Employees" value={`${employeeCount}`} muted={employeeCount === 0} />
+        <DrawerStat label={t('Cost', 'Costo')} value={fmt(cards.laborEstimate)} muted={cards.laborEstimate === 0} />
+        <DrawerStat label={t('Hours', 'Horas')} value={fmtHours(totalHours)} muted={totalHours === 0} />
+        <DrawerStat label={t('Employees', 'Empleados')} value={`${employeeCount}`} muted={employeeCount === 0} />
       </div>
 
       {/* Honesty caveat */}
       <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
         <p className="text-[11px] text-amber-800 leading-relaxed">
-          <strong>Estimated, not paid.</strong> Computed from this week&apos;s schedule × hourly rate.
-          {cards.laborUnratedShiftCount > 0 && ` ${cards.laborUnratedShiftCount} shift${cards.laborUnratedShiftCount !== 1 ? 's' : ''} excluded — employees missing hourly rates.`}
+          <strong>{t('Estimated, not paid.', 'Estimado, no pagado.')}</strong> {t("Computed from this week's schedule × hourly rate.", 'Calculado desde el horario de esta semana × tarifa por hora.')}
+          {cards.laborUnratedShiftCount > 0 && ` ${shiftLabel(cards.laborUnratedShiftCount)} ${t('excluded — employees missing hourly rates.', 'excluido(s) — empleados sin tarifa por hora.')}`}
         </p>
       </div>
 
@@ -1212,19 +1282,20 @@ function LaborDrawerContent({ cards, breakdown }: {
       {showByArea && topArea && topAreaShare >= 50 && (
         <InsightLine
           accent="purple"
-          text={`${areaLabel(topArea.area)} is ${topAreaShare}% of scheduled labor cost this week.`}
+          text={t(`${areaLabel(topArea.area, lang)} is ${topAreaShare}% of scheduled labor cost this week.`, `${areaLabel(topArea.area, lang)} es ${topAreaShare}% del costo de mano de obra programada esta semana.`)}
+          lang={lang}
         />
       )}
 
       {/* By house */}
       {showByArea && (
-        <DrawerSection title="By house">
+        <DrawerSection title={t('By house', 'Por casa')}>
           <div className="space-y-2">
             {breakdown.byArea.map((row) => (
               <BreakdownRow
                 key={row.area}
-                primary={areaLabel(row.area)}
-                secondary={`${row.shiftCount} shift${row.shiftCount !== 1 ? 's' : ''} · ${fmtHours(row.hours)}`}
+                primary={areaLabel(row.area, lang)}
+                secondary={`${shiftLabel(row.shiftCount)} · ${fmtHours(row.hours)}`}
                 value={fmt(row.cost)}
               />
             ))}
@@ -1233,16 +1304,16 @@ function LaborDrawerContent({ cards, breakdown }: {
       )}
 
       {/* By role */}
-      <DrawerSection title="By role">
+      <DrawerSection title={t('By role', 'Por rol')}>
         {breakdown.byRole.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No roles scheduled this week.</p>
+          <p className="text-xs text-gray-400 italic">{t('No roles scheduled this week.', 'Sin roles programados esta semana.')}</p>
         ) : (
           <div className="space-y-2">
             {breakdown.byRole.map((row) => (
               <BreakdownRow
                 key={row.role}
                 primary={row.role}
-                secondary={`${row.shiftCount} shift${row.shiftCount !== 1 ? 's' : ''} · ${fmtHours(row.hours)}${row.missingRate ? ' · some rates missing' : ''}`}
+                secondary={`${shiftLabel(row.shiftCount)} · ${fmtHours(row.hours)}${row.missingRate ? ` · ${t('some rates missing', 'faltan algunas tarifas')}` : ''}`}
                 value={fmt(row.cost)}
                 muted={row.cost === 0}
               />
@@ -1252,9 +1323,9 @@ function LaborDrawerContent({ cards, breakdown }: {
       </DrawerSection>
 
       {/* By employee */}
-      <DrawerSection title="By employee">
+      <DrawerSection title={t('By employee', 'Por empleado')}>
         {breakdown.byEmployee.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No employees on the schedule this week.</p>
+          <p className="text-xs text-gray-400 italic">{t('No employees on the schedule this week.', 'Sin empleados en el horario esta semana.')}</p>
         ) : (
           <div className="space-y-2">
             {breakdown.byEmployee.map((row) => (
@@ -1263,10 +1334,10 @@ function LaborDrawerContent({ cards, breakdown }: {
                 primary={row.name}
                 secondary={
                   row.hourlyRate
-                    ? `${fmtHours(row.hours)} · $${row.hourlyRate.toFixed(2)}/hr · ${row.shiftCount} shift${row.shiftCount !== 1 ? 's' : ''}`
-                    : `${fmtHours(row.hours)} · no rate · ${row.shiftCount} shift${row.shiftCount !== 1 ? 's' : ''}`
+                    ? `${fmtHours(row.hours)} · $${row.hourlyRate.toFixed(2)}${t('/hr', '/hr')} · ${shiftLabel(row.shiftCount)}`
+                    : `${fmtHours(row.hours)} · ${t('no rate', 'sin tarifa')} · ${shiftLabel(row.shiftCount)}`
                 }
-                value={row.hourlyRate ? fmt(row.cost) : 'Unrated'}
+                value={row.hourlyRate ? fmt(row.cost) : t('Unrated', 'Sin tarifa')}
                 muted={!row.hourlyRate}
               />
             ))}
@@ -1277,11 +1348,12 @@ function LaborDrawerContent({ cards, breakdown }: {
   )
 }
 
-function areaLabel(area: 'foh' | 'boh' | 'unassigned'): string {
+function areaLabel(area: 'foh' | 'boh' | 'unassigned', lang: Lang = 'en'): string {
+  const t = makeT(lang)
   switch (area) {
-    case 'foh': return 'Front of House'
-    case 'boh': return 'Back of House'
-    case 'unassigned': return 'Unassigned'
+    case 'foh': return t('Front of House', 'Salón')
+    case 'boh': return t('Back of House', 'Cocina')
+    case 'unassigned': return t('Unassigned', 'Sin asignar')
   }
 }
 
@@ -1293,11 +1365,13 @@ function fmtHours(h: number): string {
 // Inventory drawer — interpretive: stats strip + concentration +
 // vendor-first + category-second + recent (supporting only)
 // ----------------------------------------------------------------
-function InventoryDrawerContent({ total, breakdown, recentItems }: {
+function InventoryDrawerContent({ total, breakdown, recentItems, lang }: {
   total: number
   breakdown: { byCategory: { label: string; amount: number; count: number }[]; byVendor: { label: string; amount: number; count: number }[] }
   recentItems: RecentExpense[]
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const entryCount = breakdown.byCategory.reduce((s, c) => s + c.count, 0)
   // Vendor count excludes the "—" placeholder bucket
   const vendorCount = breakdown.byVendor.filter((v) => v.label !== '—').length
@@ -1306,9 +1380,9 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
   if (noData) {
     return (
       <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/60 p-6 text-center">
-        <p className="text-sm font-semibold text-gray-700">No inventory spend yet</p>
+        <p className="text-sm font-semibold text-gray-700">{t('No inventory spend yet', 'Sin gasto en inventario aún')}</p>
         <p className="mx-auto mt-1.5 max-w-xs text-xs text-gray-500 leading-relaxed">
-          Receive a restock order or log an inventory-related expense. Entries appear here grouped by vendor.
+          {t('Receive a restock order or log an inventory-related expense. Entries appear here grouped by vendor.', 'Recibe una orden de reposición o registra un gasto relacionado con inventario. Las entradas aparecen aquí agrupadas por proveedor.')}
         </p>
       </div>
     )
@@ -1324,36 +1398,38 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
     <div className="space-y-6">
       {/* Stats strip */}
       <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Spend" value={fmt(total)} muted={total === 0} />
-        <DrawerStat label="Entries" value={`${entryCount}`} muted={entryCount === 0} />
-        <DrawerStat label="Vendors" value={`${vendorCount}`} muted={vendorCount === 0} />
+        <DrawerStat label={t('Spend', 'Gasto')} value={fmt(total)} muted={total === 0} />
+        <DrawerStat label={t('Entries', 'Entradas')} value={`${entryCount}`} muted={entryCount === 0} />
+        <DrawerStat label={t('Vendors', 'Proveedores')} value={`${vendorCount}`} muted={vendorCount === 0} />
       </div>
 
       {/* Concentration insight */}
       {topVendor && topVendorShare >= 40 && (
         <InsightLine
           accent="amber"
-          text={`${topVendor.label} is ${topVendorShare}% of inventory spend.`}
+          text={t(`${topVendor.label} is ${topVendorShare}% of inventory spend.`, `${topVendor.label} es ${topVendorShare}% del gasto en inventario.`)}
+          lang={lang}
         />
       )}
       {!topVendor && topCategory && topCategoryShare >= 50 && (
         <InsightLine
           accent="amber"
-          text={`${topCategory.label} is ${topCategoryShare}% of inventory spend.`}
+          text={t(`${topCategory.label} is ${topCategoryShare}% of inventory spend.`, `${topCategory.label} es ${topCategoryShare}% del gasto en inventario.`)}
+          lang={lang}
         />
       )}
 
       {/* By vendor — primary */}
-      <DrawerSection title="By vendor">
+      <DrawerSection title={t('By vendor', 'Por proveedor')}>
         {breakdown.byVendor.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No vendor data.</p>
+          <p className="text-xs text-gray-400 italic">{t('No vendor data.', 'Sin datos de proveedor.')}</p>
         ) : (
           <div className="space-y-2">
             {breakdown.byVendor.map((row) => (
               <BreakdownRow
                 key={row.label}
-                primary={row.label === '—' ? 'Unspecified vendor' : row.label}
-                secondary={`${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
+                primary={row.label === '—' ? t('Unspecified vendor', 'Proveedor no especificado') : row.label}
+                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'gasto' : 'gastos'}` : `${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
                 value={fmt(row.amount)}
                 muted={row.label === '—'}
               />
@@ -1363,16 +1439,16 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
       </DrawerSection>
 
       {/* By category — secondary */}
-      <DrawerSection title="By category">
+      <DrawerSection title={t('By category', 'Por categoría')}>
         {breakdown.byCategory.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No category data.</p>
+          <p className="text-xs text-gray-400 italic">{t('No category data.', 'Sin datos de categoría.')}</p>
         ) : (
           <div className="space-y-2">
             {breakdown.byCategory.map((row) => (
               <BreakdownRow
                 key={row.label}
                 primary={row.label}
-                secondary={`${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
+                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'gasto' : 'gastos'}` : `${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
                 value={fmt(row.amount)}
               />
             ))}
@@ -1382,7 +1458,7 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
 
       {/* Recent — supporting */}
       {recentItems.length > 0 && (
-        <DrawerSection title="Recent entries">
+        <DrawerSection title={t('Recent entries', 'Entradas recientes')}>
           <ul className="divide-y divide-gray-100">
             {recentItems.map((item) => (
               <li key={item.id} className="py-2.5 flex items-start justify-between gap-3">
@@ -1391,7 +1467,7 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
                     {item.vendorName || item.category}
                   </p>
                   <p className="text-[11px] text-gray-500 truncate mt-0.5">
-                    {new Date(item.expenseDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    {new Date(item.expenseDate + 'T00:00:00').toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
                     {' · '}{item.category}
                   </p>
                 </div>
@@ -1416,7 +1492,7 @@ function InventoryDrawerContent({ total, breakdown, recentItems }: {
 // fees, professional services, loan payments). Bank Review (a
 // later verification workflow) is intentionally NOT built here.
 // ----------------------------------------------------------------
-function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: {
+function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev, lang }: {
   bank: {
     accounts: BankAccountSummary[]
     externalSpend7d: number
@@ -1437,33 +1513,35 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
   plaidConfigured: boolean
   plaidSandbox: boolean
   isDev: boolean
+  lang: Lang
 }) {
+  const t = makeT(lang)
   if (bank.state === 'not_connected') {
     return (
       <div className="space-y-5">
         <div className="rounded-xl border border-gray-200/80 bg-gray-50/60 p-5">
-          <p className="text-sm font-semibold text-gray-900">What Operating covers</p>
+          <p className="text-sm font-semibold text-gray-900">{t('What Operating covers', 'Qué cubre Operación')}</p>
           <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
-            Operating expenses are business costs outside labor and inventory. Connect a bank to surface them automatically.
+            {t('Operating expenses are business costs outside labor and inventory. Connect a bank to surface them automatically.', 'Los gastos de operación son costos del negocio fuera de mano de obra e inventario. Conecta un banco para mostrarlos automáticamente.')}
           </p>
           <ul className="mt-3 space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
-            <PreviewBullet>Rent, utilities, marketing, and subscriptions.</PreviewBullet>
-            <PreviewBullet>Insurance, repairs, bank fees, professional services, and loan payments.</PreviewBullet>
-            <PreviewBullet>Unresolved activity — transfers and uncategorized outflows shown separately.</PreviewBullet>
+            <PreviewBullet>{t('Rent, utilities, marketing, and subscriptions.', 'Renta, servicios, marketing y suscripciones.')}</PreviewBullet>
+            <PreviewBullet>{t('Insurance, repairs, bank fees, professional services, and loan payments.', 'Seguros, reparaciones, cuotas bancarias, servicios profesionales y pagos de préstamos.')}</PreviewBullet>
+            <PreviewBullet>{t('Unresolved activity — transfers and uncategorized outflows shown separately.', 'Actividad sin resolver — transferencias y salidas sin categorizar mostradas por separado.')}</PreviewBullet>
           </ul>
         </div>
 
         <div className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-          <p className="text-[11px] font-semibold text-gray-900">Connect a bank</p>
+          <p className="text-[11px] font-semibold text-gray-900">{t('Connect a bank', 'Conectar un banco')}</p>
           <p className="mt-1 text-xs text-gray-500 leading-relaxed mb-4">
-            Credentials stay server-side and owner-only. Disconnect anytime.
+            {t('Credentials stay server-side and owner-only. Disconnect anytime.', 'Las credenciales permanecen en el servidor y solo para el dueño. Desconecta en cualquier momento.')}
           </p>
           <ConnectBankButton configured={plaidConfigured} />
         </div>
 
         <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
           <p className="text-[11px] text-gray-600 leading-relaxed">
-            Finance interprets bank activity as operating-spend context — never as revenue. Sales stay your source of truth.
+            {t('Finance interprets bank activity as operating-spend context — never as revenue. Sales stay your source of truth.', 'Finanzas interpreta la actividad bancaria como contexto de gasto operativo — nunca como ingresos. Las ventas siguen siendo tu fuente de verdad.')}
           </p>
         </div>
       </div>
@@ -1490,17 +1568,17 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
       {/* Stats strip — operating spend, not inflow/outflow */}
       <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <DrawerStat
-          label="Operating spend"
+          label={t('Operating spend', 'Gasto de operación')}
           value={fmt(bank.externalSpend7d)}
           muted={bank.externalSpend7d === 0}
         />
         <DrawerStat
-          label="Transactions"
+          label={t('Transactions', 'Transacciones')}
           value={`${bank.externalSpendCount7d}`}
           muted={bank.externalSpendCount7d === 0}
         />
         <DrawerStat
-          label="Unresolved"
+          label={t('Unresolved', 'Sin resolver')}
           value={`${bank.unresolvedCount7d}`}
           muted={bank.unresolvedCount7d === 0}
         />
@@ -1513,32 +1591,34 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
       {bank.state === 'connected_unsynced' ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
           <p className="text-[11px] text-amber-800 leading-relaxed">
-            <strong>Awaiting first sync.</strong> Bank linked but no transactions have arrived yet.
+            <strong>{t('Awaiting first sync.', 'Esperando primera sincronización.')}</strong> {t('Bank linked but no transactions have arrived yet.', 'Banco vinculado pero aún no han llegado transacciones.')}
           </p>
         </div>
       ) : topCategory && topCategoryShare >= 40 ? (
         <InsightLine
           accent="teal"
-          text={`${topCategory.label} is ${topCategoryShare}% of operating spend.`}
+          text={t(`${topCategory.label} is ${topCategoryShare}% of operating spend.`, `${topCategory.label} es ${topCategoryShare}% del gasto de operación.`)}
+          lang={lang}
         />
       ) : unresolvedShare >= 30 && bank.unresolvedCount7d > 0 ? (
         <InsightLine
           accent="amber"
-          text={`${unresolvedShare}% of bank-detected operating spend is uncategorized — likely worth a look.`}
+          text={t(`${unresolvedShare}% of bank-detected operating spend is uncategorized — likely worth a look.`, `${unresolvedShare}% del gasto operativo detectado por el banco está sin categorizar — probablemente vale la pena revisar.`)}
+          lang={lang}
         />
       ) : null}
 
       {/* Operating expenses — categorized outflows */}
-      <DrawerSection title="Operating expenses">
+      <DrawerSection title={t('Operating expenses', 'Gastos de operación')}>
         {bank.externalByCategory.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No categorized outflows yet.</p>
+          <p className="text-xs text-gray-400 italic">{t('No categorized outflows yet.', 'Sin salidas categorizadas aún.')}</p>
         ) : (
           <div className="space-y-2">
             {bank.externalByCategory.map((row) => (
               <BreakdownRow
                 key={row.rawLabel}
                 primary={row.label}
-                secondary={`${row.count} ${row.count === 1 ? 'transaction' : 'transactions'}`}
+                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'transacción' : 'transacciones'}` : `${row.count} ${row.count === 1 ? 'transaction' : 'transactions'}`}
                 value={fmt(row.amount)}
               />
             ))}
@@ -1547,26 +1627,26 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
       </DrawerSection>
 
       {/* Unresolved activity — outflows the bank could not classify */}
-      <DrawerSection title="Unresolved activity">
+      <DrawerSection title={t('Unresolved activity', 'Actividad sin resolver')}>
         {bank.recentUnresolved.length === 0 ? (
           <p className="text-xs text-gray-500 italic">
-            All recent bank activity is categorized.
+            {t('All recent bank activity is categorized.', 'Toda la actividad bancaria reciente está categorizada.')}
           </p>
         ) : (
           <>
             <p className="text-[11px] text-gray-500 leading-relaxed mb-2.5">
-              Outflows the system can&apos;t confidently match yet.
+              {t("Outflows the system can't confidently match yet.", 'Salidas que el sistema aún no puede emparejar con confianza.')}
             </p>
             <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200/80 bg-white overflow-hidden">
               {bank.recentUnresolved.map((row) => (
                 <li key={row.id} className="px-4 py-2.5 flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="text-xs font-medium text-gray-900 truncate">
-                      {row.merchantName || row.description || 'Untitled outflow'}
+                      {row.merchantName || row.description || t('Untitled outflow', 'Salida sin título')}
                     </p>
                     <p className="text-[11px] text-gray-500 truncate mt-0.5">
-                      {new Date(row.postedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                      {' · '}No category
+                      {new Date(row.postedAt).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
+                      {' · '}{t('No category', 'Sin categoría')}
                     </p>
                   </div>
                   <p className="text-xs font-semibold text-gray-900 font-mono tabular-nums flex-shrink-0">
@@ -1580,7 +1660,7 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
       </DrawerSection>
 
       {/* Connected accounts — supporting context */}
-      <DrawerSection title="Connected accounts">
+      <DrawerSection title={t('Connected accounts', 'Cuentas conectadas')}>
         <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200/80 bg-white overflow-hidden">
           {bank.accounts.map((a) => (
             <li key={a.id} className="px-4 py-3">
@@ -1590,15 +1670,15 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
               </p>
               <p className="text-[11px] text-gray-500 mt-0.5">
                 {a.lastSyncedAt
-                  ? `Last synced ${new Date(a.lastSyncedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-                  : 'Not synced yet'}
+                  ? `${t('Last synced', 'Sincronizado')} ${new Date(a.lastSyncedAt).toLocaleString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                  : t('Not synced yet', 'Aún no sincronizado')}
               </p>
             </li>
           ))}
         </ul>
         {lastSync && (
           <p className="mt-2 text-[10px] text-gray-400">
-            Most recent sync · {new Date(lastSync).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+            {t('Most recent sync', 'Sincronización más reciente')} · {new Date(lastSync).toLocaleString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
           </p>
         )}
       </DrawerSection>
@@ -1606,7 +1686,7 @@ function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev }: 
       {/* Honesty caveat — operating spend pulled from bank context */}
       <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
         <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>Bank-detected, not authoritative.</strong> Operating expenses pulled from bank activity reflect what&apos;s posted to your account — not your system record. Sales still come from inside the app.
+          <strong>{t('Bank-detected, not authoritative.', 'Detectado por banco, no autoritativo.')}</strong> {t("Operating expenses pulled from bank activity reflect what's posted to your account — not your system record. Sales still come from inside the app.", 'Los gastos de operación obtenidos de la actividad bancaria reflejan lo que se ha registrado en tu cuenta — no tu registro del sistema. Las ventas siguen viniendo desde dentro de la app.')}
         </p>
       </div>
 
@@ -1662,6 +1742,7 @@ function SandboxConnectTrigger() {
         >
           {pending ? 'Connecting…' : 'Connect sandbox dynamic Item'}
         </button>
+        {/* Dev-only sandbox affordances kept in English (developer-facing). */}
       </form>
       {state && 'error' in state && (
         <pre className="mt-2 text-[11px] text-red-700 whitespace-pre-wrap font-sans">{state.error}</pre>
@@ -1763,7 +1844,8 @@ function BreakdownRow({ primary, secondary, value, muted = false }: {
   )
 }
 
-function InsightLine({ text, accent }: { text: string; accent: 'amber' | 'purple' | 'teal' }) {
+function InsightLine({ text, accent, lang }: { text: string; accent: 'amber' | 'purple' | 'teal'; lang?: Lang }) {
+  const t = makeT(lang ?? 'en')
   const tones: Record<typeof accent, string> = {
     amber: 'border-amber-200 bg-amber-50/60 text-amber-800',
     purple: 'border-purple-200 bg-purple-50/60 text-purple-800',
@@ -1772,7 +1854,7 @@ function InsightLine({ text, accent }: { text: string; accent: 'amber' | 'purple
   return (
     <div className={`rounded-lg border ${tones[accent]} px-3 py-2.5`}>
       <p className="text-[11px] leading-relaxed">
-        <span className="font-semibold">Notice:</span> {text}
+        <span className="font-semibold">{t('Notice:', 'Aviso:')}</span> {text}
       </p>
     </div>
   )
@@ -1900,14 +1982,15 @@ function QuickExpenseCard({
   )
 }
 
-function FormField({ label, htmlFor, children, optional = false }: {
-  label: string; htmlFor: string; children: React.ReactNode; optional?: boolean
+function FormField({ label, htmlFor, children, optional = false, lang }: {
+  label: string; htmlFor: string; children: React.ReactNode; optional?: boolean; lang?: Lang
 }) {
+  const t = makeT(lang ?? 'en')
   return (
     <div>
       <label htmlFor={htmlFor} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-700">
         {label}
-        {optional && <span className="text-gray-400 font-normal">· optional</span>}
+        {optional && <span className="text-gray-400 font-normal">{t('· optional', '· opcional')}</span>}
       </label>
       {children}
     </div>
@@ -1917,20 +2000,21 @@ function FormField({ label, htmlFor, children, optional = false }: {
 // ================================================================
 // Header chip + workspace empty
 // ================================================================
-function DataSourceChip({ state }: { state: BankState }) {
+function DataSourceChip({ state, lang }: { state: BankState; lang: Lang }) {
+  const t = makeT(lang)
   const variants: Record<BankState, { label: string; tone: string; dot: string }> = {
     not_connected: {
-      label: 'System data only',
+      label: t('System data only', 'Solo datos del sistema'),
       tone: 'text-gray-600',
       dot: 'bg-gray-400',
     },
     connected_unsynced: {
-      label: 'Bank linked · awaiting sync',
+      label: t('Bank linked · awaiting sync', 'Banco vinculado · esperando sincronización'),
       tone: 'text-amber-700',
       dot: 'bg-amber-500',
     },
     connected_synced: {
-      label: 'Live with bank context',
+      label: t('Live with bank context', 'En vivo con contexto bancario'),
       tone: 'text-green-700',
       dot: 'bg-green-500',
     },
@@ -1995,11 +2079,14 @@ function RevenueDrawerContent({
   revenue7d,
   reviewRows,
   bankState,
+  lang,
 }: {
   revenue7d: number
   reviewRows: BankReviewRow[]
   bankState: BankState
+  lang: Lang
 }) {
+  const t = makeT(lang)
   // Settled-as-revenue bank inflows give us the "verified deposits"
   // number. The rest of recorded sales are still pending settlement.
   const settledRevenueRows = reviewRows.filter(
@@ -2011,38 +2098,33 @@ function RevenueDrawerContent({
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Recorded sales" value={fmt(revenue7d)} muted={revenue7d === 0} />
+        <DrawerStat label={t('Recorded sales', 'Ventas registradas')} value={fmt(revenue7d)} muted={revenue7d === 0} />
         <DrawerStat
-          label="Verified deposits"
+          label={t('Verified deposits', 'Depósitos verificados')}
           value={bankState === 'not_connected' ? '—' : fmt(settledRevenueTotal)}
           muted={settledRevenueTotal === 0}
         />
       </div>
 
-      <DrawerSection title="How the number is built">
+      <DrawerSection title={t('How the number is built', 'Cómo se construye el número')}>
         <ul className="space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
           <PreviewBullet>
-            <strong>Recorded sales.</strong> Every order rung up in the system. This is the
-            headline number on the card.
+            <strong>{t('Recorded sales.', 'Ventas registradas.')}</strong> {t('Every order rung up in the system. This is the headline number on the card.', 'Cada pedido registrado en el sistema. Este es el número principal en la tarjeta.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Card and cash settlement happen separately.</strong> Card sales become
-            bank deposits when the processor batches them out — usually 1–2 business
-            days later. Cash sales become deposits when someone walks them to the bank.
+            <strong>{t('Card and cash settlement happen separately.', 'La liquidación de tarjeta y efectivo ocurre por separado.')}</strong> {t('Card sales become bank deposits when the processor batches them out — usually 1–2 business days later. Cash sales become deposits when someone walks them to the bank.', 'Las ventas con tarjeta se convierten en depósitos bancarios cuando el procesador las agrupa — usualmente 1–2 días hábiles después. Las ventas en efectivo se convierten en depósitos cuando alguien las lleva al banco.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Verified deposits</strong> are bank inflows you&apos;ve confirmed in Bank
-            Review as &quot;Settle as revenue.&quot; They count {settledRevenueCount}
-            {settledRevenueCount === 1 ? ' row' : ' rows'} this window.
+            <strong>{t('Verified deposits', 'Depósitos verificados')}</strong> {t("are bank inflows you've confirmed in Bank Review as \"Settle as revenue.\"", 'son entradas bancarias que has confirmado en Revisión bancaria como "Liquidar como ingresos."')} {lang === 'es'
+              ? `Cuentan ${settledRevenueCount}${settledRevenueCount === 1 ? ' fila' : ' filas'} en esta ventana.`
+              : `They count ${settledRevenueCount}${settledRevenueCount === 1 ? ' row' : ' rows'} this window.`}
           </PreviewBullet>
         </ul>
       </DrawerSection>
 
       <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
         <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>Recorded ≠ settled.</strong> Recorded sales are the system&apos;s record
-          of what was rung up. They become settled cash when the bank deposit
-          clears — and you confirm the match in Bank Review.
+          <strong>{t('Recorded ≠ settled.', 'Registrado ≠ liquidado.')}</strong> {t("Recorded sales are the system's record of what was rung up. They become settled cash when the bank deposit clears — and you confirm the match in Bank Review.", 'Las ventas registradas son el registro del sistema de lo que se cobró. Se convierten en efectivo liquidado cuando el depósito bancario se acredita — y tú confirmas el emparejamiento en Revisión bancaria.')}
         </p>
       </div>
     </div>
@@ -2056,6 +2138,7 @@ function SpendDrawerContent({
   totalSpend7d,
   reviewCounts,
   bankState,
+  lang,
 }: {
   laborSpend: number
   inventorySpend: number
@@ -2063,38 +2146,40 @@ function SpendDrawerContent({
   totalSpend7d: number
   reviewCounts: Props['bank']['review']['counts']
   bankState: BankState
+  lang: Lang
 }) {
+  const t = makeT(lang)
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Tracked spend" value={fmt(totalSpend7d)} muted={totalSpend7d === 0} />
+        <DrawerStat label={t('Tracked spend', 'Gasto rastreado')} value={fmt(totalSpend7d)} muted={totalSpend7d === 0} />
         <DrawerStat
-          label="Needs review"
+          label={t('Needs review', 'Necesita revisión')}
           value={bankState === 'not_connected' ? '—' : `${reviewCounts.unreviewed}`}
           muted={reviewCounts.unreviewed === 0}
         />
       </div>
 
-      <DrawerSection title="Breakdown">
+      <DrawerSection title={t('Breakdown', 'Desglose')}>
         <div className="space-y-2">
           <BreakdownRow
-            primary="Labor"
-            secondary="Estimated · scheduled hours × rate"
+            primary={t('Labor', 'Mano de obra')}
+            secondary={t('Estimated · scheduled hours × rate', 'Estimado · horas programadas × tarifa')}
             value={fmt(laborSpend)}
             muted={laborSpend === 0}
           />
           <BreakdownRow
-            primary="Inventory"
-            secondary="Recorded · awaiting bank settlement"
+            primary={t('Inventory', 'Inventario')}
+            secondary={t('Recorded · awaiting bank settlement', 'Registrado · esperando liquidación bancaria')}
             value={fmt(inventorySpend)}
             muted={inventorySpend === 0}
           />
           <BreakdownRow
-            primary="Operating"
+            primary={t('Operating', 'Operación')}
             secondary={
               reviewCounts.unreviewed > 0
-                ? 'Tracked · bank review needed'
-                : 'Tracked · bank context categorized'
+                ? t('Tracked · bank review needed', 'Rastreado · revisión bancaria necesaria')
+                : t('Tracked · bank context categorized', 'Rastreado · contexto bancario categorizado')
             }
             value={fmt(operatingSpend)}
             muted={operatingSpend === 0}
@@ -2104,10 +2189,7 @@ function SpendDrawerContent({
 
       <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
         <p className="text-[11px] text-amber-800 leading-relaxed">
-          <strong>Tracked, not verified.</strong> The spend number combines an estimate
-          (Labor), recorded expenses (Inventory), and bank-categorized rows
-          (Operating). Unreviewed bank activity does <em>not</em> count as verified
-          business spend — settle it in Bank Review to lock it in.
+          <strong>{t('Tracked, not verified.', 'Rastreado, no verificado.')}</strong> {t('The spend number combines an estimate (Labor), recorded expenses (Inventory), and bank-categorized rows (Operating). Unreviewed bank activity does', 'El número de gasto combina una estimación (Mano de obra), gastos registrados (Inventario) y filas categorizadas por banco (Operación). La actividad bancaria sin revisar')} <em>{t('not', 'no')}</em> {t('count as verified business spend — settle it in Bank Review to lock it in.', 'cuenta como gasto del negocio verificado — liquídala en Revisión bancaria para fijarla.')}
         </p>
       </div>
     </div>
@@ -2123,6 +2205,7 @@ function NetActivityDrawerContent({
   inventorySpend,
   reviewCounts,
   bankState,
+  lang,
 }: {
   revenue: number
   spend: number
@@ -2132,7 +2215,9 @@ function NetActivityDrawerContent({
   inventorySpend: number
   reviewCounts: Props['bank']['review']['counts']
   bankState: BankState
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const operatingNet = revenue - spend
   const bankNet = bankInflow - bankOutflow
   const difference = operatingNet - bankNet
@@ -2145,54 +2230,48 @@ function NetActivityDrawerContent({
     <div className="space-y-6">
       <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
         <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Operating view</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{t('Operating view', 'Vista operativa')}</p>
           <p className={`mt-1 text-base font-bold font-mono tabular-nums ${opTone}`}>
             {operatingNet >= 0 ? '' : '−'}{fmt(Math.abs(operatingNet))}
           </p>
-          <p className="text-[10px] text-gray-500 mt-0.5">Revenue − tracked spend</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">{t('Revenue − tracked spend', 'Ingresos − gasto rastreado')}</p>
         </div>
         <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">Bank view</p>
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{t('Bank view', 'Vista bancaria')}</p>
           <p className={`mt-1 text-base font-bold font-mono tabular-nums ${bankConnected ? bankTone : 'text-gray-300'}`}>
             {bankConnected ? `${bankNet >= 0 ? '' : '−'}${fmt(Math.abs(bankNet))}` : '—'}
           </p>
-          <p className="text-[10px] text-gray-500 mt-0.5">Bank inflows − outflows</p>
+          <p className="text-[10px] text-gray-500 mt-0.5">{t('Bank inflows − outflows', 'Entradas − salidas bancarias')}</p>
         </div>
       </div>
 
       {bankConnected && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/40 px-3 py-2.5">
           <p className="text-[11px] text-blue-900 leading-relaxed">
-            <strong>Difference: {difference >= 0 ? '' : '−'}{fmt(Math.abs(difference))}.</strong>{' '}
-            Operating and bank views look at the same week from two angles. They
-            rarely match exactly — settlement timing, estimates, and unreviewed
-            rows create the gap.
+            <strong>{t('Difference:', 'Diferencia:')} {difference >= 0 ? '' : '−'}{fmt(Math.abs(difference))}.</strong>{' '}
+            {t('Operating and bank views look at the same week from two angles. They rarely match exactly — settlement timing, estimates, and unreviewed rows create the gap.', 'Las vistas operativa y bancaria miran la misma semana desde dos ángulos. Rara vez coinciden exactamente — los tiempos de liquidación, las estimaciones y las filas sin revisar crean la brecha.')}
           </p>
         </div>
       )}
 
-      <DrawerSection title="What drives the difference">
+      <DrawerSection title={t('What drives the difference', 'Qué impulsa la diferencia')}>
         <ul className="space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
           <PreviewBullet>
-            <strong>Pending payouts.</strong> Recorded sales not yet deposited by the
-            card processor. Show up in revenue, not yet in bank inflows.
+            <strong>{t('Pending payouts.', 'Pagos pendientes.')}</strong> {t('Recorded sales not yet deposited by the card processor. Show up in revenue, not yet in bank inflows.', 'Ventas registradas que aún no han sido depositadas por el procesador de tarjetas. Aparecen en ingresos, aún no en entradas bancarias.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Estimated labor.</strong> Scheduled hours × rate is {fmt(laborSpend)} this
-            week, but payroll has its own cadence. Not in bank outflows yet.
+            <strong>{t('Estimated labor.', 'Mano de obra estimada.')}</strong> {t('Scheduled hours × rate is', 'Horas programadas × tarifa es')} {fmt(laborSpend)} {t('this week, but payroll has its own cadence. Not in bank outflows yet.', 'esta semana, pero la nómina tiene su propia cadencia. Aún no en salidas bancarias.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Inventory awaiting settlement.</strong> Recorded restock orders sit at{' '}
-            {fmt(inventorySpend)}. Bank-confirmed deductions are not line-matched yet.
+            <strong>{t('Inventory awaiting settlement.', 'Inventario esperando liquidación.')}</strong> {t('Recorded restock orders sit at', 'Las órdenes de reposición registradas están en')}{' '}
+            {fmt(inventorySpend)}. {t('Bank-confirmed deductions are not line-matched yet.', 'Las deducciones confirmadas por banco aún no están emparejadas por línea.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Unreviewed bank activity.</strong> {reviewCounts.unreviewed}{' '}
-            {reviewCounts.unreviewed === 1 ? 'row' : 'rows'} pending review — count toward
-            bank net but not toward verified spend.
+            <strong>{t('Unreviewed bank activity.', 'Actividad bancaria sin revisar.')}</strong> {reviewCounts.unreviewed}{' '}
+            {lang === 'es' ? (reviewCounts.unreviewed === 1 ? 'fila' : 'filas') : (reviewCounts.unreviewed === 1 ? 'row' : 'rows')} {t('pending review — count toward bank net but not toward verified spend.', 'pendiente(s) de revisión — cuentan hacia el neto bancario pero no hacia el gasto verificado.')}
           </PreviewBullet>
           <PreviewBullet>
-            <strong>Register cash.</strong> Cash drawer counts and walked-deposit timing
-            are out of scope for V1 — they show up later in the bank view.
+            <strong>{t('Register cash.', 'Efectivo de caja.')}</strong> {t('Cash drawer counts and walked-deposit timing are out of scope for V1 — they show up later in the bank view.', 'Los conteos del cajón de efectivo y los tiempos de depósito a pie están fuera del alcance para V1 — aparecen después en la vista bancaria.')}
           </PreviewBullet>
         </ul>
       </DrawerSection>
@@ -2218,6 +2297,7 @@ function BankReviewSummaryCard({
   autoCount,
   bankState,
   onOpen,
+  lang,
 }: {
   counts: Props['bank']['review']['counts']
   groupCount: number
@@ -2225,24 +2305,25 @@ function BankReviewSummaryCard({
   autoCount: number
   bankState: BankState
   onOpen: () => void
+  lang: Lang
 }) {
+  const t = makeT(lang)
   if (bankState === 'not_connected') {
     return (
       <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 flex flex-col min-h-[500px]">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-gray-300" />
-            <p className="text-xs font-semibold text-gray-900">Money Review</p>
+            <p className="text-xs font-semibold text-gray-900">{t('Money Review', 'Revisión de dinero')}</p>
           </div>
-          <span className="text-[10px] text-gray-400">Not connected</span>
+          <span className="text-[10px] text-gray-400">{t('Not connected', 'No conectado')}</span>
         </div>
         <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
         <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-          Connect a bank to start verifying cash reality. Money Review surfaces
-          deposits to confirm and exceptions — not every transaction.
+          {t('Connect a bank to start verifying cash reality. Money Review surfaces deposits to confirm and exceptions — not every transaction.', 'Conecta un banco para empezar a verificar la realidad del efectivo. Revisión de dinero muestra depósitos por confirmar y excepciones — no cada transacción.')}
         </p>
         <div className="mt-auto">
-          <p className="text-[11px] text-gray-400">Exception triage · activates after bank sync</p>
+          <p className="text-[11px] text-gray-400">{t('Exception triage · activates after bank sync', 'Triaje de excepciones · se activa tras la sincronización bancaria')}</p>
         </div>
       </aside>
     )
@@ -2257,15 +2338,15 @@ function BankReviewSummaryCard({
         : 'bg-green-500'
   const statusChip =
     noWork
-      ? { label: 'Caught up', tone: 'bg-green-50 text-green-700' }
-      : { label: 'Needs attention', tone: 'bg-amber-50 text-amber-700' }
+      ? { label: t('Caught up', 'Al día'), tone: 'bg-green-50 text-green-700' }
+      : { label: t('Needs attention', 'Necesita atención'), tone: 'bg-amber-50 text-amber-700' }
 
   return (
     <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 flex flex-col min-h-[500px]">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${dotTone}`} />
-          <p className="text-xs font-semibold text-gray-900">Money Review</p>
+          <p className="text-xs font-semibold text-gray-900">{t('Money Review', 'Revisión de dinero')}</p>
         </div>
         <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusChip.tone}`}>
           {statusChip.label}
@@ -2281,23 +2362,23 @@ function BankReviewSummaryCard({
       </p>
       <p className="mt-2 text-xs text-gray-500">
         {noWork
-          ? 'All money movement is classified.'
-          : `need${attentionCount === 1 ? 's' : ''} attention`}
+          ? t('All money movement is classified.', 'Todo el movimiento de dinero está clasificado.')
+          : lang === 'es' ? `necesita${attentionCount === 1 ? '' : 'n'} atención` : `need${attentionCount === 1 ? 's' : ''} attention`}
       </p>
       <p className="mt-1 text-[11px] text-gray-500 font-mono tabular-nums">
-        {autoCount} auto-classified
+        {autoCount} {t('auto-classified', 'clasificadas automáticamente')}
         <span className="text-gray-300 px-1">·</span>
-        {counts.unreviewed} transaction{counts.unreviewed === 1 ? '' : 's'} scanned
+        {counts.unreviewed} {lang === 'es' ? `transacci${counts.unreviewed === 1 ? 'ón' : 'ones'}` : `transaction${counts.unreviewed === 1 ? '' : 's'}`} {t('scanned', 'escaneadas')}
       </p>
 
       {!noWork && (
         <div className="mt-5 space-y-2 text-[11px] text-gray-500">
           <div className="flex items-center justify-between">
-            <span>Deposits to confirm</span>
+            <span>{t('Deposits to confirm', 'Depósitos por confirmar')}</span>
             <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedInflow}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span>Outgoing exceptions</span>
+            <span>{t('Outgoing exceptions', 'Excepciones salientes')}</span>
             <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedOutflow}</span>
           </div>
         </div>
@@ -2305,22 +2386,22 @@ function BankReviewSummaryCard({
 
       <div className="mt-5 pt-4 border-t border-gray-100 space-y-1 text-[10px] text-gray-400">
         <div className="flex items-center justify-between">
-          <span>Confirmed</span>
+          <span>{t('Confirmed', 'Confirmadas')}</span>
           <span className="font-medium font-mono tabular-nums">{counts.settled}</span>
         </div>
         <div className="flex items-center justify-between">
-          <span>Marked personal</span>
+          <span>{t('Marked personal', 'Marcadas como personales')}</span>
           <span className="font-medium font-mono tabular-nums">{counts.ignored}</span>
         </div>
         {counts.notAMatch > 0 && (
           <div className="flex items-center justify-between">
-            <span>Review later</span>
+            <span>{t('Review later', 'Revisar después')}</span>
             <span className="font-medium font-mono tabular-nums">{counts.notAMatch}</span>
           </div>
         )}
         {groupCount > 0 && (
           <div className="flex items-center justify-between pt-1 mt-1 border-t border-gray-100">
-            <span>Total groups</span>
+            <span>{t('Total groups', 'Grupos totales')}</span>
             <span className="font-medium font-mono tabular-nums">{groupCount}</span>
           </div>
         )}
@@ -2332,7 +2413,7 @@ function BankReviewSummaryCard({
           onClick={onOpen}
           className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
         >
-          {noWork ? 'Open Money Review' : 'Review now →'}
+          {noWork ? t('Open Money Review', 'Abrir Revisión de dinero') : t('Review now →', 'Revisar ahora →')}
         </button>
       </div>
     </aside>
@@ -2368,13 +2449,16 @@ function BankReviewDrawerContent({
   counts,
   bankState,
   plaidConfigured,
+  lang,
 }: {
   groups: BankReviewGroup[]
   rows: BankReviewRow[]
   counts: Props['bank']['review']['counts']
   bankState: BankState
   plaidConfigured: boolean
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const [showSettled, setShowSettled] = useState(false)
   const [showIgnored, setShowIgnored] = useState(false)
   const [showReviewLater, setShowReviewLater] = useState(false)
@@ -2384,11 +2468,9 @@ function BankReviewDrawerContent({
     return (
       <div className="space-y-5">
         <div className="rounded-xl border border-gray-200/80 bg-gray-50/60 p-5">
-          <p className="text-sm font-semibold text-gray-900">No bank connected</p>
+          <p className="text-sm font-semibold text-gray-900">{t('No bank connected', 'Sin banco conectado')}</p>
           <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
-            Connect a bank to see incoming deposits and outgoing exceptions.
-            Money Review focuses on what needs your attention — not every
-            transaction.
+            {t('Connect a bank to see incoming deposits and outgoing exceptions. Money Review focuses on what needs your attention — not every transaction.', 'Conecta un banco para ver depósitos entrantes y excepciones salientes. Revisión de dinero se enfoca en lo que necesita tu atención — no cada transacción.')}
           </p>
         </div>
         <div className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
@@ -2416,26 +2498,25 @@ function BankReviewDrawerContent({
       {/* Top stats strip — Need attention is the headline; auto-
           classified counts as visibility, not work. */}
       <div className="grid grid-cols-4 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label="Need attention" value={`${attentionTotal}`} muted={attentionTotal === 0} />
-        <DrawerStat label="Auto-classified" value={`${autoClassified.length}`} muted={autoClassified.length === 0} />
-        <DrawerStat label="Confirmed" value={`${counts.settled}`} muted={counts.settled === 0} />
-        <DrawerStat label="Personal" value={`${counts.ignored}`} muted={counts.ignored === 0} />
+        <DrawerStat label={t('Need attention', 'Necesitan atención')} value={`${attentionTotal}`} muted={attentionTotal === 0} />
+        <DrawerStat label={t('Auto-classified', 'Auto-clasificadas')} value={`${autoClassified.length}`} muted={autoClassified.length === 0} />
+        <DrawerStat label={t('Confirmed', 'Confirmadas')} value={`${counts.settled}`} muted={counts.settled === 0} />
+        <DrawerStat label={t('Personal', 'Personales')} value={`${counts.ignored}`} muted={counts.ignored === 0} />
       </div>
 
       {/* Opening orientation */}
       <p className="text-[11px] text-gray-500 leading-relaxed">
-        Money Review — confirm deposits, resolve exceptions, and verify cash
-        reality. Normal recurring activity is auto-classified below.
+        {t('Money Review — confirm deposits, resolve exceptions, and verify cash reality. Normal recurring activity is auto-classified below.', 'Revisión de dinero — confirma depósitos, resuelve excepciones y verifica la realidad del efectivo. La actividad recurrente normal se auto-clasifica abajo.')}
       </p>
 
       {/* 1. Deposits to confirm */}
-      <DrawerSection title={`Deposits to confirm${depositsToConfirm.length > 0 ? ` · ${depositsToConfirm.length}` : ''}`}>
+      <DrawerSection title={`${t('Deposits to confirm', 'Depósitos por confirmar')}${depositsToConfirm.length > 0 ? ` · ${depositsToConfirm.length}` : ''}`}>
         {depositsToConfirm.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">No incoming deposits waiting on a match.</p>
+          <p className="text-xs text-gray-400 italic">{t('No incoming deposits waiting on a match.', 'Sin depósitos entrantes esperando emparejamiento.')}</p>
         ) : (
           <div className="space-y-2">
             {depositsToConfirm.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} />
+              <ReviewGroupCard key={group.key} group={group} lang={lang} />
             ))}
           </div>
         )}
@@ -2443,14 +2524,13 @@ function BankReviewDrawerContent({
 
       {/* 2. Exceptions */}
       {exceptions.length > 0 && (
-        <DrawerSection title={`Exceptions · ${exceptions.length}`}>
+        <DrawerSection title={`${t('Exceptions', 'Excepciones')} · ${exceptions.length}`}>
           <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
-            Outflows that didn&apos;t auto-classify — unknown vendors,
-            transfers, or amounts large enough to want eyes on.
+            {t("Outflows that didn't auto-classify — unknown vendors, transfers, or amounts large enough to want eyes on.", 'Salidas que no se auto-clasificaron — proveedores desconocidos, transferencias o montos lo suficientemente grandes para querer revisarlos.')}
           </p>
           <div className="space-y-2">
             {exceptions.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} />
+              <ReviewGroupCard key={group.key} group={group} lang={lang} />
             ))}
           </div>
         </DrawerSection>
@@ -2458,14 +2538,13 @@ function BankReviewDrawerContent({
 
       {/* 3. Suggested personal */}
       {suggestedPersonal.length > 0 && (
-        <DrawerSection title={`Suggested personal · ${suggestedPersonal.length}`}>
+        <DrawerSection title={`${t('Suggested personal', 'Sugeridas como personales')} · ${suggestedPersonal.length}`}>
           <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
-            Looks like personal spend — mark it so it stops counting against
-            business totals.
+            {t('Looks like personal spend — mark it so it stops counting against business totals.', 'Parece gasto personal — márcalo para que deje de contar contra los totales del negocio.')}
           </p>
           <div className="space-y-2">
             {suggestedPersonal.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} />
+              <ReviewGroupCard key={group.key} group={group} lang={lang} />
             ))}
           </div>
         </DrawerSection>
@@ -2481,18 +2560,17 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showAuto ? '▾' : '▸'}</span>
-            Auto-classified · {autoClassified.length}
+            {t('Auto-classified', 'Auto-clasificadas')} · {autoClassified.length}
           </button>
           {!showAuto && (
             <p className="mt-1.5 text-[11px] text-gray-400 leading-relaxed">
-              Normal recurring activity, already categorized. Open to confirm
-              in bulk or override.
+              {t('Normal recurring activity, already categorized. Open to confirm in bulk or override.', 'Actividad recurrente normal, ya categorizada. Abre para confirmar en bloque o sobrescribir.')}
             </p>
           )}
           {showAuto && (
             <div className="mt-3 space-y-2">
               {autoClassified.map((group) => (
-                <ReviewGroupCard key={group.key} group={group} />
+                <ReviewGroupCard key={group.key} group={group} lang={lang} />
               ))}
             </div>
           )}
@@ -2508,12 +2586,12 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showReviewLater ? '▾' : '▸'}</span>
-            Review later · {reviewLater.length}
+            {t('Review later', 'Revisar después')} · {reviewLater.length}
           </button>
           {showReviewLater && (
             <div className="mt-3 space-y-2">
               {reviewLater.map((row) => (
-                <ReviewRow key={row.id} row={row} />
+                <ReviewRow key={row.id} row={row} lang={lang} />
               ))}
             </div>
           )}
@@ -2529,12 +2607,12 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showSettled ? '▾' : '▸'}</span>
-            Confirmed · {settled.length}
+            {t('Confirmed', 'Confirmadas')} · {settled.length}
           </button>
           {showSettled && (
             <div className="mt-3 space-y-2">
               {settled.map((row) => (
-                <ReviewRow key={row.id} row={row} />
+                <ReviewRow key={row.id} row={row} lang={lang} />
               ))}
             </div>
           )}
@@ -2550,12 +2628,12 @@ function BankReviewDrawerContent({
             className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
           >
             <span>{showIgnored ? '▾' : '▸'}</span>
-            Personal · {ignored.length}
+            {t('Personal', 'Personales')} · {ignored.length}
           </button>
           {showIgnored && (
             <div className="mt-3 space-y-2">
               {ignored.map((row) => (
-                <ReviewRow key={row.id} row={row} />
+                <ReviewRow key={row.id} row={row} lang={lang} />
               ))}
             </div>
           )}
@@ -2565,12 +2643,7 @@ function BankReviewDrawerContent({
       {/* Honesty caveat */}
       <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
         <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>Truth model.</strong> Confirming an outflow records the bank
-          amount as the settled value for that category. Operational records
-          (inventory orders, scheduled labor, recorded sales) are never
-          overwritten — both sides stay visible and auditable. Per-ticket
-          expected-vs-settled display requires a follow-up schema pass and is
-          intentionally deferred.
+          <strong>{t('Truth model.', 'Modelo de verdad.')}</strong> {t('Confirming an outflow records the bank amount as the settled value for that category. Operational records (inventory orders, scheduled labor, recorded sales) are never overwritten — both sides stay visible and auditable. Per-ticket expected-vs-settled display requires a follow-up schema pass and is intentionally deferred.', 'Confirmar una salida registra el monto bancario como el valor liquidado para esa categoría. Los registros operativos (órdenes de inventario, mano de obra programada, ventas registradas) nunca se sobrescriben — ambos lados permanecen visibles y auditables. La visualización por ticket esperado-vs-liquidado requiere una pasada de esquema posterior y se difiere intencionalmente.')}
         </p>
       </div>
     </div>
@@ -2594,7 +2667,8 @@ function BankReviewDrawerContent({
 // pick any of the standard kinds (or mark for later) without hunting
 // through five equal buttons.
 // ----------------------------------------------------------------
-function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
+function ReviewGroupCard({ group, lang }: { group: BankReviewGroup; lang: Lang }) {
+  const t = makeT(lang)
   const [isPending, startTransition] = useTransition()
   const [showDetails, setShowDetails] = useState(false)
   const [overrideKind, setOverrideKind] = useState<string>('')
@@ -2642,17 +2716,17 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
   }
 
   const primaryLabel = (() => {
-    if (group.personal) return 'Mark personal'
-    if (!group.suggestedKind) return 'Review details'
-    if (group.direction === 'inflow' && group.suggestedKind === 'revenue') return 'Match to Sales Deposit'
-    return `Confirm as ${prettyKind(group.suggestedKind)}`
+    if (group.personal) return t('Mark personal', 'Marcar como personal')
+    if (!group.suggestedKind) return t('Review details', 'Revisar detalles')
+    if (group.direction === 'inflow' && group.suggestedKind === 'revenue') return t('Match to Sales Deposit', 'Emparejar con depósito de ventas')
+    return t(`Confirm as ${prettyKind(group.suggestedKind, 'en')}`, `Confirmar como ${prettyKind(group.suggestedKind, 'es')}`)
   })()
 
   const suggestedLabel = group.personal
-    ? 'Suggested as personal'
+    ? t('Suggested as personal', 'Sugerido como personal')
     : group.suggestedKind
-      ? `Suggested: ${prettyKind(group.suggestedKind)}`
-      : 'Suggested: review details'
+      ? t(`Suggested: ${prettyKind(group.suggestedKind, 'en')}`, `Sugerido: ${prettyKind(group.suggestedKind, 'es')}`)
+      : t('Suggested: review details', 'Sugerido: revisar detalles')
 
   return (
     <div className="rounded-lg border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
@@ -2661,7 +2735,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-gray-900 truncate">{group.label}</p>
           <p className="text-[11px] text-gray-500 mt-0.5 font-mono tabular-nums">
-            {group.txnCount} transaction{group.txnCount === 1 ? '' : 's'}
+            {group.txnCount} {lang === 'es' ? `transacci${group.txnCount === 1 ? 'ón' : 'ones'}` : `transaction${group.txnCount === 1 ? '' : 's'}`}
           </p>
           <p className="text-[11px] text-gray-500 mt-1.5">
             <span className="font-medium text-gray-700">{suggestedLabel}</span>
@@ -2690,7 +2764,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
             the suggested decision; picking any concrete kind fires
             the corresponding action immediately. */}
         <label className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 inline-flex items-center gap-1 border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 transition-colors cursor-pointer">
-          <span>Change</span>
+          <span>{t('Change', 'Cambiar')}</span>
           <select
             value={overrideKind}
             onChange={onOverrideChange}
@@ -2699,16 +2773,16 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
           >
             <option value="">…</option>
             {group.direction === 'inflow' ? (
-              <option value="revenue">Sales Deposit</option>
+              <option value="revenue">{t('Sales Deposit', 'Depósito de ventas')}</option>
             ) : (
               <>
-                <option value="inventory">Inventory</option>
-                <option value="labor">Labor</option>
-                <option value="operating">Operating</option>
+                <option value="inventory">{t('Inventory', 'Inventario')}</option>
+                <option value="labor">{t('Labor', 'Mano de obra')}</option>
+                <option value="operating">{t('Operating', 'Operación')}</option>
               </>
             )}
-            <option value="ignore">Mark personal</option>
-            <option value="review_later">Review later</option>
+            <option value="ignore">{t('Mark personal', 'Marcar como personal')}</option>
+            <option value="review_later">{t('Review later', 'Revisar después')}</option>
           </select>
         </label>
 
@@ -2722,7 +2796,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
             onClick={() => callGroupAction(ignoreBankTransactionGroup)}
             className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:bg-gray-100 border border-gray-200 px-2 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Mark personal
+            {t('Mark personal', 'Marcar como personal')}
           </button>
         )}
 
@@ -2731,7 +2805,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
           onClick={() => setShowDetails((v) => !v)}
           className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500 hover:text-gray-700 ml-auto px-2 py-1 rounded-md transition-colors"
         >
-          {showDetails ? 'Hide details' : 'Details'}
+          {showDetails ? t('Hide details', 'Ocultar detalles') : t('Details', 'Detalles')}
         </button>
       </div>
 
@@ -2754,7 +2828,7 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
                 reviewState: 'unreviewed',
                 settledKind: null,
               }
-              return <ReviewRow key={txn.id} row={fullRow} />
+              return <ReviewRow key={txn.id} row={fullRow} lang={lang} />
             })}
           </div>
         </div>
@@ -2763,11 +2837,12 @@ function ReviewGroupCard({ group }: { group: BankReviewGroup }) {
   )
 }
 
-function prettyKind(kind: SuggestedKind): string {
-  if (kind === 'revenue') return 'Sales'
-  if (kind === 'inventory') return 'Inventory'
-  if (kind === 'labor') return 'Labor'
-  if (kind === 'operating') return 'Operating'
+function prettyKind(kind: SuggestedKind, lang: Lang = 'en'): string {
+  const t = makeT(lang)
+  if (kind === 'revenue') return t('Sales', 'Ventas')
+  if (kind === 'inventory') return t('Inventory', 'Inventario')
+  if (kind === 'labor') return t('Labor', 'Mano de obra')
+  if (kind === 'operating') return t('Operating', 'Operación')
   return ''
 }
 
@@ -2780,7 +2855,8 @@ function prettyKind(kind: SuggestedKind): string {
 // the route revalidates and the row migrates between queues on
 // success without a hard reload.
 // ----------------------------------------------------------------
-function ReviewRow({ row }: { row: BankReviewRow }) {
+function ReviewRow({ row, lang }: { row: BankReviewRow; lang: Lang }) {
+  const t = makeT(lang)
   const [isPending, startTransition] = useTransition()
   const isOutflow = row.direction === 'outflow'
   const amountTone = isOutflow ? 'text-red-700' : 'text-green-700'
@@ -2816,15 +2892,15 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold text-gray-900 truncate">
-            {row.merchantName || row.description || 'Untitled transaction'}
+            {row.merchantName || row.description || t('Untitled transaction', 'Transacción sin título')}
           </p>
           <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-            {new Date(row.postedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-            {row.rawCategory && <> · {prettyCategory(row.rawCategory)}</>}
-            {suggested && row.reviewState === 'unreviewed' && <> · suggests {suggested}</>}
-            {personal && row.reviewState === 'unreviewed' && <> · looks personal</>}
+            {new Date(row.postedAt).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
+            {row.rawCategory && <> · {prettyCategory(row.rawCategory, lang)}</>}
+            {suggested && row.reviewState === 'unreviewed' && <> · {t('suggests', 'sugiere')} {prettyKind(suggested, lang)}</>}
+            {personal && row.reviewState === 'unreviewed' && <> · {t('looks personal', 'parece personal')}</>}
             {row.reviewState === 'settled' && row.settledKind && (
-              <> · settled as {row.settledKind}</>
+              <> · {t('settled as', 'liquidado como')} {prettyKind(row.settledKind, lang)}</>
             )}
           </p>
         </div>
@@ -2844,21 +2920,21 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'inventory')}
                 >
-                  Confirm as inventory
+                  {t('Confirm as inventory', 'Confirmar como inventario')}
                 </ActionButton>
                 <ActionButton
                   primary={suggested === 'labor'}
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'labor')}
                 >
-                  Confirm as labor
+                  {t('Confirm as labor', 'Confirmar como mano de obra')}
                 </ActionButton>
                 <ActionButton
                   primary={suggested === 'operating'}
                   disabled={isPending}
                   onClick={() => call(settleBankTransaction, 'operating')}
                 >
-                  Confirm as operating
+                  {t('Confirm as operating', 'Confirmar como operación')}
                 </ActionButton>
               </>
             ) : (
@@ -2867,7 +2943,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
                 disabled={isPending}
                 onClick={() => call(settleBankTransaction, 'revenue')}
               >
-                Match to Sales Deposit
+                {t('Match to Sales Deposit', 'Emparejar con depósito de ventas')}
               </ActionButton>
             )}
             <ActionButton
@@ -2876,7 +2952,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
               disabled={isPending}
               onClick={() => call(ignoreBankTransaction)}
             >
-              Mark personal
+              {t('Mark personal', 'Marcar como personal')}
             </ActionButton>
             <ActionButton
               primary={false}
@@ -2884,7 +2960,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
               disabled={isPending}
               onClick={() => call(markBankTransactionNotAMatch)}
             >
-              Review later
+              {t('Review later', 'Revisar después')}
             </ActionButton>
           </>
         )}
@@ -2895,7 +2971,7 @@ function ReviewRow({ row }: { row: BankReviewRow }) {
             disabled={isPending}
             onClick={() => call(reopenBankTransaction)}
           >
-            Reopen
+            {t('Reopen', 'Reabrir')}
           </ActionButton>
         )}
       </div>
@@ -2936,24 +3012,25 @@ function ActionButton({
 // row meta line. Reuses the same mapping spirit as page.tsx's
 // friendlyOperatingCategory but kept inline here so the drawer
 // doesn't need a server round-trip for the labels.
-function prettyCategory(raw: string): string {
+function prettyCategory(raw: string, lang: Lang = 'en'): string {
+  const t = makeT(lang)
   const map: Record<string, string> = {
-    INCOME: 'income',
-    TRANSFER_IN: 'transfer in',
-    TRANSFER_OUT: 'transfer out',
-    FOOD_AND_DRINK: 'food & drink',
-    GENERAL_MERCHANDISE: 'merchandise',
-    RENT_AND_UTILITIES: 'rent & utilities',
-    GENERAL_SERVICES: 'services',
-    ENTERTAINMENT: 'entertainment',
-    BANK_FEES: 'bank fees',
-    LOAN_PAYMENTS: 'loan payment',
-    TRANSPORTATION: 'transportation',
-    TRAVEL: 'travel',
-    HOME_IMPROVEMENT: 'maintenance',
-    MEDICAL: 'medical',
-    PERSONAL_CARE: 'personal care',
-    GOVERNMENT_AND_NON_PROFIT: 'government',
+    INCOME: t('income', 'ingresos'),
+    TRANSFER_IN: t('transfer in', 'transferencia entrante'),
+    TRANSFER_OUT: t('transfer out', 'transferencia saliente'),
+    FOOD_AND_DRINK: t('food & drink', 'comida y bebida'),
+    GENERAL_MERCHANDISE: t('merchandise', 'mercancía'),
+    RENT_AND_UTILITIES: t('rent & utilities', 'renta y servicios'),
+    GENERAL_SERVICES: t('services', 'servicios'),
+    ENTERTAINMENT: t('entertainment', 'entretenimiento'),
+    BANK_FEES: t('bank fees', 'cuotas bancarias'),
+    LOAN_PAYMENTS: t('loan payment', 'pago de préstamo'),
+    TRANSPORTATION: t('transportation', 'transporte'),
+    TRAVEL: t('travel', 'viajes'),
+    HOME_IMPROVEMENT: t('maintenance', 'mantenimiento'),
+    MEDICAL: t('medical', 'médico'),
+    PERSONAL_CARE: t('personal care', 'cuidado personal'),
+    GOVERNMENT_AND_NON_PROFIT: t('government', 'gobierno'),
   }
   return map[raw] ?? raw.toLowerCase().replace(/_/g, ' ')
 }
@@ -2964,18 +3041,20 @@ function prettyCategory(raw: string): string {
 // in drawer chrome. createExpense action unchanged.
 // ----------------------------------------------------------------
 function LogExpenseDrawerContent({
-  action, pending, error, locationId,
+  action, pending, error, locationId, lang,
 }: {
   action: (fd: FormData) => void
   pending: boolean
   error?: string
   locationId: string
+  lang: Lang
 }) {
+  const t = makeT(lang)
   return (
     <form action={action} className="flex flex-col gap-5">
       <input type="hidden" name="location_id" value={locationId} />
 
-      <FormField label="Category" htmlFor="qa-category">
+      <FormField label={t('Category', 'Categoría')} htmlFor="qa-category" lang={lang}>
         <select
           id="qa-category"
           name="category"
@@ -2983,14 +3062,14 @@ function LogExpenseDrawerContent({
           defaultValue=""
           className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
         >
-          <option value="" disabled>Select a category…</option>
+          <option value="" disabled>{t('Select a category…', 'Selecciona una categoría…')}</option>
           {EXPENSE_CATEGORIES.map((cat) => (
             <option key={cat} value={cat}>{cat}</option>
           ))}
         </select>
       </FormField>
 
-      <FormField label="Amount" htmlFor="qa-amount">
+      <FormField label={t('Amount', 'Monto')} htmlFor="qa-amount" lang={lang}>
         <div className="relative">
           <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
           <input
@@ -3007,7 +3086,7 @@ function LogExpenseDrawerContent({
       </FormField>
 
       <div className="grid grid-cols-2 gap-3">
-        <FormField label="Date" htmlFor="qa-date">
+        <FormField label={t('Date', 'Fecha')} htmlFor="qa-date" lang={lang}>
           <input
             id="qa-date"
             name="expense_date"
@@ -3017,7 +3096,7 @@ function LogExpenseDrawerContent({
             className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
           />
         </FormField>
-        <FormField label="Vendor" htmlFor="qa-vendor" optional>
+        <FormField label={t('Vendor', 'Proveedor')} htmlFor="qa-vendor" optional lang={lang}>
           <input
             id="qa-vendor"
             name="vendor_name"
@@ -3039,8 +3118,8 @@ function LogExpenseDrawerContent({
           className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40"
         />
         <span className="text-xs text-gray-700">
-          Inventory-related
-          <span className="text-gray-400 ml-1">— food, beverage, supplies</span>
+          {t('Inventory-related', 'Relacionado con inventario')}
+          <span className="text-gray-400 ml-1">{t('— food, beverage, supplies', '— comida, bebida, suministros')}</span>
         </span>
       </label>
 
@@ -3055,7 +3134,7 @@ function LogExpenseDrawerContent({
         disabled={pending}
         className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
-        {pending ? 'Saving…' : 'Record expense'}
+        {pending ? t('Saving…', 'Guardando…') : t('Record expense', 'Registrar gasto')}
       </button>
     </form>
   )

@@ -27,6 +27,7 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getLang } from '@/lib/i18n-server'
 import AnalyticsClient from './client'
 import AnalyticsLocked from './locked'
 import { computeReadiness } from '@/lib/readiness'
@@ -79,6 +80,7 @@ function normalizePaymentType(raw: string | null): PaymentBucket {
 
 export default async function AnalyticsPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   // Readiness gate — Analytics uses a setup + live-data gate. Dev
   // bypass and per-pillar overrides are already baked into the
@@ -93,7 +95,7 @@ export default async function AnalyticsPage() {
     if (role?.restaurant_id) {
       const readiness = await computeReadiness(supabase, role.restaurant_id)
       if (readiness.pillars.analytics !== 'active') {
-        return <AnalyticsLocked readiness={readiness} />
+        return <AnalyticsLocked readiness={readiness} lang={lang} />
       }
     }
   }
@@ -445,6 +447,7 @@ export default async function AnalyticsPage() {
 
   return (
     <AnalyticsClient
+      lang={lang}
       dailyBuckets={dailyBuckets}
       itemAggregates={itemAggregates}
       categoryAggregates={categoryAggregates}

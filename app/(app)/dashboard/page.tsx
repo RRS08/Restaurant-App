@@ -19,6 +19,7 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getLang } from '@/lib/i18n-server'
 import DashboardClient from './client'
 import {
   computeReadiness,
@@ -31,6 +32,7 @@ import { groupBankTransactions } from '@/lib/finance/matching'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   const {
     data: { user },
@@ -620,6 +622,7 @@ export default async function DashboardPage() {
 
   return (
     <DashboardClient
+      lang={lang}
       firstName={firstName}
       renderedAt={renderedAt}
       readiness={readinessPillars}

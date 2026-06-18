@@ -33,12 +33,13 @@ import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
 import AccessCodesCard from './access-codes-card'
 import LanguageCard from './language-card'
-import { getLang } from '@/lib/i18n-server'
+import { getLang, getT } from '@/lib/i18n-server'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   const lang = await getLang()
+  const t = await getT()
 
   let readiness: ReadinessSnapshot | null = null
   let isDev = false
@@ -222,8 +223,11 @@ export default async function SettingsPage() {
 
   return (
     <PageShell
-      title="Settings"
-      description="Manage your restaurant configuration and connected systems."
+      title={t('Settings', 'Ajustes')}
+      description={t(
+        'Manage your restaurant configuration and connected systems.',
+        'Administra la configuración de tu restaurante y los sistemas conectados.'
+      )}
     >
       {/* COMPACT LAYOUT
             Row 1: Business + Operations (2-col on desktop)
@@ -236,17 +240,19 @@ export default async function SettingsPage() {
       <div className="max-w-4xl space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <BusinessCard
+            lang={lang}
             businessName={businessName}
             locationName={primaryLocationName}
             userDisplayName={userDisplayName}
             userEmail={userEmail}
             role={role}
           />
-          {readiness && <OperationsCard readiness={readiness} />}
+          {readiness && <OperationsCard lang={lang} readiness={readiness} />}
         </div>
 
         {(isOwner && restaurantId) && (
           <IntegrationsCard
+            lang={lang}
             bankConfigured={isPlaidConfigured()}
             bankConnected={bankConnected}
             bankConnectionCount={bankConnectionCount}
@@ -278,10 +284,10 @@ export default async function SettingsPage() {
         {/* Team management — owner-only. Lets the owner invite a
             manager (location-scoped) or staff via email. */}
         {(isOwner && restaurantId) && (
-          <TeamCard locations={teamLocations} invitations={teamInvitations} />
+          <TeamCard lang={lang} locations={teamLocations} invitations={teamInvitations} />
         )}
 
-        {readiness && <SystemStatusCard readiness={readiness} />}
+        {readiness && <SystemStatusCard lang={lang} readiness={readiness} />}
       </div>
     </PageShell>
   )

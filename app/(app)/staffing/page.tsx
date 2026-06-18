@@ -11,10 +11,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { getRoleMatrix, getStarterShiftSections } from '@/lib/onboarding/defaults'
 import { splitRolesForStorage, type BusinessType, type TeamModel } from '@/lib/onboarding/types'
+import { getLang } from '@/lib/i18n-server'
 import StaffingClient from './client'
 
 export default async function StaffingPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   const { data: config } = await supabase
     .from('staffing_config')
@@ -252,6 +254,7 @@ export default async function StaffingPage() {
 
   return (
     <StaffingClient
+      lang={lang}
       defaultLocationId={locations?.[0]?.id ?? null}
       houseModel={houseModel}
       schedulingStyle={schedulingStyle}

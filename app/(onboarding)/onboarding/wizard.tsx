@@ -28,14 +28,35 @@ import {
   getRoleMatrix,
   isRoleSelectionValid,
 } from '@/lib/onboarding/defaults'
+import { makeT, type Lang } from '@/lib/i18n'
 
 type Step = 0 | 1 | 2 | 3 | 4 | 5
+type T = (en: string, es?: string) => string
 
 const BIZ_TYPES: BusinessType[] = ['full_service', 'quick_service', 'food_truck', 'cafe', 'bar']
 const TEAMS: TeamModel[] = ['foh_boh', 'unified', 'prep_service']
 const SCHEDS: SchedulingStyle[] = ['by_role', 'by_shift_block']
 
-const BIZ_SUBTITLES: Record<BusinessType, string> = {
+const BIZ_LABELS_ES: Record<BusinessType, string> = {
+  full_service: 'Restaurante con servicio completo',
+  quick_service: 'Servicio rápido / Comida rápida',
+  food_truck: 'Food truck',
+  cafe: 'Café / Cafetería',
+  bar: 'Bar / Cantina',
+}
+
+const TEAM_LABELS_ES: Record<TeamModel, string> = {
+  foh_boh: 'Salón + Cocina',
+  unified: 'Equipo unificado',
+  prep_service: 'Prep + Servicio',
+}
+
+const SCHED_LABELS_ES: Record<SchedulingStyle, string> = {
+  by_role: 'Por rol',
+  by_shift_block: 'Por bloque de turno',
+}
+
+const BIZ_SUBTITLES_EN: Record<BusinessType, string> = {
   full_service: 'Dine-in with full table service',
   quick_service: 'Counter service, fast turnaround',
   food_truck: 'Mobile, compact menu',
@@ -43,18 +64,38 @@ const BIZ_SUBTITLES: Record<BusinessType, string> = {
   bar: 'Drinks-first, food secondary',
 }
 
-const TEAM_SUBTITLES: Record<TeamModel, string> = {
+const BIZ_SUBTITLES_ES: Record<BusinessType, string> = {
+  full_service: 'Para comer en el local con servicio en mesa',
+  quick_service: 'Servicio de mostrador, rotación rápida',
+  food_truck: 'Móvil, menú compacto',
+  cafe: 'Centrado en café, comida ligera',
+  bar: 'Bebidas primero, comida secundaria',
+}
+
+const TEAM_SUBTITLES_EN: Record<TeamModel, string> = {
   foh_boh: 'Separate front and kitchen teams',
   unified: 'Everyone shares the same pool',
   prep_service: 'Split by prep work vs customer-facing',
 }
 
-const SCHED_SUBTITLES: Record<SchedulingStyle, string> = {
+const TEAM_SUBTITLES_ES: Record<TeamModel, string> = {
+  foh_boh: 'Equipos separados de salón y cocina',
+  unified: 'Todos comparten el mismo grupo',
+  prep_service: 'Dividido entre preparación y atención al cliente',
+}
+
+const SCHED_SUBTITLES_EN: Record<SchedulingStyle, string> = {
   by_role: 'Each role gets its own row on the board',
   by_shift_block: 'Opening / Closing blocks with roles inside',
 }
 
-export default function OnboardingWizard() {
+const SCHED_SUBTITLES_ES: Record<SchedulingStyle, string> = {
+  by_role: 'Cada rol tiene su propia fila en el tablero',
+  by_shift_block: 'Bloques de apertura / cierre con roles dentro',
+}
+
+export default function OnboardingWizard({ lang }: { lang: Lang }) {
+  const t = makeT(lang)
   const router = useRouter()
   const [step, setStep] = useState<Step>(0)
   const [error, setError] = useState<string | null>(null)
@@ -151,13 +192,40 @@ export default function OnboardingWizard() {
     })
   }
 
+  const bizLabel = (v: BusinessType) => lang === 'es' ? BIZ_LABELS_ES[v] : BUSINESS_TYPE_LABEL[v]
+  const teamLabel = (v: TeamModel) => lang === 'es' ? TEAM_LABELS_ES[v] : TEAM_MODEL_LABEL[v]
+  const schedLabel = (v: SchedulingStyle) => lang === 'es' ? SCHED_LABELS_ES[v] : SCHEDULING_STYLE_LABEL[v]
+  const bizSub = (v: BusinessType) => lang === 'es' ? BIZ_SUBTITLES_ES[v] : BIZ_SUBTITLES_EN[v]
+  const teamSub = (v: TeamModel) => lang === 'es' ? TEAM_SUBTITLES_ES[v] : TEAM_SUBTITLES_EN[v]
+  const schedSub = (v: SchedulingStyle) => lang === 'es' ? SCHED_SUBTITLES_ES[v] : SCHED_SUBTITLES_EN[v]
+
   const TITLES: Record<Step, [string, string]> = {
-    0: ['Let\u2019s set up your restaurant', 'We\u2019ll personalize the system from your answers.'],
-    1: ['What type of food service are you running?', 'This shapes your menu sections, staffing defaults, and setup flow.'],
-    2: ['How is your team organized?', 'Determines how the staffing board is structured.'],
-    3: ['How do you plan to schedule?', 'You can change this later once you see the board.'],
-    4: [effSched === 'by_role' ? 'Which roles do you schedule separately?' : 'Which roles does your restaurant use?', 'Recommended roles are preselected. Uncheck what you don\u2019t need.'],
-    5: ['Are you already using another POS?', 'This sets up native sales or import from your existing system.'],
+    0: [
+      t('Let’s set up your restaurant', 'Vamos a configurar tu restaurante'),
+      t('We’ll personalize the system from your answers.', 'Personalizaremos el sistema con tus respuestas.'),
+    ],
+    1: [
+      t('What type of food service are you running?', '¿Qué tipo de servicio gastronómico operas?'),
+      t('This shapes your menu sections, staffing defaults, and setup flow.', 'Esto define las secciones del menú, los valores por defecto del personal y el flujo de configuración.'),
+    ],
+    2: [
+      t('How is your team organized?', '¿Cómo se organiza tu equipo?'),
+      t('Determines how the staffing board is structured.', 'Determina cómo se estructura el tablero de personal.'),
+    ],
+    3: [
+      t('How do you plan to schedule?', '¿Cómo planeas programar los turnos?'),
+      t('You can change this later once you see the board.', 'Puedes cambiarlo después una vez que veas el tablero.'),
+    ],
+    4: [
+      effSched === 'by_role'
+        ? t('Which roles do you schedule separately?', '¿Qué roles programas por separado?')
+        : t('Which roles does your restaurant use?', '¿Qué roles usa tu restaurante?'),
+      t('Recommended roles are preselected. Uncheck what you don’t need.', 'Los roles recomendados están preseleccionados. Desmarca los que no necesites.'),
+    ],
+    5: [
+      t('Are you already using another POS?', '¿Ya usas otro POS?'),
+      t('This sets up native sales or import from your existing system.', 'Esto configura ventas nativas o la importación desde tu sistema actual.'),
+    ],
   }
 
   // Step progress
@@ -170,9 +238,11 @@ export default function OnboardingWizard() {
         <div className="mb-6 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-8 h-8 rounded-lg bg-blue-600" />
-            <span className="text-sm font-semibold text-gray-900">Setup</span>
+            <span className="text-sm font-semibold text-gray-900">{t('Setup', 'Configuración')}</span>
           </div>
-          <span className="text-xs text-gray-400">Step {step + 1} of 6</span>
+          <span className="text-xs text-gray-400">
+            {t('Step', 'Paso')} {step + 1} {t('of', 'de')} 6
+          </span>
         </div>
 
         {/* Progress bar */}
@@ -186,12 +256,12 @@ export default function OnboardingWizard() {
           <p className="mt-1.5 text-sm text-gray-500">{TITLES[step][1]}</p>
 
           <div className="mt-8">
-            {step === 0 && <StepBasics restName={restName} setRestName={setRestName} locName={locName} setLocName={setLocName} locAddr={locAddr} setLocAddr={setLocAddr} />}
-            {step === 1 && <OptionGrid items={BIZ_TYPES.map(v => ({ v, label: BUSINESS_TYPE_LABEL[v], sub: BIZ_SUBTITLES[v] }))} value={biz} onPick={setBiz} cols={3} />}
-            {step === 2 && <OptionGrid items={TEAMS.map(v => ({ v, label: TEAM_MODEL_LABEL[v], sub: TEAM_SUBTITLES[v], rec: v === recTeam }))} value={effTeam} onPick={(v) => { setTeam(v as TeamModel); setTeamTouched(true) }} cols={3} />}
-            {step === 3 && <OptionGrid items={SCHEDS.map(v => ({ v, label: SCHEDULING_STYLE_LABEL[v], sub: SCHED_SUBTITLES[v], rec: v === recSched }))} value={effSched} onPick={(v) => { setSched(v as SchedulingStyle); setSchedTouched(true) }} cols={2} />}
-            {step === 4 && matrix && effTeam && <StepRoles matrix={matrix} tm={effTeam} a={rolesA} b={rolesB} setA={setRolesA} setB={setRolesB} />}
-            {step === 5 && <StepPos value={extPos} onChange={setExtPos} />}
+            {step === 0 && <StepBasics t={t} restName={restName} setRestName={setRestName} locName={locName} setLocName={setLocName} locAddr={locAddr} setLocAddr={setLocAddr} />}
+            {step === 1 && <OptionGrid t={t} items={BIZ_TYPES.map(v => ({ v, label: bizLabel(v), sub: bizSub(v) }))} value={biz} onPick={setBiz} cols={3} />}
+            {step === 2 && <OptionGrid t={t} items={TEAMS.map(v => ({ v, label: teamLabel(v), sub: teamSub(v), rec: v === recTeam }))} value={effTeam} onPick={(v) => { setTeam(v as TeamModel); setTeamTouched(true) }} cols={3} />}
+            {step === 3 && <OptionGrid t={t} items={SCHEDS.map(v => ({ v, label: schedLabel(v), sub: schedSub(v), rec: v === recSched }))} value={effSched} onPick={(v) => { setSched(v as SchedulingStyle); setSchedTouched(true) }} cols={2} />}
+            {step === 4 && matrix && effTeam && <StepRoles t={t} matrix={matrix} tm={effTeam} a={rolesA} b={rolesB} setA={setRolesA} setB={setRolesB} />}
+            {step === 5 && <StepPos t={t} value={extPos} onChange={setExtPos} />}
           </div>
 
           {error && <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
@@ -199,16 +269,16 @@ export default function OnboardingWizard() {
           <div className="mt-8 flex items-center justify-between border-t border-gray-100 pt-6">
             <button type="button" onClick={back} disabled={step === 0 || isPending}
               className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-30">
-              &larr; Back
+              &larr; {t('Back', 'Atrás')}
             </button>
             {step < 5
               ? <button type="button" onClick={next} disabled={!ok || isPending}
                   className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50">
-                  Continue
+                  {t('Continue', 'Continuar')}
                 </button>
               : <button type="button" onClick={submit} disabled={!ok || isPending}
                   className="px-5 py-2 text-sm font-medium rounded-lg bg-gray-900 text-white hover:bg-gray-800 transition-colors disabled:opacity-50">
-                  {isPending ? 'Setting up\u2026' : 'Finish setup'}
+                  {isPending ? t('Setting up…', 'Configurando…') : t('Finish setup', 'Finalizar configuración')}
                 </button>
             }
           </div>
@@ -221,9 +291,10 @@ export default function OnboardingWizard() {
 // ================================================================
 // Option grid — business type, team model, scheduling style
 // ================================================================
-function OptionGrid<T extends string>({ items, value, onPick, cols }: {
-  items: { v: T; label: string; sub: string; rec?: boolean }[]
-  value: T | null; onPick: (v: T) => void; cols: number
+function OptionGrid<T2 extends string>({ t, items, value, onPick, cols }: {
+  t: T
+  items: { v: T2; label: string; sub: string; rec?: boolean }[]
+  value: T2 | null; onPick: (v: T2) => void; cols: number
 }) {
   return (
     <div className={`grid gap-3 ${cols === 3 ? 'sm:grid-cols-3' : cols === 2 ? 'sm:grid-cols-2' : ''}`}>
@@ -238,7 +309,7 @@ function OptionGrid<T extends string>({ items, value, onPick, cols }: {
             <p className={`text-sm font-semibold ${value === i.v ? 'text-blue-700' : 'text-gray-900'}`}>{i.label}</p>
             {i.rec && (
               <span className="flex-shrink-0 text-[9px] font-bold uppercase tracking-widest text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded">
-                Rec
+                {t('Rec', 'Rec.')}
               </span>
             )}
           </div>
@@ -262,16 +333,32 @@ function FieldInput({ label, value, onChange, placeholder }: { label: string; va
   )
 }
 
-function StepBasics({ restName, setRestName, locName, setLocName, locAddr, setLocAddr }: {
+function StepBasics({ t, restName, setRestName, locName, setLocName, locAddr, setLocAddr }: {
+  t: T
   restName: string; setRestName: (v: string) => void
   locName: string; setLocName: (v: string) => void
   locAddr: string; setLocAddr: (v: string) => void
 }) {
   return (
     <div className="space-y-5">
-      <FieldInput label="Restaurant name" value={restName} onChange={setRestName} placeholder="e.g. Sunset Grille" />
-      <FieldInput label="First location name" value={locName} onChange={setLocName} placeholder="e.g. Main Street" />
-      <FieldInput label="Address (optional)" value={locAddr} onChange={setLocAddr} placeholder="123 Main St" />
+      <FieldInput
+        label={t('Restaurant name', 'Nombre del restaurante')}
+        value={restName}
+        onChange={setRestName}
+        placeholder={t('e.g. Sunset Grille', 'p. ej. Sunset Grille')}
+      />
+      <FieldInput
+        label={t('First location name', 'Nombre del primer local')}
+        value={locName}
+        onChange={setLocName}
+        placeholder={t('e.g. Main Street', 'p. ej. Calle Principal')}
+      />
+      <FieldInput
+        label={t('Address (optional)', 'Dirección (opcional)')}
+        value={locAddr}
+        onChange={setLocAddr}
+        placeholder={t('123 Main St', 'Calle Principal 123')}
+      />
     </div>
   )
 }
@@ -279,7 +366,8 @@ function StepBasics({ restName, setRestName, locName, setLocName, locAddr, setLo
 // ================================================================
 // Step 4 — Role selection
 // ================================================================
-function StepRoles({ matrix, tm, a, b, setA, setB }: {
+function StepRoles({ t, matrix, tm, a, b, setA, setB }: {
+  t: T
   matrix: ReturnType<typeof getRoleMatrix>; tm: TeamModel
   a: string[]; b: string[]; setA: (v: string[]) => void; setB: (v: string[]) => void
 }) {
@@ -290,16 +378,21 @@ function StepRoles({ matrix, tm, a, b, setA, setB }: {
   }
   return (
     <div className="space-y-6">
-      <RoleBucket label={matrix.groupALabel} bucket={matrix.groupA} sel={a} onToggle={r => toggle('A', r)} />
+      <RoleBucket t={t} label={matrix.groupALabel} bucket={matrix.groupA} sel={a} onToggle={r => toggle('A', r)} />
       {matrix.groupB && matrix.groupBLabel && tm !== 'unified' && (
-        <RoleBucket label={matrix.groupBLabel} bucket={matrix.groupB} sel={b} onToggle={r => toggle('B', r)} />
+        <RoleBucket t={t} label={matrix.groupBLabel} bucket={matrix.groupB} sel={b} onToggle={r => toggle('B', r)} />
       )}
-      <p className="text-xs text-gray-400">{tm === 'unified' ? 'Pick at least one role.' : 'Pick at least one role in each section.'}</p>
+      <p className="text-xs text-gray-400">
+        {tm === 'unified'
+          ? t('Pick at least one role.', 'Elige al menos un rol.')
+          : t('Pick at least one role in each section.', 'Elige al menos un rol en cada sección.')}
+      </p>
     </div>
   )
 }
 
-function RoleBucket({ label, bucket, sel, onToggle }: {
+function RoleBucket({ t, label, bucket, sel, onToggle }: {
+  t: T
   label: string; bucket: { recommended: string[]; extras: string[] }; sel: string[]; onToggle: (r: string) => void
 }) {
   return (
@@ -311,7 +404,7 @@ function RoleBucket({ label, bucket, sel, onToggle }: {
       {bucket.extras.length > 0 && (
         <>
           <div className="my-3 border-t border-gray-200" />
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-400">Optional</p>
+          <p className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-gray-400">{t('Optional', 'Opcional')}</p>
           <div className="flex flex-wrap gap-2">
             {bucket.extras.map(r => <RoleChip key={r} role={r} on={sel.includes(r)} onToggle={() => onToggle(r)} faint />)}
           </div>
@@ -339,7 +432,7 @@ function RoleChip({ role, on, onToggle, faint = false }: { role: string; on: boo
 // ================================================================
 // Step 5 — POS
 // ================================================================
-function StepPos({ value, onChange }: { value: boolean | null; onChange: (v: boolean) => void }) {
+function StepPos({ t, value, onChange }: { t: T; value: boolean | null; onChange: (v: boolean) => void }) {
   // This single answer branches the entire product experience. It sets
   // operating_mode for the restaurant and is intentionally hard to flip
   // post-setup (Settings exposes the switch only to dev accounts), so
@@ -347,22 +440,31 @@ function StepPos({ value, onChange }: { value: boolean | null; onChange: (v: boo
   const options: Array<{ v: boolean; title: string; sub: string; bullets: string[] }> = [
     {
       v: true,
-      title: 'Yes \u2014 I use another POS',
-      sub: 'Toast, Clover, Square, or similar. We import from there.',
+      title: t('Yes — I use another POS', 'Sí — uso otro POS'),
+      sub: t(
+        'Toast, Clover, Square, or similar. We import from there.',
+        'Toast, Clover, Square o similar. Importamos desde allí.'
+      ),
       bullets: [
-        'Sales come in from your existing POS',
-        'Menu can be imported from your provider',
-        'Sales page becomes a review ledger of imported orders',
+        t('Sales come in from your existing POS', 'Las ventas entran desde tu POS actual'),
+        t('Menu can be imported from your provider', 'El menú se puede importar desde tu proveedor'),
+        t(
+          'Sales page becomes a review ledger of imported orders',
+          'La página de ventas se convierte en un libro de revisión de pedidos importados'
+        ),
       ],
     },
     {
       v: false,
-      title: 'No \u2014 set me up fresh',
-      sub: 'No external POS. We\u2019ll run sales natively in-app.',
+      title: t('No — set me up fresh', 'No — configúralo desde cero'),
+      sub: t(
+        'No external POS. We’ll run sales natively in-app.',
+        'Sin POS externo. Ejecutaremos las ventas de forma nativa en la app.'
+      ),
       bullets: [
-        'Built-in POS for ringing up sales',
-        'Native menu builder',
-        'Sales page is the live ledger of native sales',
+        t('Built-in POS for ringing up sales', 'POS integrado para registrar ventas'),
+        t('Native menu builder', 'Constructor de menú nativo'),
+        t('Sales page is the live ledger of native sales', 'La página de ventas es el libro en vivo de ventas nativas'),
       ],
     },
   ]

@@ -14,27 +14,30 @@ import { createClient } from '@/lib/supabase/server'
 import { isPlaidConfigured, isPlaidSandbox } from '@/lib/plaid/client'
 import { isDevEmail } from '@/lib/dev'
 import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
+import { getLang } from '@/lib/i18n-server'
+import { makeT, type Lang } from '@/lib/i18n'
 import FinanceClient from './client'
 
 // Plaid Personal Finance Category primaries → short human labels.
 // Keeps the Operating UI readable without pretending the
 // classification is more than what Plaid actually returns.
-function friendlyOperatingCategory(raw: string): string {
+function friendlyOperatingCategory(raw: string, lang: Lang): string {
+  const t = makeT(lang)
   const map: Record<string, string> = {
-    RENT_AND_UTILITIES: 'Rent & utilities',
-    GENERAL_SERVICES: 'Services & subscriptions',
-    FOOD_AND_DRINK: 'Food & drink',
-    GENERAL_MERCHANDISE: 'Supplies & merchandise',
-    TRANSPORTATION: 'Transportation',
-    TRAVEL: 'Travel',
-    ENTERTAINMENT: 'Marketing & entertainment',
-    BANK_FEES: 'Bank fees',
-    LOAN_PAYMENTS: 'Loan payments',
-    TRANSFER_OUT: 'Transfers out',
-    HOME_IMPROVEMENT: 'Maintenance',
-    MEDICAL: 'Medical',
-    PERSONAL_CARE: 'Personal care',
-    GOVERNMENT_AND_NON_PROFIT: 'Government & other',
+    RENT_AND_UTILITIES: t('Rent & utilities', 'Renta y servicios'),
+    GENERAL_SERVICES: t('Services & subscriptions', 'Servicios y suscripciones'),
+    FOOD_AND_DRINK: t('Food & drink', 'Comida y bebida'),
+    GENERAL_MERCHANDISE: t('Supplies & merchandise', 'Suministros y mercancía'),
+    TRANSPORTATION: t('Transportation', 'Transporte'),
+    TRAVEL: t('Travel', 'Viajes'),
+    ENTERTAINMENT: t('Marketing & entertainment', 'Marketing y entretenimiento'),
+    BANK_FEES: t('Bank fees', 'Cuotas bancarias'),
+    LOAN_PAYMENTS: t('Loan payments', 'Pagos de préstamos'),
+    TRANSFER_OUT: t('Transfers out', 'Transferencias salientes'),
+    HOME_IMPROVEMENT: t('Maintenance', 'Mantenimiento'),
+    MEDICAL: t('Medical', 'Médico'),
+    PERSONAL_CARE: t('Personal care', 'Cuidado personal'),
+    GOVERNMENT_AND_NON_PROFIT: t('Government & other', 'Gobierno y otros'),
   }
   if (map[raw]) return map[raw]
   // Fallback: title-case any unknown raw value.
@@ -47,6 +50,7 @@ function friendlyOperatingCategory(raw: string): string {
 
 export default async function FinancePage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   // ---- Auto-sync (5-minute staleness threshold) ----
   // Runs server-side before the main fetch so the rest of the page
@@ -421,7 +425,7 @@ export default async function FinancePage() {
 
   const externalByCategory = Array.from(externalByCategoryMap.entries())
     .map(([rawLabel, v]) => ({
-      label: friendlyOperatingCategory(rawLabel),
+      label: friendlyOperatingCategory(rawLabel, lang),
       rawLabel,
       amount: round2(v.amount),
       count: v.count,
@@ -462,6 +466,7 @@ export default async function FinancePage() {
 
   return (
     <FinanceClient
+      lang={lang}
       locations={locations ?? []}
       defaultLocationId={defaultLocationId}
       plaidConfigured={isPlaidConfigured()}

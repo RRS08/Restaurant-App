@@ -26,6 +26,7 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { BrandLockup } from '@/components/brand'
+import { getLang, getT } from '@/lib/i18n-server'
 import AcceptInviteForm from './form'
 
 interface RestaurantSummary {
@@ -50,6 +51,8 @@ export default async function AcceptInvitePage() {
   const {
     data: { user },
   } = await supabase.auth.getUser()
+  const lang = await getLang()
+  const t = await getT()
 
   // Not signed in → /auth/callback didn't deliver a session.
   // Most likely the link expired or was clicked from a different
@@ -84,13 +87,13 @@ export default async function AcceptInvitePage() {
           </div>
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
             <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-emerald-50 text-emerald-600 text-xl">✓</div>
-            <h1 className="mt-4 text-lg font-semibold text-gray-900">You&apos;re in</h1>
-            <p className="mt-2 text-sm text-gray-500">This invitation has already been accepted.</p>
+            <h1 className="mt-4 text-lg font-semibold text-gray-900">{t('You’re in', 'Ya estás dentro')}</h1>
+            <p className="mt-2 text-sm text-gray-500">{t('This invitation has already been accepted.', 'Esta invitación ya fue aceptada.')}</p>
             <Link
               href="/dashboard"
               className="mt-6 inline-block w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
             >
-              Open dashboard
+              {t('Open dashboard', 'Abrir panel')}
             </Link>
           </div>
         </div>
@@ -107,16 +110,18 @@ export default async function AcceptInvitePage() {
             <Link href="/" className="inline-flex"><BrandLockup size="md" variant="solid" /></Link>
           </div>
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
-            <h1 className="text-lg font-semibold text-gray-900">No invitation found</h1>
+            <h1 className="text-lg font-semibold text-gray-900">{t('No invitation found', 'No se encontró ninguna invitación')}</h1>
             <p className="mt-2 text-sm text-gray-500 leading-relaxed">
-              We couldn&apos;t find a pending invitation for <strong>{userEmail}</strong>.
-              Ask the owner to send a fresh invite from their Settings page.
+              {t('We couldn’t find a pending invitation for ', 'No encontramos una invitación pendiente para ')}
+              <strong>{userEmail}</strong>.
+              {' '}
+              {t('Ask the owner to send a fresh invite from their Settings page.', 'Pídele al dueño que envíe una nueva invitación desde su página de Ajustes.')}
             </p>
             <Link
               href="/login"
               className="mt-6 inline-block text-sm font-medium text-blue-600 hover:text-blue-500"
             >
-              Back to sign in
+              {t('Back to sign in', 'Volver al inicio de sesión')}
             </Link>
           </div>
         </div>
@@ -140,45 +145,47 @@ export default async function AcceptInvitePage() {
     role: invitationRow.role as 'manager' | 'staff',
     restaurant: {
       id: restaurant?.id ?? '',
-      name: restaurant?.name ?? 'this restaurant',
+      name: restaurant?.name ?? t('this restaurant', 'este restaurante'),
     },
     location: location ? { id: location.id as string, name: location.name as string } : null,
   }
+
+  const roleLabel = invitation.role === 'manager' ? t('Manager', 'Gerente') : t('Staff', 'Personal')
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <Link href="/" className="inline-flex"><BrandLockup size="md" variant="solid" /></Link>
-          <h1 className="mt-6 text-2xl font-bold text-gray-900 tracking-tight">You&apos;re invited</h1>
+          <h1 className="mt-6 text-2xl font-bold text-gray-900 tracking-tight">{t('You’re invited', 'Estás invitado')}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Review the access you&apos;ll be granted, then accept to join.
+            {t('Review the access you’ll be granted, then accept to join.', 'Revisa el acceso que se te otorgará y acepta para unirte.')}
           </p>
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8 space-y-5">
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
-              <span className="text-gray-500">Restaurant</span>
+              <span className="text-gray-500">{t('Restaurant', 'Restaurante')}</span>
               <span className="font-medium text-gray-900">{invitation.restaurant.name}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-500">Role</span>
-              <span className="font-medium text-gray-900 capitalize">{invitation.role}</span>
+              <span className="text-gray-500">{t('Role', 'Rol')}</span>
+              <span className="font-medium text-gray-900">{roleLabel}</span>
             </div>
             {invitation.location && (
               <div className="flex justify-between">
-                <span className="text-gray-500">Location</span>
+                <span className="text-gray-500">{t('Location', 'Local')}</span>
                 <span className="font-medium text-gray-900">{invitation.location.name}</span>
               </div>
             )}
             <div className="flex justify-between">
-              <span className="text-gray-500">Your email</span>
+              <span className="text-gray-500">{t('Your email', 'Tu correo')}</span>
               <span className="font-medium text-gray-900">{userEmail}</span>
             </div>
           </div>
 
-          <AcceptInviteForm />
+          <AcceptInviteForm lang={lang} />
         </div>
       </div>
     </div>

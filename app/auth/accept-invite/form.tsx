@@ -15,8 +15,10 @@
 import { useActionState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { acceptTeamInvite } from '@/app/actions/team'
+import { makeT, type Lang } from '@/lib/i18n'
 
-export default function AcceptInviteForm() {
+export default function AcceptInviteForm({ lang }: { lang: Lang }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(acceptTeamInvite, null)
   const router = useRouter()
 
@@ -40,7 +42,7 @@ export default function AcceptInviteForm() {
                    text-white hover:bg-gray-800 transition-colors
                    disabled:opacity-60 disabled:cursor-not-allowed"
       >
-        {pending ? 'Accepting…' : 'Accept invitation'}
+        {pending ? t('Accepting…', 'Aceptando…') : t('Accept invitation', 'Aceptar invitación')}
       </button>
     </form>
   )

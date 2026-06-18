@@ -25,6 +25,12 @@ import {
   placeRestockTicket,
 } from '@/app/actions/inventory'
 import { cleanupDuplicateInventoryItems, mergeInventoryItems, runInventoryIntegrityChecks } from '@/app/actions/inventory-cleanup'
+import { makeT, type Lang } from '@/lib/i18n'
+
+// Translator function shape — threaded as a prop to every child
+// component that renders user-visible English copy. Centralizes the
+// signature so each subcomponent's props can spell it as `t: T`.
+type T = (en: string, es?: string) => string
 
 interface MenuItemDep {
   menuItemId: string
@@ -98,6 +104,18 @@ const STATUS = {
   ok:       { label: 'OK',       color: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
 } as const
 
+// Translate the STATUS label to the active language. Centralizes the
+// English → Spanish mapping for the four buckets so callers don't
+// repeat the t() literals at every consumption site.
+function translateStatusLabel(status: Item['status'], t: T): string {
+  switch (status) {
+    case 'no_count': return t('No count', 'Sin conteo')
+    case 'out':      return t('Out', 'Agotado')
+    case 'low':      return t('Low', 'Bajo')
+    case 'ok':       return t('OK', 'OK')
+  }
+}
+
 const STATUS_ORDER: Record<Item['status'], number> = { out: 0, low: 1, no_count: 2, ok: 3 }
 type Filter = 'all' | 'out' | 'low' | 'no_count' | 'ok'
 
@@ -115,7 +133,7 @@ type DrawerState =
   | { mode: 'merge-items' }
   | null
 
-export default function InventoryClient({ items, transactions, restockOrders, closedRestockOrders = [], duplicateGroups = [], mergeableItems = [], archivedInRecipes = [] }: {
+export default function InventoryClient({ items, transactions, restockOrders, closedRestockOrders = [], duplicateGroups = [], mergeableItems = [], archivedInRecipes = [], lang }: {
   items: Item[]
   transactions: Transaction[]
   restockOrders: RestockOrder[]
@@ -138,7 +156,11 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
    *  on rows the page filters out of the table; one-click banner
    *  triggers `runInventoryIntegrityChecks` which reactivates them. */
   archivedInRecipes?: string[]
+  /** Language passed down from the server-component page. Used to
+   *  build the `t` translator that's threaded to every child. */
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<Filter>('all')
   const [page, setPage] = useState(1)
@@ -232,8 +254,8 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
       {/*    or the auto-detection's name-normalization missed them. */}
       <div className="mb-7 flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Inventory</h1>
-          <p className="mt-1.5 text-sm text-gray-500">Track stock health for ingredients and operational supplies.</p>
+          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Inventory', 'Inventario')}</h1>
+          <p className="mt-1.5 text-sm text-gray-500">{t('Track stock health for ingredients and operational supplies.', 'Monitorea la salud del stock de ingredientes y suministros operativos.')}</p>
         </div>
         <div className="flex-shrink-0 flex items-center gap-2">
           <button
@@ -241,12 +263,12 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             onClick={() => setDrawer({ mode: 'merge-items' })}
             className="text-[11px] font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline transition-colors"
           >
-            Merge items
+            {t('Merge items', 'Combinar artículos')}
           </button>
           {/* Mobile-only fallback — desktop uses the right-rail inline flow */}
           <Link href="/inventory/new-item"
             className="lg:hidden inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors">
-            + New item
+            {t('+ New item', '+ Nuevo artículo')}
           </Link>
         </div>
       </div>
@@ -262,6 +284,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
         <DuplicateMergeBanner
           groups={duplicateGroups}
           onPickManually={() => setDrawer({ mode: 'merge-items' })}
+          t={t}
         />
       )}
 
@@ -273,21 +296,21 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           `runInventoryIntegrityChecks`, which now auto-reactivates
           these items so depletion lands on a visible row again. */}
       {archivedInRecipes.length > 0 && (
-        <ArchivedInRecipesBanner names={archivedInRecipes} />
+        <ArchivedInRecipesBanner names={archivedInRecipes} t={t} />
       )}
 
       {items.length === 0 ? (
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-12 text-center">
-          <p className="text-sm font-semibold text-gray-700">No inventory items yet</p>
+          <p className="text-sm font-semibold text-gray-700">{t('No inventory items yet', 'Sin artículos de inventario aún')}</p>
           <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
-            Add ingredients and products to start tracking stock health and movements.
+            {t('Add ingredients and products to start tracking stock health and movements.', 'Agrega ingredientes y productos para comenzar a rastrear la salud del stock y los movimientos.')}
           </p>
           <button
             type="button"
             onClick={() => setDrawer({ mode: 'create-item' })}
             className="mt-5 inline-flex items-center rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
           >
-            + Track new item
+            {t('+ Track new item', '+ Rastrear nuevo artículo')}
           </button>
         </div>
       ) : (
@@ -307,7 +330,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search items by name…"
+                placeholder={t('Search items by name…', 'Buscar artículos por nombre…')}
                 className="h-10 w-full rounded-lg border border-gray-200/80 bg-white pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-[0_1px_2px_rgba(0,0,0,0.03)] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
               />
             </div>
@@ -320,19 +343,19 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              Item
+              {t('Item', 'Artículo')}
             </button>
 
             <button
               type="button"
               onClick={() => setDrawer({ mode: 'orders' })}
-              title="Restock orders awaiting receipt"
+              title={t('Restock orders awaiting receipt', 'Órdenes de reabastecimiento esperando recepción')}
               className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
               </svg>
-              Restock orders
+              {t('Restock orders', 'Órdenes de reabastecimiento')}
               {orderedOrders.length > 0 && (
                 <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold px-1">
                   {orderedOrders.length}
@@ -343,13 +366,13 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             <button
               type="button"
               onClick={() => setDrawer({ mode: 'cart' })}
-              title="Items staged for your next restock order"
+              title={t('Items staged for your next restock order', 'Artículos preparados para tu próxima orden de reabastecimiento')}
               className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
-              Restock cart
+              {t('Restock cart', 'Carrito de reabastecimiento')}
               {draftOrders.length > 0 && (
                 <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold px-1">
                   {draftOrders.length}
@@ -370,28 +393,29 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             <div className="border-b border-gray-100 px-6 py-3">
               <div className="flex items-center justify-between gap-4 flex-wrap">
                 <div className="min-w-0">
-                  <h2 className="text-sm font-semibold tracking-tight text-gray-900">Stock Health</h2>
+                  <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Stock Health', 'Salud del stock')}</h2>
                   <p className="text-[11px] text-gray-500 mt-0.5">
-                    Items sorted by urgency — out, low, uncounted, then healthy.
+                    {t('Items sorted by urgency — out, low, uncounted, then healthy.', 'Artículos ordenados por urgencia: agotado, bajo, sin conteo, luego saludables.')}
                   </p>
                 </div>
                 <StockStatusStrip
                   counts={counts}
                   filter={filter}
                   onFilter={setFilter}
+                  t={t}
                 />
               </div>
               {(filter !== 'all' || query.length > 0) && (
                 <div className="mt-3 flex items-center gap-2">
                   <span className="text-[11px] text-gray-500 font-mono tabular-nums">
-                    Showing <span className="font-semibold text-gray-700">{filteredItems.length}</span> of <span className="font-semibold text-gray-700">{counts.total}</span>
+                    {t('Showing', 'Mostrando')} <span className="font-semibold text-gray-700">{filteredItems.length}</span> {t('of', 'de')} <span className="font-semibold text-gray-700">{counts.total}</span>
                   </span>
                   <button
                     type="button"
                     onClick={() => { setFilter('all'); setQuery('') }}
                     className="text-xs font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
                   >
-                    Clear filters
+                    {t('Clear filters', 'Limpiar filtros')}
                   </button>
                 </div>
               )}
@@ -402,7 +426,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                 {pageItems.length === 0 ? (
                   <tr>
                     <td colSpan={4} className="px-6 py-14 text-center text-xs text-gray-400">
-                      No items match this filter.
+                      {t('No items match this filter.', 'Ningún artículo coincide con este filtro.')}
                     </td>
                   </tr>
                 ) : pageItems.map((item) => {
@@ -415,6 +439,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                       draftLine={draftLine}
                       selected={item.id === selectedId}
                       onOpen={() => setDrawer({ mode: 'item', itemId: item.id })}
+                      t={t}
                     />
                   )
                 })}
@@ -424,14 +449,14 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             {filteredItems.length > PAGE_SIZE && (
               <div className="border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
                 <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                  Showing <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> of <span className="font-semibold text-gray-700">{filteredItems.length}</span>
+                  {t('Showing', 'Mostrando')} <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> {t('of', 'de')} <span className="font-semibold text-gray-700">{filteredItems.length}</span>
                 </p>
                 <div className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={safePage === 1}
-                    aria-label="Previous items"
+                    aria-label={t('Previous items', 'Artículos anteriores')}
                     className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     ←
@@ -443,7 +468,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     type="button"
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={safePage === totalPages}
-                    aria-label="Next items"
+                    aria-label={t('Next items', 'Artículos siguientes')}
                     className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   >
                     →
@@ -464,10 +489,11 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           transactions={transactions}
           restockOrders={ordersByItem.get(selectedItem.id) ?? []}
           onClose={() => setDrawer(null)}
+          t={t}
         />
       )}
       {drawer?.mode === 'create-item' && (
-        <QuickAddItemDrawer onClose={() => setDrawer(null)} />
+        <QuickAddItemDrawer onClose={() => setDrawer(null)} t={t} />
       )}
       {drawer?.mode === 'cart' && (
         <CartDrawer
@@ -475,6 +501,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           itemsById={itemsById}
           onClose={() => setDrawer(null)}
           onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
+          t={t}
         />
       )}
       {drawer?.mode === 'orders' && (
@@ -484,12 +511,14 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           itemsById={itemsById}
           onClose={() => setDrawer(null)}
           onInspectItem={(itemId) => setDrawer({ mode: 'item', itemId })}
+          t={t}
         />
       )}
       {drawer?.mode === 'merge-items' && (
         <MergeItemsDrawer
           mergeableItems={mergeableItems}
           onClose={() => setDrawer(null)}
+          t={t}
         />
       )}
     </div>
@@ -510,10 +539,12 @@ function StockStatusStrip({
   counts,
   filter,
   onFilter,
+  t,
 }: {
   counts: { out: number; low: number; no_count: number; ok: number; total: number }
   filter: Filter
   onFilter: (f: Filter) => void
+  t: T
 }) {
   // `dot` is the status palette shared with ItemRow's left stripe
   // (red Out, amber Low, gray No count, emerald OK). `All` is the
@@ -524,18 +555,18 @@ function StockStatusStrip({
     value: number
     dot: string | null
   }> = [
-    { key: 'all',      label: 'All',      value: counts.total,    dot: null            },
-    { key: 'out',      label: 'Out',      value: counts.out,      dot: 'bg-red-500'    },
-    { key: 'low',      label: 'Low',      value: counts.low,      dot: 'bg-amber-500'  },
-    { key: 'no_count', label: 'No count', value: counts.no_count, dot: 'bg-gray-400'   },
-    { key: 'ok',       label: 'OK',       value: counts.ok,       dot: 'bg-emerald-500' },
+    { key: 'all',      label: t('All', 'Todos'),         value: counts.total,    dot: null            },
+    { key: 'out',      label: t('Out', 'Agotado'),       value: counts.out,      dot: 'bg-red-500'    },
+    { key: 'low',      label: t('Low', 'Bajo'),          value: counts.low,      dot: 'bg-amber-500'  },
+    { key: 'no_count', label: t('No count', 'Sin conteo'), value: counts.no_count, dot: 'bg-gray-400'   },
+    { key: 'ok',       label: t('OK', 'OK'),             value: counts.ok,       dot: 'bg-emerald-500' },
   ]
 
   return (
     <div
       className="flex flex-wrap items-center gap-1.5"
       role="group"
-      aria-label="Filter stock by status"
+      aria-label={t('Filter stock by status', 'Filtrar stock por estado')}
     >
       {pills.map((p) => {
         const isActive = filter === p.key
@@ -576,12 +607,13 @@ function StockStatusStrip({
 // (Cart / Orders / Create-item). Same shape as Staffing's drawers
 // so the inventory drawers feel like the same product family.
 // ----------------------------------------------------------------
-function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
+function DrawerShell({ eyebrow, title, subtitle, onClose, children, t }: {
   eyebrow?: string
   title: string
   subtitle?: string
   onClose: () => void
   children: React.ReactNode
+  t: T
 }) {
   // Close on Escape — same convention every other drawer in the
   // app uses.
@@ -615,7 +647,7 @@ function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('Close', 'Cerrar')}
             className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -656,11 +688,12 @@ function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
 // split expected_cost so the existing receipt-time Finance bridge
 // reconciles to the entered ticket total.
 // ----------------------------------------------------------------
-function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
+function CartDrawer({ drafts, itemsById, onClose, onInspectItem, t }: {
   drafts: RestockOrder[]
   itemsById: Map<string, Item>
   onClose: () => void
   onInspectItem: (itemId: string) => void
+  t: T
 }) {
   // Active ticket membership — Set of draft ids currently in the
   // ticket. Drafts not in this set stay in the staging area.
@@ -734,11 +767,11 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
   const onCreateTicket = () => {
     setError(null)
     if (ticketItems.length === 0) {
-      setError('Add at least one item to the ticket.')
+      setError(t('Add at least one item to the ticket.', 'Agrega al menos un artículo a la boleta.'))
       return
     }
     if (!vendor.trim()) {
-      setError('Add a vendor before creating the order ticket.')
+      setError(t('Add a vendor before creating the order ticket.', 'Agrega un proveedor antes de crear la boleta de orden.'))
       return
     }
     startTransition(async () => {
@@ -766,10 +799,11 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
 
   return (
     <DrawerShell
-      eyebrow="Replenishment"
-      title="Restock Cart"
-      subtitle="Build vendor order tickets from staged items."
+      eyebrow={t('Replenishment', 'Reabastecimiento')}
+      title={t('Restock Cart', 'Carrito de reabastecimiento')}
+      subtitle={t('Build vendor order tickets from staged items.', 'Crea boletas de orden de proveedor a partir de artículos preparados.')}
       onClose={onClose}
+      t={t}
     >
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
         {drafts.length === 0 ? (
@@ -779,9 +813,9 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
             </div>
-            <p className="text-sm font-semibold text-gray-900">Restock cart is empty.</p>
+            <p className="text-sm font-semibold text-gray-900">{t('Restock cart is empty.', 'El carrito de reabastecimiento está vacío.')}</p>
             <p className="mx-auto mt-1.5 max-w-[300px] text-xs text-gray-500 leading-relaxed">
-              Add low or out items from Stock Health to start building a vendor ticket.
+              {t('Add low or out items from Stock Health to start building a vendor ticket.', 'Agrega artículos bajos o agotados desde Salud del stock para empezar a crear una boleta de proveedor.')}
             </p>
           </div>
         ) : (
@@ -811,6 +845,7 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
               onCreateTicket={onCreateTicket}
               pending={pending}
               error={error}
+              t={t}
             />
 
             <StagingArea
@@ -821,6 +856,7 @@ function CartDrawer({ drafts, itemsById, onClose, onInspectItem }: {
               onMoveToTicket={moveToTicket}
               onDragStart={onDragStart}
               ticketHasItems={ticketItems.length > 0}
+              t={t}
             />
           </>
         )}
@@ -843,6 +879,7 @@ function StagingArea({
   onMoveToTicket,
   onDragStart,
   ticketHasItems,
+  t,
 }: {
   items: RestockOrder[]
   itemsById: Map<string, Item>
@@ -851,6 +888,7 @@ function StagingArea({
   onMoveToTicket: (id: string) => void
   onDragStart: (e: React.DragEvent, id: string) => void
   ticketHasItems: boolean
+  t: T
 }) {
   return (
     // Soft blue top accent puts the Staging Area in the same color
@@ -861,9 +899,9 @@ function StagingArea({
     <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-xs font-semibold text-gray-900">Staging area</p>
+          <p className="text-xs font-semibold text-gray-900">{t('Staging area', 'Área de preparación')}</p>
           <p className="mt-0.5 text-[10.5px] text-gray-500">
-            Items waiting to be assigned to a vendor ticket.
+            {t('Items waiting to be assigned to a vendor ticket.', 'Artículos esperando ser asignados a una boleta de proveedor.')}
           </p>
         </div>
         {items.length > 0 && (
@@ -873,7 +911,7 @@ function StagingArea({
           // ticket's stronger blue-500 dot.
           <span className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
             <span className="w-1 h-1 rounded-full bg-blue-300" />
-            {items.length === 1 ? '1 waiting' : `${items.length} waiting`}
+            {items.length === 1 ? t('1 waiting', '1 en espera') : `${items.length} ${t('waiting', 'en espera')}`}
           </span>
         )}
       </div>
@@ -881,8 +919,8 @@ function StagingArea({
       {items.length === 0 ? (
         <p className="px-4 py-3 text-[10.5px] text-gray-400 leading-relaxed">
           {ticketHasItems
-            ? 'All staged items are on the active ticket above.'
-            : 'Nothing waiting. Add items from Stock Health.'}
+            ? t('All staged items are on the active ticket above.', 'Todos los artículos preparados están en la boleta activa de arriba.')
+            : t('Nothing waiting. Add items from Stock Health.', 'Nada en espera. Agrega artículos desde Salud del stock.')}
         </p>
       ) : (
         // Bounded scrollable tray. Above 3 items the list scrolls
@@ -908,6 +946,7 @@ function StagingArea({
                 onSelect={() => onSelect(selectedId === order.id ? null : order.id)}
                 onMoveToTicket={() => onMoveToTicket(order.id)}
                 onDragStart={(e) => onDragStart(e, order.id)}
+                t={t}
               />
             ))}
           </ul>
@@ -941,6 +980,7 @@ function StagingItemCard({
   onSelect,
   onMoveToTicket,
   onDragStart,
+  t,
 }: {
   order: RestockOrder
   item: Item | undefined
@@ -948,11 +988,12 @@ function StagingItemCard({
   onSelect: () => void
   onMoveToTicket: () => void
   onDragStart: (e: React.DragEvent) => void
+  t: T
 }) {
   const unit = item?.unitOfMeasure ?? ''
   const recipeSubtitle = item?.recipeLinks
-    ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
-    : 'Standalone item'
+    ? `${t('Used in', 'Usado en')} ${item.recipeLinks} ${item.recipeLinks > 1 ? t('recipes', 'recetas') : t('recipe', 'receta')}`
+    : t('Standalone item', 'Artículo independiente')
 
   // String-based input draft. Lets the manager type partial values
   // like "1." or transient empties without snapping back on each
@@ -1034,8 +1075,8 @@ function StagingItemCard({
           <button
             type="submit"
             disabled={cancelPending}
-            aria-label="Remove from staging"
-            title="Remove from staging"
+            aria-label={t('Remove from staging', 'Quitar de preparación')}
+            title={t('Remove from staging', 'Quitar de preparación')}
             className="text-gray-300 hover:text-red-600 transition-colors p-1 disabled:opacity-50"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1061,7 +1102,7 @@ function StagingItemCard({
             type="button"
             onClick={() => commitToServer(displayQty - 1)}
             disabled={qtyPending || displayQty <= 0.01}
-            aria-label="Decrease staged quantity"
+            aria-label={t('Decrease staged quantity', 'Disminuir cantidad preparada')}
             className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -1081,14 +1122,14 @@ function StagingItemCard({
               }
             }}
             disabled={qtyPending}
-            aria-label="Staged quantity"
+            aria-label={t('Staged quantity', 'Cantidad preparada')}
             className="h-7 w-14 text-center text-sm font-mono font-semibold tabular-nums text-gray-900 border-x border-gray-300 focus:outline-none focus:bg-blue-50/40 disabled:opacity-50 appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
           />
           <button
             type="button"
             onClick={() => commitToServer(displayQty + 1)}
             disabled={qtyPending}
-            aria-label="Increase staged quantity"
+            aria-label={t('Increase staged quantity', 'Aumentar cantidad preparada')}
             className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -1107,7 +1148,7 @@ function StagingItemCard({
             }}
             className="ml-auto flex-shrink-0 rounded-md bg-blue-600 px-2.5 py-1 text-[10.5px] font-semibold text-white hover:bg-blue-700 transition-colors"
           >
-            Add to ticket
+            {t('Add to ticket', 'Agregar a boleta')}
           </button>
         )}
       </div>
@@ -1147,6 +1188,7 @@ function ActiveTicketCard({
   onCreateTicket,
   pending,
   error,
+  t,
 }: {
   items: RestockOrder[]
   itemsById: Map<string, Item>
@@ -1165,15 +1207,16 @@ function ActiveTicketCard({
   onCreateTicket: () => void
   pending: boolean
   error: string | null
+  t: T
 }) {
   const hasItems = items.length > 0
   const canCreate = hasItems && vendor.trim().length > 0 && !pending
-  const title = vendor.trim() ? `${vendor.trim()} ticket` : 'Active ticket'
+  const title = vendor.trim() ? `${vendor.trim()} ${t('ticket', 'boleta')}` : t('Active ticket', 'Boleta activa')
   const ctaLabel = pending
-    ? 'Creating…'
+    ? t('Creating…', 'Creando…')
     : vendor.trim()
-      ? `Create ${vendor.trim()} order ticket`
-      : 'Create order ticket'
+      ? `${t('Create', 'Crear')} ${vendor.trim()} ${t('order ticket', 'boleta de orden')}`
+      : t('Create order ticket', 'Crear boleta de orden')
 
   return (
     <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-300 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
@@ -1181,12 +1224,12 @@ function ActiveTicketCard({
         <div className="min-w-0">
           <p className="text-xs font-semibold text-gray-900 truncate">{title}</p>
           <p className="mt-0.5 text-[10.5px] text-gray-500">
-            Build one vendor order from staged items.
+            {t('Build one vendor order from staged items.', 'Crea una orden de proveedor a partir de artículos preparados.')}
           </p>
         </div>
         <span className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
           <span className="w-1 h-1 rounded-full bg-blue-500" />
-          {items.length === 1 ? '1 item' : `${items.length} items`}
+          {items.length === 1 ? t('1 item', '1 artículo') : `${items.length} ${t('items', 'artículos')}`}
         </span>
       </div>
 
@@ -1195,7 +1238,7 @@ function ActiveTicketCard({
           types. */}
       <div className="px-4 py-2.5 border-b border-gray-100">
         <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
-          Vendor / source
+          {t('Vendor / source', 'Proveedor / origen')}
         </label>
         <input
           type="text"
@@ -1211,7 +1254,7 @@ function ActiveTicketCard({
           toward the click fallback when nothing is being dragged. */}
       <div className="px-4 py-2.5">
         <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1.5">
-          Ticket items
+          {t('Ticket items', 'Artículos de la boleta')}
         </p>
         <div
           onDragOver={onDragOver}
@@ -1233,6 +1276,7 @@ function ActiveTicketCard({
                   order={order}
                   item={itemsById.get(order.inventoryItemId)}
                   onMoveBack={() => onMoveBack(order.id)}
+                  t={t}
                 />
               ))}
             </ul>
@@ -1241,10 +1285,10 @@ function ActiveTicketCard({
               dragOverTicket ? 'text-blue-700 font-medium' : 'text-gray-500'
             }`}>
               {dragOverTicket
-                ? 'Drop to add to the ticket.'
+                ? t('Drop to add to the ticket.', 'Suelta para agregar a la boleta.')
                 : selectedStagingId
-                  ? 'Drop here, or click Add selected below.'
-                  : 'Drag staged items here, or select one and add it.'}
+                  ? t('Drop here, or click Add selected below.', 'Suelta aquí, o haz clic en Agregar seleccionado abajo.')
+                  : t('Drag staged items here, or select one and add it.', 'Arrastra artículos preparados aquí, o selecciona uno y agrégalo.')}
             </p>
           )}
         </div>
@@ -1255,7 +1299,7 @@ function ActiveTicketCard({
             onClick={onAddSelected}
             className="mt-1.5 w-full rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold text-blue-700 hover:bg-blue-100 transition-colors"
           >
-            + Add selected to ticket
+            {t('+ Add selected to ticket', '+ Agregar seleccionado a boleta')}
           </button>
         )}
       </div>
@@ -1266,7 +1310,7 @@ function ActiveTicketCard({
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
-              Expected total
+              {t('Expected total', 'Total esperado')}
             </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
@@ -1282,7 +1326,7 @@ function ActiveTicketCard({
           </div>
           <div>
             <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
-              Expected date
+              {t('Expected date', 'Fecha esperada')}
             </label>
             <input
               ref={dateRef}
@@ -1293,12 +1337,12 @@ function ActiveTicketCard({
         </div>
         <div>
           <label className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-1">
-            Notes
+            {t('Notes', 'Notas')}
           </label>
           <input
             ref={notesRef}
             type="text"
-            placeholder="Confirm with vendor"
+            placeholder={t('Confirm with vendor', 'Confirmar con proveedor')}
             className="h-9 w-full rounded-md border border-gray-200 bg-white px-3 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
           />
         </div>
@@ -1320,7 +1364,7 @@ function ActiveTicketCard({
           {ctaLabel}
         </button>
         <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed text-center">
-          Stock and Finance update on receipt.
+          {t('Stock and Finance update on receipt.', 'Stock y Finanzas se actualizan al recibir.')}
         </p>
       </div>
     </div>
@@ -1337,10 +1381,12 @@ function TicketItemRow({
   order,
   item,
   onMoveBack,
+  t,
 }: {
   order: RestockOrder
   item: Item | undefined
   onMoveBack: () => void
+  t: T
 }) {
   const unit = item?.unitOfMeasure ?? ''
   return (
@@ -1354,8 +1400,8 @@ function TicketItemRow({
       <button
         type="button"
         onClick={onMoveBack}
-        title="Move back to staging"
-        aria-label="Move back to staging"
+        title={t('Move back to staging', 'Mover de regreso a preparación')}
+        aria-label={t('Move back to staging', 'Mover de regreso a preparación')}
         className="flex-shrink-0 text-gray-400 hover:text-blue-700 p-1 transition-colors"
       >
         <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1382,12 +1428,13 @@ function TicketItemRow({
 // ----------------------------------------------------------------
 type OrderLifecycle = 'pending' | 'partial' | 'closed'
 
-function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
+function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem, t }: {
   ordered: RestockOrder[]
   closed: RestockOrder[]
   itemsById: Map<string, Item>
   onClose: () => void
   onInspectItem: (itemId: string) => void
+  t: T
 }) {
   // Group lines into batches by `orderedAt`, then split the pending
   // bucket by whether any sibling has already been received. That
@@ -1453,24 +1500,25 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
   useEffect(() => { setExpandedKey(null) }, [tab])
 
   const filters: Array<{ key: OrderLifecycle; label: string; count: number }> = [
-    { key: 'pending', label: 'Pending', count: awaitingBatches.length },
-    { key: 'partial', label: 'Partial', count: partialBatches.length },
-    { key: 'closed',  label: 'Closed',  count: closedBatches.length  },
+    { key: 'pending', label: t('Pending', 'Pendientes'), count: awaitingBatches.length },
+    { key: 'partial', label: t('Partial', 'Parcial'),    count: partialBatches.length },
+    { key: 'closed',  label: t('Closed', 'Cerradas'),    count: closedBatches.length  },
   ]
 
   return (
     <DrawerShell
-      eyebrow="Replenishment"
-      title="Restock Orders"
-      subtitle="Track restock tickets through receiving."
+      eyebrow={t('Replenishment', 'Reabastecimiento')}
+      title={t('Restock Orders', 'Órdenes de reabastecimiento')}
+      subtitle={t('Track restock tickets through receiving.', 'Rastrea las boletas de reabastecimiento durante la recepción.')}
       onClose={onClose}
+      t={t}
     >
       {/* LIFECYCLE FILTER ROW — black-active pill style, same family
           as Stock Health filters. One selection at a time. The count
           inline keeps the bucket sizes legible without a separate
           eyebrow row. */}
       <div className="flex-shrink-0 px-6 pt-4 pb-3 border-b border-gray-100">
-        <div className="flex items-center gap-1.5" role="group" aria-label="Filter by lifecycle">
+        <div className="flex items-center gap-1.5" role="group" aria-label={t('Filter by lifecycle', 'Filtrar por ciclo de vida')}>
           {filters.map((f) => {
             const isActive = tab === f.key
             return (
@@ -1500,8 +1548,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
           <div className="px-6 py-5">
             {awaitingBatches.length === 0 ? (
               <EmptyLifecycle
-                title="No pending orders."
-                body="New restock tickets will appear here until something is received."
+                title={t('No pending orders.', 'Sin órdenes pendientes.')}
+                body={t('New restock tickets will appear here until something is received.', 'Las nuevas boletas de reabastecimiento aparecerán aquí hasta que se reciba algo.')}
               />
             ) : (
               <>
@@ -1517,6 +1565,7 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                       onToggleExpand={(open) =>
                         setExpandedKey(open ? batch.key : null)
                       }
+                      t={t}
                     />
                   ))}
                 </ul>
@@ -1529,7 +1578,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                     totalPages={pendingSlice.totalPages}
                     onPrev={() => setPendingPage((p) => Math.max(1, p - 1))}
                     onNext={() => setPendingPage((p) => Math.min(pendingSlice.totalPages, p + 1))}
-                    ariaContext="pending orders"
+                    ariaContext={t('pending orders', 'órdenes pendientes')}
+                    t={t}
                   />
                 )}
               </>
@@ -1541,8 +1591,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
           <div className="px-6 py-5">
             {partialBatches.length === 0 ? (
               <EmptyLifecycle
-                title="No partially received orders."
-                body="Orders appear here when only part of a delivery has arrived."
+                title={t('No partially received orders.', 'Sin órdenes recibidas parcialmente.')}
+                body={t('Orders appear here when only part of a delivery has arrived.', 'Las órdenes aparecen aquí cuando solo parte de una entrega ha llegado.')}
               />
             ) : (
               <>
@@ -1558,6 +1608,7 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                       onToggleExpand={(open) =>
                         setExpandedKey(open ? batch.key : null)
                       }
+                      t={t}
                     />
                   ))}
                 </ul>
@@ -1570,7 +1621,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                     totalPages={partialSlice.totalPages}
                     onPrev={() => setPartialPage((p) => Math.max(1, p - 1))}
                     onNext={() => setPartialPage((p) => Math.min(partialSlice.totalPages, p + 1))}
-                    ariaContext="partially received orders"
+                    ariaContext={t('partially received orders', 'órdenes recibidas parcialmente')}
+                    t={t}
                   />
                 )}
               </>
@@ -1582,8 +1634,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
           <div className="px-6 py-5">
             {closedBatches.length === 0 ? (
               <EmptyLifecycle
-                title="No closed orders yet."
-                body="Closed tickets will appear here after receiving is complete."
+                title={t('No closed orders yet.', 'Sin órdenes cerradas aún.')}
+                body={t('Closed tickets will appear here after receiving is complete.', 'Las boletas cerradas aparecerán aquí después de completar la recepción.')}
               />
             ) : (
               <>
@@ -1593,6 +1645,7 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                       key={batch.key}
                       batch={batch}
                       itemsById={itemsById}
+                      t={t}
                     />
                   ))}
                 </ul>
@@ -1605,7 +1658,8 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
                     totalPages={closedSlice.totalPages}
                     onPrev={() => setClosedPage((p) => Math.max(1, p - 1))}
                     onNext={() => setClosedPage((p) => Math.min(closedSlice.totalPages, p + 1))}
-                    ariaContext="closed orders"
+                    ariaContext={t('closed orders', 'órdenes cerradas')}
+                    t={t}
                   />
                 )}
               </>
@@ -1624,7 +1678,7 @@ function OrdersDrawer({ ordered, closed, itemsById, onClose, onInspectItem }: {
 // more than one page; callers gate the render with `totalPages > 1`.
 // ----------------------------------------------------------------
 function PaginationFooter({
-  start, pageSize, total, safePage, totalPages, onPrev, onNext, ariaContext,
+  start, pageSize, total, safePage, totalPages, onPrev, onNext, ariaContext, t,
 }: {
   start: number
   pageSize: number
@@ -1634,22 +1688,23 @@ function PaginationFooter({
   onPrev: () => void
   onNext: () => void
   ariaContext: string
+  t: T
 }) {
   return (
     <div className="mt-3 flex items-center justify-between">
       <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-        Showing{' '}
+        {t('Showing', 'Mostrando')}{' '}
         <span className="font-semibold text-gray-700">
           {start + 1}–{Math.min(start + pageSize, total)}
         </span>{' '}
-        of <span className="font-semibold text-gray-700">{total}</span>
+        {t('of', 'de')} <span className="font-semibold text-gray-700">{total}</span>
       </p>
       <div className="inline-flex items-center gap-1">
         <button
           type="button"
           onClick={onPrev}
           disabled={safePage === 1}
-          aria-label={`Previous ${ariaContext}`}
+          aria-label={`${t('Previous', 'Anterior')} ${ariaContext}`}
           className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           ←
@@ -1661,7 +1716,7 @@ function PaginationFooter({
           type="button"
           onClick={onNext}
           disabled={safePage === totalPages}
-          aria-label={`Next ${ariaContext}`}
+          aria-label={`${t('Next', 'Siguiente')} ${ariaContext}`}
           className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           →
@@ -1848,6 +1903,7 @@ function OrderBatchCard({
   mode,
   isExpanded,
   onToggleExpand,
+  t,
 }: {
   batch: RestockBatch
   itemsById: Map<string, Item>
@@ -1864,6 +1920,7 @@ function OrderBatchCard({
    *  card automatically. */
   isExpanded: boolean
   onToggleExpand: (open: boolean) => void
+  t: T
 }) {
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -1914,7 +1971,7 @@ function OrderBatchCard({
 
   const placedLabel = batch.orderedAt
     ? formatBatchTimestamp(batch.orderedAt)
-    : 'Order awaiting receipt'
+    : t('Order awaiting receipt', 'Orden esperando recepción')
 
   // The receive commit. `closeShort` controls what happens to the
   // unchecked lines:
@@ -1924,7 +1981,7 @@ function OrderBatchCard({
   const onConfirm = (closeShort: boolean) => {
     setError(null)
     if (includedLines.length === 0 && !closeShort) {
-      setError('Select at least one line to receive, or use "Receive & close" to short-close the order.')
+      setError(t('Select at least one line to receive, or use "Receive & close" to short-close the order.', 'Selecciona al menos una línea para recibir, o usa "Recibir y cerrar" para cerrar la orden con faltante.'))
       return
     }
     startTransition(async () => {
@@ -1935,8 +1992,8 @@ function OrderBatchCard({
         const raw = receivedQtys[line.id] ?? line.quantity.toString()
         const parsed = parseFloat(raw)
         if (!Number.isFinite(parsed) || parsed <= 0) {
-          const name = itemsById.get(line.inventoryItemId)?.name ?? 'Item'
-          setError(`${name}: received quantity must be greater than zero.`)
+          const name = itemsById.get(line.inventoryItemId)?.name ?? t('Item', 'Artículo')
+          setError(`${name}: ${t('received quantity must be greater than zero.', 'la cantidad recibida debe ser mayor que cero.')}`)
           return
         }
         const fd = new FormData()
@@ -1951,7 +2008,7 @@ function OrderBatchCard({
         }
         const result = await markRestockReceived(null, fd)
         if (result?.error) {
-          const name = itemsById.get(line.inventoryItemId)?.name ?? 'Item'
+          const name = itemsById.get(line.inventoryItemId)?.name ?? t('Item', 'Artículo')
           setError(`${name}: ${result.error}`)
           return
         }
@@ -1982,7 +2039,7 @@ function OrderBatchCard({
   // field was left blank before commit).
   const itemCount = batch.lines.length
   const primaryVendor = batch.vendorList[0] ?? null
-  const titleText = primaryVendor ? `${primaryVendor} order` : 'Restock order'
+  const titleText = primaryVendor ? `${primaryVendor} ${t('order', 'orden')}` : t('Restock order', 'Orden de reabastecimiento')
   const vendorOverflow = batch.vendorList.length > 1 ? ` +${batch.vendorList.length - 1}` : ''
 
   // Item preview — up to 3 lines shown directly in the collapsed
@@ -2000,16 +2057,16 @@ function OrderBatchCard({
   const topAccent = isPartial ? 'border-t-blue-200' : 'border-t-amber-200'
   const pillBg = isPartial ? 'bg-blue-50 text-blue-700' : 'bg-amber-50 text-amber-700'
   const pillDot = isPartial ? 'bg-blue-500' : 'bg-amber-500'
-  const pillLabel = isPartial ? 'Partially received' : 'Awaiting receipt'
-  const buttonLabel = isPartial ? 'Continue receiving' : 'Receive order'
+  const pillLabel = isPartial ? t('Partially received', 'Recibida parcialmente') : t('Awaiting receipt', 'Esperando recepción')
+  const buttonLabel = isPartial ? t('Continue receiving', 'Continuar recepción') : t('Receive order', 'Recibir orden')
   const expandedHeader = isPartial
-    ? primaryVendor ? `Continue receiving ${primaryVendor} order` : 'Continue receiving'
-    : primaryVendor ? `Receive ${primaryVendor} order` : 'Confirm received quantities'
+    ? primaryVendor ? `${t('Continue receiving', 'Continuar recepción de')} ${primaryVendor} ${t('order', 'orden')}` : t('Continue receiving', 'Continuar recepción')
+    : primaryVendor ? `${t('Receive', 'Recibir')} ${primaryVendor} ${t('order', 'orden')}` : t('Confirm received quantities', 'Confirmar cantidades recibidas')
 
   // Partial-progress meta line (collapsed view): "X of Y items
   // received" so the lifecycle is legible without expanding.
   const partialProgress = isPartial
-    ? `${earlierReceivedLines.length} of ${itemCount} items received`
+    ? `${earlierReceivedLines.length} ${t('of', 'de')} ${itemCount} ${itemCount === 1 ? t('item received', 'artículo recibido') : t('items received', 'artículos recibidos')}`
     : null
 
   // Comma-joined item-name preview for the awaiting card. Quantities
@@ -2017,7 +2074,7 @@ function OrderBatchCard({
   const previewNames = previewLines
     .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
     .join(', ')
-  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} more` : ''
+  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} ${t('more', 'más')}` : ''
 
   // Partial-card subsections — "Still open" lists the lines still
   // awaiting receipt, "Received" lists what already came in. Both
@@ -2056,11 +2113,11 @@ function OrderBatchCard({
               prefix; placement time is internal state, not what the
               manager is deciding on. */}
           <p className="mt-0.5 text-[11px] text-gray-500">
-            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+            {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
             {batch.soonestExpectedDate && (
               <>
                 <span className="text-gray-300 mx-1">·</span>
-                <span>Expected {formatRestockDate(batch.soonestExpectedDate)}</span>
+                <span>{t('Expected', 'Esperada')} {formatRestockDate(batch.soonestExpectedDate)}</span>
               </>
             )}
             {batch.totalExpectedCost !== null && batch.totalExpectedCost > 0 && (
@@ -2091,20 +2148,20 @@ function OrderBatchCard({
             <div className="mt-2.5 space-y-2.5">
               {stillOpenPreview.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">Still open</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">{t('Still open', 'Aún abierto')}</p>
                   <p className="mt-1 text-[11px] text-gray-700 truncate">
                     {stillOpenPreview
                       .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
                       .join(', ')}
                     {stillOpenOverflow > 0 && (
-                      <span className="text-gray-400"> + {stillOpenOverflow} more</span>
+                      <span className="text-gray-400"> + {stillOpenOverflow} {t('more', 'más')}</span>
                     )}
                   </p>
                 </div>
               )}
               {receivedPreview.length > 0 && (
                 <div>
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">Received</p>
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-gray-500">{t('Received', 'Recibido')}</p>
                   <div className="mt-1 space-y-0.5">
                     {receivedPreview.map((line) => {
                       const item = itemsById.get(line.inventoryItemId)
@@ -2115,12 +2172,12 @@ function OrderBatchCard({
                       return (
                         <p key={line.id} className="text-[11px] text-gray-700 truncate font-mono tabular-nums">
                           <span className="font-medium text-gray-900">{item?.name ?? '—'}</span>
-                          <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit} received</span>
+                          <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit} {t('received', 'recibido')}</span>
                         </p>
                       )
                     })}
                     {receivedOverflow > 0 && (
-                      <p className="text-[10.5px] text-gray-400">+ {receivedOverflow} more</p>
+                      <p className="text-[10.5px] text-gray-400">+ {receivedOverflow} {t('more', 'más')}</p>
                     )}
                   </div>
                 </div>
@@ -2178,6 +2235,7 @@ function OrderBatchCard({
             onToggleExpand(false)
             setError(null)
           }}
+          t={t}
         />
       )}
     </li>
@@ -2223,6 +2281,7 @@ function ReceivePanelBody({
   partialProgress,
   onConfirm,
   onCancel,
+  t,
 }: {
   batch: RestockBatch
   itemsById: Map<string, Item>
@@ -2248,6 +2307,7 @@ function ReceivePanelBody({
   partialProgress: string | null
   onConfirm: (closeShort: boolean) => void
   onCancel: () => void
+  t: T
 }) {
   return (
     <div className="border-t-2 border-t-blue-300 bg-white">
@@ -2264,11 +2324,11 @@ function ReceivePanelBody({
           </span>
         </div>
         <p className="mt-0.5 text-[11px] text-gray-500">
-          {itemCount} {itemCount === 1 ? 'item' : 'items'}
+          {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
           {batch.soonestExpectedDate && (
             <>
               <span className="text-gray-300 mx-1">·</span>
-              <span>Expected {formatRestockDate(batch.soonestExpectedDate)}</span>
+              <span>{t('Expected', 'Esperada')} {formatRestockDate(batch.soonestExpectedDate)}</span>
             </>
           )}
           {batch.totalExpectedCost !== null && batch.totalExpectedCost > 0 && (
@@ -2288,7 +2348,7 @@ function ReceivePanelBody({
         <>
           <div className="px-4 pt-3 pb-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              Open items
+              {t('Open items', 'Artículos abiertos')}
             </p>
           </div>
           <ul className="px-4 pb-3 space-y-3">
@@ -2301,6 +2361,7 @@ function ReceivePanelBody({
                 isIncluded={includedIds.has(line.id)}
                 raw={receivedQtys[line.id] ?? line.quantity.toString()}
                 pending={pending}
+                t={t}
                 onToggleSkip={() => {
                   setIncludedIds((s) => {
                     const next = new Set(s)
@@ -2331,7 +2392,7 @@ function ReceivePanelBody({
         <>
           <div className="px-4 pt-2 pb-1 border-t border-gray-100">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              Already received
+              {t('Already received', 'Ya recibido')}
             </p>
           </div>
           <ul className="px-4 pb-3 pt-1 space-y-1">
@@ -2353,7 +2414,7 @@ function ReceivePanelBody({
                     <span className="font-medium text-gray-900">{item?.name ?? '—'}</span>
                     <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit}</span>
                   </p>
-                  <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">Done</span>
+                  <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">{t('Done', 'Listo')}</span>
                 </li>
               )
             })}
@@ -2367,7 +2428,7 @@ function ReceivePanelBody({
         <>
           <div className="px-4 pt-2 pb-1 border-t border-gray-100">
             <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              Closed short
+              {t('Closed short', 'Cerrado con faltante')}
             </p>
           </div>
           <ul className="px-4 pb-3 pt-1 space-y-1">
@@ -2378,7 +2439,7 @@ function ReceivePanelBody({
               return (
                 <li key={line.id} className="text-[11px] text-gray-500 truncate">
                   <span className="font-medium text-gray-700">{item?.name ?? '—'}</span>
-                  <span> · {orderedStr} {unit} ordered · not received</span>
+                  <span> · {orderedStr} {unit} {t('ordered · not received', 'pedido · no recibido')}</span>
                 </li>
               )
             })}
@@ -2393,7 +2454,7 @@ function ReceivePanelBody({
       <div className="px-4 pt-3 pb-3 border-t border-gray-100">
         <label className="block">
           <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-            Confirmed total
+            {t('Confirmed total', 'Total confirmado')}
           </span>
           <div className="relative mt-1">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">$</span>
@@ -2405,12 +2466,12 @@ function ReceivePanelBody({
               onChange={(e) => setConfirmedTotalDraft(e.target.value)}
               disabled={pending}
               placeholder="0.00"
-              aria-label="Confirmed order total"
+              aria-label={t('Confirmed order total', 'Total confirmado de la orden')}
               className="h-9 w-full rounded-md border border-gray-200 bg-white pl-6 pr-3 text-sm font-mono font-semibold tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition disabled:opacity-60"
             />
           </div>
           <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
-            Used for inventory spend when the order closes.
+            {t('Used for inventory spend when the order closes.', 'Se usa para gasto de inventario cuando se cierra la orden.')}
           </p>
         </label>
       </div>
@@ -2430,7 +2491,7 @@ function ReceivePanelBody({
               disabled={pending}
               className="h-9 rounded-md border border-gray-200 bg-white px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
             >
-              {pending ? 'Working…' : 'Receive · keep open'}
+              {pending ? t('Working…', 'Procesando…') : t('Receive · keep open', 'Recibir · mantener abierta')}
             </button>
             <button
               type="button"
@@ -2438,7 +2499,7 @@ function ReceivePanelBody({
               disabled={pending}
               className="h-9 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
             >
-              {pending ? 'Working…' : 'Receive · close order'}
+              {pending ? t('Working…', 'Procesando…') : t('Receive · close order', 'Recibir · cerrar orden')}
             </button>
           </div>
         ) : (
@@ -2448,7 +2509,7 @@ function ReceivePanelBody({
             disabled={pending}
             className="w-full h-9 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
           >
-            {pending ? 'Working…' : 'Receive · close order'}
+            {pending ? t('Working…', 'Procesando…') : t('Receive · close order', 'Recibir · cerrar orden')}
           </button>
         )}
         <button
@@ -2457,11 +2518,11 @@ function ReceivePanelBody({
           disabled={pending}
           className="mt-1.5 w-full h-7 text-[11px] font-medium text-gray-500 hover:text-gray-700 disabled:opacity-60 transition-colors"
         >
-          Cancel
+          {t('Cancel', 'Cancelar')}
         </button>
         {skippedLines.length > 0 && (
           <p className="mt-1.5 text-[10px] text-gray-400 leading-relaxed text-center">
-            Keep open leaves skipped lines pending. Close order cancels them.
+            {t('Keep open leaves skipped lines pending. Close order cancels them.', 'Mantener abierta deja las líneas omitidas pendientes. Cerrar orden las cancela.')}
           </p>
         )}
       </div>
@@ -2490,6 +2551,7 @@ function OpenLineRow({
   onToggleSkip,
   onChangeQty,
   onStepQty,
+  t,
 }: {
   line: RestockOrder
   item: Item | undefined
@@ -2500,6 +2562,7 @@ function OpenLineRow({
   onToggleSkip: () => void
   onChangeQty: (value: string) => void
   onStepQty: (delta: number) => void
+  t: T
 }) {
   const unit = item?.unitOfMeasure ?? ''
   const name = item?.name ?? '—'
@@ -2517,7 +2580,7 @@ function OpenLineRow({
           <span className="font-medium text-gray-900">{name}</span>
           <span className="text-gray-500"> · {recvStr} / {orderedStr} {unit}</span>
         </p>
-        <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">Done</span>
+        <span className="text-[10px] font-semibold text-emerald-700 flex-shrink-0">{t('Done', 'Listo')}</span>
       </li>
     )
   }
@@ -2528,7 +2591,7 @@ function OpenLineRow({
       <li className="flex items-center gap-2">
         <p className="text-[11px] text-gray-500 truncate flex-1 min-w-0">
           <span className="font-medium text-gray-700">{name}</span>
-          <span> · Skipped for now</span>
+          <span> · {t('Skipped for now', 'Omitido por ahora')}</span>
         </p>
         <button
           type="button"
@@ -2536,7 +2599,7 @@ function OpenLineRow({
           disabled={pending}
           className="flex-shrink-0 text-[10px] font-medium text-blue-700 hover:text-blue-800 underline-offset-2 hover:underline transition-colors disabled:opacity-50"
         >
-          Include
+          {t('Include', 'Incluir')}
         </button>
       </li>
     )
@@ -2564,29 +2627,29 @@ function OpenLineRow({
           disabled={pending}
           className="flex-shrink-0 text-[10px] font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline transition-colors disabled:opacity-50"
         >
-          Skip
+          {t('Skip', 'Omitir')}
         </button>
       </div>
 
       {/* Metadata line — muted Ordered + Received so far. */}
       <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
-        Ordered{' '}
+        {t('Ordered', 'Pedido')}{' '}
         <span className="font-mono font-semibold text-gray-700">{orderedStr} {unit}</span>
         <span className="text-gray-300 mx-1.5">·</span>
-        Received so far{' '}
+        {t('Received so far', 'Recibido hasta ahora')}{' '}
         <span className="font-mono font-semibold text-gray-700">0 {unit}</span>
       </p>
 
       {/* Stepper + Remaining inline. */}
       <div className="mt-1.5 flex items-center justify-between gap-2 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] text-gray-500">Receiving now</span>
+          <span className="text-[11px] text-gray-500">{t('Receiving now', 'Recibiendo ahora')}</span>
           <div className="inline-flex items-stretch rounded-md border border-gray-300 bg-white overflow-hidden">
             <button
               type="button"
               onClick={() => onStepQty(-1)}
               disabled={pending}
-              aria-label={`Decrease receiving for ${name}`}
+              aria-label={`${t('Decrease receiving for', 'Disminuir recepción para')} ${name}`}
               className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -2600,14 +2663,14 @@ function OpenLineRow({
               value={raw}
               onChange={(e) => onChangeQty(e.target.value)}
               disabled={pending}
-              aria-label={`Receiving now for ${name}`}
+              aria-label={`${t('Receiving now for', 'Recibiendo ahora para')} ${name}`}
               className="h-7 w-14 text-center text-sm font-mono font-semibold tabular-nums text-gray-900 border-x border-gray-300 focus:outline-none focus:bg-blue-50/40 disabled:opacity-60 appearance-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none [-moz-appearance:textfield]"
             />
             <button
               type="button"
               onClick={() => onStepQty(1)}
               disabled={pending}
-              aria-label={`Increase receiving for ${name}`}
+              aria-label={`${t('Increase receiving for', 'Aumentar recepción para')} ${name}`}
               className="px-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -2618,7 +2681,7 @@ function OpenLineRow({
           <span className="text-[11px] text-gray-500">{unit}</span>
         </div>
         <p className="text-[11px] font-mono tabular-nums">
-          <span className="text-gray-500">Remaining </span>
+          <span className="text-gray-500">{t('Remaining', 'Restante')} </span>
           <span className={`font-mono font-semibold ${
             overReceiving
               ? 'text-amber-700'
@@ -2633,7 +2696,7 @@ function OpenLineRow({
 
       {overReceiving && (
         <p className="mt-1 text-[10px] text-amber-700">
-          Receiving more than ordered.
+          {t('Receiving more than ordered.', 'Recibiendo más de lo pedido.')}
         </p>
       )}
     </li>
@@ -2681,9 +2744,11 @@ function formatBatchTimestamp(iso: string): string {
 function ClosedOrderCard({
   batch,
   itemsById,
+  t,
 }: {
   batch: RestockBatch
   itemsById: Map<string, Item>
+  t: T
 }) {
   const [expanded, setExpanded] = useState(false)
 
@@ -2695,7 +2760,7 @@ function ClosedOrderCard({
   // Vendor-first title — same convention as pending batches so the
   // family of cards reads consistently.
   const primaryVendor = batch.vendorList[0] ?? null
-  const titleText = primaryVendor ? `${primaryVendor} order` : 'Restock order'
+  const titleText = primaryVendor ? `${primaryVendor} ${t('order', 'orden')}` : t('Restock order', 'Orden de reabastecimiento')
   const vendorOverflow = batch.vendorList.length > 1 ? ` +${batch.vendorList.length - 1}` : ''
 
   // Status pill semantics:
@@ -2718,7 +2783,7 @@ function ClosedOrderCard({
       const recv = l.receivedQuantity ?? l.quantity
       return recv >= l.quantity
     })
-  const closeStatusLabel = isOrderComplete ? 'Closed complete' : 'Closed short'
+  const closeStatusLabel = isOrderComplete ? t('Closed complete', 'Cerrada completa') : t('Closed short', 'Cerrada con faltante')
 
   // Close timestamp — most recent received_at across the batch
   // (falls back to canceled_at for all-canceled batches). Drives
@@ -2757,7 +2822,7 @@ function ClosedOrderCard({
   const previewNames = previewLines
     .map((l) => itemsById.get(l.inventoryItemId)?.name ?? '—')
     .join(', ')
-  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} more` : ''
+  const previewSuffix = previewOverflow > 0 ? ` + ${previewOverflow} ${t('more', 'más')}` : ''
 
   return (
     <li className="rounded-xl border border-gray-200/80 border-t-2 border-t-emerald-200 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
@@ -2770,7 +2835,7 @@ function ClosedOrderCard({
         type="button"
         onClick={() => setExpanded((e) => !e)}
         aria-expanded={expanded}
-        aria-label={expanded ? 'Collapse closed order details' : 'Expand closed order details'}
+        aria-label={expanded ? t('Collapse closed order details', 'Contraer detalles de orden cerrada') : t('Expand closed order details', 'Expandir detalles de orden cerrada')}
         className="w-full text-left px-4 py-3.5 hover:bg-gray-50/60 transition-colors"
       >
         <div className="flex items-start justify-between gap-2">
@@ -2780,7 +2845,7 @@ function ClosedOrderCard({
           </p>
           <span className={`flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pillBg}`}>
             <span className={`w-1 h-1 rounded-full ${pillDot}`} />
-            Closed
+            {t('Closed', 'Cerrada')}
           </span>
         </div>
         <p className="mt-0.5 text-[11px] text-gray-500">
@@ -2790,22 +2855,22 @@ function ClosedOrderCard({
               <span className="text-gray-300 mx-1">·</span>
             </>
           )}
-          {batch.lines.length} {batch.lines.length === 1 ? 'item' : 'items'}
+          {batch.lines.length} {batch.lines.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
           {closedLabel && (
             <>
               <span className="text-gray-300 mx-1">·</span>
-              <span>Closed {closedLabel}</span>
+              <span>{t('Closed', 'Cerrada')} {closedLabel}</span>
             </>
           )}
         </p>
         {allCanceled && (
           <p className="mt-0.5 text-[10.5px] text-gray-400">
-            No items received — closed short.
+            {t('No items received — closed short.', 'Sin artículos recibidos — cerrada con faltante.')}
           </p>
         )}
         {!allReceived && !allCanceled && (
           <p className="mt-0.5 text-[10.5px] text-gray-500">
-            {receivedLines.length} received · {canceledLines.length} closed short
+            {receivedLines.length} {t('received · ', 'recibidos · ')}{canceledLines.length} {t('closed short', 'cerrados con faltante')}
           </p>
         )}
 
@@ -2819,7 +2884,7 @@ function ClosedOrderCard({
         {/* Expand affordance — single quiet chevron link. */}
         <div className="mt-2 flex items-center justify-end">
           <span className="inline-flex items-center gap-1 text-[10px] font-medium text-gray-400">
-            {expanded ? 'Hide details' : 'View details'}
+            {expanded ? t('Hide details', 'Ocultar detalles') : t('View details', 'Ver detalles')}
             <svg
               className={`w-3 h-3 transition-transform ${expanded ? 'rotate-180' : ''}`}
               fill="none"
@@ -2847,21 +2912,21 @@ function ClosedOrderCard({
           {/* 1. ORDER SUMMARY — eyebrow + breathing stack. */}
           <div className="px-5 pt-4 pb-4">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
-              Order Summary
+              {t('Order Summary', 'Resumen de la orden')}
             </p>
             <div className="mt-2 space-y-1">
               <p className="text-xs text-gray-700">
-                {closedLabel ? `Closed ${closedLabel}` : 'Closed'}
+                {closedLabel ? `${t('Closed', 'Cerrada')} ${closedLabel}` : t('Closed', 'Cerrada')}
               </p>
               <p className="text-xs text-gray-700">
-                <span className="text-gray-500">Status: </span>
+                <span className="text-gray-500">{t('Status: ', 'Estado: ')}</span>
                 <span className={`font-semibold ${isOrderComplete ? 'text-emerald-700' : 'text-gray-700'}`}>
                   {closeStatusLabel}
                 </span>
               </p>
               {hasSpend && (
                 <p className="text-xs text-gray-700">
-                  <span className="text-gray-500">Final recorded total: </span>
+                  <span className="text-gray-500">{t('Final recorded total: ', 'Total final registrado: ')}</span>
                   <span className="font-semibold font-mono tabular-nums">${finalSpend.toFixed(2)}</span>
                 </p>
               )}
@@ -2871,7 +2936,7 @@ function ClosedOrderCard({
           {/* 2. RECEIVED ITEMS — name row + 3-col stat grid. */}
           <div className="px-5 pt-3 pb-1 border-t border-gray-100">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
-              {allCanceled ? 'Order Items' : 'Received Items'}
+              {allCanceled ? t('Order Items', 'Artículos de la orden') : t('Received Items', 'Artículos recibidos')}
             </p>
           </div>
           <ul className="px-5 pb-4 pt-2 space-y-3">
@@ -2899,12 +2964,12 @@ function ClosedOrderCard({
                     {item?.name ?? '—'}
                   </p>
                   <div className="mt-1.5 grid grid-cols-3 gap-2">
-                    <ClosedStat label="Ordered" value={`${orderedStr} ${unit}`} valueColor="text-gray-700" />
-                    <ClosedStat label="Received" value={`${receivedStr} ${unit}`} valueColor={receivedColor} />
-                    <ClosedStat label="Short" value={`${shortStr} ${unit}`} valueColor={shortColor} />
+                    <ClosedStat label={t('Ordered', 'Pedido')} value={`${orderedStr} ${unit}`} valueColor="text-gray-700" />
+                    <ClosedStat label={t('Received', 'Recibido')} value={`${receivedStr} ${unit}`} valueColor={receivedColor} />
+                    <ClosedStat label={t('Short', 'Faltante')} value={`${shortStr} ${unit}`} valueColor={shortColor} />
                   </div>
                   {line.status === 'canceled' && (
-                    <p className="mt-1 text-[10px] text-gray-500">Closed short — not received.</p>
+                    <p className="mt-1 text-[10px] text-gray-500">{t('Closed short — not received.', 'Cerrado con faltante — no recibido.')}</p>
                   )}
                 </li>
               )
@@ -2915,11 +2980,11 @@ function ClosedOrderCard({
               final-total adjustment + bank verification are deferred
               for pilot. */}
           <div className="px-5 pt-3 pb-4 border-t border-gray-100">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">Finance</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">{t('Finance', 'Finanzas')}</p>
             <p className="mt-2 text-[11px] text-gray-600 leading-relaxed">
               {hasSpend
-                ? 'Inventory spend recorded from this ticket.'
-                : 'No inventory spend recorded for this ticket.'}
+                ? t('Inventory spend recorded from this ticket.', 'Gasto de inventario registrado desde esta boleta.')
+                : t('No inventory spend recorded for this ticket.', 'Sin gasto de inventario registrado para esta boleta.')}
             </p>
           </div>
         </div>
@@ -2966,12 +3031,13 @@ function ClosedStat({ label, value, valueColor }: { label: string; value: string
 // quick creation actions in future passes (do NOT swap workflow
 // drawers like Cart / Orders / Item detail onto this shell).
 // ----------------------------------------------------------------
-function QuickActionDrawer({ eyebrow, title, helper, onClose, children }: {
+function QuickActionDrawer({ eyebrow, title, helper, onClose, children, t }: {
   eyebrow: string
   title: string
   helper?: string
   onClose: () => void
   children: React.ReactNode
+  t: T
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -3001,7 +3067,7 @@ function QuickActionDrawer({ eyebrow, title, helper, onClose, children }: {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('Close', 'Cerrar')}
             className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3033,7 +3099,7 @@ function QuickGroupLabel({ children }: { children: React.ReactNode }) {
 // `createInventoryItem` action, and the auto-close-on-success
 // behavior upstream are all unchanged from the previous treatment.
 // ----------------------------------------------------------------
-function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
+function QuickAddItemDrawer({ onClose, t }: { onClose: () => void; t: T }) {
   const [state, action, pending] = useActionState(createInventoryItem, null)
   const nameRef = useRef<HTMLInputElement>(null)
   useEffect(() => { nameRef.current?.focus() }, [])
@@ -3043,20 +3109,21 @@ function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
 
   return (
     <QuickActionDrawer
-      eyebrow="Quick add"
-      title="New inventory item"
-      helper="Track stock for an ingredient or supply."
+      eyebrow={t('Quick add', 'Agregado rápido')}
+      title={t('New inventory item', 'Nuevo artículo de inventario')}
+      helper={t('Track stock for an ingredient or supply.', 'Rastrea el stock de un ingrediente o suministro.')}
       onClose={onClose}
+      t={t}
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
 
           {/* Item group */}
           <div className="space-y-2.5">
-            <QuickGroupLabel>Item</QuickGroupLabel>
+            <QuickGroupLabel>{t('Item', 'Artículo')}</QuickGroupLabel>
             <div>
               <label htmlFor="ci-name" className="block text-[11px] font-medium text-gray-600 mb-1">
-                Name
+                {t('Name', 'Nombre')}
               </label>
               <input
                 ref={nameRef}
@@ -3064,13 +3131,13 @@ function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
                 name="name"
                 type="text"
                 required
-                placeholder="Mozzarella, Olive oil, Napkins…"
+                placeholder={t('Mozzarella, Olive oil, Napkins…', 'Mozzarella, aceite de oliva, servilletas…')}
                 className={fieldBase}
               />
             </div>
             <div>
               <label htmlFor="ci-unit" className="block text-[11px] font-medium text-gray-600 mb-1">
-                Unit of measure
+                {t('Unit of measure', 'Unidad de medida')}
               </label>
               <select
                 id="ci-unit"
@@ -3078,24 +3145,24 @@ function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
                 defaultValue="units"
                 className={fieldBase}
               >
-                <option value="units">Units (each)</option>
-                <option value="kg">Kilograms (kg)</option>
-                <option value="lbs">Pounds (lbs)</option>
-                <option value="liters">Liters</option>
-                <option value="gallons">Gallons</option>
-                <option value="oz">Ounces (oz)</option>
-                <option value="cases">Cases</option>
-                <option value="bags">Bags</option>
+                <option value="units">{t('Units (each)', 'Unidades (cada uno)')}</option>
+                <option value="kg">{t('Kilograms (kg)', 'Kilogramos (kg)')}</option>
+                <option value="lbs">{t('Pounds (lbs)', 'Libras (lbs)')}</option>
+                <option value="liters">{t('Liters', 'Litros')}</option>
+                <option value="gallons">{t('Gallons', 'Galones')}</option>
+                <option value="oz">{t('Ounces (oz)', 'Onzas (oz)')}</option>
+                <option value="cases">{t('Cases', 'Cajas')}</option>
+                <option value="bags">{t('Bags', 'Bolsas')}</option>
               </select>
             </div>
           </div>
 
           {/* Tracking group */}
           <div className="space-y-2.5">
-            <QuickGroupLabel>Tracking</QuickGroupLabel>
+            <QuickGroupLabel>{t('Tracking', 'Seguimiento')}</QuickGroupLabel>
             <div>
               <label htmlFor="ci-threshold" className="block text-[11px] font-medium text-gray-600 mb-1">
-                Low stock threshold
+                {t('Low stock threshold', 'Umbral de bajo stock')}
               </label>
               <input
                 id="ci-threshold"
@@ -3120,14 +3187,14 @@ function QuickAddItemDrawer({ onClose }: { onClose: () => void }) {
             onClick={onClose}
             className="flex-1 h-9 rounded-lg border border-gray-200 px-3 text-xs font-semibold text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('Cancel', 'Cancelar')}
           </button>
           <button
             type="submit"
             disabled={pending}
             className="flex-1 h-9 rounded-lg bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
           >
-            {pending ? 'Creating…' : 'Create item'}
+            {pending ? t('Creating…', 'Creando…') : t('Create item', 'Crear artículo')}
           </button>
         </div>
       </form>
@@ -3174,11 +3241,12 @@ function formatRestockDate(yyyymmdd: string): string {
 // Selected: bg + stripe both shift blue so the row open in the
 // drawer is unmistakable without becoming loud.
 // ----------------------------------------------------------------
-function ItemRow({ item, draftLine, selected, onOpen }: {
+function ItemRow({ item, draftLine, selected, onOpen, t }: {
   item: Item
   draftLine: RestockOrder | null
   selected: boolean
   onOpen: () => void
+  t: T
 }) {
   // Display-clamped stock. The manager-facing UI never surfaces
   // negative values — they're confusing in the action context
@@ -3201,8 +3269,8 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
         : item.status === 'low' ? 'text-amber-700'
           : 'text-gray-900'
   const typeLabel = item.recipeLinks > 0
-    ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
-    : 'Standalone item'
+    ? `${t('Used in', 'Usado en')} ${item.recipeLinks} ${item.recipeLinks > 1 ? t('recipes', 'recetas') : t('recipe', 'receta')}`
+    : t('Standalone item', 'Artículo independiente')
 
   // Left-edge stripe — status semantics by default, swaps to blue
   // when the row is selected so "this is the row I'm inspecting"
@@ -3225,7 +3293,7 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
       : item.status === 'low'  ? 'bg-amber-500'
         : item.status === 'ok' ? 'bg-green-500'
           : 'bg-gray-400'
-  const statusLabel = STATUS[item.status].label
+  const statusLabel = translateStatusLabel(item.status, t)
 
   return (
     <tr
@@ -3259,7 +3327,7 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
             <span>{typeLabel}</span>
             <span className="text-gray-300 mx-1.5">·</span>
             <span>
-              Reorder at{' '}
+              {t('Reorder at', 'Reordenar en')}{' '}
               <span className="font-mono tabular-nums text-gray-600">
                 {item.threshold.toFixed(2)}
               </span>{' '}
@@ -3278,7 +3346,7 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
         {displayEstimated !== null ? (
           <span
             className="inline-flex items-baseline gap-1 font-mono"
-            title={isOverdrawn ? 'Usage has passed the last count. Receiving will reset this item from zero.' : undefined}
+            title={isOverdrawn ? t('Usage has passed the last count. Receiving will reset this item from zero.', 'El uso ha pasado el último conteo. Al recibir, este artículo se reiniciará desde cero.') : undefined}
           >
             <span className={`text-base font-bold font-mono tabular-nums ${stockColor}`}>
               {displayEstimated.toFixed(2)}
@@ -3308,15 +3376,15 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
           <button
             type="button"
             onClick={onOpen}
-            title={`In restock cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
-            aria-label={`In restock cart · ${draftLine.quantity} ${item.unitOfMeasure} — click to edit`}
+            title={`${t('In restock cart · ', 'En carrito de reabastecimiento · ')}${draftLine.quantity} ${item.unitOfMeasure} ${t('— click to edit', '— haz clic para editar')}`}
+            aria-label={`${t('In restock cart · ', 'En carrito de reabastecimiento · ')}${draftLine.quantity} ${item.unitOfMeasure} ${t('— click to edit', '— haz clic para editar')}`}
             className="inline-flex items-center gap-1.5 h-8 rounded-md bg-blue-50 border border-blue-200 text-blue-700 px-2 hover:bg-blue-100 group-hover:border-blue-300 transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
             <span className="text-[10px] font-semibold font-mono tabular-nums">
-              In cart · {draftLine.quantity % 1 === 0
+              {t('In cart · ', 'En carrito · ')}{draftLine.quantity % 1 === 0
                 ? draftLine.quantity.toFixed(0)
                 : draftLine.quantity.toFixed(2)}
             </span>
@@ -3327,8 +3395,8 @@ function ItemRow({ item, draftLine, selected, onOpen }: {
             <input type="hidden" name="quantity" value={defaultRestockQty(item)} />
             <button
               type="submit"
-              title="Add to restock"
-              aria-label="Add to restock"
+              title={t('Add to restock', 'Agregar a reabastecimiento')}
+              aria-label={t('Add to restock', 'Agregar a reabastecimiento')}
               className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 bg-white text-gray-500 hover:bg-gray-100 hover:text-gray-900 hover:border-gray-300 group-hover:border-gray-300 group-hover:text-gray-700 transition-colors"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3354,27 +3422,28 @@ function receiptAdjustedLabel(
   type: string,
   defaultLabel: string,
   note: string | null,
+  t: T,
 ): { label: string; note: string | null } {
   if (type !== 'purchase' || !note) return { label: defaultLabel, note }
   const trimmed = note.trim()
   if (!trimmed.startsWith('Restock received')) return { label: defaultLabel, note }
   // Strip the leading "Restock received" + optional " · " separator
   const remainder = trimmed.slice('Restock received'.length).replace(/^\s*[·\-—]\s*/, '').trim()
-  return { label: 'Restock received', note: remainder.length > 0 ? remainder : null }
+  return { label: t('Restock received', 'Reabastecimiento recibido'), note: remainder.length > 0 ? remainder : null }
 }
 
 // ----------------------------------------------------------------
 // ActivityFeed — compact supporting feed (replaces secondary table)
 // ----------------------------------------------------------------
-function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
+function ActivityFeed({ transactions, t }: { transactions: Transaction[]; t: T }) {
   // `initial_count` and `count` come from inventory_counts (merged
   // server-side). All other types come from inventory_transactions.
   const styleFor: Record<string, { bg: string; text: string; glyph: string; label: string; showSign: boolean }> = {
-    purchase:      { bg: 'bg-green-50',  text: 'text-green-700',  glyph: '+', label: 'Purchase',      showSign: true  },
-    waste:         { bg: 'bg-red-50',    text: 'text-red-700',    glyph: '−', label: 'Waste',         showSign: true  },
-    usage:         { bg: 'bg-blue-50',   text: 'text-blue-700',   glyph: '−', label: 'Usage',         showSign: true  },
-    count:         { bg: 'bg-gray-100',  text: 'text-gray-600',   glyph: '◉', label: 'Count',         showSign: false },
-    initial_count: { bg: 'bg-emerald-50', text: 'text-emerald-700', glyph: '✦', label: 'Initial count', showSign: false },
+    purchase:      { bg: 'bg-green-50',  text: 'text-green-700',  glyph: '+', label: t('Purchase', 'Compra'),       showSign: true  },
+    waste:         { bg: 'bg-red-50',    text: 'text-red-700',    glyph: '−', label: t('Waste', 'Desperdicio'),     showSign: true  },
+    usage:         { bg: 'bg-blue-50',   text: 'text-blue-700',   glyph: '−', label: t('Usage', 'Uso'),             showSign: true  },
+    count:         { bg: 'bg-gray-100',  text: 'text-gray-600',   glyph: '◉', label: t('Count', 'Conteo'),          showSign: false },
+    initial_count: { bg: 'bg-emerald-50', text: 'text-emerald-700', glyph: '✦', label: t('Initial count', 'Conteo inicial'), showSign: false },
   }
 
   const visibleCount = Math.min(ACTIVITY_LIMIT, transactions.length)
@@ -3382,10 +3451,10 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
     <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Activity</p>
-          <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">Recent movements</h2>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{t('Activity', 'Actividad')}</p>
+          <h2 className="text-base font-semibold tracking-tight text-gray-900 mt-1">{t('Recent movements', 'Movimientos recientes')}</h2>
         </div>
-        <span className="flex-shrink-0 text-[10px] text-gray-400">Last {visibleCount}</span>
+        <span className="flex-shrink-0 text-[10px] text-gray-400">{t('Last', 'Últimos')} {visibleCount}</span>
       </div>
       <ul className="divide-y divide-gray-50">
         {transactions.slice(0, ACTIVITY_LIMIT).map((tx) => {
@@ -3397,7 +3466,7 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
             : tx.qty < 0 ? 'text-red-600'
             : 'text-gray-600'
           const qtyPrefix = style.showSign && tx.qty > 0 ? '+' : ''
-          const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note)
+          const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note, t)
           return (
             <li key={tx.id} className="flex items-center gap-3 px-5 py-2.5">
               <span className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${style.bg} ${style.text}`}>
@@ -3430,7 +3499,7 @@ function ActivityFeed({ transactions }: { transactions: Transaction[] }) {
 // label + signed qty + date. Item name is intentionally omitted
 // because the row already lives inside that item's workspace.
 // ----------------------------------------------------------------
-function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
+function ItemMovementRow({ tx, unit, t }: { tx: Transaction; unit: string; t: T }) {
   // Style map shared with ActivityFeed below so per-item and
   // global feeds stay visually consistent.
   //
@@ -3443,11 +3512,11 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
   //   count     → slate   (neutral correction event)
   //   initial   → emerald (the founding event that started tracking)
   const styleFor: Record<string, { bg: string; text: string; glyph: string; label: string; showSign: boolean }> = {
-    purchase:      { bg: 'bg-green-50',   text: 'text-green-700',   glyph: '+', label: 'Purchase',      showSign: true  },
-    waste:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: 'Waste',         showSign: true  },
-    usage:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: 'Usage',         showSign: true  },
-    count:         { bg: 'bg-slate-100',  text: 'text-slate-600',   glyph: '◉', label: 'Count',         showSign: false },
-    initial_count: { bg: 'bg-emerald-50', text: 'text-emerald-700', glyph: '✦', label: 'Initial count', showSign: false },
+    purchase:      { bg: 'bg-green-50',   text: 'text-green-700',   glyph: '+', label: t('Purchase', 'Compra'),       showSign: true  },
+    waste:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: t('Waste', 'Desperdicio'),     showSign: true  },
+    usage:         { bg: 'bg-red-50',     text: 'text-red-700',     glyph: '−', label: t('Usage', 'Uso'),             showSign: true  },
+    count:         { bg: 'bg-slate-100',  text: 'text-slate-600',   glyph: '◉', label: t('Count', 'Conteo'),          showSign: false },
+    initial_count: { bg: 'bg-emerald-50', text: 'text-emerald-700', glyph: '✦', label: t('Initial count', 'Conteo inicial'), showSign: false },
   }
   const style = styleFor[tx.type] ?? { bg: 'bg-slate-100', text: 'text-slate-600', glyph: '·', label: tx.type, showSign: false }
   const isInitial = tx.type === 'initial_count'
@@ -3457,7 +3526,7 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
       : tx.qty < 0 ? 'text-red-600'
         : 'text-slate-600'
   const qtyPrefix = style.showSign && tx.qty > 0 ? '+' : ''
-  const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note)
+  const { label, note } = receiptAdjustedLabel(tx.type, style.label, tx.note, t)
 
   return (
     <li className="flex items-center gap-2 px-3 py-2">
@@ -3493,12 +3562,12 @@ function ItemMovementRow({ tx, unit }: { tx: Transaction; unit: string }) {
 //             so partial receipt isn't supported here — full
 //             received qty is recorded.
 // ----------------------------------------------------------------
-function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string }) {
+function RestockOrderRow({ order, unit, t }: { order: RestockOrder; unit: string; t: T }) {
   const [receivedState, receivedAction, receivedPending] = useActionState(markRestockReceived, null)
   const [cancelState, cancelAction, cancelPending] = useActionState(cancelRestockOrder, null)
 
   const isDraft = order.status === 'draft'
-  const statusLabel = isDraft ? 'Staged' : 'Awaiting receipt'
+  const statusLabel = isDraft ? t('Staged', 'Preparado') : t('Awaiting receipt', 'Esperando recepción')
   const statusClass = isDraft
     ? 'bg-gray-100 text-gray-700'
     : 'bg-amber-50 text-amber-700'
@@ -3507,12 +3576,12 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
   const detailParts = [
     order.vendor,
     order.expectedCost !== null ? `~$${order.expectedCost.toFixed(2)}` : null,
-    order.expectedDate ? `Expected ${formatRestockDate(order.expectedDate)}` : null,
+    order.expectedDate ? `${t('Expected', 'Esperada')} ${formatRestockDate(order.expectedDate)}` : null,
     order.notes,
   ].filter(Boolean)
   const detailLine = detailParts.length > 0
     ? detailParts.join(' · ')
-    : 'No vendor or cost recorded'
+    : t('No vendor or cost recorded', 'Sin proveedor ni costo registrado')
 
   const error = receivedState?.error ?? cancelState?.error
 
@@ -3530,7 +3599,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
         </div>
         <div className="text-right flex-shrink-0">
           <p className="text-[10px] uppercase tracking-wide text-gray-400">
-            {isDraft ? 'Staged qty' : 'Ordered'}
+            {isDraft ? t('Staged qty', 'Cant. preparada') : t('Ordered', 'Pedida')}
           </p>
           <p className="mt-0.5 text-base font-semibold font-mono tabular-nums text-gray-900">
             {order.quantity.toFixed(2)}
@@ -3542,7 +3611,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
       <div className="mt-3 flex items-center gap-2">
         {isDraft ? (
           <p className="flex-1 text-[10px] text-gray-400 leading-relaxed">
-            Moves with your next restock order.
+            {t('Moves with your next restock order.', 'Se mueve con tu próxima orden de reabastecimiento.')}
           </p>
         ) : (
           <form action={receivedAction} className="flex-1">
@@ -3552,7 +3621,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
               disabled={receivedPending}
               className="w-full rounded-md bg-gray-900 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
             >
-              {receivedPending ? 'Receiving…' : 'Mark received'}
+              {receivedPending ? t('Receiving…', 'Recibiendo…') : t('Mark received', 'Marcar recibido')}
             </button>
           </form>
         )}
@@ -3564,7 +3633,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
             disabled={cancelPending}
             className="text-[11px] font-medium text-gray-500 hover:text-red-600 disabled:opacity-60 px-1 transition-colors"
           >
-            {cancelPending ? '…' : 'Remove'}
+            {cancelPending ? '…' : t('Remove', 'Quitar')}
           </button>
         </form>
       </div>
@@ -3582,7 +3651,7 @@ function RestockOrderRow({ order, unit }: { order: RestockOrder; unit: string })
 // on stock + ordering. Same conventions as Staffing's destructive
 // confirms: text-only at rest, expand-into-confirm on click.
 // ----------------------------------------------------------------
-function ItemDestructiveSection({ item }: { item: Item }) {
+function ItemDestructiveSection({ item, t }: { item: Item; t: T }) {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deletePending, setDeletePending] = useState(false)
@@ -3607,7 +3676,7 @@ function ItemDestructiveSection({ item }: { item: Item }) {
 
   return (
     <div className="pt-4 mt-2 border-t border-gray-100">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">Manage</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 mb-2">{t('Manage', 'Administrar')}</p>
 
       <div className="flex items-center gap-3">
         <form action={archiveAction}>
@@ -3617,7 +3686,7 @@ function ItemDestructiveSection({ item }: { item: Item }) {
             disabled={archivePending}
             className="text-[11px] font-medium text-gray-600 hover:text-gray-900 disabled:opacity-60"
           >
-            {archivePending ? 'Archiving…' : 'Archive item'}
+            {archivePending ? t('Archiving…', 'Archivando…') : t('Archive item', 'Archivar artículo')}
           </button>
         </form>
 
@@ -3626,9 +3695,9 @@ function ItemDestructiveSection({ item }: { item: Item }) {
         {item.hasDependencies ? (
           <span
             className="text-[11px] text-gray-300"
-            title="Has linked recipes, counts, or transactions. Archive instead."
+            title={t('Has linked recipes, counts, or transactions. Archive instead.', 'Tiene recetas, conteos o movimientos vinculados. Archivar en su lugar.')}
           >
-            Delete unavailable
+            {t('Delete unavailable', 'Eliminación no disponible')}
           </span>
         ) : !confirmDelete ? (
           <button
@@ -3636,10 +3705,10 @@ function ItemDestructiveSection({ item }: { item: Item }) {
             onClick={() => setConfirmDelete(true)}
             className="text-[11px] font-medium text-red-600 hover:text-red-700"
           >
-            Delete item
+            {t('Delete item', 'Eliminar artículo')}
           </button>
         ) : (
-          <span className="text-[11px] text-gray-400">Confirm below</span>
+          <span className="text-[11px] text-gray-400">{t('Confirm below', 'Confirmar abajo')}</span>
         )}
       </div>
 
@@ -3653,9 +3722,9 @@ function ItemDestructiveSection({ item }: { item: Item }) {
 
       {confirmDelete && !item.hasDependencies && (
         <div className="mt-2.5 rounded-lg border border-red-200 bg-red-50/60 p-3">
-          <p className="text-xs font-semibold text-red-900">Delete {item.name}?</p>
+          <p className="text-xs font-semibold text-red-900">{t('Delete', '¿Eliminar')} {item.name}?</p>
           <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
-            This is permanent. Use Archive if you might restore it later.
+            {t('This is permanent. Use Archive if you might restore it later.', 'Esto es permanente. Usa Archivar si podrías restaurarlo después.')}
           </p>
           <div className="mt-2.5 flex items-center gap-2">
             <button
@@ -3664,14 +3733,14 @@ function ItemDestructiveSection({ item }: { item: Item }) {
               disabled={deletePending}
               className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
             >
-              {deletePending ? 'Deleting…' : 'Confirm delete'}
+              {deletePending ? t('Deleting…', 'Eliminando…') : t('Confirm delete', 'Confirmar eliminación')}
             </button>
             <button
               type="button"
               onClick={() => { setConfirmDelete(false); setDeleteError(null) }}
               className="text-[11px] text-gray-500 hover:text-gray-700"
             >
-              Cancel
+              {t('Cancel', 'Cancelar')}
             </button>
           </div>
           {deleteError && <p className="mt-1.5 text-[11px] text-red-700">{deleteError}</p>}
@@ -3702,11 +3771,12 @@ function ItemDestructiveSection({ item }: { item: Item }) {
 // `transactions` is the page-level activity feed; the drawer
 // filters it down to just this item via `inventoryItemId`.
 // ----------------------------------------------------------------
-function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
+function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: {
   item: Item
   transactions: Transaction[]
   restockOrders: RestockOrder[]
   onClose: () => void
+  t: T
 }) {
   const st = STATUS[item.status]
   const [threshold, setThreshold] = useState(item.threshold.toString())
@@ -3744,18 +3814,18 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
   }
 
   const hasCount = item.lastCount !== null
-  const countCtaLabel = hasCount ? 'Update stock count' : 'Record first count'
+  const countCtaLabel = hasCount ? t('Update stock count', 'Actualizar conteo de stock') : t('Record first count', 'Registrar primer conteo')
 
   // Item type — equally first-class for both variants. Recipe-linked
   // items get the count surfaced; standalone items are simply
   // labeled as such, never as "missing" metadata.
   const isRecipeLinked = item.recipeLinks > 0
   const typeLabel = isRecipeLinked
-    ? `Recipe-linked · ${item.recipeLinks}`
-    : 'Standalone'
+    ? `${t('Recipe-linked', 'Vinculado a receta')} · ${item.recipeLinks}`
+    : t('Standalone', 'Independiente')
   const typeTitle = isRecipeLinked
-    ? `Used in ${item.recipeLinks} recipe${item.recipeLinks > 1 ? 's' : ''}`
-    : 'Standalone item — not linked to any recipe'
+    ? `${t('Used in', 'Usado en')} ${item.recipeLinks} ${item.recipeLinks > 1 ? t('recipes', 'recetas') : t('recipe', 'receta')}`
+    : t('Standalone item — not linked to any recipe', 'Artículo independiente — no vinculado a ninguna receta')
 
   // Item-scoped movement — all transactions for THIS item that the
   // page-level feed surfaced (capped at 20 server-side). The drawer
@@ -3798,19 +3868,19 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
       <div className="fixed inset-0 bg-black/20 z-40" onClick={onClose} />
       <aside
         className="fixed right-0 top-0 bottom-0 w-full max-w-md md:max-w-lg lg:max-w-md bg-white border-l border-gray-200 shadow-xl z-50 flex flex-col"
-        aria-label={`${item.name} workspace`}
+        aria-label={t(`${item.name} workspace`, `espacio de trabajo de ${item.name}`)}
       >
         {/* Sticky header — same family as Staffing's drawers. The
             type/recipe pill carries first-class context for both
             recipe-linked ingredients and standalone supplies. */}
         <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">Inventory item</p>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">{t('Inventory item', 'Artículo de inventario')}</p>
             <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
                 <span className={`w-1 h-1 rounded-full ${st.dot}`} />
-                {st.label}
+                {translateStatusLabel(item.status, t)}
               </span>
               <span
                 className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600"
@@ -3823,7 +3893,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t('Close', 'Cerrar')}
             className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3848,10 +3918,10 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                   : ''
           } bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden`}>
             <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold text-gray-900">Stock Status</p>
+              <p className="text-xs font-semibold text-gray-900">{t('Stock Status', 'Estado del stock')}</p>
               <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
                 <span className={`w-1 h-1 rounded-full ${st.dot}`} />
-                {st.label}
+                {translateStatusLabel(item.status, t)}
               </span>
             </div>
 
@@ -3862,7 +3932,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                 count has a tiny "Manual" sub-line. */}
             <div className="px-4 py-3 grid grid-cols-3 gap-3">
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400">Current stock</p>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">{t('Current stock', 'Stock actual')}</p>
                 <p className={`mt-1 text-base font-semibold font-mono tabular-nums ${
                   displayEstimated === null ? 'text-gray-300'
                     : displayEstimated === 0 ? 'text-red-600'
@@ -3874,7 +3944,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                 </p>
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400">Reorder at</p>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">{t('Reorder at', 'Reordenar en')}</p>
                 {thresholdEditing ? (
                   <div className="mt-1 flex items-center gap-1">
                     <input
@@ -3895,7 +3965,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                       disabled={!thresholdDirty || thresholdSaving}
                       className="text-[10px] font-semibold text-gray-700 hover:text-gray-900 disabled:opacity-40"
                     >
-                      {thresholdSaving ? '…' : 'Save'}
+                      {thresholdSaving ? '…' : t('Save', 'Guardar')}
                     </button>
                     <button
                       type="button"
@@ -3920,21 +3990,21 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                         onClick={() => setThresholdEditing(true)}
                         className="ml-1.5 text-[10px] font-semibold text-gray-500 hover:text-gray-900 font-sans"
                       >
-                        Edit
+                        {t('Edit', 'Editar')}
                       </button>
                     )}
                   </p>
                 )}
               </div>
               <div>
-                <p className="text-[10px] uppercase tracking-wide text-gray-400">Last count</p>
+                <p className="text-[10px] uppercase tracking-wide text-gray-400">{t('Last count', 'Último conteo')}</p>
                 <p className="mt-1 text-base font-semibold font-mono tabular-nums text-gray-900">
                   {hasCount
                     ? <>{item.lastCount!.toFixed(2)} <span className="text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span></>
                     : <span className="text-gray-400 font-sans font-normal text-xs">—</span>}
                 </p>
                 {hasCount && (
-                  <p className="mt-0.5 text-[10px] text-gray-400">Manual</p>
+                  <p className="mt-0.5 text-[10px] text-gray-400">{t('Manual', 'Manual')}</p>
                 )}
               </div>
             </div>
@@ -3951,7 +4021,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                 <div className="min-w-0">
                   <p className="text-xs font-semibold text-gray-900">{countCtaLabel}</p>
                   <p className="text-[10px] text-gray-500 mt-0.5">
-                    {hasCount ? 'Adjust the quantity on hand' : 'Record the first physical count'}
+                    {hasCount ? t('Adjust the quantity on hand', 'Ajustar la cantidad disponible') : t('Record the first physical count', 'Registrar el primer conteo físico')}
                   </p>
                 </div>
                 <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -3961,10 +4031,10 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                       "Close" because the action is no longer to act
                       — it's to dismiss. */}
                   <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wide text-blue-700 group-hover:text-blue-800 bg-blue-50 group-hover:bg-blue-100 px-1.5 py-0.5 rounded transition-colors group-open:hidden">
-                    Adjust
+                    {t('Adjust', 'Ajustar')}
                   </span>
                   <span className="hidden group-open:inline-flex items-center text-[10px] font-semibold uppercase tracking-wide text-gray-500 bg-gray-100 px-1.5 py-0.5 rounded">
-                    Close
+                    {t('Close', 'Cerrar')}
                   </span>
                   <svg className="w-3.5 h-3.5 text-gray-500 group-open:rotate-180 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -3990,7 +4060,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                   disabled={countPending}
                   className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
                 >
-                  {countPending ? 'Saving…' : 'Save count'}
+                  {countPending ? t('Saving…', 'Guardando…') : t('Save count', 'Guardar conteo')}
                 </button>
                 {countState?.error && (
                   <p className="text-[11px] text-red-600">{countState.error}</p>
@@ -4006,7 +4076,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                  from recipe_components (server-fetched and joined
                  to active menu_items in page.tsx). Empty state is
                  compact; long lists collapse to a "+N more" tail. */}
-          <UsedInMenuItemsCard item={item} />
+          <UsedInMenuItemsCard item={item} t={t} />
 
           {/* ---- RESTOCK ITEM — quantity-only add-to-cart surface.
                  The drawer no longer collects vendor / cost / date /
@@ -4017,6 +4087,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
           <ReplenishSection
             item={item}
             orders={restockOrders}
+            t={t}
           />
 
           {/* ---- RECENT MOVEMENT — item-scoped feed of counts and
@@ -4028,16 +4099,16 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                  list's pagination. */}
           <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
             <div className="border-b border-gray-100 px-4 py-3 flex items-center justify-between">
-              <p className="text-xs font-semibold text-gray-900">Recent movement</p>
+              <p className="text-xs font-semibold text-gray-900">{t('Recent movement', 'Movimiento reciente')}</p>
               <span className="text-[10px] text-gray-400 font-mono tabular-nums">
                 {allItemMovement.length === 0
-                  ? 'No movement yet'
-                  : `${allItemMovement.length} ${allItemMovement.length === 1 ? 'movement' : 'movements'}`}
+                  ? t('No movement yet', 'Sin movimientos aún')
+                  : `${allItemMovement.length} ${allItemMovement.length === 1 ? t('movement', 'movimiento') : t('movements', 'movimientos')}`}
               </span>
             </div>
             {allItemMovement.length === 0 ? (
               <p className="px-4 py-2.5 text-[10.5px] text-gray-400 leading-relaxed">
-                Counts, sales usage, and received orders will appear here.
+                {t('Counts, sales usage, and received orders will appear here.', 'Los conteos, uso por ventas y órdenes recibidas aparecerán aquí.')}
               </p>
             ) : (
               <>
@@ -4054,20 +4125,20 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                   }`}
                 >
                   {visibleMovement.map((tx) => (
-                    <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} />
+                    <ItemMovementRow key={tx.id} tx={tx} unit={item.unitOfMeasure} t={t} />
                   ))}
                 </ul>
                 {allItemMovement.length > MOVEMENT_PAGE_SIZE && (
                   <div className="border-t border-gray-100 px-4 py-2 flex items-center justify-between">
                     <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                      Showing <span className="font-semibold text-gray-700">{movementStart + 1}–{Math.min(movementStart + MOVEMENT_PAGE_SIZE, allItemMovement.length)}</span> of <span className="font-semibold text-gray-700">{allItemMovement.length}</span>
+                      {t('Showing', 'Mostrando')} <span className="font-semibold text-gray-700">{movementStart + 1}–{Math.min(movementStart + MOVEMENT_PAGE_SIZE, allItemMovement.length)}</span> {t('of', 'de')} <span className="font-semibold text-gray-700">{allItemMovement.length}</span>
                     </p>
                     <div className="inline-flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => setMovementPage((p) => Math.max(1, p - 1))}
                         disabled={safeMovementPage === 1}
-                        aria-label="Previous movements"
+                        aria-label={t('Previous movements', 'Movimientos anteriores')}
                         className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         ←
@@ -4079,7 +4150,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
                         type="button"
                         onClick={() => setMovementPage((p) => Math.min(totalMovementPages, p + 1))}
                         disabled={safeMovementPage === totalMovementPages}
-                        aria-label="Next movements"
+                        aria-label={t('Next movements', 'Movimientos siguientes')}
                         className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                       >
                         →
@@ -4094,7 +4165,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
           {/* ---- MANAGE ITEM — archive + delete pinned at the
                  bottom. Visually quiet by design; destructive
                  actions never compete with the primary lifecycle. */}
-          <ItemDestructiveSection item={item} />
+          <ItemDestructiveSection item={item} t={t} />
         </div>
       </aside>
     </>
@@ -4114,7 +4185,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose }: {
 // ----------------------------------------------------------------
 const USED_IN_VISIBLE_LIMIT = 5
 
-function UsedInMenuItemsCard({ item }: { item: Item }) {
+function UsedInMenuItemsCard({ item, t }: { item: Item; t: T }) {
   const deps = item.menuItems
   const visible = deps.slice(0, USED_IN_VISIBLE_LIMIT)
   const overflowCount = deps.length - visible.length
@@ -4122,17 +4193,17 @@ function UsedInMenuItemsCard({ item }: { item: Item }) {
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-gray-900">Used in menu items</p>
+        <p className="text-xs font-semibold text-gray-900">{t('Used in menu items', 'Usado en artículos del menú')}</p>
         {deps.length > 0 && (
           <span className="text-[10px] text-gray-400 font-mono tabular-nums">
-            {deps.length === 1 ? '1 item' : `${deps.length} items`}
+            {deps.length === 1 ? t('1 item', '1 artículo') : `${deps.length} ${t('items', 'artículos')}`}
           </span>
         )}
       </div>
 
       {deps.length === 0 ? (
         <p className="px-4 py-2.5 text-[10.5px] text-gray-400 leading-relaxed">
-          No mapped menu items yet.
+          {t('No mapped menu items yet.', 'Sin artículos del menú asignados aún.')}
         </p>
       ) : (
         <ul className="divide-y divide-gray-50">
@@ -4155,7 +4226,7 @@ function UsedInMenuItemsCard({ item }: { item: Item }) {
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {m.quantityRequired > 0 && (
                     <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                      Uses <span className="font-mono">{m.quantityRequired.toFixed(2)}</span> {item.unitOfMeasure}
+                      {t('Uses', 'Usa')} <span className="font-mono">{m.quantityRequired.toFixed(2)}</span> {item.unitOfMeasure}
                     </p>
                   )}
                   <svg
@@ -4174,7 +4245,7 @@ function UsedInMenuItemsCard({ item }: { item: Item }) {
           ))}
           {overflowCount > 0 && (
             <li className="px-4 py-2 text-[10.5px] text-gray-400">
-              +{overflowCount} more
+              +{overflowCount} {t('more', 'más')}
             </li>
           )}
         </ul>
@@ -4197,7 +4268,7 @@ function UsedInMenuItemsCard({ item }: { item: Item }) {
 // driven by the card and the rest are surfaced as a quiet
 // "+N more" tail.
 // ----------------------------------------------------------------
-function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[] }) {
+function ReplenishSection({ item, orders, t }: { item: Item; orders: RestockOrder[]; t: T }) {
   const drafts = orders.filter((o) => o.status === 'draft')
   if (drafts.length > 0) {
     return (
@@ -4205,10 +4276,11 @@ function ReplenishSection({ item, orders }: { item: Item; orders: RestockOrder[]
         item={item}
         draft={drafts[0]}
         extraStagedCount={drafts.length - 1}
+        t={t}
       />
     )
   }
-  return <RestockItemCard item={item} />
+  return <RestockItemCard item={item} t={t} />
 }
 
 // Compact quantity stepper — shared chrome for both the staged
@@ -4219,11 +4291,13 @@ function CompactQtyStepper({
   setQty,
   unit,
   label,
+  t,
 }: {
   qty: number
   setQty: (next: number) => void
   unit: string
   label: string
+  t: T
 }) {
   const step = 1
   const dec = () => setQty(Math.max(step, Math.round((qty - step) * 100) / 100))
@@ -4237,7 +4311,7 @@ function CompactQtyStepper({
             type="button"
             onClick={dec}
             className="px-2.5 text-gray-500 hover:bg-gray-50 transition-colors"
-            aria-label="Decrease quantity"
+            aria-label={t('Decrease quantity', 'Disminuir cantidad')}
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
@@ -4253,13 +4327,13 @@ function CompactQtyStepper({
               if (Number.isFinite(n) && n > 0) setQty(n)
             }}
             className="h-8 flex-1 min-w-0 text-center text-sm font-mono font-semibold tabular-nums border-x border-gray-200 focus:outline-none focus:bg-blue-50/40"
-            aria-label="Quantity"
+            aria-label={t('Quantity', 'Cantidad')}
           />
           <button
             type="button"
             onClick={inc}
             className="px-2.5 text-gray-500 hover:bg-gray-50 transition-colors"
-            aria-label="Increase quantity"
+            aria-label={t('Increase quantity', 'Aumentar cantidad')}
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -4279,18 +4353,18 @@ function CompactQtyStepper({
 // no helper copy about cart details. The drawer's role is to
 // stage a quantity; everything else is the cart's job.
 // ----------------------------------------------------------------
-function RestockItemCard({ item }: { item: Item }) {
+function RestockItemCard({ item, t }: { item: Item; t: T }) {
   const [qty, setQty] = useState<number>(defaultRestockQty(item))
   return (
     <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="border-b border-gray-100 px-4 py-2.5">
-        <p className="text-xs font-semibold text-gray-900">Restock item</p>
+        <p className="text-xs font-semibold text-gray-900">{t('Restock item', 'Reabastecer artículo')}</p>
         <p className="mt-0.5 text-[10.5px] text-gray-500 leading-relaxed">
-          Add this item to the next restock cart.
+          {t('Add this item to the next restock cart.', 'Agrega este artículo al próximo carrito de reabastecimiento.')}
         </p>
       </div>
       <div className="px-4 py-3 space-y-3">
-        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label="Quantity" />
+        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label={t('Quantity', 'Cantidad')} t={t} />
         <form action={quickAddToOrder}>
           <input type="hidden" name="inventory_item_id" value={item.id} />
           <input type="hidden" name="quantity" value={qty} />
@@ -4299,7 +4373,7 @@ function RestockItemCard({ item }: { item: Item }) {
             disabled={qty <= 0}
             className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
           >
-            Add to restock
+            {t('Add to restock', 'Agregar a reabastecimiento')}
           </button>
         </form>
       </div>
@@ -4324,10 +4398,12 @@ function StagedItemCard({
   item,
   draft,
   extraStagedCount,
+  t,
 }: {
   item: Item
   draft: RestockOrder
   extraStagedCount: number
+  t: T
 }) {
   const [qty, setQty] = useState<number>(draft.quantity)
   const [updateState, updateAction, updatePending] = useActionState(updateRestockQuantity, null)
@@ -4349,10 +4425,10 @@ function StagedItemCard({
     // signals reinforce each other.
     <div className="rounded-xl border border-gray-200/80 border-t-2 border-t-blue-300 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
       <div className="border-b border-gray-100 px-4 py-2.5 flex items-center justify-between gap-2">
-        <p className="text-xs font-semibold text-gray-900">Staged for restock</p>
+        <p className="text-xs font-semibold text-gray-900">{t('Staged for restock', 'Preparado para reabastecimiento')}</p>
         <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">
           <span className="w-1 h-1 rounded-full bg-blue-500" />
-          In cart
+          {t('In cart', 'En carrito')}
         </span>
       </div>
 
@@ -4360,14 +4436,14 @@ function StagedItemCard({
         {/* Hero stat — current staged quantity. Reads as the
             object-of-attention; the stepper below is the editor. */}
         <div>
-          <p className="text-[10px] uppercase tracking-wide text-gray-400">Staged quantity</p>
+          <p className="text-[10px] uppercase tracking-wide text-gray-400">{t('Staged quantity', 'Cantidad preparada')}</p>
           <p className="mt-0.5 text-lg font-semibold font-mono tabular-nums text-gray-900">
             {draft.quantity.toFixed(2)}
             <span className="ml-1 text-[10px] font-sans font-normal text-gray-400">{item.unitOfMeasure}</span>
           </p>
         </div>
 
-        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label="Adjust quantity" />
+        <CompactQtyStepper qty={qty} setQty={setQty} unit={item.unitOfMeasure} label={t('Adjust quantity', 'Ajustar cantidad')} t={t} />
 
         <form action={updateAction}>
           <input type="hidden" name="order_id" value={draft.id} />
@@ -4377,7 +4453,7 @@ function StagedItemCard({
             disabled={updatePending || qty <= 0 || !isDirty}
             className="w-full h-9 rounded-md bg-gray-900 px-4 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 transition-colors"
           >
-            {updatePending ? 'Updating…' : 'Update staged quantity'}
+            {updatePending ? t('Updating…', 'Actualizando…') : t('Update staged quantity', 'Actualizar cantidad preparada')}
           </button>
         </form>
 
@@ -4388,13 +4464,13 @@ function StagedItemCard({
             disabled={removePending}
             className="text-[11px] font-medium text-gray-500 hover:text-red-600 disabled:opacity-60 transition-colors"
           >
-            {removePending ? '…' : 'Remove from cart'}
+            {removePending ? '…' : t('Remove from cart', 'Quitar del carrito')}
           </button>
         </form>
 
         {extraStagedCount > 0 && (
           <p className="text-[10px] text-gray-400 leading-relaxed text-center">
-            +{extraStagedCount} more staged {extraStagedCount === 1 ? 'line' : 'lines'} for this item in the Restock cart.
+            +{extraStagedCount} {extraStagedCount === 1 ? t('more staged line for this item in the Restock cart.', 'línea preparada más para este artículo en el Carrito de reabastecimiento.') : t('more staged lines for this item in the Restock cart.', 'líneas preparadas más para este artículo en el Carrito de reabastecimiento.')}
           </p>
         )}
 
@@ -4417,9 +4493,11 @@ function StagedItemCard({
 function DuplicateMergeBanner({
   groups,
   onPickManually,
+  t,
 }: {
   groups: { displayName: string; count: number }[]
   onPickManually: () => void
+  t: T
 }) {
   const [pending, startTransition] = useTransition()
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
@@ -4436,8 +4514,8 @@ function DuplicateMergeBanner({
           ok: true,
           message:
             merged > 0
-              ? `Merged ${merged} duplicate${merged === 1 ? '' : 's'}. Stock movement will now land on the canonical row.`
-              : 'No active duplicates found.',
+              ? `${t('Merged', 'Se combinaron')} ${merged} ${merged === 1 ? t('duplicate. Stock movement will now land on the canonical row.', 'duplicado. El movimiento de stock ahora caerá en la fila canónica.') : t('duplicates. Stock movement will now land on the canonical row.', 'duplicados. El movimiento de stock ahora caerá en la fila canónica.')}`
+              : t('No active duplicates found.', 'No se encontraron duplicados activos.'),
         })
       }
     })
@@ -4448,18 +4526,18 @@ function DuplicateMergeBanner({
     .slice(0, 3)
     .map((g) => `${g.displayName} ×${g.count}`)
     .join(', ')
-  const more = groups.length > 3 ? `, +${groups.length - 3} more` : ''
+  const more = groups.length > 3 ? `, +${groups.length - 3} ${t('more', 'más')}` : ''
 
   return (
     <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold text-amber-900">
-            Duplicate inventory items detected
+            {t('Duplicate inventory items detected', 'Artículos de inventario duplicados detectados')}
           </p>
           <p className="mt-1 text-xs text-amber-800 leading-relaxed">
-            {groups.length} item name{groups.length === 1 ? ' has' : 's have'} more than one active row.
-            Stock movement may not show against the row you&apos;re looking at. Merge to consolidate.
+            {groups.length} {groups.length === 1 ? t('item name has more than one active row.', 'nombre de artículo tiene más de una fila activa.') : t('item names have more than one active row.', 'nombres de artículos tienen más de una fila activa.')}{' '}
+            {t('Stock movement may not show against the row you’re looking at. Merge to consolidate.', 'El movimiento de stock puede no mostrarse en la fila que estás viendo. Combina para consolidar.')}
           </p>
           <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">
             {preview}{more}
@@ -4477,14 +4555,14 @@ function DuplicateMergeBanner({
             disabled={pending}
             className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
           >
-            {pending ? 'Merging…' : 'Merge duplicates'}
+            {pending ? t('Merging…', 'Combinando…') : t('Merge duplicates', 'Combinar duplicados')}
           </button>
           <button
             type="button"
             onClick={onPickManually}
             className="text-[11px] font-medium text-amber-700 hover:text-amber-800 underline-offset-2 hover:underline transition-colors"
           >
-            Pick manually
+            {t('Pick manually', 'Elegir manualmente')}
           </button>
         </div>
       </div>
@@ -4501,7 +4579,7 @@ function DuplicateMergeBanner({
 // integrity check, which auto-reactivates these rows so depletion
 // lands on a visible item again.
 // ================================================================
-function ArchivedInRecipesBanner({ names }: { names: string[] }) {
+function ArchivedInRecipesBanner({ names, t }: { names: string[]; t: T }) {
   const [pending, startTransition] = useTransition()
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null)
 
@@ -4517,25 +4595,26 @@ function ArchivedInRecipesBanner({ names }: { names: string[] }) {
         )
         setResult({
           ok: true,
-          message: reactivated?.message ?? 'Integrity check complete — no recipe-linked archived items found.',
+          message: reactivated?.message ?? t('Integrity check complete — no recipe-linked archived items found.', 'Verificación de integridad completa — no se encontraron artículos archivados vinculados a recetas.'),
         })
       }
     })
   }
 
   const preview = names.slice(0, 3).join(', ')
-  const more = names.length > 3 ? `, +${names.length - 3} more` : ''
+  const more = names.length > 3 ? `, +${names.length - 3} ${t('more', 'más')}` : ''
 
   return (
     <div className="mb-6 rounded-xl border border-amber-200 bg-amber-50/60 p-4">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold text-amber-900">
-            Archived items still used in active recipes
+            {t('Archived items still used in active recipes', 'Artículos archivados aún usados en recetas activas')}
           </p>
           <p className="mt-1 text-xs text-amber-800 leading-relaxed">
-            {names.length} archived inventory item{names.length === 1 ? '' : 's'} {names.length === 1 ? 'is' : 'are'} still
-            referenced by active recipes, so stock movement is disappearing from the list. Reactivate to bring {names.length === 1 ? 'it' : 'them'} back.
+            {names.length === 1
+              ? `${names.length} ${t('archived inventory item is still referenced by active recipes, so stock movement is disappearing from the list. Reactivate to bring it back.', 'artículo de inventario archivado sigue siendo referenciado por recetas activas, por lo que el movimiento de stock está desapareciendo de la lista. Reactiva para traerlo de vuelta.')}`
+              : `${names.length} ${t('archived inventory items are still referenced by active recipes, so stock movement is disappearing from the list. Reactivate to bring them back.', 'artículos de inventario archivados siguen siendo referenciados por recetas activas, por lo que el movimiento de stock está desapareciendo de la lista. Reactiva para traerlos de vuelta.')}`}
           </p>
           <p className="mt-1.5 text-[11px] text-amber-700/80 truncate">{preview}{more}</p>
           {result && (
@@ -4550,7 +4629,7 @@ function ArchivedInRecipesBanner({ names }: { names: string[] }) {
           disabled={pending}
           className="flex-shrink-0 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-60 transition-colors"
         >
-          {pending ? 'Repairing…' : 'Reactivate items'}
+          {pending ? t('Repairing…', 'Reparando…') : t('Reactivate items', 'Reactivar artículos')}
         </button>
       </div>
     </div>
@@ -4574,9 +4653,11 @@ function ArchivedInRecipesBanner({ names }: { names: string[] }) {
 function MergeItemsDrawer({
   mergeableItems,
   onClose,
+  t,
 }: {
   mergeableItems: { id: string; name: string; active: boolean }[]
   onClose: () => void
+  t: T
 }) {
   const [canonicalId, setCanonicalId] = useState('')
   const [duplicateId, setDuplicateId] = useState('')
@@ -4599,11 +4680,11 @@ function MergeItemsDrawer({
   const handleMerge = () => {
     setResult(null)
     if (!canonicalId || !duplicateId) {
-      setResult({ ok: false, message: 'Pick both items before merging.' })
+      setResult({ ok: false, message: t('Pick both items before merging.', 'Elige ambos artículos antes de combinar.') })
       return
     }
     if (canonicalId === duplicateId) {
-      setResult({ ok: false, message: 'Canonical and duplicate must be different items.' })
+      setResult({ ok: false, message: t('Canonical and duplicate must be different items.', 'Las filas canónica y duplicada deben ser artículos diferentes.') })
       return
     }
     startTransition(async () => {
@@ -4640,11 +4721,11 @@ function MergeItemsDrawer({
         <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              Inventory cleanup
+              {t('Inventory cleanup', 'Limpieza de inventario')}
             </p>
-            <h2 className="mt-1 text-base font-bold text-gray-900">Merge inventory items</h2>
+            <h2 className="mt-1 text-base font-bold text-gray-900">{t('Merge inventory items', 'Combinar artículos de inventario')}</h2>
             <p className="mt-1 text-xs text-gray-500 leading-relaxed">
-              Re-points counts, recipe links, and stock transactions from the duplicate row to the canonical row, then removes the duplicate.
+              {t('Re-points counts, recipe links, and stock transactions from the duplicate row to the canonical row, then removes the duplicate.', 'Reasigna conteos, vínculos de receta y movimientos de stock de la fila duplicada a la fila canónica, luego elimina la duplicada.')}
             </p>
           </div>
           <button
@@ -4652,7 +4733,7 @@ function MergeItemsDrawer({
             onClick={onClose}
             className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
           >
-            Close
+            {t('Close', 'Cerrar')}
           </button>
         </div>
 
@@ -4661,17 +4742,17 @@ function MergeItemsDrawer({
 
           <div>
             <label className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1.5">
-              Canonical (the row to keep)
+              {t('Canonical (the row to keep)', 'Canónica (la fila a conservar)')}
             </label>
             <select
               value={canonicalId}
               onChange={(e) => setCanonicalId(e.target.value)}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
             >
-              <option value="">Select an item…</option>
+              <option value="">{t('Select an item…', 'Selecciona un artículo…')}</option>
               {sortedItems.map((item) => (
                 <option key={item.id} value={item.id} disabled={item.id === duplicateId}>
-                  {item.name}{item.active ? '' : ' (archived)'}
+                  {item.name}{item.active ? '' : ` ${t('(archived)', '(archivado)')}`}
                 </option>
               ))}
             </select>
@@ -4679,17 +4760,17 @@ function MergeItemsDrawer({
 
           <div>
             <label className="block text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-1.5">
-              Duplicate (merged into canonical)
+              {t('Duplicate (merged into canonical)', 'Duplicada (combinada en canónica)')}
             </label>
             <select
               value={duplicateId}
               onChange={(e) => setDuplicateId(e.target.value)}
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
             >
-              <option value="">Select an item…</option>
+              <option value="">{t('Select an item…', 'Selecciona un artículo…')}</option>
               {sortedItems.map((item) => (
                 <option key={item.id} value={item.id} disabled={item.id === canonicalId}>
-                  {item.name}{item.active ? '' : ' (archived)'}
+                  {item.name}{item.active ? '' : ` ${t('(archived)', '(archivado)')}`}
                 </option>
               ))}
             </select>
@@ -4699,19 +4780,19 @@ function MergeItemsDrawer({
           {canonical && duplicate && (
             <div className="rounded-xl border border-gray-200 bg-gray-50/50 p-4">
               <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate mb-2">
-                What will happen
+                {t('What will happen', 'Lo que sucederá')}
               </p>
               <ul className="text-[12px] text-gray-700 space-y-1.5 leading-relaxed">
                 <li>
-                  Counts, recipe links, and stock transactions from{' '}
-                  <span className="font-semibold">{duplicate.name}{duplicate.active ? '' : ' (archived)'}</span> move onto{' '}
-                  <span className="font-semibold">{canonical.name}{canonical.active ? '' : ' (archived)'}</span>.
+                  {t('Counts, recipe links, and stock transactions from', 'Conteos, vínculos de receta y movimientos de stock de')}{' '}
+                  <span className="font-semibold">{duplicate.name}{duplicate.active ? '' : ` ${t('(archived)', '(archivado)')}`}</span> {t('move onto', 'se mueven a')}{' '}
+                  <span className="font-semibold">{canonical.name}{canonical.active ? '' : ` ${t('(archived)', '(archivado)')}`}</span>.
                 </li>
                 <li>
-                  Canonical is set to <span className="font-semibold">active</span> if it isn&apos;t already.
+                  {t('Canonical is set to active if it isn’t already.', 'La canónica se establece como activa si aún no lo está.')}
                 </li>
                 <li>
-                  Duplicate is removed (or archived if a hard delete is blocked).
+                  {t('Duplicate is removed (or archived if a hard delete is blocked).', 'La duplicada se elimina (o se archiva si la eliminación está bloqueada).')}
                 </li>
               </ul>
             </div>
@@ -4732,14 +4813,14 @@ function MergeItemsDrawer({
             disabled={pending || !canonicalId || !duplicateId || canonicalId === duplicateId}
             className="flex-1 rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {pending ? 'Merging…' : 'Merge items'}
+            {pending ? t('Merging…', 'Combinando…') : t('Merge items', 'Combinar artículos')}
           </button>
           <button
             type="button"
             onClick={onClose}
             className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
           >
-            Cancel
+            {t('Cancel', 'Cancelar')}
           </button>
         </div>
       </aside>

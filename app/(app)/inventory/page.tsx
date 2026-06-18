@@ -6,10 +6,12 @@
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
+import { getLang } from '@/lib/i18n-server'
 import InventoryClient from './client'
 
 export default async function InventoryPage() {
   const supabase = await createClient()
+  const lang = await getLang()
 
   // Demo seed switcher — see app/(app)/pos/page.tsx for the full
   // explanation. Resolves the caller's restaurant + its active
@@ -467,6 +469,7 @@ export default async function InventoryPage() {
       duplicateGroups={duplicateGroups}
       mergeableItems={mergeableItems}
       archivedInRecipes={archivedInRecipes}
+      lang={lang}
     />
   )
 }

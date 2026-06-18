@@ -14,6 +14,23 @@ import {
   updateShiftSection,
   deleteShiftSection,
 } from '@/app/actions/staffing'
+import { makeT, type Lang } from '@/lib/i18n'
+
+type T = (en: string, es?: string) => string
+
+// Localized day-of-week short labels (Mon→Lun, etc.). Indexed
+// Mon=0 … Sun=6 to match the existing DAYS array shape.
+function localizedDays(t: T): string[] {
+  return [
+    t('Mon', 'Lun'),
+    t('Tue', 'Mar'),
+    t('Wed', 'Mié'),
+    t('Thu', 'Jue'),
+    t('Fri', 'Vie'),
+    t('Sat', 'Sáb'),
+    t('Sun', 'Dom'),
+  ]
+}
 
 interface Employee { id: string; name: string; role: string; primaryLocationId: string }
 interface Section { id: string; name: string; role: string; area: 'foh' | 'boh'; defaultStartHour: number; defaultEndHour: number; sortOrder: number }
@@ -22,19 +39,20 @@ interface Shift {
   employeeName: string; role: string; startTime: string; endTime: string; notes: string | null
 }
 interface Props {
+  lang: Lang
   defaultLocationId: string | null; employees: Employee[]; shifts: Shift[]; sections: Section[]
   houseModel: 'split' | 'unified'
   schedulingStyle: 'by_role' | 'by_team'
   fohRoles: string[]; bohRoles: string[]
 }
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
 function getMonday(d: Date) { const date = new Date(d); const day = date.getDay(); date.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); date.setHours(0,0,0,0); return date }
 function getWeekDays(mon: Date) { return Array.from({ length: 7 }, (_, i) => { const d = new Date(mon); d.setDate(mon.getDate() + i); return d }) }
 function sameDay(a: Date, b: Date) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate() }
 function fmt(d: string) { return new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) }
-function fmtMonthDay(d: string | Date) { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) }
+function fmtMonthDay(d: string | Date, lang: Lang = 'en') {
+  return new Date(d).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })
+}
 function hL(h: number) { return h === 0 ? '12a' : h === 12 ? '12p' : h < 12 ? `${h}a` : `${h-12}p` }
 function toLocal(d: Date) { const p = (n: number) => n.toString().padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}` }
 
@@ -174,15 +192,15 @@ function roleSortIndex(role: string, house: 'foh' | 'boh'): number {
 //   • near (40) → amber pill (text-amber-800, bg-amber-100)
 //   • over (>40)→ red pill (text-red-700, bg-red-50)
 // Always font-mono tabular-nums so digit columns line up across cards.
-function HoursIndicator({ hours, tier }: { hours: number; tier: HoursTier }) {
+function HoursIndicator({ hours, tier, t }: { hours: number; tier: HoursTier; t: T }) {
   if (hours <= 0) {
     return (
       <span
         className="text-[10px] font-medium font-mono tabular-nums text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded flex-shrink-0"
-        aria-label="No shifts scheduled this week"
-        title="No shifts scheduled this week"
+        aria-label={t('No shifts scheduled this week', 'Sin turnos programados esta semana')}
+        title={t('No shifts scheduled this week', 'Sin turnos programados esta semana')}
       >
-        Unscheduled
+        {t('Unscheduled', 'Sin programar')}
       </span>
     )
   }
@@ -195,17 +213,18 @@ function HoursIndicator({ hours, tier }: { hours: number; tier: HoursTier }) {
     }
   })()
   const ariaSuffix = tier === 'over'
-    ? ' — over 40 hours, overtime risk'
+    ? t(' — over 40 hours, overtime risk', ' — más de 40 horas, riesgo de tiempo extra')
     : tier === 'near'
-      ? ' — at 40-hour limit'
+      ? t(' — at 40-hour limit', ' — en el límite de 40 horas')
       : tier === 'caution'
-        ? ' — approaching full time'
+        ? t(' — approaching full time', ' — acercándose a tiempo completo')
         : ''
+  const thisWeek = t(' this week', ' esta semana')
   return (
     <span
       className={`text-[10px] font-mono tabular-nums flex-shrink-0 ${className}`}
-      aria-label={`${formatHours(hours)} this week${ariaSuffix}`}
-      title={`${formatHours(hours)} this week${ariaSuffix}`}
+      aria-label={`${formatHours(hours)}${thisWeek}${ariaSuffix}`}
+      title={`${formatHours(hours)}${thisWeek}${ariaSuffix}`}
     >
       {formatHours(hours)}
     </span>
@@ -213,7 +232,9 @@ function HoursIndicator({ hours, tier }: { hours: number; tier: HoursTier }) {
 }
 
 
-export default function StaffingClient({ defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles }: Props) {
+export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles }: Props) {
+  const t = makeT(lang)
+  const DAYS = localizedDays(t)
   const isUnified = houseModel === 'unified'
   const isByRole = schedulingStyle === 'by_role'
   const [locationId] = useState(defaultLocationId ?? '')
@@ -276,7 +297,8 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
   const houseSections = isUnified ? sections : sections.filter((s) => s.area === activeHouse)
   const weekShifts = shifts.filter((s) => s.locationId === locationId && new Date(s.startTime) >= weekStart && new Date(s.startTime) < weekEnd)
 
-  const weekLabel = `${weekDays[0].toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekDays[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+  const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
+  const weekLabel = `${weekDays[0].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })} – ${weekDays[6].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric', year: 'numeric' })}`
 
   const handleDrop = (e: DragEvent, dayIdx: number, sectionId: string) => {
     e.preventDefault(); setDragOver(null)
@@ -388,8 +410,8 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
     return activeHouse === 'foh' ? isFohRole(s.role) : !isFohRole(s.role)
   })
   const subtitle = isUnified
-    ? 'Plan the week and track labor coverage.'
-    : 'Plan the week by house — drag from the bench to assign.'
+    ? t('Plan the week and track labor coverage.', 'Planifica la semana y monitorea la cobertura de personal.')
+    : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
 
   return (
     <div className="max-w-[1400px]">
@@ -400,7 +422,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       {/*    being torn between top-right and a separate house line.       */}
       {/* ================================================================ */}
       <div className="mb-5">
-        <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">Staffing</h1>
+        <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Staffing', 'Personal')}</h1>
         <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
       </div>
 
@@ -429,7 +451,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                Front of House
+                {t('Front of House', 'Salón')}
               </button>
               <button
                 type="button"
@@ -440,7 +462,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                     : 'text-gray-600 hover:text-gray-900'
                 }`}
               >
-                Back of House
+                {t('Back of House', 'Cocina')}
               </button>
             </div>
           )}
@@ -453,18 +475,18 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
               type="button"
               onClick={() => setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() - 7); return d })}
               className="px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-              aria-label="Previous week"
+              aria-label={t('Previous week', 'Semana anterior')}
             >‹</button>
             <button
               type="button"
               onClick={() => setWeekStart(getMonday(new Date()))}
               className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 border-x border-gray-200/80 transition-colors"
-            >Today</button>
+            >{t('Today', 'Hoy')}</button>
             <button
               type="button"
               onClick={() => setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() + 7); return d })}
               className="px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-              aria-label="Next week"
+              aria-label={t('Next week', 'Próxima semana')}
             >›</button>
           </div>
 
@@ -476,21 +498,21 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
             onClick={() => setDrawer({ mode: 'add-shift', defaultDay: null })}
             className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
           >
-            + Shift
+            {t('+ Shift', '+ Turno')}
           </button>
           <button
             type="button"
             onClick={() => setDrawer({ mode: 'add-block', defaultArea: activeHouse })}
             className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
           >
-            + Block
+            {t('+ Block', '+ Bloque')}
           </button>
           <button
             type="button"
             onClick={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
             className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
           >
-            + Employee
+            {t('+ Employee', '+ Empleado')}
           </button>
         </div>
       </div>
@@ -505,13 +527,13 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* Header band */}
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight text-gray-900">Schedule</h2>
+            <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Schedule', 'Horario')}</h2>
             <p className="mt-0.5 text-[11px] text-gray-500 truncate">
               {weekLabel}
               {houseSections.length > 0 && (
                 <>
                   <span className="text-gray-300 px-1">·</span>
-                  {houseSections.length} block{houseSections.length === 1 ? '' : 's'}
+                  {houseSections.length} {houseSections.length === 1 ? t('block', 'bloque') : t('blocks', 'bloques')}
                 </>
               )}
             </p>
@@ -522,14 +544,14 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
               reads as intentional rather than just empty. */}
           <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            {totalShiftsThisWeek} shift{totalShiftsThisWeek === 1 ? '' : 's'}
+            {totalShiftsThisWeek} {totalShiftsThisWeek === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
             <span className="opacity-50">·</span>
             <span className="font-mono tabular-nums">{formatHours(totalHoursThisWeek)}</span>
             <span className="opacity-50">·</span>
             {totalShiftsThisWeek > 0 ? (
-              <span>{coveredDays} covered day{coveredDays === 1 ? '' : 's'}</span>
+              <span>{coveredDays} {coveredDays === 1 ? t('covered day', 'día cubierto') : t('covered days', 'días cubiertos')}</span>
             ) : (
-              <span className="font-medium opacity-80">no coverage</span>
+              <span className="font-medium opacity-80">{t('no coverage', 'sin cobertura')}</span>
             )}
           </span>
         </div>
@@ -537,7 +559,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* Day headers */}
         <div className="grid grid-cols-[110px_repeat(7,1fr)] min-w-[820px] lg:min-w-0 border-b border-gray-100 bg-gray-50/40">
           <div className="px-3 py-2.5 border-r border-gray-100">
-            <p className="text-[11px] font-medium text-gray-500">Block</p>
+            <p className="text-[11px] font-medium text-gray-500">{t('Block', 'Bloque')}</p>
           </div>
           {weekDays.map((day, i) => {
             const isToday = sameDay(day, new Date())
@@ -556,11 +578,11 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {/* Shift block rows */}
         {houseSections.length === 0 && (
           <div className="p-12 text-center">
-            <p className="text-sm font-medium text-gray-700">No shift blocks defined yet</p>
+            <p className="text-sm font-medium text-gray-700">{t('No shift blocks defined yet', 'Aún no hay bloques de turno definidos')}</p>
             <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
               {isUnified
-                ? 'Define a few starter blocks to begin scheduling — Opening, Mid, Closing.'
-                : 'Define starter blocks for this house to begin scheduling — they show up as drop targets here.'}
+                ? t('Define a few starter blocks to begin scheduling — Opening, Mid, Closing.', 'Define algunos bloques iniciales para comenzar a programar — Apertura, Medio, Cierre.')
+                : t('Define starter blocks for this house to begin scheduling — they show up as drop targets here.', 'Define bloques iniciales para esta área para comenzar a programar — aparecen como destinos aquí.')}
             </p>
           </div>
         )}
@@ -587,7 +609,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                   shiftCount: shiftsBySection.get(section.id) ?? 0,
                 })}
                 className="text-left px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80 cursor-pointer transition-all hover:bg-gray-100 hover:ring-1 hover:ring-inset hover:ring-gray-400"
-                aria-label={`Edit block ${section.name}`}
+                aria-label={t(`Edit block ${section.name}`, `Editar bloque ${section.name}`)}
               >
                 <p className="text-[12px] font-bold text-gray-900 leading-tight truncate tracking-tight">{section.name}</p>
                 <p className="text-[10px] text-gray-500 mt-0.5 font-mono tabular-nums">
@@ -630,7 +652,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                         the schedule stays calm. */}
                     {isOver && isEmpty && (
                       <p className={`text-[10px] font-medium text-center pointer-events-none ${tone.dropHint}`}>
-                        Drop shift here
+                        {t('Drop shift here', 'Soltar turno aquí')}
                       </p>
                     )}
                     {cellShifts.map((shift) => {
@@ -715,8 +737,8 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         {customShifts.length > 0 && (
           <div className="grid grid-cols-[110px_repeat(7,1fr)] min-w-[820px] lg:min-w-0 border-t border-gray-200">
             <div className="px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80">
-              <p className="text-[12px] font-bold text-gray-700 leading-tight tracking-tight">Custom</p>
-              <p className="text-[10px] text-gray-500 mt-0.5">One-off shifts</p>
+              <p className="text-[12px] font-bold text-gray-700 leading-tight tracking-tight">{t('Custom', 'Personalizado')}</p>
+              <p className="text-[10px] text-gray-500 mt-0.5">{t('One-off shifts', 'Turnos únicos')}</p>
             </div>
             {weekDays.map((day, dayIdx) => {
               const isToday = sameDay(day, new Date())
@@ -774,13 +796,13 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
         <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold tracking-tight text-gray-900">
-              {isUnified ? 'Bench' : (activeHouse === 'foh' ? 'Bench · Front of House' : 'Bench · Back of House')}
+              {isUnified ? t('Bench', 'Plantilla') : (activeHouse === 'foh' ? t('Bench · Front of House', 'Plantilla · Salón') : t('Bench · Back of House', 'Plantilla · Cocina'))}
             </h2>
-            <p className="mt-0.5 text-[11px] text-gray-500">Available staff — drag onto a shift block.</p>
+            <p className="mt-0.5 text-[11px] text-gray-500">{t('Available staff — drag onto a shift block.', 'Personal disponible — arrastra sobre un bloque de turno.')}</p>
           </div>
           <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            {houseEmployees.length} available
+            {houseEmployees.length} {t('available', 'disponibles')}
           </span>
         </div>
 
@@ -788,17 +810,25 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
           {houseEmployees.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-4 py-8 text-center">
               <p className="text-sm font-medium text-gray-700">
-                No {isUnified ? 'team members' : (activeHouse === 'foh' ? 'FOH team members' : 'BOH team members')} yet
+                {isUnified
+                  ? t('No team members yet', 'Aún no hay miembros del equipo')
+                  : (activeHouse === 'foh'
+                    ? t('No FOH team members yet', 'Aún no hay miembros del salón')
+                    : t('No BOH team members yet', 'Aún no hay miembros de la cocina'))}
               </p>
               <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
-                Add staff to the bench, then drag them onto the board to schedule shifts.
+                {t('Add staff to the bench, then drag them onto the board to schedule shifts.', 'Agrega personal a la plantilla, luego arrástralos al tablero para programar turnos.')}
               </p>
               <button
                 type="button"
                 onClick={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
                 className={`mt-3 inline-flex items-center text-xs font-semibold ${tone.text} hover:underline`}
               >
-                + Add your first {isUnified ? 'team member' : (activeHouse === 'foh' ? 'FOH team member' : 'BOH team member')}
+                {isUnified
+                  ? t('+ Add your first team member', '+ Agregar tu primer miembro del equipo')
+                  : (activeHouse === 'foh'
+                    ? t('+ Add your first FOH team member', '+ Agregar tu primer miembro del salón')
+                    : t('+ Add your first BOH team member', '+ Agregar tu primer miembro de la cocina'))}
               </button>
             </div>
           ) : (
@@ -814,6 +844,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
                     hoursLabel={hoursLabel}
                     weekHours={weekHours}
                     tier={tier}
+                    t={t}
                     onClick={() => setDrawer({
                       mode: 'edit-employee',
                       employee: emp,
@@ -833,15 +864,16 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
           this list exhaustive — adding a new flow is a one-line
           render branch here. */}
       {drawer?.mode === 'edit' && (
-        <EditDrawer shift={drawer.shift} employees={locEmployees} sections={sections} onClose={() => setDrawer(null)} />
+        <EditDrawer lang={lang} shift={drawer.shift} employees={locEmployees} sections={sections} onClose={() => setDrawer(null)} />
       )}
       {drawer?.mode === 'add-employee' && (
-        <AddEmployeeDrawer locationId={locationId} house={drawer.house} isUnified={isUnified}
+        <AddEmployeeDrawer lang={lang} locationId={locationId} house={drawer.house} isUnified={isUnified}
           roles={isUnified ? fohRoles : (drawer.house === 'foh' ? fohRoles : bohRoles)}
           onClose={() => setDrawer(null)} />
       )}
       {drawer?.mode === 'edit-employee' && (
         <EditEmployeeDrawer
+          lang={lang}
           employee={drawer.employee}
           isUnified={isUnified}
           house={drawer.house}
@@ -852,6 +884,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       )}
       {drawer?.mode === 'add-block' && (
         <AddBlockDrawer
+          lang={lang}
           isUnified={isUnified}
           defaultArea={drawer.defaultArea}
           onClose={() => setDrawer(null)}
@@ -859,6 +892,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       )}
       {drawer?.mode === 'edit-block' && (
         <EditBlockDrawer
+          lang={lang}
           section={drawer.section}
           shiftCount={drawer.shiftCount}
           onClose={() => setDrawer(null)}
@@ -866,6 +900,7 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
       )}
       {drawer?.mode === 'add-shift' && (
         <AddCustomShiftDrawer
+          lang={lang}
           locationId={locationId}
           employees={locEmployees}
           sections={houseSections}
@@ -887,9 +922,10 @@ export default function StaffingClient({ defaultLocationId, employees, shifts, s
 // Block, Custom shift). Save action lives in the footer; Remove
 // shift is a quiet destructive secondary at the bottom.
 // ----------------------------------------------------------------
-function EditDrawer({ shift, employees, sections: _sections, onClose }: {
-  shift: Shift; employees: Employee[]; sections: Section[]; onClose: () => void
+function EditDrawer({ lang, shift, employees, sections: _sections, onClose }: {
+  lang: Lang; shift: Shift; employees: Employee[]; sections: Section[]; onClose: () => void
 }) {
+  const t = makeT(lang)
   const [eState, eAction, ePending] = useActionState(updateShift, null)
   const [dState, dAction, dPending] = useActionState(deleteShift, null)
   useAutoCloseOnSuccess(ePending, eState, onClose)
@@ -897,10 +933,11 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
 
   return (
     <DrawerShell
-      eyebrow="Shift"
-      title={`Edit ${shift.employeeName}`}
+      eyebrow={t('Shift', 'Turno')}
+      title={t(`Edit ${shift.employeeName}`, `Editar ${shift.employeeName}`)}
       subtitle={`${shift.role} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       {/* Sibling delete form — lives OUTSIDE the edit form so we
           don't nest <form> elements (HTML disallows it and React
@@ -923,18 +960,18 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
               : 0
             return (
               <PreviewCard
-                eyebrow="Shift"
+                eyebrow={t('Shift', 'Turno')}
                 toneDot={role.dot}
                 title={`${shift.employeeName} · ${shift.role}`}
                 meta={[
-                  `${fmtMonthDay(shift.startTime)} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`,
-                  `${formatHours(hrs)} scheduled`,
+                  `${fmtMonthDay(shift.startTime, lang)} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`,
+                  `${formatHours(hrs)} ${t('scheduled', 'programadas')}`,
                 ]}
               />
             )
           })()}
 
-          <Field label="Employee" htmlFor="es-employee">
+          <Field label={t('Employee', 'Empleado')} htmlFor="es-employee" t={t}>
             <select
               id="es-employee"
               name="employee_id"
@@ -946,7 +983,7 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
             </select>
           </Field>
 
-          <Field label="Start" htmlFor="es-start">
+          <Field label={t('Start', 'Inicio')} htmlFor="es-start" t={t}>
             <input
               id="es-start"
               name="start_time"
@@ -957,7 +994,7 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
             />
           </Field>
 
-          <Field label="End" htmlFor="es-end">
+          <Field label={t('End', 'Fin')} htmlFor="es-end" t={t}>
             <input
               id="es-end"
               name="end_time"
@@ -968,13 +1005,13 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
             />
           </Field>
 
-          <Field label="Notes" htmlFor="es-notes" optional>
+          <Field label={t('Notes', 'Notas')} htmlFor="es-notes" optional t={t}>
             <input
               id="es-notes"
               name="notes"
               type="text"
               defaultValue={shift.notes ?? ''}
-              placeholder="Anything worth flagging"
+              placeholder={t('Anything worth flagging', 'Cualquier cosa que valga la pena señalar')}
               className={fieldInputClass}
             />
           </Field>
@@ -994,14 +1031,14 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
               disabled={dPending}
               className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
             >
-              {dPending ? 'Removing…' : 'Remove shift'}
+              {dPending ? t('Removing…', 'Eliminando…') : t('Remove shift', 'Eliminar turno')}
             </button>
             <button
               type="submit"
               disabled={ePending}
               className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {ePending ? 'Saving…' : 'Save changes'}
+              {ePending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
             </button>
           </div>
           {dState?.error && <p className="mt-2 text-xs text-red-500">{dState.error}</p>}
@@ -1048,12 +1085,13 @@ function EditDrawer({ shift, employees, sections: _sections, onClose }: {
 // and so every staffing branch consumes the same component.
 // ----------------------------------------------------------------
 function BenchCard({
-  employee, hoursLabel, weekHours, tier, onClick,
+  employee, hoursLabel, weekHours, tier, t, onClick,
 }: {
   employee: Employee
   hoursLabel: string
   weekHours: number
   tier: HoursTier
+  t: T
   onClick: () => void
 }) {
   const draggingRef = useRef(false)
@@ -1074,7 +1112,10 @@ function BenchCard({
         if (draggingRef.current) return
         onClick()
       }}
-      title={`${employee.name} (${employee.role}) · ${hoursLabel} this week — drag onto a shift, or click to manage`}
+      title={t(
+        `${employee.name} (${employee.role}) · ${hoursLabel} this week — drag onto a shift, or click to manage`,
+        `${employee.name} (${employee.role}) · ${hoursLabel} esta semana — arrastra a un turno, o haz clic para administrar`
+      )}
       className="group relative min-w-[170px] rounded-lg border border-gray-200/90 bg-white pl-3 pr-3 py-2 cursor-grab active:cursor-grabbing select-none transition-all hover:-translate-y-0.5 hover:border-gray-300 hover:shadow-[0_2px_4px_rgba(15,23,42,0.05)] overflow-hidden"
     >
       {/* Role identity — thin left accent bar in the role color. The
@@ -1083,7 +1124,7 @@ function BenchCard({
       <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${role.dot}`} aria-hidden />
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs font-semibold text-gray-900 leading-tight truncate">{employee.name}</p>
-        <HoursIndicator hours={weekHours} tier={tier} />
+        <HoursIndicator hours={weekHours} tier={tier} t={t} />
       </div>
       {/* Role label — role-toned text, no leading dot. The left
           accent bar already anchors the role color, so the dot read
@@ -1105,7 +1146,8 @@ function BenchCard({
 // footer as a destructive secondary action — soft delete only;
 // historical shifts stay intact.
 // ----------------------------------------------------------------
-function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onClose }: {
+function EditEmployeeDrawer({ lang, employee, isUnified, house, roles, weekHours, onClose }: {
+  lang: Lang
   employee: Employee
   isUnified: boolean
   house: 'foh' | 'boh'
@@ -1113,13 +1155,14 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
   weekHours: number
   onClose: () => void
 }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(updateEmployee, null)
   const [archState, archAction, archPending] = useActionState(archiveEmployee, null)
   const [confirmArchive, setConfirmArchive] = useState(false)
   useAutoCloseOnSuccess(pending, state, onClose)
   useAutoCloseOnSuccess(archPending, archState, onClose)
 
-  const eyebrow = isUnified ? 'Team' : (house === 'foh' ? 'Front of House' : 'Back of House')
+  const eyebrow = isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
   const role = roleTone(employee.role)
 
   // The role select needs to include the employee's CURRENT role
@@ -1138,9 +1181,10 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
   return (
     <DrawerShell
       eyebrow={eyebrow}
-      title={`Manage ${employee.name}`}
-      subtitle="Edit role, pay, and employee status."
+      title={t(`Manage ${employee.name}`, `Administrar ${employee.name}`)}
+      subtitle={t('Edit role, pay, and employee status.', 'Editar puesto, pago y estado del empleado.')}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <input type="hidden" name="employee_id" value={employee.id} />
@@ -1151,21 +1195,21 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
               parent maintains. */}
           <SummaryCard
             entries={[
-              { label: 'Role', value: (
+              { label: t('Role', 'Puesto'), value: (
                 <span className="inline-flex items-center gap-1.5">
                   <span className={`w-1.5 h-1.5 rounded-full ${role.dot}`} aria-hidden />
                   <span className={role.text}>{employee.role}</span>
                 </span>
               ) },
-              { label: 'Scheduled', value: formatHours(weekHours) + ' this week' },
-              { label: 'House', value: isUnified ? 'Team' : (house === 'foh' ? 'Front of House' : 'Back of House') },
-              { label: 'Status', value: 'Active' },
+              { label: t('Scheduled', 'Programado'), value: formatHours(weekHours) + t(' this week', ' esta semana') },
+              { label: t('House', 'Área'), value: isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')) },
+              { label: t('Status', 'Estado'), value: t('Active', 'Activo') },
             ]}
           />
 
-          <SectionLabel>Profile</SectionLabel>
+          <SectionLabel>{t('Profile', 'Perfil')}</SectionLabel>
 
-          <Field label="Name" htmlFor="ee-name">
+          <Field label={t('Name', 'Nombre')} htmlFor="ee-name" t={t}>
             <input
               id="ee-name"
               name="name"
@@ -1176,10 +1220,10 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
             />
           </Field>
 
-          <Field label="Role" htmlFor="ee-role">
+          <Field label={t('Role', 'Puesto')} htmlFor="ee-role" t={t}>
             {roles.length === 0 ? (
               <p className="text-xs text-amber-700">
-                No roles defined for this house yet. Add one from Add employee first.
+                {t('No roles defined for this house yet. Add one from Add employee first.', 'Aún no hay puestos definidos para esta área. Agrega uno desde Agregar empleado primero.')}
               </p>
             ) : (
               <select
@@ -1195,10 +1239,11 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
           </Field>
 
           <Field
-            label="Hourly rate"
+            label={t('Hourly rate', 'Tarifa por hora')}
             htmlFor="ee-rate"
             optional
-            hint="Leave blank to clear. Drives scheduled-labor estimates in Finance."
+            t={t}
+            hint={t('Leave blank to clear. Drives scheduled-labor estimates in Finance.', 'Deja en blanco para borrar. Determina los estimados de mano de obra programada en Finanzas.')}
           >
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
@@ -1219,10 +1264,12 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
               room to breathe. */}
           {confirmArchive && (
             <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
-              <p className="text-xs font-semibold text-red-900">Archive {employee.name}?</p>
+              <p className="text-xs font-semibold text-red-900">{t(`Archive ${employee.name}?`, `¿Archivar a ${employee.name}?`)}</p>
               <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
-                They&apos;ll be removed from the bench. Historical shifts stay intact and
-                can&apos;t be edited until the employee is restored.
+                {t(
+                  "They'll be removed from the bench. Historical shifts stay intact and can't be edited until the employee is restored.",
+                  "Será removido de la plantilla. Los turnos históricos permanecen intactos y no se pueden editar hasta que el empleado sea restaurado."
+                )}
               </p>
               {/* Sibling form keeps us out of nested-form territory;
                   the confirm button binds via `form="..."`. */}
@@ -1236,14 +1283,14 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
                   disabled={archPending}
                   className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
                 >
-                  {archPending ? 'Archiving…' : 'Confirm archive'}
+                  {archPending ? t('Archiving…', 'Archivando…') : t('Confirm archive', 'Confirmar archivar')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmArchive(false)}
                   className="text-[11px] text-gray-500 hover:text-gray-700"
                 >
-                  Cancel
+                  {t('Cancel', 'Cancelar')}
                 </button>
               </div>
               {archState?.error && (
@@ -1265,17 +1312,17 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
                 onClick={() => setConfirmArchive(true)}
                 className="text-xs font-medium text-red-600 hover:text-red-700"
               >
-                Archive employee
+                {t('Archive employee', 'Archivar empleado')}
               </button>
             ) : (
-              <span className="text-[11px] text-gray-400">Confirm above</span>
+              <span className="text-[11px] text-gray-400">{t('Confirm above', 'Confirma arriba')}</span>
             )}
             <button
               type="submit"
               disabled={pending}
               className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {pending ? 'Saving…' : 'Save changes'}
+              {pending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
             </button>
           </div>
         </DrawerFooter>
@@ -1284,16 +1331,17 @@ function EditEmployeeDrawer({ employee, isUnified, house, roles, weekHours, onCl
   )
 }
 
-function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
-  locationId: string; house: 'foh' | 'boh'; isUnified: boolean; roles: string[]; onClose: () => void
+function AddEmployeeDrawer({ lang, locationId, house, isUnified, roles, onClose }: {
+  lang: Lang; locationId: string; house: 'foh' | 'boh'; isUnified: boolean; roles: string[]; onClose: () => void
 }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createEmployee, null)
   const [roleState, roleAction, rolePending] = useActionState(addStaffingRole, null)
   const [showAddRole, setShowAddRole] = useState(false)
   useAutoCloseOnSuccess(pending, state, onClose)
 
-  const houseLabel = isUnified ? 'your team' : (house === 'foh' ? 'Front of House' : 'Back of House')
-  const eyebrow = isUnified ? 'Team' : (house === 'foh' ? 'Front of House' : 'Back of House')
+  const houseLabel = isUnified ? t('your team', 'tu equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
+  const eyebrow = isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
   const hasRoles = roles.length > 0
   // Re-collapse the inline add-role affordance after a successful
   // role add so the manager lands back on the populated select.
@@ -1312,9 +1360,10 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
   return (
     <DrawerShell
       eyebrow={eyebrow}
-      title="Add employee"
-      subtitle="Name, role, and an hourly rate if you have one."
+      title={t('Add employee', 'Agregar empleado')}
+      subtitle={t('Name, role, and an hourly rate if you have one.', 'Nombre, puesto y una tarifa por hora si tienes una.')}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       {/* Sibling form for adding roles — rendered hidden so it has a
           DOM presence the bound inputs can submit to. */}
@@ -1326,34 +1375,34 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
           <PreviewCard
             eyebrow={eyebrow}
             toneDot={isUnified || house === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
-            title="New employee"
-            meta={[`Will appear on the ${houseLabel} bench after creation.`]}
-            footer="Role and hourly rate can be changed later."
+            title={t('New employee', 'Nuevo empleado')}
+            meta={[t(`Will appear on the ${houseLabel} bench after creation.`, `Aparecerá en la plantilla de ${houseLabel} después de la creación.`)]}
+            footer={t('Role and hourly rate can be changed later.', 'El puesto y la tarifa por hora se pueden cambiar después.')}
           />
 
-          <Field label="Name" htmlFor="ae-name">
+          <Field label={t('Name', 'Nombre')} htmlFor="ae-name" t={t}>
             <input
               id="ae-name"
               name="name"
               type="text"
               required
               autoFocus
-              placeholder="Jane Smith"
+              placeholder={t('Jane Smith', 'Juana Pérez')}
               className={fieldInputClass}
             />
           </Field>
 
-          <Field label="Role" htmlFor={hasRoles ? 'ae-role' : 'ae-new-role'}>
+          <Field label={t('Role', 'Puesto')} htmlFor={hasRoles ? 'ae-role' : 'ae-new-role'} t={t}>
             {!hasRoles ? (
               // Inline empty-role callout — guided, not broken. The
               // role <input> + submit button bind to the sibling
               // role form via `form="..."`.
               <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3">
                 <p className="text-xs font-semibold text-amber-900">
-                  No roles for {houseLabel} yet
+                  {t(`No roles for ${houseLabel} yet`, `Aún no hay puestos para ${houseLabel}`)}
                 </p>
                 <p className="mt-0.5 text-[11px] text-amber-700/90 leading-relaxed">
-                  Add one to continue. New roles appear here right away.
+                  {t('Add one to continue. New roles appear here right away.', 'Agrega uno para continuar. Los nuevos puestos aparecen aquí de inmediato.')}
                 </p>
                 <div className="mt-2.5 flex gap-2">
                   <input
@@ -1362,7 +1411,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                     name="role"
                     type="text"
                     required
-                    placeholder="e.g. Server, Cook"
+                    placeholder={t('e.g. Server, Cook', 'p.ej. Mesero, Cocinero')}
                     className="flex-1 h-9 rounded-md border border-amber-300 bg-white px-2.5 text-xs text-gray-900 placeholder:text-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-500/40 focus:border-amber-500"
                   />
                   <input form={roleFormId} type="hidden" name="area" value={house} />
@@ -1372,7 +1421,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                     disabled={rolePending}
                     className="h-9 rounded-md bg-gray-900 hover:bg-gray-800 px-3 text-xs font-semibold text-white disabled:opacity-60 transition-colors"
                   >
-                    {rolePending ? 'Adding…' : 'Add role'}
+                    {rolePending ? t('Adding…', 'Agregando…') : t('Add role', 'Agregar puesto')}
                   </button>
                 </div>
                 {roleState?.error && (
@@ -1388,7 +1437,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                   defaultValue=""
                   className={fieldInputClass}
                 >
-                  <option value="" disabled>Select…</option>
+                  <option value="" disabled>{t('Select…', 'Seleccionar…')}</option>
                   {roles.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
                 {!showAddRole ? (
@@ -1397,7 +1446,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                     onClick={() => setShowAddRole(true)}
                     className="mt-1.5 text-[11px] text-gray-500 hover:text-gray-700"
                   >
-                    + Add a new role
+                    {t('+ Add a new role', '+ Agregar un nuevo puesto')}
                   </button>
                 ) : (
                   <div className="mt-2 rounded-md border border-gray-200 bg-gray-50/60 p-2.5">
@@ -1408,7 +1457,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                         type="text"
                         required
                         autoFocus
-                        placeholder="e.g. Sommelier"
+                        placeholder={t('e.g. Sommelier', 'p.ej. Sommelier')}
                         className="flex-1 h-9 rounded-md border border-gray-200 bg-white px-2.5 text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500"
                       />
                       <input form={roleFormId} type="hidden" name="area" value={house} />
@@ -1418,7 +1467,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                         disabled={rolePending}
                         className="h-9 rounded-md bg-gray-900 hover:bg-gray-800 px-3 text-xs font-semibold text-white disabled:opacity-60 transition-colors"
                       >
-                        {rolePending ? 'Adding…' : 'Add'}
+                        {rolePending ? t('Adding…', 'Agregando…') : t('Add', 'Agregar')}
                       </button>
                     </div>
                     {roleState?.error && (
@@ -1429,7 +1478,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
                       onClick={() => setShowAddRole(false)}
                       className="mt-1 text-[10px] text-gray-400 hover:text-gray-600"
                     >
-                      Cancel
+                      {t('Cancel', 'Cancelar')}
                     </button>
                   </div>
                 )}
@@ -1437,7 +1486,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
             )}
           </Field>
 
-          <Field label="Hourly rate" htmlFor="ae-rate" optional>
+          <Field label={t('Hourly rate', 'Tarifa por hora')} htmlFor="ae-rate" optional t={t}>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
               <input
@@ -1463,7 +1512,7 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
             disabled={pending || !hasRoles}
             className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {pending ? 'Adding…' : 'Add employee'}
+            {pending ? t('Adding…', 'Agregando…') : t('Add employee', 'Agregar empleado')}
           </button>
         </DrawerFooter>
       </form>
@@ -1482,11 +1531,12 @@ function AddEmployeeDrawer({ locationId, house, isUnified, roles, onClose }: {
 // Keeps backdrop, side-sheet, header, and close button consistent
 // so all four drawers feel like one coherent system.
 // ----------------------------------------------------------------
-function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
+function DrawerShell({ eyebrow, title, subtitle, onClose, closeLabel, children }: {
   eyebrow?: string
   title: string
   subtitle?: string
   onClose: () => void
+  closeLabel?: string
   children: React.ReactNode
 }) {
   return (
@@ -1516,7 +1566,7 @@ function DrawerShell({ eyebrow, title, subtitle, onClose, children }: {
             type="button"
             onClick={onClose}
             className="flex-shrink-0 text-gray-400 hover:text-gray-600 p-1 -mt-0.5"
-            aria-label="Close"
+            aria-label={closeLabel ?? 'Close'}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -1564,13 +1614,15 @@ function DrawerFooter({ children }: { children: React.ReactNode }) {
   )
 }
 
-function Field({ label, htmlFor, optional, hint, children }: {
+function Field({ label, htmlFor, optional, hint, t, children }: {
   label: string
   htmlFor?: string
   optional?: boolean
   hint?: string
+  t?: T
   children: React.ReactNode
 }) {
+  const optLabel = t ? t('· optional', '· opcional') : '· optional'
   return (
     <div>
       <label
@@ -1578,7 +1630,7 @@ function Field({ label, htmlFor, optional, hint, children }: {
         className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-700"
       >
         {label}
-        {optional && <span className="text-gray-400 font-normal">· optional</span>}
+        {optional && <span className="text-gray-400 font-normal">{optLabel}</span>}
       </label>
       {children}
       {hint && <p className="mt-1 text-[10.5px] text-gray-400 leading-relaxed">{hint}</p>}
@@ -1697,9 +1749,10 @@ function useAutoCloseOnSuccess(
 // single bucket the staffing client treats as the unified team).
 // Times are 0–24 hour integers — same as the schema columns.
 // ----------------------------------------------------------------
-function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
-  isUnified: boolean; defaultArea: 'foh' | 'boh'; onClose: () => void
+function AddBlockDrawer({ lang, isUnified, defaultArea, onClose }: {
+  lang: Lang; isUnified: boolean; defaultArea: 'foh' | 'boh'; onClose: () => void
 }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createShiftSection, null)
   useAutoCloseOnSuccess(pending, state, onClose)
 
@@ -1712,23 +1765,24 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
   const [startHour, setStartHour] = useState(9)
   const [endHour, setEndHour] = useState(17)
 
-  const areaLabel = area === 'foh' ? 'Front of House' : 'Back of House'
+  const areaLabel = area === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')
 
   return (
     <DrawerShell
-      eyebrow="Block"
-      title="Add shift block"
-      subtitle="A reusable lane on the schedule. Drop staff onto it any day."
+      eyebrow={t('Block', 'Bloque')}
+      title={t('Add shift block', 'Agregar bloque de turno')}
+      subtitle={t('A reusable lane on the schedule. Drop staff onto it any day.', 'Una vía reutilizable en el horario. Suelta personal en ella cualquier día.')}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       <form action={action} className="flex-1 flex flex-col min-h-0">
         <DrawerBody>
           <PreviewCard
-            eyebrow={isUnified ? 'Block' : `Block · ${areaLabel}`}
+            eyebrow={isUnified ? t('Block', 'Bloque') : `${t('Block', 'Bloque')} · ${areaLabel}`}
             toneDot={area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
-            title={name.trim() || 'New block'}
+            title={name.trim() || t('New block', 'Nuevo bloque')}
             meta={[`${hL(startHour)}–${hL(endHour)} · ${areaLabel}`]}
-            footer="Reusable schedule lane"
+            footer={t('Reusable schedule lane', 'Vía de horario reutilizable')}
           />
 
           {/* Area is hidden + locked in unified mode. In split mode
@@ -1737,7 +1791,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
           {isUnified ? (
             <input type="hidden" name="area" value="foh" />
           ) : (
-            <Field label="House" htmlFor="ab-area">
+            <Field label={t('House', 'Área')} htmlFor="ab-area" t={t}>
               <select
                 id="ab-area"
                 name="area"
@@ -1746,13 +1800,13 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 onChange={(e) => setArea(e.target.value as 'foh' | 'boh')}
                 className={fieldInputClass}
               >
-                <option value="foh">Front of House</option>
-                <option value="boh">Back of House</option>
+                <option value="foh">{t('Front of House', 'Salón')}</option>
+                <option value="boh">{t('Back of House', 'Cocina')}</option>
               </select>
             </Field>
           )}
 
-          <Field label="Block name" htmlFor="ab-name">
+          <Field label={t('Block name', 'Nombre del bloque')} htmlFor="ab-name" t={t}>
             <input
               id="ab-name"
               name="name"
@@ -1761,16 +1815,16 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Brunch, Late, Event"
+              placeholder={t('e.g. Brunch, Late, Event', 'p.ej. Brunch, Tarde, Evento')}
               className={fieldInputClass}
             />
           </Field>
           <p className="text-[10.5px] text-gray-400 leading-relaxed">
-            Examples: Opening, Mid, Closing, Brunch, Prep, Service.
+            {t('Examples: Opening, Mid, Closing, Brunch, Prep, Service.', 'Ejemplos: Apertura, Medio, Cierre, Brunch, Preparación, Servicio.')}
           </p>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Start hour" htmlFor="ab-start">
+            <Field label={t('Start hour', 'Hora de inicio')} htmlFor="ab-start" t={t}>
               <input
                 id="ab-start"
                 name="default_start_hour"
@@ -1784,7 +1838,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
                 className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
-            <Field label="End hour" htmlFor="ab-end">
+            <Field label={t('End hour', 'Hora de fin')} htmlFor="ab-end" t={t}>
               <input
                 id="ab-end"
                 name="default_end_hour"
@@ -1800,7 +1854,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
             </Field>
           </div>
           <p className="text-[10.5px] text-gray-400 leading-relaxed">
-            24-hour format. These pre-fill drag-drop assignments — times can be tweaked per shift.
+            {t('24-hour format. These pre-fill drag-drop assignments — times can be tweaked per shift.', 'Formato de 24 horas. Estos pre-rellenan las asignaciones de arrastrar y soltar — los tiempos se pueden ajustar por turno.')}
           </p>
 
           {state?.error && (
@@ -1814,7 +1868,7 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
             disabled={pending}
             className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            {pending ? 'Creating…' : 'Create block'}
+            {pending ? t('Creating…', 'Creando…') : t('Create block', 'Crear bloque')}
           </button>
         </DrawerFooter>
       </form>
@@ -1832,23 +1886,25 @@ function AddBlockDrawer({ isUnified, defaultArea, onClose }: {
 // the Custom lane, not lost) — making the consequence visible
 // without needing a heavier modal.
 // ----------------------------------------------------------------
-function EditBlockDrawer({ section, shiftCount, onClose }: {
-  section: Section; shiftCount: number; onClose: () => void
+function EditBlockDrawer({ lang, section, shiftCount, onClose }: {
+  lang: Lang; section: Section; shiftCount: number; onClose: () => void
 }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(updateShiftSection, null)
   const [delState, delAction, delPending] = useActionState(deleteShiftSection, null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   useAutoCloseOnSuccess(pending, state, onClose)
   useAutoCloseOnSuccess(delPending, delState, onClose)
 
-  const areaLabel = section.area === 'foh' ? 'Front of House' : 'Back of House'
+  const areaLabel = section.area === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')
 
   return (
     <DrawerShell
-      eyebrow={`Block · ${areaLabel}`}
-      title={`Edit ${section.name}`}
-      subtitle="Rename, retime, or delete this block."
+      eyebrow={`${t('Block', 'Bloque')} · ${areaLabel}`}
+      title={t(`Edit ${section.name}`, `Editar ${section.name}`)}
+      subtitle={t('Rename, retime, or delete this block.', 'Renombra, cambia el horario o elimina este bloque.')}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       {/* Sibling delete form — lives OUTSIDE the edit form so we
           don't nest <form> elements (HTML disallows it and React
@@ -1863,19 +1919,21 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
         <input type="hidden" name="section_id" value={section.id} />
         <DrawerBody>
           <PreviewCard
-            eyebrow={`Block · ${areaLabel}`}
+            eyebrow={`${t('Block', 'Bloque')} · ${areaLabel}`}
             toneDot={section.area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
             title={section.name}
             meta={[
               `${hL(section.defaultStartHour)}–${hL(section.defaultEndHour)} · ${areaLabel}`,
               shiftCount === 0
-                ? 'No shifts using this block yet'
-                : `${shiftCount} shift${shiftCount === 1 ? '' : 's'} use this block`,
+                ? t('No shifts using this block yet', 'Aún no hay turnos usando este bloque')
+                : (shiftCount === 1
+                  ? t(`${shiftCount} shift uses this block`, `${shiftCount} turno usa este bloque`)
+                  : t(`${shiftCount} shifts use this block`, `${shiftCount} turnos usan este bloque`)),
             ]}
-            footer="Reusable lane on the weekly schedule"
+            footer={t('Reusable lane on the weekly schedule', 'Vía reutilizable en el horario semanal')}
           />
 
-          <Field label="Block name" htmlFor="eb-name">
+          <Field label={t('Block name', 'Nombre del bloque')} htmlFor="eb-name" t={t}>
             <input
               id="eb-name"
               name="name"
@@ -1887,7 +1945,7 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
           </Field>
 
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Start hour" htmlFor="eb-start">
+            <Field label={t('Start hour', 'Hora de inicio')} htmlFor="eb-start" t={t}>
               <input
                 id="eb-start"
                 name="default_start_hour"
@@ -1900,7 +1958,7 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                 className={`${fieldInputClass} font-mono tabular-nums`}
               />
             </Field>
-            <Field label="End hour" htmlFor="eb-end">
+            <Field label={t('End hour', 'Hora de fin')} htmlFor="eb-end" t={t}>
               <input
                 id="eb-end"
                 name="default_end_hour"
@@ -1921,13 +1979,15 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
             <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
               <p className="text-xs font-semibold text-red-900">
                 {shiftCount === 0
-                  ? 'Delete this block?'
-                  : `Move ${shiftCount} shift${shiftCount === 1 ? '' : 's'} to the Custom lane?`}
+                  ? t('Delete this block?', '¿Eliminar este bloque?')
+                  : (shiftCount === 1
+                    ? t(`Move ${shiftCount} shift to the Custom lane?`, `¿Mover ${shiftCount} turno a la vía Personalizada?`)
+                    : t(`Move ${shiftCount} shifts to the Custom lane?`, `¿Mover ${shiftCount} turnos a la vía Personalizada?`))}
               </p>
               <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
                 {shiftCount === 0
-                  ? 'No shifts are using this block.'
-                  : `Shifts won't be deleted — they'll surface on the Custom lane.`}
+                  ? t('No shifts are using this block.', 'Ningún turno está usando este bloque.')
+                  : t("Shifts won't be deleted — they'll surface on the Custom lane.", "Los turnos no se eliminarán — aparecerán en la vía Personalizada.")}
               </p>
               {/* Submit button binds to the sibling delete form
                   defined above the edit form, via `form="..."` —
@@ -1939,14 +1999,14 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                   disabled={delPending}
                   className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
                 >
-                  {delPending ? 'Deleting…' : 'Confirm delete'}
+                  {delPending ? t('Deleting…', 'Eliminando…') : t('Confirm delete', 'Confirmar eliminación')}
                 </button>
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(false)}
                   className="text-[11px] text-gray-500 hover:text-gray-700"
                 >
-                  Cancel
+                  {t('Cancel', 'Cancelar')}
                 </button>
               </div>
               {delState?.error && (
@@ -1968,17 +2028,17 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
                 onClick={() => setConfirmDelete(true)}
                 className="text-xs font-medium text-red-600 hover:text-red-700"
               >
-                Delete block
+                {t('Delete block', 'Eliminar bloque')}
               </button>
             ) : (
-              <span className="text-[11px] text-gray-400">Confirm above</span>
+              <span className="text-[11px] text-gray-400">{t('Confirm above', 'Confirma arriba')}</span>
             )}
             <button
               type="submit"
               disabled={pending}
               className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {pending ? 'Saving…' : 'Save changes'}
+              {pending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
             </button>
           </div>
         </DrawerFooter>
@@ -2009,10 +2069,11 @@ function EditBlockDrawer({ section, shiftCount, onClose }: {
 // time inputs into hidden datetime-local fields the server reads.
 // ----------------------------------------------------------------
 function AddCustomShiftDrawer({
-  locationId, employees, sections,
+  lang, locationId, employees, sections,
   defaultDay, defaultSectionId, defaultStartHour, defaultEndHour,
   onClose,
 }: {
+  lang: Lang
   locationId: string
   employees: Employee[]
   sections: Section[]
@@ -2022,6 +2083,7 @@ function AddCustomShiftDrawer({
   defaultEndHour?: number | null
   onClose: () => void
 }) {
+  const t = makeT(lang)
   const [state, action, pending] = useActionState(createShift, null)
   useAutoCloseOnSuccess(pending, state, onClose)
 
@@ -2091,10 +2153,11 @@ function AddCustomShiftDrawer({
 
   return (
     <DrawerShell
-      eyebrow="Shift"
-      title="Add shift"
-      subtitle="One-off or block-aligned. Pick a person, a day, and a time."
+      eyebrow={t('Shift', 'Turno')}
+      title={t('Add shift', 'Agregar turno')}
+      subtitle={t('One-off or block-aligned. Pick a person, a day, and a time.', 'Único o alineado a un bloque. Elige una persona, un día y una hora.')}
       onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
     >
       {employees.length === 0 ? (
         // Empty state — no people on the bench yet, so no shift can
@@ -2102,9 +2165,9 @@ function AddCustomShiftDrawer({
         // height feels intentional, not collapsed.
         <DrawerBody>
           <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 p-5 text-center">
-            <p className="text-sm font-medium text-gray-700">No employees yet</p>
+            <p className="text-sm font-medium text-gray-700">{t('No employees yet', 'Sin empleados aún')}</p>
             <p className="mt-1.5 text-xs text-gray-500 leading-relaxed">
-              Add at least one employee before scheduling shifts.
+              {t('Add at least one employee before scheduling shifts.', 'Agrega al menos un empleado antes de programar turnos.')}
             </p>
           </div>
         </DrawerBody>
@@ -2120,21 +2183,21 @@ function AddCustomShiftDrawer({
 
           <DrawerBody>
             <PreviewCard
-              eyebrow="Shift"
+              eyebrow={t('Shift', 'Turno')}
               toneDot={previewRole?.dot}
               title={
                 selectedEmployee
                   ? `${selectedEmployee.name} · ${selectedEmployee.role}`
-                  : 'Unassigned'
+                  : t('Unassigned', 'Sin asignar')
               }
               meta={[
-                `${fmtMonthDay(composedStart)} · ${fmt(composedStart)}–${fmt(composedEnd)}`,
-                `${formatHours(previewHrs)} scheduled`,
-                ...(selectedSection ? [`Block: ${selectedSection.name}`] : []),
+                `${fmtMonthDay(composedStart, lang)} · ${fmt(composedStart)}–${fmt(composedEnd)}`,
+                `${formatHours(previewHrs)} ${t('scheduled', 'programadas')}`,
+                ...(selectedSection ? [`${t('Block', 'Bloque')}: ${selectedSection.name}`] : []),
               ]}
             />
 
-            <Field label="Employee" htmlFor="cs-emp">
+            <Field label={t('Employee', 'Empleado')} htmlFor="cs-emp" t={t}>
               <select
                 id="cs-emp"
                 name="employee_id"
@@ -2143,7 +2206,7 @@ function AddCustomShiftDrawer({
                 onChange={(e) => setEmployeeId(e.target.value)}
                 className={fieldInputClass}
               >
-                <option value="" disabled>Select…</option>
+                <option value="" disabled>{t('Select…', 'Seleccionar…')}</option>
                 {employees.map((e) => (
                   <option key={e.id} value={e.id}>{e.name} · {e.role}</option>
                 ))}
@@ -2151,10 +2214,11 @@ function AddCustomShiftDrawer({
             </Field>
 
             <Field
-              label="Block"
+              label={t('Block', 'Bloque')}
               htmlFor="cs-section"
               optional
-              hint="Pick a block to slot into its lane. Leave on Custom for a one-off."
+              t={t}
+              hint={t('Pick a block to slot into its lane. Leave on Custom for a one-off.', 'Elige un bloque para insertarlo en su vía. Deja en Personalizado para un turno único.')}
             >
               <select
                 id="cs-section"
@@ -2162,7 +2226,7 @@ function AddCustomShiftDrawer({
                 onChange={(e) => handleSectionChange(e.target.value)}
                 className={fieldInputClass}
               >
-                <option value="">— Custom (no block) —</option>
+                <option value="">{t('— Custom (no block) —', '— Personalizado (sin bloque) —')}</option>
                 {sections.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name} ({hL(s.defaultStartHour)}–{hL(s.defaultEndHour)})
@@ -2171,7 +2235,7 @@ function AddCustomShiftDrawer({
               </select>
             </Field>
 
-            <Field label="Date" htmlFor="cs-date">
+            <Field label={t('Date', 'Fecha')} htmlFor="cs-date" t={t}>
               <input
                 id="cs-date"
                 type="date"
@@ -2183,7 +2247,7 @@ function AddCustomShiftDrawer({
             </Field>
 
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Start" htmlFor="cs-start">
+              <Field label={t('Start', 'Inicio')} htmlFor="cs-start" t={t}>
                 <input
                   id="cs-start"
                   type="time"
@@ -2193,7 +2257,7 @@ function AddCustomShiftDrawer({
                   className={`${fieldInputClass} font-mono tabular-nums`}
                 />
               </Field>
-              <Field label="End" htmlFor="cs-end">
+              <Field label={t('End', 'Fin')} htmlFor="cs-end" t={t}>
                 <input
                   id="cs-end"
                   type="time"
@@ -2205,12 +2269,12 @@ function AddCustomShiftDrawer({
               </Field>
             </div>
 
-            <Field label="Notes" htmlFor="cs-notes" optional>
+            <Field label={t('Notes', 'Notas')} htmlFor="cs-notes" optional t={t}>
               <input
                 id="cs-notes"
                 name="notes"
                 type="text"
-                placeholder="e.g. Event coverage"
+                placeholder={t('e.g. Event coverage', 'p.ej. Cobertura de evento')}
                 className={fieldInputClass}
               />
             </Field>
@@ -2226,7 +2290,7 @@ function AddCustomShiftDrawer({
               disabled={pending}
               className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              {pending ? 'Adding…' : 'Add shift'}
+              {pending ? t('Adding…', 'Agregando…') : t('Add shift', 'Agregar turno')}
             </button>
           </DrawerFooter>
         </form>

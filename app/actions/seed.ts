@@ -197,10 +197,14 @@ export async function installSeed(
   // 5. Initial inventory counts — without these the Inventory page
   // shows every freshly-seeded item as "no count yet" and the
   // recipe depletion math has no baseline to subtract from. We
-  // record one inventory_counts row per item at parInventory so
-  // the demo opens with a realistic stock level. entered_by_user_id
-  // is required (non-null FK to auth.users); we record the dev
-  // who clicked Install.
+  // record one inventory_counts row per item at a flat 50 units
+  // (deliberately, NOT each item's parInventory) so every demo
+  // opens with the same round number across every concept. Easier
+  // for the cashier to point at depletion: "see, that was 50, now
+  // it's 49.83 after that taco rang up." entered_by_user_id is
+  // required (non-null FK to auth.users); we record the dev who
+  // clicked Install.
+  const DEMO_OPENING_STOCK = 50
   const countRows = seed.inventory.map((i) => {
     const invId = invIdByKey.get(i.key)
     if (!invId) return null
@@ -208,7 +212,7 @@ export async function installSeed(
       restaurant_id: restaurantId,
       location_id: locationId,
       inventory_item_id: invId,
-      quantity_on_hand: i.parInventory,
+      quantity_on_hand: DEMO_OPENING_STOCK,
       entered_by_user_id: userId,
     }
   }).filter((r): r is NonNullable<typeof r> => r !== null)
@@ -264,10 +268,16 @@ export async function refreshSeedCounts(
     return { error: 'No items found for this concept.' }
   }
 
-  // Build a name → parInventory map from the seed so we can match
-  // the seeded items by name (concept_key is in the DB but the
-  // seed key (slug) isn't — names are how we bridge).
-  const parByName = new Map(seed.inventory.map((i) => [i.name, i.parInventory]))
+  // Demo opening stock — same flat 50 we use on install, so a
+  // refresh leaves every item at a consistent baseline regardless
+  // of the per-item parInventory in the seed definition.
+  const DEMO_OPENING_STOCK = 50
+
+  // Validate items belong to this concept's seed (we still use
+  // the name map to skip random items that aren't part of the
+  // seed — defensive). The actual count value is the flat
+  // DEMO_OPENING_STOCK constant above.
+  const knownNames = new Set(seed.inventory.map((i) => i.name))
 
   // Skip any item that already has a count, even an old one. The
   // dev can always insert a fresh count manually from /inventory
@@ -282,13 +292,12 @@ export async function refreshSeedCounts(
   const rows = items
     .filter((it) => !alreadyCounted.has(it.id as string))
     .map((it) => {
-      const par = parByName.get(it.name as string)
-      if (par === undefined) return null
+      if (!knownNames.has(it.name as string)) return null
       return {
         restaurant_id: restaurantId,
         location_id: it.location_id as string,
         inventory_item_id: it.id as string,
-        quantity_on_hand: par,
+        quantity_on_hand: DEMO_OPENING_STOCK,
         entered_by_user_id: userId,
       }
     })

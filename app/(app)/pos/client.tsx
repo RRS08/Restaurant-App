@@ -22,6 +22,7 @@
 
 import { useState, useMemo, useActionState, useEffect, useRef, useTransition } from 'react'
 import { createOrder } from '@/app/actions/sales'
+import { useSearchParams, useRouter } from 'next/navigation'
 import { useOnlineStatus } from '@/hooks/use-online-status'
 import { enqueueAction } from '@/lib/offline-queue'
 import { createTerminalPaymentIntent } from '@/app/actions/payments'
@@ -166,6 +167,28 @@ export default function PosClient({
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [state, action, pending] = useActionState(createOrder, null)
   const [confirmation, setConfirmation] = useState<string | null>(null)
+
+  // Sale-success celebration. createOrder ends with a server-side
+  // redirect to /pos on success — the redirect destroys the
+  // confirmation state we'd otherwise set client-side. To keep the
+  // reward animation visible across that hop, we encode the sold
+  // amount in the redirect URL (`?sold=12.50`) and read it here on
+  // the next render. The router.replace then strips the param so
+  // refreshing the page doesn't replay the celebration.
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  useEffect(() => {
+    const sold = searchParams.get('sold')
+    if (!sold) return
+    const amount = parseFloat(sold)
+    if (Number.isFinite(amount) && amount > 0) {
+      setConfirmation(`${t('Sale complete', 'Venta completada')} · ${CURRENCY(amount)}`)
+      const timer = setTimeout(() => setConfirmation(null), 3000)
+      router.replace('/pos')
+      return () => clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Offline-aware cash submit. When the kiosk has no connection we
   // refuse to even try the server action and instead serialize the
@@ -331,67 +354,136 @@ export default function PosClient({
   return (
     <div className="max-w-[1400px] h-full relative">
       {/* Payment-complete reward overlay.
-          Fullscreen dim + a big green check that scales in with a
-          satisfying overshoot, surrounded by a soft pulse ring.
-          Above the check sits a small uppercase eyebrow; below it
-          the confirmation copy (which already includes the dollar
-          amount). Auto-dismisses on the same 2s timer that drove
-          the old pill. Three keyframes inline so we don't have to
-          edit globals.css. */}
+          The "did it!" moment. We want the cashier — and the
+          customer watching from the other side of the counter — to
+          feel a real spike of completion. Three layered effects:
+            1. A backdrop blur dims the world so the celebration is
+               undeniably foreground.
+            2. A 144px green check disc scales in with a spring
+               overshoot, framed by THREE staggered pulse rings.
+            3. ~32 confetti pieces fall + rotate from above the
+               check in green / amber / pink / sky-blue, randomized
+               via inline transforms so each render varies slightly.
+          Below the check, the sale total renders at 56px tabular
+          mono — large enough to read from across the floor. The
+          whole sequence holds for 3 seconds before the wrapping
+          effect clears `confirmation` and the page returns to
+          neutral. Inline keyframes so we don't have to edit
+          globals.css. */}
       {confirmation && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/40 backdrop-blur-sm pointer-events-none"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/55 backdrop-blur-sm pointer-events-none overflow-hidden"
           role="status"
           aria-live="polite"
         >
           <style>{`
             @keyframes posSuccessPop {
-              0%   { transform: scale(0.3); opacity: 0; }
-              60%  { transform: scale(1.12); opacity: 1; }
+              0%   { transform: scale(0.2); opacity: 0; }
+              55%  { transform: scale(1.18); opacity: 1; }
+              80%  { transform: scale(0.95); }
               100% { transform: scale(1); opacity: 1; }
             }
             @keyframes posSuccessRing {
-              0%   { transform: scale(0.6); opacity: 0.6; }
-              100% { transform: scale(1.8); opacity: 0; }
+              0%   { transform: scale(0.55); opacity: 0.7; }
+              100% { transform: scale(2.1); opacity: 0; }
             }
             @keyframes posSuccessFadeUp {
-              0%   { opacity: 0; transform: translateY(8px); }
-              100% { opacity: 1; transform: translateY(0); }
+              0%   { opacity: 0; transform: translateY(14px) scale(0.96); }
+              100% { opacity: 1; transform: translateY(0) scale(1); }
+            }
+            @keyframes posConfettiFall {
+              0%   { transform: translate3d(0,-40vh,0) rotate(0deg); opacity: 1; }
+              80%  { opacity: 1; }
+              100% { transform: translate3d(var(--fx, 0), 60vh, 0) rotate(var(--fr, 540deg)); opacity: 0; }
+            }
+            @keyframes posCheckDraw {
+              0%   { stroke-dashoffset: 30; }
+              100% { stroke-dashoffset: 0; }
             }
           `}</style>
-          <div className="flex flex-col items-center gap-5">
+
+          {/* Confetti layer. 32 colored squares scattered across the
+              viewport width with randomized fall trajectory + rotation. */}
+          <div className="absolute inset-0 pointer-events-none">
+            {Array.from({ length: 32 }).map((_, i) => {
+              const palette = ['#22C55E', '#F59E0B', '#EC4899', '#38BDF8', '#A855F7', '#FACC15']
+              const color = palette[i % palette.length]
+              // Deterministic-by-index pseudo-random so SSR/CSR agree.
+              const seed = (i * 9301 + 49297) % 233280
+              const r = seed / 233280
+              const left = (i * 3.13) % 100
+              const delay = (r * 0.5).toFixed(2)
+              const duration = (1.2 + r * 1.1).toFixed(2)
+              const drift = ((r - 0.5) * 200).toFixed(0)
+              const rotate = (380 + r * 720).toFixed(0)
+              const size = 8 + Math.round(r * 8)
+              return (
+                <span
+                  key={i}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: `${left}%`,
+                    width: size,
+                    height: size,
+                    background: color,
+                    borderRadius: i % 2 === 0 ? 2 : '50%',
+                    ['--fx' as string]: `${drift}px`,
+                    ['--fr' as string]: `${rotate}deg`,
+                    animation: `posConfettiFall ${duration}s cubic-bezier(0.2, 0.6, 0.4, 1) ${delay}s forwards`,
+                  } as React.CSSProperties}
+                />
+              )
+            })}
+          </div>
+
+          <div className="relative flex flex-col items-center gap-7">
             <div className="relative flex items-center justify-center">
-              {/* Soft pulse rings — two staggered concentric rings
-                  to give the moment a sense of release. */}
+              {/* Pulse rings — three staggered concentric arcs so
+                  the eye lands on the disc, then expands outward. */}
               <span
-                className="absolute w-32 h-32 rounded-full bg-green-400/30"
-                style={{ animation: 'posSuccessRing 900ms ease-out forwards' }}
+                className="absolute w-40 h-40 rounded-full bg-green-400/30"
+                style={{ animation: 'posSuccessRing 1100ms ease-out forwards' }}
               />
               <span
-                className="absolute w-32 h-32 rounded-full bg-green-400/20"
-                style={{ animation: 'posSuccessRing 900ms ease-out 180ms forwards' }}
+                className="absolute w-40 h-40 rounded-full bg-green-400/25"
+                style={{ animation: 'posSuccessRing 1100ms ease-out 200ms forwards' }}
               />
-              {/* Green check disc. */}
               <span
-                className="relative w-28 h-28 rounded-full bg-green-500 shadow-[0_20px_60px_-12px_rgba(34,197,94,0.55)] flex items-center justify-center"
-                style={{ animation: 'posSuccessPop 480ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards' }}
+                className="absolute w-40 h-40 rounded-full bg-green-400/15"
+                style={{ animation: 'posSuccessRing 1100ms ease-out 400ms forwards' }}
+              />
+              {/* Green check disc — 144px, drop shadow tinted green
+                  so the glow reads as celebratory rather than neutral. */}
+              <span
+                className="relative w-36 h-36 rounded-full bg-green-500 shadow-[0_25px_70px_-12px_rgba(34,197,94,0.65)] flex items-center justify-center"
+                style={{ animation: 'posSuccessPop 620ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards' }}
               >
-                <svg className="w-14 h-14 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                <svg className="w-20 h-20 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3.5}>
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M5 13l4 4L19 7"
+                    strokeDasharray="30"
+                    style={{ animation: 'posCheckDraw 420ms ease-out 200ms backwards' }}
+                  />
                 </svg>
               </span>
             </div>
             <div
               className="text-center"
-              style={{ animation: 'posSuccessFadeUp 360ms ease-out 220ms backwards' }}
+              style={{ animation: 'posSuccessFadeUp 420ms cubic-bezier(0.22, 1, 0.36, 1) 320ms backwards' }}
             >
-              <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/70">
+              <p className="text-xs font-mono uppercase tracking-[0.22em] text-white/80 font-semibold">
                 {t('Sale complete', 'Venta completada')}
               </p>
-              <p className="mt-2 text-3xl font-mono tabular-nums font-bold text-white">
+              <p className="mt-3 text-[56px] leading-none font-mono tabular-nums font-bold text-white drop-shadow-[0_4px_12px_rgba(0,0,0,0.25)]">
                 {confirmation.includes('·')
                   ? confirmation.split('·').slice(1).join('·').trim()
                   : confirmation}
+              </p>
+              <p className="mt-3 text-[13px] text-white/60 font-medium">
+                {t('Nice work.', '¡Buen trabajo!')}
               </p>
             </div>
           </div>
@@ -1502,7 +1594,11 @@ function CheckoutDrawer({
           <input type="hidden" name="payment_type" value={paymentType} />
           <input type="hidden" name="payment_status" value="paid" />
           <input type="hidden" name="status" value="completed" />
-          <input type="hidden" name="redirect_to" value="/pos" />
+          {/* Encode the sold amount in the redirect URL so PosClient
+              can fire the celebration overlay on the post-redirect
+              render. See the useSearchParams effect at the top of
+              the component. */}
+          <input type="hidden" name="redirect_to" value={`/pos?sold=${subtotal.toFixed(2)}`} />
 
           {/* Offline status hint inside the drawer — gives the
               cashier confidence the cash flow still works, and

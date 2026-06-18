@@ -104,6 +104,41 @@ export default async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 
+  // ---- Kiosk access-mode gate ----
+  //
+  // Signed-in users carry a `pos_mode` cookie set by /access. Two
+  // values: 'owner' (full system) or 'staff' (POS only).
+  //
+  //   • No cookie + protected path → redirect to /access. The
+  //     /access page itself checks whether the restaurant has set
+  //     an owner code. If not, it bounces straight to /dashboard,
+  //     so newly-onboarded users aren't gated by their own absence.
+  //
+  //   • Cookie = 'staff' + path other than /pos or /access → kick
+  //     back to /pos. Staff can't browse anywhere else.
+  //
+  //   • Cookie = 'owner' → no extra restriction; behaves like
+  //     before this gate existed.
+  //
+  // /access, /onboarding, /api/*, and auth-flow pages are exempt so
+  // the cookie can be obtained or the user can finish setup. We
+  // DON'T gate /onboarding because a brand-new user reaches it
+  // before they have a restaurant (and therefore before any code
+  // could possibly be set).
+  if (user && !isAuthFlowPage && !isPublicPage) {
+    const posMode = request.cookies.get('pos_mode')?.value
+    const isAccessPage = path === '/access'
+    const isOnboardingPage = path.startsWith('/onboarding')
+    const isApiRoute = path.startsWith('/api/')
+
+    if (!posMode && !isAccessPage && !isOnboardingPage && !isApiRoute) {
+      return NextResponse.redirect(new URL('/access', request.url))
+    }
+    if (posMode === 'staff' && !isAccessPage && path !== '/pos' && !isApiRoute) {
+      return NextResponse.redirect(new URL('/pos', request.url))
+    }
+  }
+
   // For everything else, continue normally and return the response
   // (which may carry refreshed session cookies).
   return response

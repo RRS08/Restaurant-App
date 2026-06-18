@@ -28,7 +28,6 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
-import { logout } from '@/app/actions/auth'
 import { useSidebarClose } from '@/app/(app)/app-shell'
 import { BrandMark, BrandWordmark } from '@/components/brand'
 import {
@@ -182,17 +181,19 @@ export default function Sidebar({
           )}
         </div>
 
-        <form action={logout}>
-          <button
-            type="submit"
-            className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
-                       font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900
-                       transition-colors"
-          >
-            <LogOut className="w-4 h-4 text-zinc-400 flex-shrink-0" />
-            Sign out
-          </button>
-        </form>
+        {/* Sign-out routes through /access?signout=1 — the owner
+            passcode is required to actually end the session. This
+            is the kiosk model: staff can't unilaterally sign the
+            device out, and the owner confirms with their code. */}
+        <Link
+          href="/access?signout=1"
+          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm
+                     font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-900
+                     transition-colors"
+        >
+          <LogOut className="w-4 h-4 text-zinc-400 flex-shrink-0" />
+          Sign out
+        </Link>
 
         {/* Product wordmark — calm, small, sits below the user
             block to anchor the sidebar with the brand without

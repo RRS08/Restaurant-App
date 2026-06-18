@@ -19,6 +19,7 @@
 // ----------------------------------------------------------------
 
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/sidebar'
 import AppShell from './app-shell'
@@ -54,6 +55,34 @@ export default async function AppLayout({
 
   if (!userRole) {
     redirect('/onboarding')
+  }
+
+  // ---- Staff kiosk mode ----
+  //
+  // When pos_mode === 'staff' the device is locked to /pos. We
+  // render the page WITHOUT the sidebar/shell so it sits fullscreen.
+  // The middleware already prevents staff from reaching anything
+  // other than /pos, so children will always be the POS page here.
+  // The only escape is the on-screen lock button (a small link
+  // back to /access) — that's the kiosk's switch-mode + sign-out
+  // affordance.
+  const posMode = (await cookies()).get('pos_mode')?.value
+  if (posMode === 'staff') {
+    // Kiosk frame: page content fullscreen + a small bottom-right
+    // "Switch" link that returns to /access for the owner to enter
+    // their code and reclaim full access. Without this the owner
+    // has no way out of POS once staff mode is on.
+    return (
+      <div className="min-h-screen bg-white relative">
+        {children}
+        <a
+          href="/access"
+          className="fixed bottom-3 right-3 z-50 text-[11px] font-mono uppercase tracking-[0.16em] text-zinc-400 hover:text-zinc-700 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full border border-zinc-200 shadow-sm"
+        >
+          Switch
+        </a>
+      </div>
+    )
   }
 
   // ---- Fetch display data for the sidebar ----

@@ -31,6 +31,7 @@ import OperationsCard from './operations-card'
 import IntegrationsCard from './integrations-card'
 import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
+import AccessCodesCard from './access-codes-card'
 
 export default async function SettingsPage() {
   const supabase = await createClient()
@@ -50,6 +51,10 @@ export default async function SettingsPage() {
   // Summary-card payloads. Fetched at the page level so the cards
   // stay pure presentation. Defaults render as "Not connected" /
   // empty for users without integrations.
+  // Access codes (passcode kiosk gate) — owner-only.
+  let accessOwnerSet = false
+  let accessStaffSet = false
+
   let bankConnected = false
   let bankConnectionCount = 0
   let bankLatestSyncAt: string | null = null
@@ -98,7 +103,7 @@ export default async function SettingsPage() {
         { data: cloverConn },
         { count: pendingCount },
       ] = await Promise.all([
-        supabase.from('restaurants').select('name').eq('id', rid).maybeSingle(),
+        supabase.from('restaurants').select('name, owner_passcode_hash, staff_passcode_hash').eq('id', rid).maybeSingle(),
         supabase
           .from('locations')
           .select('id, name')
@@ -136,6 +141,8 @@ export default async function SettingsPage() {
           .eq('active', false),
       ])
       businessName = restaurant?.name ?? null
+      accessOwnerSet = !!(restaurant as { owner_passcode_hash?: string | null } | null)?.owner_passcode_hash
+      accessStaffSet = !!(restaurant as { staff_passcode_hash?: string | null } | null)?.staff_passcode_hash
       primaryLocationName = firstLoc?.name ?? null
       readiness = readinessSnap
       operatingMode = mode
@@ -250,6 +257,13 @@ export default async function SettingsPage() {
             posPendingReviewCount={posPendingReviewCount}
             isDev={isDev}
           />
+        )}
+
+        {/* Access codes — owner-only. Kiosk passcodes (owner + staff)
+            that gate the system, distinct from the per-user team
+            model used for payroll/auth. */}
+        {(isOwner && restaurantId) && (
+          <AccessCodesCard ownerSet={accessOwnerSet} staffSet={accessStaffSet} />
         )}
 
         {/* Team management — owner-only. Lets the owner invite a

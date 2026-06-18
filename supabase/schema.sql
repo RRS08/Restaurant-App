@@ -45,6 +45,13 @@ create table public.locations (
 );
 
 
+-- Access passcodes — see supabase/migrations/2026-06-18-restaurant-passcodes.sql.
+-- Owner sets these from Settings → Access codes. Either column can be NULL;
+-- the access gate only enforces when owner_passcode_hash is set.
+alter table public.restaurants add column if not exists owner_passcode_hash text;
+alter table public.restaurants add column if not exists staff_passcode_hash text;
+
+
 -- ----------------------------------------------------------------
 -- user_roles: connects users to restaurants with a specific role
 -- ----------------------------------------------------------------

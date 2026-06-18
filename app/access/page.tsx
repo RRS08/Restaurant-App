@@ -24,7 +24,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { BrandLockup } from '@/components/brand'
-import { getLang, getT } from '@/lib/i18n'
+import { getLang, getT } from '@/lib/i18n-server'
 import AccessForm from './form'
 
 interface Props {

@@ -27,7 +27,7 @@ import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
 import { BrandMark } from '@/components/brand'
 import { Lock } from 'lucide-react'
-import { getLang, getT } from '@/lib/i18n'
+import { getLang, getT } from '@/lib/i18n-server'
 
 export default async function AppLayout({
   children,

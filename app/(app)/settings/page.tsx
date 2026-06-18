@@ -33,7 +33,7 @@ import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
 import AccessCodesCard from './access-codes-card'
 import LanguageCard from './language-card'
-import { getLang } from '@/lib/i18n'
+import { getLang } from '@/lib/i18n-server'
 
 export default async function SettingsPage() {
   const supabase = await createClient()

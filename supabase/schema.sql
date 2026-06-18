@@ -51,6 +51,13 @@ create table public.locations (
 alter table public.restaurants add column if not exists owner_passcode_hash text;
 alter table public.restaurants add column if not exists staff_passcode_hash text;
 
+-- Demo seed switcher — see supabase/migrations/2026-06-18-seed-concepts.sql.
+-- Dev-only: lets a dev account pre-load multiple concept-themed datasets
+-- (taqueria, bakery, burgers, …) and toggle which one renders in POS +
+-- Inventory before a sales call. Real customers never set these and
+-- their data has concept_key NULL = always visible.
+alter table public.restaurants add column if not exists active_seed_concept text;
+
 
 -- ----------------------------------------------------------------
 -- user_roles: connects users to restaurants with a specific role

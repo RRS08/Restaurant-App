@@ -26,6 +26,12 @@ export default async function PosPage() {
   // it, so dev/testing flows are preserved on either branch.
   const { data: { user } } = await supabase.auth.getUser()
   let operatingMode: 'native_pos' | 'external_pos' | null = null
+  // Demo seed switcher — dev accounts only. The active concept is
+  // stored on `restaurants.active_seed_concept`. Queries below
+  // filter menu items + categories so the POS shows only items
+  // tagged with this concept (plus untagged "real" rows). See
+  // app/actions/seed.ts + supabase/migrations/2026-06-18-seed-concepts.sql.
+  let activeSeedConcept: string | null = null
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -34,6 +40,12 @@ export default async function PosPage() {
       .single()
     if (role?.restaurant_id) {
       operatingMode = await getOperatingMode(supabase, role.restaurant_id)
+      const { data: r } = await supabase
+        .from('restaurants')
+        .select('active_seed_concept')
+        .eq('id', role.restaurant_id)
+        .maybeSingle()
+      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
     }
   }
 
@@ -44,23 +56,37 @@ export default async function PosPage() {
   // Same defensive fetch as menu/page.tsx — fall back to the base
   // column set when the new availability_override migration hasn't
   // landed yet, so POS keeps rendering tiles either way.
+  // Seed filter helper. Strict semantics: only show rows that
+  // either match the active concept or are untagged (NULL). When
+  // no seed is active, only untagged "real" content shows. Real
+  // customers never set concept_key so this is always a pass-through
+  // for them.
+  const applyMenuSeedFilter = <T extends { or: (s: string) => T; is: (col: string, val: null) => T }>(q: T): T => {
+    if (activeSeedConcept) {
+      return q.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
+    }
+    return q.is('concept_key', null)
+  }
+
   async function fetchActiveMenuItems() {
-    const rich = await supabase
-      .from('menu_items')
-      .select('id, name, current_price, category_id, active, availability_override')
-      .eq('active', true)
-      .order('name', { ascending: true })
+    const rich = await applyMenuSeedFilter(
+      supabase
+        .from('menu_items')
+        .select('id, name, current_price, category_id, active, availability_override')
+        .eq('active', true)
+    ).order('name', { ascending: true })
     if (!rich.error) return rich.data
     if (rich.error.code !== '42703') {
       console.error('[pos/page] menu_items select failed:', rich.error)
     } else {
       console.warn('[pos/page] availability_override column missing — falling back to base select. Run the schema migration to enable overrides.')
     }
-    const base = await supabase
-      .from('menu_items')
-      .select('id, name, current_price, category_id, active')
-      .eq('active', true)
-      .order('name', { ascending: true })
+    const base = await applyMenuSeedFilter(
+      supabase
+        .from('menu_items')
+        .select('id, name, current_price, category_id, active')
+        .eq('active', true)
+    ).order('name', { ascending: true })
     if (base.error) {
       console.error('[pos/page] menu_items base select failed:', base.error)
       return null
@@ -78,10 +104,11 @@ export default async function PosPage() {
     countsRes,
     transactionsRes,
   ] = await Promise.all([
-    supabase
-      .from('menu_categories')
-      .select('id, name, sort_order')
-      .order('sort_order', { ascending: true }),
+    applyMenuSeedFilter(
+      supabase
+        .from('menu_categories')
+        .select('id, name, sort_order')
+    ).order('sort_order', { ascending: true }),
 
     fetchActiveMenuItems(),
 

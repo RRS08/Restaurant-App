@@ -37,6 +37,8 @@ export default async function MenuPage() {
   // Resolve restaurant id once for the operating-mode + locations +
   // connections lookups. RLS still scopes the rest of the queries.
   let restaurantId: string | null = null
+  // Demo seed switcher — dev only. See app/actions/seed.ts.
+  let activeSeedConcept: string | null = null
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -44,6 +46,14 @@ export default async function MenuPage() {
       .eq('user_id', user.id)
       .single()
     restaurantId = role?.restaurant_id ?? null
+    if (restaurantId) {
+      const { data: r } = await supabase
+        .from('restaurants')
+        .select('active_seed_concept')
+        .eq('id', restaurantId)
+        .maybeSingle()
+      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+    }
   }
 
   const operatingMode = restaurantId
@@ -80,11 +90,26 @@ export default async function MenuPage() {
   // We try the rich select first and fall back to the base select if
   // those columns are missing — items still render, override just
   // defaults to 'none' for every row until the migration lands.
+  // Seed filter helper. Strict semantics — only show rows whose
+  // concept_key matches the active seed OR is NULL. Same as POS /
+  // Inventory.
+  type MenuFilter<T> = T & {
+    or: (s: string) => MenuFilter<T>
+    is: (col: string, val: null) => MenuFilter<T>
+  }
+  const applySeedFilter = <T extends { or: (s: string) => T; is: (col: string, val: null) => T }>(q: T): T => {
+    if (activeSeedConcept) {
+      return q.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
+    }
+    return q.is('concept_key', null)
+  }
+
   async function fetchMenuItems() {
-    const rich = await supabase
-      .from('menu_items')
-      .select('id, name, current_price, active, category_id, source, external_provider, availability_override, availability_override_set_at')
-      .order('name', { ascending: true })
+    const rich = await applySeedFilter(
+      supabase
+        .from('menu_items')
+        .select('id, name, current_price, active, category_id, source, external_provider, availability_override, availability_override_set_at')
+    ).order('name', { ascending: true })
     if (!rich.error) return { data: rich.data, hasOverrideColumns: true }
 
     // 42703 = undefined column. Any other error: surface it via the
@@ -96,10 +121,11 @@ export default async function MenuPage() {
       console.warn('[menu/page] availability_override columns missing — falling back to base select. Run the schema migration to enable overrides.')
     }
 
-    const base = await supabase
-      .from('menu_items')
-      .select('id, name, current_price, active, category_id, source, external_provider')
-      .order('name', { ascending: true })
+    const base = await applySeedFilter(
+      supabase
+        .from('menu_items')
+        .select('id, name, current_price, active, category_id, source, external_provider')
+    ).order('name', { ascending: true })
     if (base.error) {
       console.error('[menu/page] menu_items base select failed:', base.error)
       return { data: null as null | unknown[], hasOverrideColumns: false }
@@ -120,9 +146,11 @@ export default async function MenuPage() {
     countsRes,
     transactionsRes,
   ] = await Promise.all([
-    supabase
-      .from('menu_categories')
-      .select('id, name, sort_order, source')
+    applySeedFilter(
+      supabase
+        .from('menu_categories')
+        .select('id, name, sort_order, source')
+    )
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
 
@@ -134,12 +162,14 @@ export default async function MenuPage() {
       .select('id, menu_item_id, inventory_item_id, quantity_required, inventory_items ( name, unit_of_measure )')
       .order('created_at', { ascending: true }),
 
-    // Active inventory items for the ingredient dropdown
-    supabase
-      .from('inventory_items')
-      .select('id, name, unit_of_measure')
-      .eq('active', true)
-      .order('name', { ascending: true }),
+    // Active inventory items for the ingredient dropdown — also
+    // filtered by seed so the dropdown matches the visible menu.
+    applySeedFilter(
+      supabase
+        .from('inventory_items')
+        .select('id, name, unit_of_measure')
+        .eq('active', true)
+    ).order('name', { ascending: true }),
 
     // Inventory activation gate. Projection logic is skipped entirely
     // when the bridge is not live so we never auto-disable items

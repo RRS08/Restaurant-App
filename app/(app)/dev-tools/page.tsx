@@ -30,6 +30,8 @@ import CloverCard from '../settings/clover-card'
 import BankCard from '../settings/bank-card'
 import FinanceSandboxCard from './finance-sandbox-card'
 import FinanceBankResetCard from './finance-bank-reset-card'
+import SeedSwitcherCard, { type ConceptRow } from './seed-switcher-card'
+import { SEED_CONCEPTS, PLANNED_CONCEPTS } from '@/lib/seed-concepts'
 
 export default async function DevToolboxPage() {
   const supabase = await createClient()
@@ -79,8 +81,56 @@ export default async function DevToolboxPage() {
   const locations = locs ?? []
   const posConnections = conns ?? []
 
+  // ---- Seed switcher data ----
+  // Read the active seed + per-concept install counts so the card
+  // can render its current state. Per-concept count uses a tiny
+  // exact head select; the indexed (restaurant_id, concept_key)
+  // column makes each query effectively constant-time.
+  const { data: restaurantRow } = await supabase
+    .from('restaurants')
+    .select('active_seed_concept')
+    .eq('id', restaurantId)
+    .maybeSingle()
+  const activeSeed = (restaurantRow as { active_seed_concept?: string | null } | null)
+    ?.active_seed_concept ?? null
+
+  const seedConceptRows: ConceptRow[] = await Promise.all(
+    SEED_CONCEPTS.map(async (c) => {
+      const { count } = await supabase
+        .from('menu_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('restaurant_id', restaurantId)
+        .eq('concept_key', c.key)
+      const itemCount = count ?? 0
+      return {
+        key: c.key,
+        labelEn: c.labelEn,
+        labelEs: c.labelEs,
+        installed: itemCount > 0,
+        itemCount,
+      }
+    }),
+  )
+
   return (
     <ToolboxShell>
+      {/* 0. DEMO SEED SWITCHER -------------------------------------
+          Sales-call workflow: switch the visible menu + inventory
+          to match the lead's concept (taqueria, bakery, …) without
+          deleting any data. See app/actions/seed.ts + the
+          lib/seed-concepts.ts dataset for what each concept loads. */}
+      <DevSection
+        eyebrow="Demo Seeds"
+        title="Shape the demo to the lead"
+        body="Install, activate, or hide concept-themed datasets. Only the active concept renders in POS, Menu, and Inventory; the others stay parked in the DB."
+      >
+        <SeedSwitcherCard
+          activeSeed={activeSeed}
+          installedConcepts={seedConceptRows}
+          plannedConcepts={PLANNED_CONCEPTS.map((c) => ({ key: c.key, labelEn: c.labelEn }))}
+        />
+      </DevSection>
+
       {/* 1. SETUP & READINESS OVERRIDES ----------------------------
           The dev-gated pillar grid + operating-mode switcher + the
           full setup-override surface (bypass, per-pillar overrides,

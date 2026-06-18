@@ -11,6 +11,37 @@ import InventoryClient from './client'
 export default async function InventoryPage() {
   const supabase = await createClient()
 
+  // Demo seed switcher — see app/(app)/pos/page.tsx for the full
+  // explanation. Resolves the caller's restaurant + its active
+  // concept so we can filter inventory_items below.
+  const { data: { user } } = await supabase.auth.getUser()
+  let activeSeedConcept: string | null = null
+  if (user) {
+    const { data: role } = await supabase
+      .from('user_roles')
+      .select('restaurant_id')
+      .eq('user_id', user.id)
+      .single()
+    if (role?.restaurant_id) {
+      const { data: r } = await supabase
+        .from('restaurants')
+        .select('active_seed_concept')
+        .eq('id', role.restaurant_id)
+        .maybeSingle()
+      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+    }
+  }
+
+  // Strict seed filter: concept_key matches the active concept
+  // OR is NULL (real customer data). When nothing is active, only
+  // untagged rows surface. See app/actions/seed.ts.
+  const itemsQuery = supabase
+    .from('inventory_items')
+    .select('id, name, unit_of_measure, low_stock_threshold, active')
+  const filteredItemsQuery = activeSeedConcept
+    ? itemsQuery.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
+    : itemsQuery.is('concept_key', null)
+
   const [
     { data: items },
     { data: counts },
@@ -23,10 +54,7 @@ export default async function InventoryPage() {
     // Drop the active filter so the duplicate detection + manual
     // merge drawer can see archived rows too. The page-level item
     // list (table) re-filters to active before render below.
-    supabase
-      .from('inventory_items')
-      .select('id, name, unit_of_measure, low_stock_threshold, active')
-      .order('name', { ascending: true }),
+    filteredItemsQuery.order('name', { ascending: true }),
 
     supabase
       .from('inventory_counts')

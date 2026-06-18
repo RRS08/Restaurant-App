@@ -16,13 +16,17 @@
 // ----------------------------------------------------------------
 
 import { useActionState } from 'react'
-import { setPasscodes, clearStaffPasscode } from '@/app/actions/access'
+import { setPasscodes, clearStaffPasscode, lockDevice } from '@/app/actions/access'
 
 interface Props {
   ownerSet: boolean
   staffSet: boolean
 }
 
+// Mode line that explains both "set codes" and "lock now" sit side
+// by side. Saving doesn't lock the device — the owner has to
+// explicitly hand it off via the lock button. This is what lets
+// the owner stay in owner mode after configuring codes.
 export default function AccessCodesCard({ ownerSet, staffSet }: Props) {
   const [state, formAction, pending] = useActionState(setPasscodes, null)
 
@@ -92,16 +96,28 @@ export default function AccessCodesCard({ ownerSet, staffSet }: Props) {
         </button>
       </form>
 
-      {staffSet && (
-        <form action={clearStaffPasscode} className="mt-3">
-          <button
-            type="submit"
-            className="text-sm text-zinc-500 hover:text-zinc-900 transition-colors"
-          >
-            Disable staff code
-          </button>
-        </form>
-      )}
+      <div className="mt-4 pt-4 border-t border-zinc-100 flex items-center gap-4 flex-wrap">
+        {ownerSet && (
+          <form action={lockDevice}>
+            <button
+              type="submit"
+              className="text-sm font-medium text-zinc-900 hover:text-zinc-700 transition-colors"
+            >
+              Lock device now →
+            </button>
+          </form>
+        )}
+        {staffSet && (
+          <form action={clearStaffPasscode}>
+            <button
+              type="submit"
+              className="text-sm text-zinc-500 hover:text-zinc-900 transition-colors"
+            >
+              Disable staff code
+            </button>
+          </form>
+        )}
+      </div>
     </div>
   )
 }

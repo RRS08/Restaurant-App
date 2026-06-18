@@ -128,6 +128,23 @@ export async function setPasscodes(
 // will be asked for the owner code). Staff mode just becomes
 // unavailable.
 // ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// lockDevice — clears the pos_mode cookie WITHOUT signing out. The
+// auth session stays alive; the next protected page request is
+// redirected to /access for a fresh code entry.
+//
+// Use cases:
+//   • Owner hands the device to a server and wants the staff code
+//     prompt to come up
+//   • Testing the gate after configuring codes (otherwise the
+//     setPasscodes auto-bump cookie stays valid for 30 days)
+// ----------------------------------------------------------------
+export async function lockDevice(_formData?: FormData): Promise<void> {
+  const c = await cookies()
+  c.delete(POS_MODE_COOKIE)
+  redirect('/access')
+}
+
 export async function clearStaffPasscode(_formData?: FormData): Promise<void> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

@@ -39,6 +39,7 @@ export default async function MenuPage() {
   let restaurantId: string | null = null
   // Demo seed switcher — dev only. See app/actions/seed.ts.
   let activeSeedConcept: string | null = null
+  let seedColumnsAvailable = true
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -47,12 +48,17 @@ export default async function MenuPage() {
       .single()
     restaurantId = role?.restaurant_id ?? null
     if (restaurantId) {
-      const { data: r } = await supabase
+      const probe = await supabase
         .from('restaurants')
         .select('active_seed_concept')
         .eq('id', restaurantId)
         .maybeSingle()
-      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      if (probe.error?.code === '42703') {
+        seedColumnsAvailable = false
+        console.warn('[menu/page] seed migration not applied — concept filter disabled')
+      } else {
+        activeSeedConcept = (probe.data as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      }
     }
   }
 
@@ -92,12 +98,10 @@ export default async function MenuPage() {
   // defaults to 'none' for every row until the migration lands.
   // Seed filter helper. Strict semantics — only show rows whose
   // concept_key matches the active seed OR is NULL. Same as POS /
-  // Inventory.
-  type MenuFilter<T> = T & {
-    or: (s: string) => MenuFilter<T>
-    is: (col: string, val: null) => MenuFilter<T>
-  }
+  // Inventory. Defensive: identity function when the migration
+  // hasn't run so the menu doesn't blank.
   const applySeedFilter = <T extends { or: (s: string) => T; is: (col: string, val: null) => T }>(q: T): T => {
+    if (!seedColumnsAvailable) return q
     if (activeSeedConcept) {
       return q.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
     }

@@ -32,6 +32,12 @@ export default async function PosPage() {
   // tagged with this concept (plus untagged "real" rows). See
   // app/actions/seed.ts + supabase/migrations/2026-06-18-seed-concepts.sql.
   let activeSeedConcept: string | null = null
+  // Tracks whether the seed migration columns exist yet. If false,
+  // we skip the seed filter entirely so a pre-migration deploy
+  // doesn't blank out the menu. Detected via the active_seed_concept
+  // probe below — same column gate covers the menu/inventory side
+  // because they ship in the same migration.
+  let seedColumnsAvailable = true
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -40,12 +46,17 @@ export default async function PosPage() {
       .single()
     if (role?.restaurant_id) {
       operatingMode = await getOperatingMode(supabase, role.restaurant_id)
-      const { data: r } = await supabase
+      const probe = await supabase
         .from('restaurants')
         .select('active_seed_concept')
         .eq('id', role.restaurant_id)
         .maybeSingle()
-      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      if (probe.error?.code === '42703') {
+        seedColumnsAvailable = false
+        console.warn('[pos/page] seed migration not applied — concept filter disabled')
+      } else {
+        activeSeedConcept = (probe.data as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      }
     }
   }
 
@@ -61,7 +72,13 @@ export default async function PosPage() {
   // no seed is active, only untagged "real" content shows. Real
   // customers never set concept_key so this is always a pass-through
   // for them.
+  //
+  // Defensive: if the migration hasn't been applied yet (column
+  // missing), the helper is an identity function — the original
+  // menu/inventory still render. This prevents a fresh deploy
+  // from looking broken before the SQL runs.
   const applyMenuSeedFilter = <T extends { or: (s: string) => T; is: (col: string, val: null) => T }>(q: T): T => {
+    if (!seedColumnsAvailable) return q
     if (activeSeedConcept) {
       return q.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
     }

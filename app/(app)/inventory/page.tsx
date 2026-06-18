@@ -16,6 +16,7 @@ export default async function InventoryPage() {
   // concept so we can filter inventory_items below.
   const { data: { user } } = await supabase.auth.getUser()
   let activeSeedConcept: string | null = null
+  let seedColumnsAvailable = true
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -23,24 +24,33 @@ export default async function InventoryPage() {
       .eq('user_id', user.id)
       .single()
     if (role?.restaurant_id) {
-      const { data: r } = await supabase
+      const probe = await supabase
         .from('restaurants')
         .select('active_seed_concept')
         .eq('id', role.restaurant_id)
         .maybeSingle()
-      activeSeedConcept = (r as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      if (probe.error?.code === '42703') {
+        seedColumnsAvailable = false
+        console.warn('[inventory/page] seed migration not applied — concept filter disabled')
+      } else {
+        activeSeedConcept = (probe.data as { active_seed_concept?: string | null } | null)?.active_seed_concept ?? null
+      }
     }
   }
 
   // Strict seed filter: concept_key matches the active concept
   // OR is NULL (real customer data). When nothing is active, only
-  // untagged rows surface. See app/actions/seed.ts.
+  // untagged rows surface. See app/actions/seed.ts. Skipped when
+  // the migration hasn't run yet, so the existing inventory
+  // never disappears just because the column is missing.
   const itemsQuery = supabase
     .from('inventory_items')
     .select('id, name, unit_of_measure, low_stock_threshold, active')
-  const filteredItemsQuery = activeSeedConcept
-    ? itemsQuery.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
-    : itemsQuery.is('concept_key', null)
+  const filteredItemsQuery = !seedColumnsAvailable
+    ? itemsQuery
+    : activeSeedConcept
+      ? itemsQuery.or(`concept_key.eq.${activeSeedConcept},concept_key.is.null`)
+      : itemsQuery.is('concept_key', null)
 
   const [
     { data: items },

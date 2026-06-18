@@ -22,6 +22,8 @@
 
 import { useState, useMemo, useActionState, useEffect, useRef, useTransition } from 'react'
 import { createOrder } from '@/app/actions/sales'
+import { useOnlineStatus } from '@/hooks/use-online-status'
+import { enqueueAction } from '@/lib/offline-queue'
 import { createTerminalPaymentIntent } from '@/app/actions/payments'
 import {
   type EffectiveSellability,
@@ -154,6 +156,14 @@ export default function PosClient({
   const [state, action, pending] = useActionState(createOrder, null)
   const [confirmation, setConfirmation] = useState<string | null>(null)
 
+  // Offline-aware cash submit. When the kiosk has no connection we
+  // refuse to even try the server action and instead serialize the
+  // payload into the offline queue. SyncRunner replays it when the
+  // connection returns. Card / Stripe Terminal still require a live
+  // connection (you can't authorize a card without the network), so
+  // only cash benefits from this path. See lib/offline-queue.ts.
+  const online = useOnlineStatus()
+
   // Workflow state per payment method. Reset on payment-type change
   // so switching between Cash and Card never carries leftover input.
   // (Card stage is now internal to CardWorkflow — when the user
@@ -201,6 +211,20 @@ export default function PosClient({
     }
     wasPendingRef.current = pending
   }, [pending, state, cart])
+
+  // Offline cash commit — runs the same reset + flash sequence as
+  // the success effect above, but driven by the offline branch
+  // synchronously instead of waiting for the server-action pending
+  // state to transition. The confirmation copy explicitly mentions
+  // the device queue so the cashier knows it didn't actually post.
+  const commitOfflineSale = (subtotal: number) => {
+    setCart([])
+    setPaymentType('cash')
+    setCashReceivedRaw('')
+    setCheckoutOpen(false)
+    setConfirmation(`Saved on device · ${CURRENCY(subtotal)} · will sync when online`)
+    setTimeout(() => setConfirmation(null), 3500)
+  }
 
   // Reset payment-specific workflow on type change so switching
   // doesn't leave a stale cash-received value visible under the
@@ -526,6 +550,8 @@ export default function PosClient({
           pending={pending}
           actionError={state?.error ?? null}
           onClose={() => setCheckoutOpen(false)}
+          online={online}
+          onOfflineCommit={commitOfflineSale}
         />
       )}
     </div>
@@ -1284,6 +1310,8 @@ function CheckoutDrawer({
   pending,
   actionError,
   onClose,
+  online,
+  onOfflineCommit,
 }: {
   cart: CartLine[]
   subtotal: number
@@ -1297,6 +1325,8 @@ function CheckoutDrawer({
   pending: boolean
   actionError: string | null
   onClose: () => void
+  online: boolean
+  onOfflineCommit: (subtotal: number) => void
 }) {
   // Esc + body-scroll lock — same pattern as the Menu and Sales
   // drawers in this codebase.
@@ -1351,13 +1381,50 @@ function CheckoutDrawer({
             The form wraps the whole body so each workflow's submit
             button still drives createOrder with the same hidden-
             field payload as before. */}
-        <form action={action} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        <form
+          action={action}
+          onSubmit={(e) => {
+            // Card / Stripe Terminal require a live network to
+            // authorize — there's no graceful offline path for
+            // them. Cash is the only payment type we can safely
+            // queue, because it's already-collected money.
+            if (online) return
+            const fd = new FormData(e.currentTarget)
+            const submittedPaymentType = (fd.get('payment_type') as string) || 'cash'
+            if (submittedPaymentType !== 'cash') return
+            e.preventDefault()
+            // Serialize the FormData as a plain key→value record so
+            // it round-trips through localStorage. createOrder
+            // re-hydrates a FormData from this on replay (see
+            // components/sync-runner.tsx).
+            const payload: Record<string, string> = {}
+            fd.forEach((value, key) => {
+              if (typeof value === 'string') payload[key] = value
+            })
+            enqueueAction('create_order', payload)
+            onOfflineCommit(subtotal)
+          }}
+          className="flex-1 overflow-y-auto px-6 py-5 space-y-5"
+        >
           <input type="hidden" name="line_items" value={lineItemsJson} />
           <input type="hidden" name="source" value="native_pos" />
           <input type="hidden" name="payment_type" value={paymentType} />
           <input type="hidden" name="payment_status" value="paid" />
           <input type="hidden" name="status" value="completed" />
           <input type="hidden" name="redirect_to" value="/pos" />
+
+          {/* Offline status hint inside the drawer — gives the
+              cashier confidence the cash flow still works, and
+              flags that card won't. Only renders when offline so
+              it stays out of the way during normal operation. */}
+          {!online && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-800">
+              <p className="font-semibold">You’re offline.</p>
+              <p className="mt-0.5 leading-relaxed">
+                Cash sales will save on this device and sync when the network returns. Card and other electronic payments can’t be authorized offline.
+              </p>
+            </div>
+          )}
 
           {/* 1. Hero — Amount due is the visual anchor of the
               drawer. No card chrome around it; a large centered

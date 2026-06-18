@@ -33,8 +33,24 @@ import {
   type QueuedAction,
   type QueuedActionKind,
 } from '@/lib/offline-queue'
+import { createOrder } from '@/app/actions/sales'
 
 type Replayer = (action: QueuedAction) => Promise<{ ok: boolean; error?: string }>
+
+// Server actions throw a special error (`digest` starts with
+// "NEXT_REDIRECT") when they call `redirect()`. From the client's
+// perspective that throw IS success — the redirect would have
+// landed us on /sales if we were inside the normal action flow.
+// We swallow it and treat as ok.
+function isNextRedirect(err: unknown): boolean {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'digest' in err &&
+    typeof (err as { digest?: unknown }).digest === 'string' &&
+    ((err as { digest: string }).digest).startsWith('NEXT_REDIRECT')
+  )
+}
 
 // Map of kind → replay function. When you add a new QueuedActionKind
 // in lib/offline-queue.ts, add a matching entry here. Until then
@@ -42,13 +58,32 @@ type Replayer = (action: QueuedAction) => Promise<{ ok: boolean; error?: string 
 // queue forever — that's intentional, so unfinished features don't
 // silently lose data.
 const REPLAYERS: Partial<Record<QueuedActionKind, Replayer>> = {
-  create_order: async () => {
-    // TODO(offline): wire to app/actions/sales.createOrder once
-    // the POS submit path enqueues offline sales. The payload
-    // shape will be the same FormData-equivalent createOrder
-    // takes today. For now this is a no-op that keeps the queue
-    // stable until the integration lands.
-    return { ok: false, error: 'create_order replay not wired yet' }
+  create_order: async (action) => {
+    // The queue stores a flat key→value record (FormData was
+    // serialized via Object.fromEntries on enqueue). Rebuild a
+    // FormData with the same field names + values createOrder
+    // already understands. The server action handles auth,
+    // pricing, depletion, etc. exactly like a live submit.
+    const payload = action.payload as Record<string, string>
+    const formData = new FormData()
+    for (const [key, value] of Object.entries(payload)) {
+      if (typeof value === 'string') formData.append(key, value)
+    }
+    try {
+      const result = await createOrder(null, formData)
+      if (result?.error) return { ok: false, error: result.error }
+      // createOrder always redirects on success — if we got here
+      // without throwing, treat as success (the server-action
+      // runtime would have thrown NEXT_REDIRECT before reaching
+      // a non-error return).
+      return { ok: true }
+    } catch (err) {
+      if (isNextRedirect(err)) return { ok: true }
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : 'replay threw',
+      }
+    }
   },
 }
 

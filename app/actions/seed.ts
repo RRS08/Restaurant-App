@@ -33,24 +33,26 @@ import { createClient } from '@/lib/supabase/server'
 import { isDevEmail } from '@/lib/dev'
 import { findConcept } from '@/lib/seed-concepts'
 
-// Resolves the caller's restaurant_id + enforces dev-only access.
-// Returns { restaurantId, error } — error is set when caller isn't
-// dev or doesn't have a restaurant.
+// Resolves the caller's restaurant_id + user_id + enforces dev-only
+// access. Returns { restaurantId, userId, error } — error is set
+// when the caller isn't dev or doesn't have a restaurant. userId
+// is needed for inventory_counts.entered_by_user_id (the table
+// records who entered each count).
 async function requireDevContext(): Promise<
-  | { restaurantId: string; error: null }
-  | { restaurantId: null; error: string }
+  | { restaurantId: string; userId: string; error: null }
+  | { restaurantId: null; userId: null; error: string }
 > {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { restaurantId: null, error: 'Not signed in.' }
-  if (!isDevEmail(user.email)) return { restaurantId: null, error: 'Dev only.' }
+  if (!user) return { restaurantId: null, userId: null, error: 'Not signed in.' }
+  if (!isDevEmail(user.email)) return { restaurantId: null, userId: null, error: 'Dev only.' }
   const { data: role } = await supabase
     .from('user_roles')
     .select('restaurant_id')
     .eq('user_id', user.id)
     .single()
-  if (!role?.restaurant_id) return { restaurantId: null, error: 'No restaurant.' }
-  return { restaurantId: role.restaurant_id, error: null }
+  if (!role?.restaurant_id) return { restaurantId: null, userId: null, error: 'No restaurant.' }
+  return { restaurantId: role.restaurant_id, userId: user.id, error: null }
 }
 
 export async function setActiveSeed(
@@ -78,8 +80,8 @@ export async function setActiveSeed(
 export async function installSeed(
   conceptKey: string,
 ): Promise<{ error?: string; ok?: boolean; counts?: { categories: number; items: number; inventory: number } }> {
-  const { restaurantId, error } = await requireDevContext()
-  if (error || !restaurantId) return { error: error ?? 'Unknown error.' }
+  const { restaurantId, userId, error } = await requireDevContext()
+  if (error || !restaurantId || !userId) return { error: error ?? 'Unknown error.' }
 
   const seed = findConcept(conceptKey)
   if (!seed) return { error: 'Unknown concept.' }
@@ -190,6 +192,29 @@ export async function installSeed(
   if (recipeRows.length > 0) {
     const { error: recipeErr } = await supabase.from('recipe_components').insert(recipeRows)
     if (recipeErr) return { error: `Recipes failed: ${recipeErr.message}` }
+  }
+
+  // 5. Initial inventory counts — without these the Inventory page
+  // shows every freshly-seeded item as "no count yet" and the
+  // recipe depletion math has no baseline to subtract from. We
+  // record one inventory_counts row per item at parInventory so
+  // the demo opens with a realistic stock level. entered_by_user_id
+  // is required (non-null FK to auth.users); we record the dev
+  // who clicked Install.
+  const countRows = seed.inventory.map((i) => {
+    const invId = invIdByKey.get(i.key)
+    if (!invId) return null
+    return {
+      restaurant_id: restaurantId,
+      location_id: locationId,
+      inventory_item_id: invId,
+      quantity_on_hand: i.parInventory,
+      entered_by_user_id: userId,
+    }
+  }).filter((r): r is NonNullable<typeof r> => r !== null)
+  if (countRows.length > 0) {
+    const { error: countsErr } = await supabase.from('inventory_counts').insert(countRows)
+    if (countsErr) return { error: `Counts failed: ${countsErr.message}` }
   }
 
   revalidatePath('/dev-tools')

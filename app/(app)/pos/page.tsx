@@ -11,6 +11,7 @@
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { getOperatingMode } from '@/lib/readiness'
+import { getLang } from '@/lib/i18n-server'
 import { computeStockSnapshot } from '@/lib/inventory/stock'
 import {
   computeAvailability,
@@ -221,9 +222,11 @@ export default async function PosPage() {
   // mode and give the menu grid the extra vertical space.
   const posMode = (await cookies()).get('pos_mode')?.value
   const kioskMode = posMode === 'staff'
+  const lang = await getLang()
 
   return (
     <PosClient
+      lang={lang}
       kioskMode={kioskMode}
       categories={(categories ?? []).map((c) => ({ id: c.id, name: c.name }))}
       items={(items ?? []).map((i) => {

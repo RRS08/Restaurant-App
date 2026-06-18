@@ -28,6 +28,7 @@ import {
   installSeed,
   uninstallSeed,
   tagCurrentDataAs,
+  refreshSeedCounts,
 } from '@/app/actions/seed'
 
 export interface ConceptRow {
@@ -174,18 +175,29 @@ export default function SeedSwitcherCard({
                   </span>
                 )}
                 {c.installed && !c.adHoc && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      if (confirm(`Uninstall ${c.labelEn}? This deletes its menu + inventory rows for this restaurant.`)) {
-                        run(c.key, () => uninstallSeed(c.key))
-                      }
-                    }}
-                    className="text-xs text-gray-500 hover:text-red-700 disabled:opacity-60"
-                  >
-                    Uninstall
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => run(c.key, () => refreshSeedCounts(c.key))}
+                      title="Top up inventory_counts for any items that don't have one yet"
+                      className="text-xs text-gray-500 hover:text-gray-900 disabled:opacity-60"
+                    >
+                      Refresh counts
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        if (confirm(`Uninstall ${c.labelEn}? This deletes its menu + inventory rows for this restaurant.`)) {
+                          run(c.key, () => uninstallSeed(c.key))
+                        }
+                      }}
+                      className="text-xs text-gray-500 hover:text-red-700 disabled:opacity-60"
+                    >
+                      Uninstall
+                    </button>
+                  </>
                 )}
               </div>
             </div>

@@ -231,6 +231,82 @@ export async function installSeed(
   }
 }
 
+// ----------------------------------------------------------------
+// refreshSeedCounts — top up inventory_counts for an already-
+// installed concept. Used for restaurants whose Taqueria install
+// predates the "seed initial counts" change in installSeed — they
+// have inventory_items but every row shows "No count yet" on the
+// Inventory page because no count_inventory_counts row was ever
+// written.
+//
+// Idempotent: only inserts a count for items that currently have
+// none. Re-running is safe and won't overwrite the most recent
+// real count if one already exists.
+// ----------------------------------------------------------------
+export async function refreshSeedCounts(
+  conceptKey: string,
+): Promise<{ error?: string; ok?: boolean; topped?: number }> {
+  const { restaurantId, userId, error } = await requireDevContext()
+  if (error || !restaurantId || !userId) return { error: error ?? 'Unknown error.' }
+
+  const seed = findConcept(conceptKey)
+  if (!seed) return { error: 'Unknown concept.' }
+
+  const supabase = await createClient()
+
+  const { data: items } = await supabase
+    .from('inventory_items')
+    .select('id, name, location_id')
+    .eq('restaurant_id', restaurantId)
+    .eq('concept_key', conceptKey)
+
+  if (!items || items.length === 0) {
+    return { error: 'No items found for this concept.' }
+  }
+
+  // Build a name → parInventory map from the seed so we can match
+  // the seeded items by name (concept_key is in the DB but the
+  // seed key (slug) isn't — names are how we bridge).
+  const parByName = new Map(seed.inventory.map((i) => [i.name, i.parInventory]))
+
+  // Skip any item that already has a count, even an old one. The
+  // dev can always insert a fresh count manually from /inventory
+  // if they want a baseline overwrite.
+  const itemIds = items.map((i) => i.id as string)
+  const { data: existingCounts } = await supabase
+    .from('inventory_counts')
+    .select('inventory_item_id')
+    .in('inventory_item_id', itemIds)
+  const alreadyCounted = new Set((existingCounts ?? []).map((c) => c.inventory_item_id as string))
+
+  const rows = items
+    .filter((it) => !alreadyCounted.has(it.id as string))
+    .map((it) => {
+      const par = parByName.get(it.name as string)
+      if (par === undefined) return null
+      return {
+        restaurant_id: restaurantId,
+        location_id: it.location_id as string,
+        inventory_item_id: it.id as string,
+        quantity_on_hand: par,
+        entered_by_user_id: userId,
+      }
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null)
+
+  if (rows.length === 0) {
+    return { ok: true, topped: 0 }
+  }
+
+  const { error: insErr } = await supabase.from('inventory_counts').insert(rows)
+  if (insErr) return { error: `Counts failed: ${insErr.message}` }
+
+  revalidatePath('/dev-tools')
+  revalidatePath('/inventory')
+  revalidatePath('/pos')
+  return { ok: true, topped: rows.length }
+}
+
 export async function uninstallSeed(
   conceptKey: string,
 ): Promise<{ error?: string; ok?: boolean }> {

@@ -25,6 +25,7 @@ import { createOrder } from '@/app/actions/sales'
 import { useOnlineStatus } from '@/hooks/use-online-status'
 import { enqueueAction } from '@/lib/offline-queue'
 import { createTerminalPaymentIntent } from '@/app/actions/payments'
+import { makeT, type Lang } from '@/lib/i18n'
 import {
   type EffectiveSellability,
   type ProjectionState,
@@ -144,6 +145,7 @@ export default function PosClient({
   items,
   operatingMode = null,
   kioskMode = false,
+  lang,
 }: {
   categories: Category[]
   items: Item[]
@@ -154,7 +156,9 @@ export default function PosClient({
    *  Ring up a sale." header to avoid the redundancy and free up
    *  vertical space for the menu grid. */
   kioskMode?: boolean
+  lang: Lang
 }) {
+  const t = makeT(lang)
   const [activeCategoryId, setActiveCategoryId] = useState<string | 'all'>(
     categories[0]?.id ?? 'all'
   )
@@ -212,7 +216,7 @@ export default function PosClient({
       setPaymentType('cash')
       setCashReceivedRaw('')
       setCheckoutOpen(false)
-      setConfirmation(`Sale complete · ${CURRENCY(lastSubtotalRef.current)}`)
+      setConfirmation(`${t('Sale complete', 'Venta completada')} · ${CURRENCY(lastSubtotalRef.current)}`)
       const t = setTimeout(() => setConfirmation(null), 2000)
       return () => clearTimeout(t)
     }
@@ -229,7 +233,7 @@ export default function PosClient({
     setPaymentType('cash')
     setCashReceivedRaw('')
     setCheckoutOpen(false)
-    setConfirmation(`Saved on device · ${CURRENCY(subtotal)} · will sync when online`)
+    setConfirmation(`${t('Saved on device', 'Guardado en el dispositivo')} · ${CURRENCY(subtotal)} · ${t('will sync when online', 'se sincronizará cuando vuelva la conexión')}`)
     setTimeout(() => setConfirmation(null), 3500)
   }
 
@@ -326,13 +330,70 @@ export default function PosClient({
 
   return (
     <div className="max-w-[1400px] h-full relative">
+      {/* Payment-complete reward overlay.
+          Fullscreen dim + a big green check that scales in with a
+          satisfying overshoot, surrounded by a soft pulse ring.
+          Above the check sits a small uppercase eyebrow; below it
+          the confirmation copy (which already includes the dollar
+          amount). Auto-dismisses on the same 2s timer that drove
+          the old pill. Three keyframes inline so we don't have to
+          edit globals.css. */}
       {confirmation && (
-        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <div className="flex items-center gap-2 rounded-full bg-gray-900 text-white text-xs font-semibold px-4 py-2 shadow-lg">
-            <svg className="w-3.5 h-3.5 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-            </svg>
-            {confirmation}
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-gray-900/40 backdrop-blur-sm pointer-events-none"
+          role="status"
+          aria-live="polite"
+        >
+          <style>{`
+            @keyframes posSuccessPop {
+              0%   { transform: scale(0.3); opacity: 0; }
+              60%  { transform: scale(1.12); opacity: 1; }
+              100% { transform: scale(1); opacity: 1; }
+            }
+            @keyframes posSuccessRing {
+              0%   { transform: scale(0.6); opacity: 0.6; }
+              100% { transform: scale(1.8); opacity: 0; }
+            }
+            @keyframes posSuccessFadeUp {
+              0%   { opacity: 0; transform: translateY(8px); }
+              100% { opacity: 1; transform: translateY(0); }
+            }
+          `}</style>
+          <div className="flex flex-col items-center gap-5">
+            <div className="relative flex items-center justify-center">
+              {/* Soft pulse rings — two staggered concentric rings
+                  to give the moment a sense of release. */}
+              <span
+                className="absolute w-32 h-32 rounded-full bg-green-400/30"
+                style={{ animation: 'posSuccessRing 900ms ease-out forwards' }}
+              />
+              <span
+                className="absolute w-32 h-32 rounded-full bg-green-400/20"
+                style={{ animation: 'posSuccessRing 900ms ease-out 180ms forwards' }}
+              />
+              {/* Green check disc. */}
+              <span
+                className="relative w-28 h-28 rounded-full bg-green-500 shadow-[0_20px_60px_-12px_rgba(34,197,94,0.55)] flex items-center justify-center"
+                style={{ animation: 'posSuccessPop 480ms cubic-bezier(0.34, 1.56, 0.64, 1) forwards' }}
+              >
+                <svg className="w-14 h-14 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </span>
+            </div>
+            <div
+              className="text-center"
+              style={{ animation: 'posSuccessFadeUp 360ms ease-out 220ms backwards' }}
+            >
+              <p className="text-[11px] font-mono uppercase tracking-[0.18em] text-white/70">
+                {t('Sale complete', 'Venta completada')}
+              </p>
+              <p className="mt-2 text-3xl font-mono tabular-nums font-bold text-white">
+                {confirmation.includes('·')
+                  ? confirmation.split('·').slice(1).join('·').trim()
+                  : confirmation}
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -344,8 +405,8 @@ export default function PosClient({
       {!kioskMode && (
         <div className="flex items-start justify-between mb-4">
           <div>
-            <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">POS</h1>
-            <p className="mt-1.5 text-sm text-gray-500">Ring up a sale.</p>
+            <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('POS', 'POS')}</h1>
+            <p className="mt-1.5 text-sm text-gray-500">{t('Ring up a sale.', 'Cobra una venta.')}</p>
           </div>
         </div>
       )}
@@ -354,10 +415,13 @@ export default function PosClient({
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-indigo-200/80 bg-indigo-50/60 px-4 py-3">
           <span className="flex-shrink-0 mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
             <span className="w-1 h-1 rounded-full bg-indigo-500" />
-            External POS
+            {t('External POS', 'POS externo')}
           </span>
           <p className="text-xs text-indigo-800 leading-relaxed">
-            Your provider is the canonical sales source — use this surface only when needed.
+            {t(
+              'Your provider is the canonical sales source — use this surface only when needed.',
+              'Tu proveedor es la fuente principal de ventas — usa esta superficie solo cuando sea necesario.',
+            )}
           </p>
         </div>
       )}
@@ -376,7 +440,7 @@ export default function PosClient({
           <div className="mb-4 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-1.5">
             <div className="flex flex-wrap items-center gap-1">
               <CategoryChip
-                label="All"
+                label={t('All', 'Todos')}
                 active={activeCategoryId === 'all'}
                 onClick={() => setActiveCategoryId('all')}
               />
@@ -393,13 +457,13 @@ export default function PosClient({
 
           {visibleItems.length === 0 ? (
             <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white p-16 text-center">
-              <p className="text-sm font-semibold text-gray-700">No items in this category</p>
-              <p className="mt-1 text-xs text-gray-500">Add menu items to start selling.</p>
+              <p className="text-sm font-semibold text-gray-700">{t('No items in this category', 'Sin artículos en esta categoría')}</p>
+              <p className="mt-1 text-xs text-gray-500">{t('Add menu items to start selling.', 'Agrega artículos al menú para empezar a vender.')}</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {visibleItems.map((item) => (
-                <ItemTile key={item.id} item={item} onAdd={() => addItem(item)} />
+                <ItemTile key={item.id} item={item} onAdd={() => addItem(item)} lang={lang} />
               ))}
             </div>
           )}
@@ -421,10 +485,14 @@ export default function PosClient({
             <div className="border-b border-gray-100 px-5 pt-4 pb-3 flex items-baseline justify-between">
               <div>
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
-                  Current order
+                  {t('Current order', 'Pedido actual')}
                 </p>
                 <p className="mt-0.5 text-[11px] text-gray-500">
-                  {cart.length === 0 ? 'Empty' : `${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
+                  {cart.length === 0
+                    ? t('Empty', 'Vacío')
+                    : cartItemCount === 1
+                      ? `${cartItemCount} ${t('item', 'artículo')}`
+                      : `${cartItemCount} ${t('items', 'artículos')}`}
                 </p>
               </div>
               {cart.length > 0 && (
@@ -433,7 +501,7 @@ export default function PosClient({
                   onClick={clearCart}
                   className="text-[11px] font-medium text-gray-500 hover:text-red-600 transition-colors"
                 >
-                  Clear
+                  {t('Clear', 'Limpiar')}
                 </button>
               )}
             </div>
@@ -449,7 +517,7 @@ export default function PosClient({
               {cart.length === 0 ? (
                 <div className="p-6 text-center">
                   <p className="text-xs text-gray-400 leading-relaxed">
-                    Tap a menu item to add it.
+                    {t('Tap a menu item to add it.', 'Toca un artículo del menú para agregarlo.')}
                   </p>
                 </div>
               ) : (
@@ -483,8 +551,8 @@ export default function PosClient({
                       <button
                         type="button"
                         onClick={() => removeLine(line.lineId)}
-                        aria-label={`Remove ${line.name}`}
-                        title="Remove from order"
+                        aria-label={`${t('Remove', 'Quitar')} ${line.name}`}
+                        title={t('Remove from order', 'Quitar del pedido')}
                         className="absolute top-1/2 -translate-y-1/2 right-1.5 text-gray-400 hover:text-red-600 p-1 rounded-md hover:bg-red-50 transition-colors"
                       >
                         <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -506,12 +574,12 @@ export default function PosClient({
             <div className="border-t border-gray-100 bg-gradient-to-b from-gray-50/80 to-gray-100/40">
               <div className="px-6 pt-5 pb-4">
                 <div className="flex items-baseline justify-between text-[11px] text-gray-500">
-                  <span className="uppercase tracking-[0.14em] font-semibold">Subtotal</span>
+                  <span className="uppercase tracking-[0.14em] font-semibold">{t('Subtotal', 'Subtotal')}</span>
                   <span className="font-mono tabular-nums text-gray-600">{CURRENCY(subtotal)}</span>
                 </div>
                 <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Total</span>
-                  <span className="text-[40px] leading-none font-mono tabular-nums font-bold text-gray-900">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{t('Total', 'Total')}</span>
+                  <span className="text-[26px] leading-none font-mono tabular-nums font-bold text-gray-900">
                     {CURRENCY(subtotal)}
                   </span>
                 </div>

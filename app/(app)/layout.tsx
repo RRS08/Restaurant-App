@@ -25,6 +25,8 @@ import Sidebar from '@/components/sidebar'
 import AppShell from './app-shell'
 import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
+import { BrandMark } from '@/components/brand'
+import { Lock } from 'lucide-react'
 
 export default async function AppLayout({
   children,
@@ -60,27 +62,52 @@ export default async function AppLayout({
   // ---- Staff kiosk mode ----
   //
   // When pos_mode === 'staff' the device is locked to /pos. We
-  // render the page WITHOUT the sidebar/shell so it sits fullscreen.
-  // The middleware already prevents staff from reaching anything
-  // other than /pos, so children will always be the POS page here.
-  // The only escape is the on-screen lock button (a small link
-  // back to /access) — that's the kiosk's switch-mode + sign-out
-  // affordance.
+  // render the page WITHOUT the sidebar/shell so it sits in a
+  // dedicated kiosk frame: a thin top strip carrying the brand +
+  // restaurant name + a Lock link, then the POS content centered
+  // in a max-width container. The Lock link goes to /access where
+  // the owner can switch back into full system access.
   const posMode = (await cookies()).get('pos_mode')?.value
   if (posMode === 'staff') {
-    // Kiosk frame: page content fullscreen + a small bottom-right
-    // "Switch" link that returns to /access for the owner to enter
-    // their code and reclaim full access. Without this the owner
-    // has no way out of POS once staff mode is on.
+    // Pull just the restaurant name for the kiosk header strip.
+    // We deliberately skip the heavier sidebar fetches (profile,
+    // operating mode) — they're not used in kiosk mode.
+    const { data: kioskRestaurant } = await supabase
+      .from('restaurants')
+      .select('name')
+      .eq('id', userRole.restaurant_id)
+      .single()
+
     return (
-      <div className="min-h-screen bg-white relative">
-        {children}
-        <a
-          href="/access"
-          className="fixed bottom-3 right-3 z-50 text-[11px] font-mono uppercase tracking-[0.16em] text-zinc-400 hover:text-zinc-700 bg-white/90 backdrop-blur px-3 py-1.5 rounded-full border border-zinc-200 shadow-sm"
-        >
-          Switch
-        </a>
+      <div className="min-h-screen bg-gray-50 flex flex-col">
+        {/* Kiosk header — calm, single line. Brand mark + restaurant
+            name on the left, Lock link on the right. Sticky so it
+            stays in reach as the POS grid scrolls. */}
+        <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-12 flex items-center justify-between">
+            <div className="flex items-center gap-3 min-w-0">
+              <BrandMark size={22} />
+              <span className="text-[11px] font-mono uppercase tracking-[0.16em] text-gray-500 truncate">
+                {kioskRestaurant?.name ?? 'Checked'} · POS
+              </span>
+            </div>
+            <a
+              href="/access"
+              className="flex items-center gap-2 text-[11px] font-mono uppercase tracking-[0.16em] text-gray-500 hover:text-gray-900 transition-colors px-2 py-1 rounded-md hover:bg-gray-50"
+            >
+              <Lock className="w-3.5 h-3.5" />
+              Lock
+            </a>
+          </div>
+        </header>
+
+        {/* Content — centered, max-width matches the POS internal
+            container so it doesn't double-shrink. */}
+        <main className="flex-1">
+          <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            {children}
+          </div>
+        </main>
       </div>
     )
   }

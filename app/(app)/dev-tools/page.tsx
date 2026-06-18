@@ -32,6 +32,8 @@ import FinanceSandboxCard from './finance-sandbox-card'
 import FinanceBankResetCard from './finance-bank-reset-card'
 import SeedSwitcherCard, { type ConceptRow } from './seed-switcher-card'
 import { SEED_CONCEPTS, PLANNED_CONCEPTS } from '@/lib/seed-concepts'
+import InviteCodesCard from './invite-codes-card'
+import { listInviteCodes } from '@/app/actions/invites'
 
 export default async function DevToolboxPage() {
   const supabase = await createClient()
@@ -135,9 +137,26 @@ export default async function DevToolboxPage() {
     })
   }
 
+  // Invite codes — the signup gate. Pre-fetched here so the card
+  // hydrates with the existing list; the card itself refreshes
+  // via the server action after a mint/revoke.
+  const { codes: inviteCodes } = await listInviteCodes()
+
   return (
     <ToolboxShell>
-      {/* 0. DEMO SEED SWITCHER -------------------------------------
+      {/* 0. INVITE CODES --------------------------------------------
+          The gate on /signup. One code per pilot. Mint here, hand
+          it to the prospect after they agree to pilot pricing, watch
+          it consume on signup. */}
+      <DevSection
+        eyebrow="Invite Codes"
+        title="Gate /signup with a per-pilot code"
+        body="No one signs up without a code. Generate one per pilot, send by text/email, revoke if needed."
+      >
+        <InviteCodesCard initialCodes={inviteCodes} />
+      </DevSection>
+
+      {/* 1. DEMO SEED SWITCHER -------------------------------------
           Sales-call workflow: switch the visible menu + inventory
           to match the lead's concept (taqueria, bakery, …) without
           deleting any data. See app/actions/seed.ts + the

@@ -14,6 +14,7 @@
 
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { validateAndConsumeInviteCode } from './invites'
 
 // ----------------------------------------------------------------
 // SIGN UP
@@ -39,6 +40,7 @@ export async function signup(
   const email = formData.get('email') as string
   const password = formData.get('password') as string
   const fullName = formData.get('full_name') as string
+  const inviteCode = (formData.get('invite_code') as string | null) ?? ''
 
   // Basic validation. Return early with an error if anything is missing.
   // The error object is passed back to the form via useActionState.
@@ -48,6 +50,16 @@ export async function signup(
 
   if (password.length < 8) {
     return { error: 'Password must be at least 8 characters.' }
+  }
+
+  // Invite-gate. /signup is closed to the public — every account
+  // must come from a code minted at /dev-tools (or, later, by the
+  // Stripe checkout.session.completed webhook). We validate +
+  // atomically consume the code BEFORE creating the auth user so
+  // a wrong code never produces a stranded auth record.
+  const inviteResult = await validateAndConsumeInviteCode(inviteCode)
+  if (!inviteResult.ok) {
+    return { error: inviteResult.error }
   }
 
   const { error } = await supabase.auth.signUp({

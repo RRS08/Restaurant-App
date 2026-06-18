@@ -101,6 +101,42 @@ export default function SignupForm({ lang }: { lang: Lang }) {
               />
             </div>
 
+            {/* Invite code — required. /signup is invite-only; the
+                code is what proves the prospect talked to us. The
+                input is uppercased + tabular-mono so the eight-digit
+                code is unambiguous to type from a text message. */}
+            <div>
+              <label
+                htmlFor="invite_code"
+                className="block text-sm font-medium text-gray-700 mb-1.5"
+              >
+                {t('Invite code', 'Código de invitación')}
+              </label>
+              <input
+                id="invite_code"
+                name="invite_code"
+                type="text"
+                required
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                placeholder="XXXX-XXXX"
+                maxLength={9}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm font-mono tracking-[0.18em] uppercase
+                           placeholder:text-gray-300 placeholder:tracking-normal
+                           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+              <p className="mt-1.5 text-xs text-gray-500">
+                {t(
+                  'Need a code? Book a demo and we’ll send you one.',
+                  '¿Necesitas un código? Pide una demo y te enviamos uno.'
+                )}{' '}
+                <Link href="/#book" className="font-medium text-blue-600 hover:text-blue-500">
+                  {t('Book a demo', 'Pide una demo')}
+                </Link>
+              </p>
+            </div>
+
             {/* Error from server */}
             {state?.error && (
               <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3">

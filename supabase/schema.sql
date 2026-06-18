@@ -58,6 +58,21 @@ alter table public.restaurants add column if not exists staff_passcode_hash text
 -- their data has concept_key NULL = always visible.
 alter table public.restaurants add column if not exists active_seed_concept text;
 
+-- Invite-only signup — see supabase/migrations/2026-06-18-invite-codes.sql.
+-- Gates /signup on a code minted from /dev-tools. RLS locked down;
+-- every read/write goes through the admin client in server actions.
+create table if not exists public.invite_codes (
+  id                  uuid primary key default gen_random_uuid(),
+  code                text not null unique,
+  notes               text,
+  max_uses            int not null default 1,
+  used_count          int not null default 0,
+  expires_at          timestamptz,
+  created_by_user_id  uuid references auth.users(id) on delete set null,
+  created_at          timestamptz not null default now()
+);
+alter table public.invite_codes enable row level security;
+
 
 -- ----------------------------------------------------------------
 -- user_roles: connects users to restaurants with a specific role

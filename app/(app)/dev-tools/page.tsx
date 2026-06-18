@@ -112,6 +112,29 @@ export default async function DevToolboxPage() {
     }),
   )
 
+  // Surface test_seed (the ad-hoc bucket the "Tag current data"
+  // button writes into) whenever there's anything tagged with it,
+  // so the user can Activate it back if they tagged and lost
+  // visibility of their menu. We treat it like an installed
+  // concept but mark it adHoc=true so the UI skips Install /
+  // Uninstall buttons — there's nothing to install, and deleting
+  // would nuke the user's own pre-seed test data.
+  const { count: testSeedCount } = await supabase
+    .from('menu_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('restaurant_id', restaurantId)
+    .eq('concept_key', 'test_seed')
+  if ((testSeedCount ?? 0) > 0) {
+    seedConceptRows.unshift({
+      key: 'test_seed',
+      labelEn: 'Test Seed',
+      labelEs: 'Datos de prueba',
+      installed: true,
+      itemCount: testSeedCount ?? 0,
+      adHoc: true,
+    })
+  }
+
   return (
     <ToolboxShell>
       {/* 0. DEMO SEED SWITCHER -------------------------------------

@@ -288,6 +288,17 @@ export async function tagCurrentDataAs(
     .is('concept_key', null)
     .select('id')
 
+  // Auto-activate the concept we just tagged. Without this the
+  // user's existing menu + inventory disappear from POS / Menu /
+  // Inventory immediately after tagging (the filter excludes the
+  // rows they just labeled). Auto-activation keeps the visible
+  // set intact and makes the "tag → switch later" flow work as
+  // expected.
+  await supabase
+    .from('restaurants')
+    .update({ active_seed_concept: conceptKey })
+    .eq('id', restaurantId)
+
   revalidatePath('/dev-tools')
   revalidatePath('/pos')
   revalidatePath('/menu')

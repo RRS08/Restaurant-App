@@ -38,6 +38,12 @@ export interface ConceptRow {
   // Count of menu items currently in the DB for this concept —
   // helps the dev see if a partial install happened.
   itemCount: number
+  // True for ad-hoc buckets (test_seed) that the user populated
+  // via "Tag current data as test_seed" rather than via the
+  // pre-canned Install path. We hide Install / Uninstall on
+  // those rows — Install is meaningless (there's no canned data)
+  // and Uninstall would delete the user's actual test menu.
+  adHoc?: boolean
 }
 
 interface Props {
@@ -142,7 +148,7 @@ export default function SeedSwitcherCard({
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {!c.installed && (
+                {!c.installed && !c.adHoc && (
                   <button
                     type="button"
                     disabled={busy}
@@ -167,7 +173,7 @@ export default function SeedSwitcherCard({
                     Active
                   </span>
                 )}
-                {c.installed && (
+                {c.installed && !c.adHoc && (
                   <button
                     type="button"
                     disabled={busy}

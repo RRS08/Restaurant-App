@@ -28,6 +28,8 @@ import { isDevEmail } from '@/lib/dev'
 import { BrandMark } from '@/components/brand'
 import { Lock } from 'lucide-react'
 import { getLang, getT } from '@/lib/i18n-server'
+import OfflineBanner from '@/components/offline-banner'
+import SyncRunner from '@/components/sync-runner'
 
 export default async function AppLayout({
   children,
@@ -88,6 +90,13 @@ export default async function AppLayout({
 
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
+        {/* Offline / sync banner — sits ABOVE the kiosk header so
+            the warning is the first thing the cashier sees if the
+            kiosk drops connection mid-shift. SyncRunner has no UI;
+            it drains the queue when the connection returns. */}
+        <OfflineBanner />
+        <SyncRunner />
+
         {/* Kiosk header — calm, single line. Brand mark + restaurant
             name on the left, Lock link on the right. Sticky so it
             stays in reach as the POS grid scrolls. */}
@@ -151,19 +160,27 @@ export default async function AppLayout({
   // Sidebar consumes it via the useSidebarClose() hook — no
   // function ever travels from server to client.
   return (
-    <AppShell
-      sidebar={
-        <Sidebar
-          restaurantName={restaurant?.name ?? 'My Restaurant'}
-          userFullName={profile?.full_name ?? null}
-          userEmail={user.email ?? ''}
-          operatingMode={operatingMode}
-          isDev={isDev}
-          lang={lang}
-        />
-      }
-    >
-      {children}
-    </AppShell>
+    <>
+      {/* Offline / sync state — sits above the app shell so it
+          spans the full viewport, including the sidebar. The
+          SyncRunner has no UI; it drains the queue on reconnect. */}
+      <OfflineBanner />
+      <SyncRunner />
+
+      <AppShell
+        sidebar={
+          <Sidebar
+            restaurantName={restaurant?.name ?? 'My Restaurant'}
+            userFullName={profile?.full_name ?? null}
+            userEmail={user.email ?? ''}
+            operatingMode={operatingMode}
+            isDev={isDev}
+            lang={lang}
+          />
+        }
+      >
+        {children}
+      </AppShell>
+    </>
   )
 }

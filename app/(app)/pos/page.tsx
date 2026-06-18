@@ -8,6 +8,7 @@
 // The existing Sales → Inventory bridge keeps working unchanged.
 // ----------------------------------------------------------------
 
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { getOperatingMode } from '@/lib/readiness'
 import { computeStockSnapshot } from '@/lib/inventory/stock'
@@ -213,8 +214,17 @@ export default async function PosPage() {
     categoryIdsWithActiveItems.has(c.id),
   )
 
+  // Kiosk mode — when the device is locked to /pos via the staff
+  // passcode, the (app) layout wraps PosClient in a dedicated kiosk
+  // frame (header strip + Lock link). The page header "POS / Ring
+  // up a sale." duplicates that identity, so we hide it in kiosk
+  // mode and give the menu grid the extra vertical space.
+  const posMode = (await cookies()).get('pos_mode')?.value
+  const kioskMode = posMode === 'staff'
+
   return (
     <PosClient
+      kioskMode={kioskMode}
       categories={(categories ?? []).map((c) => ({ id: c.id, name: c.name }))}
       items={(items ?? []).map((i) => {
         // `availability_override` may be undefined if the migration

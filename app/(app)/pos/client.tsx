@@ -143,10 +143,17 @@ export default function PosClient({
   categories,
   items,
   operatingMode = null,
+  kioskMode = false,
 }: {
   categories: Category[]
   items: Item[]
   operatingMode?: 'native_pos' | 'external_pos' | null
+  /** True when the device is in staff kiosk mode (locked to /pos).
+   *  The (app) layout's kiosk frame already shows brand + restaurant
+   *  identity at the top, so we hide PosClient's internal "POS /
+   *  Ring up a sale." header to avoid the redundancy and free up
+   *  vertical space for the menu grid. */
+  kioskMode?: boolean
 }) {
   const [activeCategoryId, setActiveCategoryId] = useState<string | 'all'>(
     categories[0]?.id ?? 'all'
@@ -330,12 +337,18 @@ export default function PosClient({
         </div>
       )}
 
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">POS</h1>
-          <p className="mt-1.5 text-sm text-gray-500">Ring up a sale.</p>
+      {/* Page header — hidden in kiosk mode because the (app) layout's
+          kiosk strip already carries the brand + "POS" eyebrow at the
+          top of the device. Showing it twice wastes a vertical band
+          right where the menu grid wants to live. */}
+      {!kioskMode && (
+        <div className="flex items-start justify-between mb-4">
+          <div>
+            <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">POS</h1>
+            <p className="mt-1.5 text-sm text-gray-500">Ring up a sale.</p>
+          </div>
         </div>
-      </div>
+      )}
 
       {operatingMode === 'external_pos' && (
         <div className="mb-4 flex items-start gap-3 rounded-xl border border-indigo-200/80 bg-indigo-50/60 px-4 py-3">
@@ -392,21 +405,28 @@ export default function PosClient({
           )}
         </div>
 
-        {/* ================= RIGHT: Checkout panel ================= */}
+        {/* ================= RIGHT: Checkout panel =================
+            Reframed as a transaction surface: the Total is the
+            visual anchor (40px tabular hero number), the order
+            lines sit in a calmer scroll region, and the Continue
+            button reads as the cashier's primary action. The
+            outer shell carries a slightly stronger shadow than
+            the menu tiles so the eye knows where the payment
+            decision happens. */}
         <aside className="mt-4 lg:mt-0">
-          <div className="sticky top-4 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]">
+          <div className="sticky top-4 rounded-2xl border border-gray-200 bg-white shadow-[0_8px_24px_-12px_rgba(15,23,42,0.10)] overflow-hidden flex flex-col max-h-[calc(100vh-2rem)]">
 
-            {/* Header */}
-            <div className="border-b border-gray-100 px-5 py-4 flex items-baseline justify-between">
+            {/* Header — eyebrow + tiny meta line. Compact so the
+                Total band below gets the visual weight. */}
+            <div className="border-b border-gray-100 px-5 pt-4 pb-3 flex items-baseline justify-between">
               <div>
-                <h2 className="text-sm font-semibold tracking-tight text-gray-900">Current order</h2>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-500">
+                  Current order
+                </p>
                 <p className="mt-0.5 text-[11px] text-gray-500">
                   {cart.length === 0 ? 'Empty' : `${cartItemCount} item${cartItemCount !== 1 ? 's' : ''}`}
                 </p>
               </div>
-              {/* Clear — quiet text link. Calmer than the previous
-                  uppercase treatment but still red-on-hover so the
-                  destructive intent is obvious on intent to use. */}
               {cart.length > 0 && (
                 <button
                   type="button"
@@ -477,29 +497,31 @@ export default function PosClient({
               )}
             </div>
 
-            {/* Order-building footer.
-                Default right-rail state focuses only on Phase 1:
-                review totals and advance to payment. Payment method
-                selection + the per-method workflow (cash/card/other)
-                no longer live here — they're in the CheckoutDrawer
-                that opens via the primary action below. */}
-            <div className="border-t border-gray-100 bg-gray-50/40">
-              <div className="px-5 pt-4 pb-3">
-                <div className="flex items-center justify-between text-[11px] text-gray-500">
-                  <span>Subtotal</span>
-                  <span className="font-mono tabular-nums">{CURRENCY(subtotal)}</span>
+            {/* Transaction footer.
+                Hero Total band uses an ink-on-cream surface so the
+                cashier's eye lands on the dollar amount before the
+                button. Continue button is full-width, taller, and
+                lifted with a soft shadow so it reads as the
+                drawer-opening action — not just another button. */}
+            <div className="border-t border-gray-100 bg-gradient-to-b from-gray-50/80 to-gray-100/40">
+              <div className="px-6 pt-5 pb-4">
+                <div className="flex items-baseline justify-between text-[11px] text-gray-500">
+                  <span className="uppercase tracking-[0.14em] font-semibold">Subtotal</span>
+                  <span className="font-mono tabular-nums text-gray-600">{CURRENCY(subtotal)}</span>
                 </div>
-                <div className="mt-1 flex items-baseline justify-between">
-                  <span className="text-sm font-semibold text-gray-900">Total</span>
-                  <span className="text-lg font-mono tabular-nums font-bold text-gray-900">{CURRENCY(subtotal)}</span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">Total</span>
+                  <span className="text-[40px] leading-none font-mono tabular-nums font-bold text-gray-900">
+                    {CURRENCY(subtotal)}
+                  </span>
                 </div>
               </div>
-              <div className="px-5 pb-5">
+              <div className="px-6 pb-6">
                 <button
                   type="button"
                   onClick={() => setCheckoutOpen(true)}
                   disabled={cart.length === 0 || pending}
-                  className="w-full rounded-lg bg-gray-900 px-4 py-3 text-sm font-bold text-white hover:bg-gray-800 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="w-full rounded-xl bg-gray-900 px-4 py-4 text-base font-bold text-white hover:bg-gray-800 active:scale-[0.99] shadow-[0_8px_20px_-12px_rgba(15,23,42,0.4)] disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none transition-all"
                 >
                   {cart.length === 0
                     ? 'Add items to start'

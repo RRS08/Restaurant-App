@@ -106,13 +106,13 @@ export default async function proxy(request: NextRequest) {
 
   // ---- Kiosk access-mode gate ----
   //
-  // Signed-in users carry a `pos_mode` cookie set by /access. Two
-  // values: 'owner' (full system) or 'staff' (POS only).
+  // Signed-in users carry a `pos_mode` cookie set here or by
+  // /access. Two values: 'owner' (full system) or 'staff' (POS only).
   //
-  //   • No cookie + protected path → redirect to /access. The
-  //     /access page itself checks whether the restaurant has set
-  //     an owner code. If not, it bounces straight to /dashboard,
-  //     so newly-onboarded users aren't gated by their own absence.
+  //   • No cookie + protected path → check whether the restaurant
+  //     has an owner code configured. If not, set the cookie to
+  //     'owner' and continue (newly-onboarded users aren't gated
+  //     by their own absence). If yes, redirect to /access.
   //
   //   • Cookie = 'staff' + path other than /pos or /access → kick
   //     back to /pos. Staff can't browse anywhere else.
@@ -120,11 +120,8 @@ export default async function proxy(request: NextRequest) {
   //   • Cookie = 'owner' → no extra restriction; behaves like
   //     before this gate existed.
   //
-  // /access, /onboarding, /api/*, and auth-flow pages are exempt so
-  // the cookie can be obtained or the user can finish setup. We
-  // DON'T gate /onboarding because a brand-new user reaches it
-  // before they have a restaurant (and therefore before any code
-  // could possibly be set).
+  // We do the DB lookup ONLY when the cookie is missing — once set
+  // the next 30 days of requests skip this branch entirely.
   if (user && !isAuthFlowPage && !isPublicPage) {
     const posMode = request.cookies.get('pos_mode')?.value
     const isAccessPage = path === '/access'
@@ -132,7 +129,43 @@ export default async function proxy(request: NextRequest) {
     const isApiRoute = path.startsWith('/api/')
 
     if (!posMode && !isAccessPage && !isOnboardingPage && !isApiRoute) {
-      return NextResponse.redirect(new URL('/access', request.url))
+      // Determine whether the gate is actually configured for this
+      // restaurant. The query is tolerant of a pre-migration deploy
+      // — if the column doesn't exist the select errors and we treat
+      // ownerCodeSet as false (gate off), so the kiosk feature
+      // degrades gracefully until the SQL is run.
+      let ownerCodeSet = false
+      try {
+        const { data: roleRow } = await supabase
+          .from('user_roles')
+          .select('restaurant_id')
+          .eq('user_id', user.id)
+          .maybeSingle()
+        if (roleRow?.restaurant_id) {
+          const { data: r } = await supabase
+            .from('restaurants')
+            .select('owner_passcode_hash')
+            .eq('id', roleRow.restaurant_id)
+            .maybeSingle()
+          ownerCodeSet = !!(r as { owner_passcode_hash?: string | null } | null)?.owner_passcode_hash
+        }
+      } catch {
+        ownerCodeSet = false
+      }
+
+      if (ownerCodeSet) {
+        return NextResponse.redirect(new URL('/access', request.url))
+      }
+      // No gate configured → set the cookie and let them through.
+      // This is the path a freshly-onboarded user takes; they never
+      // see the access screen until they explicitly configure codes.
+      response.cookies.set('pos_mode', 'owner', {
+        httpOnly: true,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30,
+      })
+      return response
     }
     if (posMode === 'staff' && !isAccessPage && path !== '/pos' && !isApiRoute) {
       return NextResponse.redirect(new URL('/pos', request.url))

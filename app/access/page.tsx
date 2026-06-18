@@ -46,15 +46,25 @@ export default async function AccessPage({ searchParams }: Props) {
     .single()
   if (!roleRow) redirect('/onboarding')
 
-  const { data: r } = await supabase
-    .from('restaurants')
-    .select('name, owner_passcode_hash, staff_passcode_hash')
-    .eq('id', roleRow.restaurant_id)
-    .single()
+  // Column-tolerant fetch — if the migration hasn't run yet the
+  // select fails and we treat r as null. Middleware also bypasses
+  // the gate in that case, so this is only hit if the user typed
+  // /access directly before the gate exists.
+  let r: { name?: string | null; owner_passcode_hash?: string | null; staff_passcode_hash?: string | null } | null = null
+  try {
+    const { data } = await supabase
+      .from('restaurants')
+      .select('name, owner_passcode_hash, staff_passcode_hash')
+      .eq('id', roleRow.restaurant_id)
+      .single()
+    r = data
+  } catch {
+    // fall through with r=null
+  }
 
-  // No owner code configured → no gate. Don't even ask. The owner
-  // can set codes from Settings → Access codes when they want the
-  // kiosk model on.
+  // No owner code configured → just bounce to /dashboard. Middleware
+  // will set the pos_mode cookie on that request (Server Components
+  // can't write cookies, only middleware and Server Actions can).
   if (!r?.owner_passcode_hash && !signout) {
     redirect('/dashboard')
   }

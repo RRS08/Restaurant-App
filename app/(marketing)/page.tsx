@@ -406,6 +406,13 @@ export default async function MarketingPage() {
              form visually flows into the section like the text does
              rather than reading as a separate centered card. */
           .mk-demo-form{padding:16px!important;border:none!important;background:transparent!important}
+          /* "Same day · Quick call · No pressure" eyebrow row —
+             hide on phone. With the form's box treatment dropped
+             above, the form's inputs sit directly under the
+             paragraph; this monospace row in between read as a
+             stranded artifact between left-aligned text and the
+             centered form button below. */
+          .mk-cta-signals{display:none!important}
 
           /* Footer — center-align on phone so the brand + tagline
              + copyright stack vertically. */
@@ -816,7 +823,7 @@ export default async function MarketingPage() {
             <div style={{ flex: '1 1 380px' }}>
               <h2 style={{ fontSize: 'clamp(32px,4.2vw,52px)', lineHeight: 1.0, letterSpacing: '-1.8px', fontWeight: 700, margin: 0 }}>{t('Let’s get your place ', 'Pongamos tu lugar en orden. Con ')}<span style={{ color: '#FFFFFF' }}>Checked</span>.</h2>
               <p style={{ fontSize: 18, lineHeight: 1.55, color: '#C9C9CE', margin: '20px 0 0', maxWidth: 440 }}>{t('Tell us a bit about your place and we’ll set up a quick walkthrough. We’ll figure out together if it’s the right fit.', 'Cuéntanos un poco de tu lugar y agendamos una llamada rápida. Decidimos juntos si es la solución para ti.')}</p>
-              <div style={mono({ display: 'flex', flexWrap: 'nowrap', gap: '8px 18px', marginTop: 24, fontSize: 12.5, color: '#6B6B70', whiteSpace: 'nowrap' })}>
+              <div className="mk-cta-signals" style={mono({ display: 'flex', flexWrap: 'nowrap', gap: '8px 18px', marginTop: 24, fontSize: 12.5, color: '#6B6B70', whiteSpace: 'nowrap' })}>
                 <span>{t('Same day', 'El mismo día')}</span><span style={{ color: '#3A3A40' }}>·</span>
                 <span>{t('Quick call', 'Llamada corta')}</span><span style={{ color: '#3A3A40' }}>·</span>
                 <span>{t('No pressure', 'Sin presión')}</span>

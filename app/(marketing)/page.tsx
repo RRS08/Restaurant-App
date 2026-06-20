@@ -463,21 +463,21 @@ export default async function MarketingPage() {
               <div style={{ fontSize: 12.5, padding: '14px 0', display: 'flex', flexDirection: 'column', gap: 9 }}>
                 {lang === 'es' ? (
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(1990, 500) }}><span>2× Tacos al Pastor</span><span>7.00</span></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(2590, 500) }}><span>1× Quesabirria</span><span>4.75</span></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(3190, 500) }}><span>1× Horchata</span><span>3.50</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(1990, 500) }}><span>2× Tacos al Pastor</span><span>$7.00</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(2590, 500) }}><span>1× Quesabirria</span><span>$4.75</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(3190, 500) }}><span>1× Horchata</span><span>$3.50</span></div>
                   </>
                 ) : (
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(1990, 500) }}><span>2× Smash Burger</span><span>7.00</span></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(2590, 500) }}><span>1× Bacon Stack</span><span>4.75</span></div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(3190, 500) }}><span>1× Lemonade</span><span>3.50</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(1990, 500) }}><span>2× Smash Burger</span><span>$7.00</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(2590, 500) }}><span>1× Bacon Stack</span><span>$4.75</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', ...typeIn(3190, 500) }}><span>1× Lemonade</span><span>$3.50</span></div>
                   </>
                 )}
               </div>
               <div style={{ borderTop: '1px dashed #D8D8D4', padding: '13px 0 0', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6B6B70', ...typeIn(3790, 550) }}><span>{t('Stock updated', 'Inventario actualizado')}</span><span style={{ color: '#18181B' }}>{t('−3 ingredients', '−3 ingredientes')}</span></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 600, ...typeIn(4440, 500) }}><span>TOTAL</span><span>15.25</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 600, ...typeIn(4440, 500) }}><span>TOTAL</span><span>$15.25</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingTop: 12, borderTop: '1px dashed #D8D8D4', ...typeIn(5040, 700) }}>
                   <span style={{ color: '#6B6B70' }}>{t('Next morning', 'A la mañana siguiente')}</span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{t('Checked', 'Checked')} <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#18181B', color: '#FFF', fontSize: 10, ...popIn(5840) }}>✓</span></span>

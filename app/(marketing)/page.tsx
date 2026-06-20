@@ -370,7 +370,7 @@ export default async function MarketingPage() {
             </div>
             <div style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>
               <span>{t('Owner-operator first', 'Hecho para dueños')}</span><span style={{ color: '#D0D0CC' }}>·</span>
-              <span>{t('Set up in person', 'Instalado en persona')}</span><span style={{ color: '#D0D0CC' }}>·</span>
+              <span>{t('Easy to install', 'Fácil de instalar')}</span><span style={{ color: '#D0D0CC' }}>·</span>
               <span>{t('Built to make sense', 'Sin complicaciones')}</span>
             </div>
           </div>
@@ -442,8 +442,8 @@ export default async function MarketingPage() {
             'Carros que se manejan solos en la calle. Laboratorios de IA en cada ciudad. Mientras tanto, los restaurantes siguen cerrando el día con papel y lápiz.'
           )}</h2>
           <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '32px 0 0', maxWidth: 720 }}>{t(
-            'That’s the gap we want to close. Independent restaurants run some of the best food anywhere — and most of them are still closing the day in a notebook because the kind of software they actually need (affordable, walked through in person, designed to make sense the first time you open it) simply hasn’t arrived yet.',
-            'Esa es la brecha que queremos cerrar. Los restaurantes independientes hacen parte de la mejor comida que existe — y la mayoría sigue cerrando el día en una libreta porque el tipo de software que de verdad necesitan (accesible, explicado en persona, diseñado para tener sentido la primera vez que lo abres) simplemente no ha llegado todavía.'
+            'That’s the gap we want to close. Independent restaurants run some of the best food anywhere — and most of them are still closing the day in a notebook because the kind of software they actually need (easy to install, easy to understand, easy to use) simply hasn’t arrived yet.',
+            'Esa es la brecha que queremos cerrar. Los restaurantes independientes hacen parte de la mejor comida que existe — y la mayoría sigue cerrando el día en una libreta porque el tipo de software que de verdad necesitan (fácil de instalar, fácil de entender, fácil de usar) simplemente no ha llegado todavía.'
           )}</p>
           <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '20px 0 0', maxWidth: 720 }}>{t(
             'Checked is that — the operating system independent restaurants have been waiting for. An owner shouldn’t have to be technical to see today’s margin. And the price shouldn’t make them choose between this and making payroll.',

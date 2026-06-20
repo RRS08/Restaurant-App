@@ -427,6 +427,31 @@ export default async function MarketingPage() {
         </div>
       </section>
 
+      {/* WHAT WE BELIEVE — the mission section. Sits between the
+          hero and Act 1 as the connective tissue: every later beat
+          (one package / one promise / one person, "by design not
+          policy", the principles) reads as proof of what this
+          section commits to. No act number — this is the frame the
+          acts sit inside, not another chapter. Same borderTop +
+          eyebrow chrome as the acts so it slots in visually. */}
+      <section id="believe" className="mk-sec mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 56px' })}>
+        <div style={{ borderTop: '1px solid #18181B', paddingTop: 36 }}>
+          <div style={eyebrow}>{t('What we believe', 'Lo que creemos')}</div>
+          <h2 style={{ fontSize: 'clamp(28px,4vw,48px)', lineHeight: 1.08, letterSpacing: '-1.6px', fontWeight: 700, margin: '14px 0 0', maxWidth: 880 }}>{t(
+            'Self-driving cars on the road. AI labs in every city. Meanwhile, restaurants are still closing the day on a legal pad.',
+            'Carros que se manejan solos en la calle. Laboratorios de IA en cada ciudad. Mientras tanto, los restaurantes siguen cerrando el día con papel y lápiz.'
+          )}</h2>
+          <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '32px 0 0', maxWidth: 720 }}>{t(
+            'That’s the gap we want to close. Independent restaurants run some of the best food anywhere — and most of them are still closing the day in a notebook because the kind of software they actually need (affordable, walked through in person, designed to make sense the first time you open it) simply hasn’t arrived yet.',
+            'Esa es la brecha que queremos cerrar. Los restaurantes independientes hacen parte de la mejor comida que existe — y la mayoría sigue cerrando el día en una libreta porque el tipo de software que de verdad necesitan (accesible, explicado en persona, diseñado para tener sentido la primera vez que lo abres) simplemente no ha llegado todavía.'
+          )}</p>
+          <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '20px 0 0', maxWidth: 720 }}>{t(
+            'Checked is that — the operating system independent restaurants have been waiting for. An owner shouldn’t have to be technical to see today’s margin. And the price shouldn’t make them choose between this and making payroll.',
+            'Checked es eso — el sistema operativo que los restaurantes independientes han estado esperando. Un dueño no debería tener que saber de tecnología para ver el margen del día. Y el precio no debería hacerlo elegir entre esto y pagar la nómina.'
+          )}</p>
+        </div>
+      </section>
+
       {/* ACT 1 — slightly tighter top padding (64 vs Acts 2/3's
           96) because the hero above is full-viewport with vertically
           centered content. The hero's empty bottom space already

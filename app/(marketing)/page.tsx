@@ -243,7 +243,7 @@ export default async function MarketingPage() {
   ]
 
   return (
-    <div style={{ background: '#FAF9F6', color: '#18181B', minHeight: '100vh' }}>
+    <div style={{ background: '#FAF9F6', color: '#18181B', minHeight: '100vh', overflowX: 'hidden' }}>
       <style>{`
         @keyframes cPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
         @keyframes testiScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}

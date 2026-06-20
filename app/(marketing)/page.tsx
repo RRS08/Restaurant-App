@@ -185,8 +185,8 @@ export default async function MarketingPage() {
       n: '03',
       t: t('You’re a partner, not a ticket.', 'Eres un socio, no un ticket de soporte.'),
       d: t(
-        'Your wins are my wins. However big this gets, you stay heard, supported, and one message away from the person who built it.',
-        'Tus ganancias son mis ganancias. Sin importar qué tanto crezca esto, sigues escuchado, respaldado y a un mensaje de la persona que lo construyó.'
+        'Your wins are our wins. However big this gets, you stay heard, supported, and one message away from the team behind it.',
+        'Tus ganancias son nuestras ganancias. Sin importar qué tanto crezca esto, sigues escuchado, respaldado y a un mensaje del equipo detrás de esto.'
       ),
     },
     {

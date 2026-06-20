@@ -317,6 +317,14 @@ export default async function MarketingPage() {
           .mk-act-pad-top{padding-top:56px!important}
           .mk-act-pad-bottom{padding-bottom:24px!important}
 
+          /* Live-demo subheader caption is a side-column note next
+             to the H3 on desktop/tablet — it reads as a subheader.
+             On phone the columns stack and the caption ends up
+             orphaned under the H3 with no visual hook to anything
+             above or below. The FloorSim's own LIVE DEMO · PORK'S
+             status line covers the same intent, so hide here. */
+          .mk-livedemo-caption{display:none!important}
+
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
@@ -553,7 +561,7 @@ export default async function MarketingPage() {
             'Here’s what that looks like in motion. The same restaurant, on one screen, across one real day.',
             'Así se ve en movimiento. El mismo restaurante, en una sola pantalla, a lo largo de un día real.'
           )}</h3>
-          <p style={mono({ fontSize: 12.5, color: '#6B6B70', maxWidth: 240, lineHeight: 1.6 })}>{t(
+          <p className="mk-livedemo-caption" style={mono({ fontSize: 12.5, color: '#6B6B70', maxWidth: 240, lineHeight: 1.6 })}>{t(
             'The actual product, not a mockup. Plays itself as you scroll — three moments, from a single ring to close.',
             'El producto real, no una maqueta. Se reproduce solo conforme bajas — tres momentos, desde la primera venta hasta el cierre.'
           )}</p>

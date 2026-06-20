@@ -376,6 +376,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   // Chapter 2 refs — the staffing card (touch-dot container) plus
   // the bench items + empty MID-slot the drag travels between.
   const staffCardRef = useRef<HTMLDivElement | null>(null)
+  const financeCardRef = useRef<HTMLDivElement | null>(null)
   const benchItemRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const emptyShiftSlotRef = useRef<HTMLSpanElement | null>(null)
 
@@ -663,6 +664,21 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
     setLaborPulse(false)
     setC2Touches([])
     setDragTouchPos(null)
+
+    // Phone-only choreography (same pattern as Chapter 1):
+    // Pull the Staffing card to center before the drag, then pull
+    // the Finance card to center just before the labor spend ticks
+    // up. The two scrolls make the cause→effect beat actually visible
+    // on a vertical viewport where the cards stack and can't both
+    // share the screen at once.
+    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+      staffCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // 3500ms: 600ms before the pulse at 4100ms — gives smooth-scroll
+      //         time to settle so the bars rebalance in-frame.
+      timers.current.push(setTimeout(() => {
+        financeCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 3500))
+    }
 
     // 700ms: touch lands on Pork Adams, card lifts (scale + shadow).
     // The touch dot is set here at a jittered position and persists
@@ -1458,7 +1474,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
 
         {/* Finance */}
-        <div style={{ ...cardStyle, padding: '14px 16px' }}>
+        <div ref={financeCardRef} style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Finance', 'Finanzas')}</span>
             <span style={mono({ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: GREEN })}>
@@ -1489,7 +1505,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             {[
               { label: t('Scheduled labor', 'Mano de obra'), tag: t('est.', 'est.'), amt: fmt(laborSpend), w: laborPct + '%',     c: '#7C5CFF', key: 'labor' },
               { label: t('Inventory', 'Inventario'),         tag: null,               amt: fmt(INVENTORY_SPEND), w: inventoryPct + '%', c: '#F59E0B', key: 'inv' },
-              { label: t('Operating', 'Operación'),          tag: null,               amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#16A34A', key: 'op' },
+              { label: t('Operating', 'Operación'),          tag: null,               amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#0D9488', key: 'op' },
             ].map((row) => {
               const pulse = row.key === 'labor' && laborPulse
               return (
@@ -1721,14 +1737,14 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             </div>
             <div style={mono({ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#9CA3AF', marginBottom: 9 })}>{t('Payment mix', 'Mix por pago')}</div>
             <div style={{ display: 'flex', height: 9, borderRadius: 99, overflow: 'hidden', marginBottom: 9 }}>
-              <div style={{ width: `${cardPct}%`, background: '#7C5CFF', transition: 'width .5s' }} />
-              <div style={{ width: `${cashPct}%`, background: '#F59E0B', transition: 'width .5s' }} />
-              <div style={{ width: `${otherPct}%`, background: '#D4D7DD', transition: 'width .5s' }} />
+              <div style={{ width: `${cardPct}%`, background: '#0EA5E9', transition: 'width .5s' }} />
+              <div style={{ width: `${cashPct}%`, background: '#EC4899', transition: 'width .5s' }} />
+              <div style={{ width: `${otherPct}%`, background: '#94A3B8', transition: 'width .5s' }} />
             </div>
             <div style={mono({ display: 'flex', gap: 16, fontSize: 11, color: '#71717A' })}>
-              <span><span style={{ color: '#7C5CFF' }}>■</span> {t('Card', 'Tarjeta')} {cardPct}%</span>
-              <span><span style={{ color: '#F59E0B' }}>■</span> {t('Cash', 'Efectivo')} {cashPct}%</span>
-              <span><span style={{ color: '#D4D7DD' }}>■</span> {t('Other', 'Otro')} {otherPct}%</span>
+              <span><span style={{ color: '#0EA5E9' }}>■</span> {t('Card', 'Tarjeta')} {cardPct}%</span>
+              <span><span style={{ color: '#EC4899' }}>■</span> {t('Cash', 'Efectivo')} {cashPct}%</span>
+              <span><span style={{ color: '#94A3B8' }}>■</span> {t('Other', 'Otro')} {otherPct}%</span>
             </div>
           </div>
         </div>

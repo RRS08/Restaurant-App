@@ -366,6 +366,21 @@ export default async function MarketingPage() {
           .mk-lang-toggle{bottom:10px!important;right:10px!important;padding:2px!important;font-size:9.5px!important;letter-spacing:0.06em!important}
           .mk-lang-toggle button{padding:4px 9px!important}
 
+          /* Act 2 "five disconnected tools → One screen" converge row.
+             Default wraps onto 3 lines on phone: 4 grey pills, then
+             Whiteboard alone, then arrow + black "One screen" pill.
+             Breaks the cause-and-effect visual story. Force the whole
+             row to nowrap, shrink everything, allow horizontal scroll
+             as the safety so it never wraps even at 320px. Scrollbar
+             hidden so it still reads as a clean strip. */
+          .mk-act2-converge{flex-wrap:nowrap!important;gap:6px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+          .mk-act2-converge::-webkit-scrollbar{display:none}
+          .mk-act2-pills{flex-wrap:nowrap!important;gap:4px!important;flex:0 0 auto}
+          .mk-act2-pills > span{font-size:9px!important;padding:3px 6px!important;border-radius:5px!important}
+          .mk-act2-arrow{font-size:14px!important;flex:0 0 auto}
+          .mk-act2-one{font-size:10px!important;padding:4px 9px!important;flex:0 0 auto}
+          .mk-act2-one svg{width:11px!important;height:11px!important}
+
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
@@ -627,14 +642,14 @@ export default async function MarketingPage() {
         </div>
 
         <div className="mk-section" style={wrap({ padding: '34px 24px 0' })}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          <div className="mk-act2-converge" style={{ display: 'flex', alignItems: 'center', gap: 13, flexWrap: 'wrap' }}>
+            <div className="mk-act2-pills" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
               {['POS', 'Spreadsheet', 'Notebook', 'Bank app', 'Whiteboard'].map((x, i) => (
-                <span key={x} style={{ fontSize: 11, color: '#A1A1A6', background: '#FFFFFF', border: '1px dashed #D8D8D4', borderRadius: 7, padding: '5px 9px', animation: `fadeMerge 3.2s ease-in-out infinite`, animationDelay: `${i * 0.15}s` }}>{x}</span>
+                <span key={x} style={{ fontSize: 11, color: '#A1A1A6', background: '#FFFFFF', border: '1px dashed #D8D8D4', borderRadius: 7, padding: '5px 9px', animation: `fadeMerge 3.2s ease-in-out infinite`, animationDelay: `${i * 0.15}s`, whiteSpace: 'nowrap' }}>{x}</span>
               ))}
             </div>
-            <span style={mono({ fontSize: 18, color: '#18181B', animation: 'arrowPulse 3.2s ease-in-out infinite' })}>&rarr;</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: '#18181B', color: '#FAF9F6', borderRadius: 9, padding: '6px 12px', fontSize: 12, fontWeight: 600 }}>
+            <span className="mk-act2-arrow" style={mono({ fontSize: 18, color: '#18181B', animation: 'arrowPulse 3.2s ease-in-out infinite' })}>&rarr;</span>
+            <span className="mk-act2-one" style={{ display: 'inline-flex', alignItems: 'center', gap: 7, background: '#18181B', color: '#FAF9F6', borderRadius: 9, padding: '6px 12px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
               <svg width="14" height="14" viewBox="0 0 24 24"><path d="M5 12l5 5 9-11" fill="none" stroke="#FAF9F6" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" /></svg>One screen
             </span>
           </div>

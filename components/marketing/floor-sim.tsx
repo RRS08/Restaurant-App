@@ -554,13 +554,19 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   }
 
   // Mount + IntersectionObserver — start the script when the
-  // FloorSim is 30%+ visible, once per page load. User can replay
-  // via the "Watch again" affordance.
+  // POS card is 30%+ visible, once per page load. Earlier this
+  // observed the OUTER FloorSim container, but on phone (where
+  // all three chapters stack vertically) the container is ~3000px
+  // tall against a ~700px viewport, so max intersection ratio
+  // could never exceed ~0.23 and the script never fired. Targeting
+  // the POS card (which is what carries Chapter 1's visual anyway)
+  // matches the per-chapter pattern Chapters 2 and 3 already use
+  // and lets the threshold work on any screen size.
   const containerRef = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     timers.current = []
     timers.current.push(setTimeout(() => setMounted(true), 80))
-    const node = containerRef.current
+    const node = posCardRef.current
     if (!node) return () => { timers.current.forEach(clearTimeout) }
     const observer = new IntersectionObserver(
       (entries) => {

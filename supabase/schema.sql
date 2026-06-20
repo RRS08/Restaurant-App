@@ -73,6 +73,23 @@ create table if not exists public.invite_codes (
 );
 alter table public.invite_codes enable row level security;
 
+-- Demo lead capture — see supabase/migrations/2026-06-18-demo-leads.sql.
+-- Marketing "Book a demo" form persists leads here. RLS locked
+-- down; rejected rows are kept (with rejection_reason) so we can
+-- audit spam attempts.
+create table if not exists public.demo_leads (
+  id                uuid primary key default gen_random_uuid(),
+  email             text not null,
+  concept           text,
+  message           text,
+  ip_address        text,
+  user_agent        text,
+  rejected          boolean not null default false,
+  rejection_reason  text,
+  created_at        timestamptz not null default now()
+);
+alter table public.demo_leads enable row level security;
+
 
 -- ----------------------------------------------------------------
 -- user_roles: connects users to restaurants with a specific role

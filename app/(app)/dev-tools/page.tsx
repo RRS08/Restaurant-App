@@ -34,6 +34,8 @@ import SeedSwitcherCard, { type ConceptRow } from './seed-switcher-card'
 import { SEED_CONCEPTS, PLANNED_CONCEPTS } from '@/lib/seed-concepts'
 import InviteCodesCard from './invite-codes-card'
 import { listInviteCodes } from '@/app/actions/invites'
+import DemoLeadsCard from './demo-leads-card'
+import { listDemoLeads } from '@/app/actions/demo-leads'
 
 export default async function DevToolboxPage() {
   const supabase = await createClient()
@@ -142,6 +144,11 @@ export default async function DevToolboxPage() {
   // via the server action after a mint/revoke.
   const { codes: inviteCodes } = await listInviteCodes()
 
+  // Demo leads — recent "Book a demo" submissions, including any
+  // honeypot/rate-limit/turnstile rejections so we can see scale
+  // of bot attempts.
+  const { leads: demoLeads } = await listDemoLeads()
+
   return (
     <ToolboxShell>
       {/* 0. INVITE CODES --------------------------------------------
@@ -154,6 +161,18 @@ export default async function DevToolboxPage() {
         body="No one signs up without a code. Generate one per pilot, send by text/email, revoke if needed."
       >
         <InviteCodesCard initialCodes={inviteCodes} />
+      </DevSection>
+
+      {/* 0.5 DEMO LEADS --------------------------------------------
+          Recent submissions from the marketing "Book a demo" form,
+          including honeypot/rate-limit rejections so we can see
+          spam scale. Read-only — manage from Supabase if needed. */}
+      <DevSection
+        eyebrow="Demo Leads"
+        title="Who reached out from the marketing site"
+        body="Submissions to the Book-a-demo form. Bot attempts the honeypot caught show up flagged red."
+      >
+        <DemoLeadsCard leads={demoLeads} />
       </DevSection>
 
       {/* 1. DEMO SEED SWITCHER -------------------------------------

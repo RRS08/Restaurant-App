@@ -59,7 +59,6 @@ const MENU_ES: MenuItem[] = [
   { id: 'guac',     name: 'Chips & Guac',    price: 5.0,  cat: 'Sides',    inv: [] },
   { id: 'horchata', name: 'Horchata',        price: 3.5,  cat: 'Drinks',   inv: [['horchata', 8]] },
   { id: 'jamaica',  name: 'Agua de Jamaica', price: 3.0,  cat: 'Drinks',   inv: [] },
-  { id: 'jarritos', name: 'Jarritos',        price: 2.75, cat: 'Drinks',   inv: [] },
 ]
 
 // EN burger theme. Same category keys, same item IDs, same recipe
@@ -76,7 +75,6 @@ const MENU_EN: MenuItem[] = [
   { id: 'guac',     name: 'Onion Rings',     price: 4.75, cat: 'Sides',    inv: [] },
   { id: 'horchata', name: 'Lemonade',        price: 3.5,  cat: 'Drinks',   inv: [['horchata', 8]] },
   { id: 'jamaica',  name: 'Iced Tea',        price: 3.0,  cat: 'Drinks',   inv: [] },
-  { id: 'jarritos', name: 'Root Beer',       price: 2.75, cat: 'Drinks',   inv: [] },
 ]
 
 const TABS: Cat[] = ['Tacos', 'Mariscos', 'Sides', 'Drinks']
@@ -1006,6 +1004,13 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-pos{grid-template-columns:1fr!important}
           .fs-pos-menu{border-right:none!important;border-bottom:1px solid #EEF0F3!important;padding:10px 14px!important}
           .fs-pos-order{min-height:auto!important;padding:10px 14px!important}
+          /* All four category tabs on one row at phone widths.
+             Tighter padding + smaller font, and overflow-x: auto as
+             a safety in case the longest EN label ("Sandwiches")
+             still won't fit on the narrowest devices. */
+          .fs-tabs-row{flex-wrap:nowrap!important;gap:5px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+          .fs-tabs-row::-webkit-scrollbar{display:none}
+          .fs-tab{font-size:11.5px!important;padding:6px 10px!important;white-space:nowrap!important;flex:0 0 auto!important}
           /* Cap the cart list so adding items doesn't push the POS card
              taller — the rail scrolls internally instead. Combined with
              tighter padding above, the POS card stays compact enough
@@ -1065,12 +1070,13 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           <div className="fs-pos" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 0 }}>
             {/* menu */}
             <div className="fs-pos-menu" style={{ padding: '14px 16px', borderRight: '1px solid #EEF0F3' }}>
-              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 13 }}>
+              <div className="fs-tabs-row" style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 13 }}>
                 {TABS.map((c) => (
                   <button
                     key={c}
                     ref={(el) => { tabRefs.current[c] = el }}
                     onClick={() => handleTabClick(c)}
+                    className="fs-tab"
                     style={{
                       cursor: isPlaying ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 600, padding: '7px 13px', borderRadius: 8,
                       border: `1px solid ${c === tab ? '#18181B' : '#E6E8EC'}`, background: c === tab ? '#18181B' : '#FFFFFF',

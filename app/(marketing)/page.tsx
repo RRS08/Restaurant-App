@@ -335,6 +335,28 @@ export default async function MarketingPage() {
           .mk-act-row{flex-wrap:nowrap!important;align-items:flex-start!important;gap:14px!important}
           .mk-act-num{font-size:30px!important;line-height:1!important;flex-shrink:0}
 
+          /* Hero signals row: "Owner-operator first · Easy to install
+             · Built to make sense". Three short claims meant to read
+             as one beat. On phone the default flex-wrap split them
+             across two lines, breaking the rhythm. Force one line
+             via nowrap + smaller font + overflow-x scroll as a
+             safety for the narrowest devices. Scrollbar hidden so
+             it still reads as a clean strip. */
+          .mk-hero-signals{flex-wrap:nowrap!important;font-size:10.5px!important;gap:0 6px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;white-space:nowrap!important}
+          .mk-hero-signals::-webkit-scrollbar{display:none}
+          .mk-hero-signals > span{flex:0 0 auto}
+
+          /* FloorSim intro H3 ("Here's what that looks like in
+             motion. The same restaurant, on one screen, across one
+             real day."): wraps to four lines on phone above an
+             already-wrapping LIVE DEMO status line — too much
+             intro before the actual demo. Hide on phone; the per-
+             chapter heads ("Sell a dish, and your stock counts
+             itself" etc.) carry the framing once the sim plays.
+             Also tighten the floorsim section's top padding so the
+             user lands on the demo faster. */
+          .mk-floorsim-h3{display:none!important}
+
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
@@ -463,7 +485,7 @@ export default async function MarketingPage() {
               <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
               <a className="mk-hero-cta" href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
             </div>
-            <div style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>
+            <div className="mk-hero-signals" style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>
               <span>{t('Owner-operator first', 'Hecho para dueños')}</span><span style={{ color: '#D0D0CC' }}>·</span>
               <span>{t('Easy to install', 'Fácil de instalar')}</span><span style={{ color: '#D0D0CC' }}>·</span>
               <span>{t('Built to make sense', 'Sin complicaciones')}</span>
@@ -567,7 +589,7 @@ export default async function MarketingPage() {
           section break, not a continuation. */}
       <section className="mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 64px' })}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
-          <h3 style={{ fontSize: 'clamp(22px,2.8vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: 0, maxWidth: 620 }}>{t(
+          <h3 className="mk-floorsim-h3" style={{ fontSize: 'clamp(22px,2.8vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: 0, maxWidth: 620 }}>{t(
             'Here’s what that looks like in motion. The same restaurant, on one screen, across one real day.',
             'Así se ve en movimiento. El mismo restaurante, en una sola pantalla, a lo largo de un día real.'
           )}</h3>

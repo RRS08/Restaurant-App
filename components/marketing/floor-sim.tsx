@@ -366,7 +366,6 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   // here so getRelPos() can convert their bounding rect into a
   // coordinate inside the POS card.
   const posCardRef = useRef<HTMLDivElement | null>(null)
-  const invCardRef = useRef<HTMLDivElement | null>(null)
   const tileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const continueRef = useRef<HTMLButtonElement | null>(null)
@@ -376,7 +375,6 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   // Chapter 2 refs — the staffing card (touch-dot container) plus
   // the bench items + empty MID-slot the drag travels between.
   const staffCardRef = useRef<HTMLDivElement | null>(null)
-  const financeCardRef = useRef<HTMLDivElement | null>(null)
   const benchItemRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const emptyShiftSlotRef = useRef<HTMLSpanElement | null>(null)
 
@@ -468,16 +466,6 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       Drinks: prev.Drinks + nextCatDelta.Drinks,
     }))
     setPaid(method); setPaidFading(false); setTicket((v) => v + 1)
-    // Phone-only second pull: now glide down to the inventory card so
-    // the bars-deplete moment lands in the viewport. Pairs with the
-    // initial POS centering at startScript() — the two scrolls read
-    // as a guided "watch this → now watch this" rather than a single
-    // mid-animation yank.
-    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
-      timers.current.push(setTimeout(() => {
-        invCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }, 1300))
-    }
     // 1500ms in: kick off the check overlay's fade-out.
     timers.current.push(setTimeout(() => setPaidFading(true), 1500))
     // 1850ms in: overlay is fully transparent → unmount it AND
@@ -548,17 +536,6 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
     setTab('Tacos')
     setPaid(null)
     setTouches([])
-
-    // Phone-only: park the user on the POS card before the script
-    // starts ringing items up. The intersection observer fires when
-    // the POS is 30% in view, which often means it's still in the
-    // bottom half of the viewport — items get tapped off-screen.
-    // Centering at script start (and re-centering on inventory at
-    // payment time, in pay()) makes the demo feel guided rather
-    // than something happening past the fold.
-    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
-      posCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
 
     // Schedule each step at its time. No cursor pre-glide.
     SCRIPT.forEach(({ at, step }) => {
@@ -664,21 +641,6 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
     setLaborPulse(false)
     setC2Touches([])
     setDragTouchPos(null)
-
-    // Phone-only choreography (same pattern as Chapter 1):
-    // Pull the Staffing card to center before the drag, then pull
-    // the Finance card to center just before the labor spend ticks
-    // up. The two scrolls make the cause→effect beat actually visible
-    // on a vertical viewport where the cards stack and can't both
-    // share the screen at once.
-    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
-      staffCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      // 3500ms: 600ms before the pulse at 4100ms — gives smooth-scroll
-      //         time to settle so the bars rebalance in-frame.
-      timers.current.push(setTimeout(() => {
-        financeCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      }, 3500))
-    }
 
     // 700ms: touch lands on Pork Adams, card lifts (scale + shadow).
     // The touch dot is set here at a jittered position and persists
@@ -1241,7 +1203,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
 
         {/* Inventory */}
-        <div ref={invCardRef} style={{ ...cardStyle, padding: '14px 16px' }}>
+        <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Inventory', 'Inventario')}</span>
             <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('sorted by urgency', 'ordenado por urgencia')}</span>
@@ -1474,7 +1436,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
 
         {/* Finance */}
-        <div ref={financeCardRef} style={{ ...cardStyle, padding: '14px 16px' }}>
+        <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Finance', 'Finanzas')}</span>
             <span style={mono({ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: GREEN })}>

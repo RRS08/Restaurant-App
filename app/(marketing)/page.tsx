@@ -325,6 +325,16 @@ export default async function MarketingPage() {
              status line covers the same intent, so hide here. */
           .mk-livedemo-caption{display:none!important}
 
+          /* Act header (01/02/03 + eyebrow + h2): on tablet/desktop
+             the big number sits next to the content thanks to wide
+             horizontal space; on phone flex-wrap punts the number
+             to its own row and it reads as a leftover artifact. Pin
+             the row to a no-wrap two-column with a compact number
+             on the left so it reads as a section index next to the
+             content stack, not a stranded badge. */
+          .mk-act-row{flex-wrap:nowrap!important;align-items:flex-start!important;gap:14px!important}
+          .mk-act-num{font-size:30px!important;line-height:1!important;flex-shrink:0}
+
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
@@ -517,8 +527,8 @@ export default async function MarketingPage() {
           centered content. The hero's empty bottom space already
           contributes breathing room before this section starts. */}
       <section id="what" className="mk-sec mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '64px 24px 32px' })}>
-        <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
-          <span style={actNum}>01</span>
+        <div className="mk-act-row" style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
+          <span className="mk-act-num" style={actNum}>01</span>
           <div>
             <div style={eyebrow}>{t('What it is & what it fixes', 'Qué es y qué arregla')}</div>
             <h2 style={{ fontSize: 'clamp(26px,3.4vw,40px)', lineHeight: 1.05, letterSpacing: '-1.3px', fontWeight: 700, margin: '8px 0 0', maxWidth: 760 }}>{t('Your tools don’t talk to each other. Checked makes them one screen.', 'Tus herramientas no se hablan entre sí. Checked las une en una sola pantalla.')}</h2>
@@ -572,8 +582,8 @@ export default async function MarketingPage() {
       {/* ACT 2 */}
       <section id="why" className="mk-sec" style={{ background: '#F0F0EC' }}>
         <div className="mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 32px' })}>
-          <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
-            <span style={actNum}>02</span>
+          <div className="mk-act-row" style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
+            <span className="mk-act-num" style={actNum}>02</span>
             <div>
               <div style={eyebrow}>{t('Why get it from us', 'Por qué con nosotros')}</div>
               <h2 style={{ fontSize: 'clamp(26px,3.4vw,40px)', lineHeight: 1.05, letterSpacing: '-1.3px', fontWeight: 700, margin: '8px 0 0', maxWidth: 760 }}>{t('Same software. Same price. Same person. For as long as we work together.', 'Mismo software. Mismo precio. Misma persona. Mientras trabajemos juntos.')}</h2>
@@ -662,8 +672,8 @@ export default async function MarketingPage() {
 
       {/* ACT 3 */}
       <section id="trust" className="mk-sec mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 32px' })}>
-        <div style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
-          <span style={actNum}>03</span>
+        <div className="mk-act-row" style={{ borderTop: '1px solid #18181B', paddingTop: 36, display: 'flex', alignItems: 'baseline', gap: 28, flexWrap: 'wrap' }}>
+          <span className="mk-act-num" style={actNum}>03</span>
           <div>
             <div style={eyebrow}>{t('Can you trust us', '¿Puedes confiar en nosotros?')}</div>
             <h2 style={{ fontSize: 'clamp(26px,3.4vw,40px)', lineHeight: 1.05, letterSpacing: '-1.3px', fontWeight: 700, margin: '8px 0 0', maxWidth: 760 }}>{t('We can’t show you a wall of logos yet. So here’s what we’ll stand on instead.', 'Aún no tenemos una pared de logos. Así que aquí está lo que sí podemos respaldar.')}</h2>

@@ -341,15 +341,16 @@ export default async function MarketingPage() {
              into the corner so it doesn't sit over the CTA. */
           .mk-lang-toggle{bottom:14px!important;right:14px!important}
 
-          /* Act 1 problem section — reorder on phone.
-             Default render order: long-p → ProblemCards → short-p.
-             On phone: long-p hidden, ProblemCards first, short-p
-             after. Flex order property handles the swap without
-             touching the DOM order React produced. */
+          /* Act 1 problem section — phone reorder.
+             Default React render: long-p, ProblemCards, short-p.
+             Phone: long-p hidden, short-p first (carries the
+             condensed setup), ProblemCards after (visualizes the
+             five disconnected tools as a payoff). Flex order
+             property handles the swap without touching DOM order. */
           .mk-act1-problem{display:flex!important;flex-direction:column!important;gap:28px!important}
           .mk-problem-p-long{display:none!important}
-          .mk-problem-cards-wrap{order:1}
-          .mk-problem-p-short{order:2;display:block!important}
+          .mk-problem-p-short{order:1;display:block!important}
+          .mk-problem-cards-wrap{order:2}
 
           /* PHONE HERO REVEAL — sequenced single-focal-point intro.
              0–6.5s: the receipt is the only thing on screen,

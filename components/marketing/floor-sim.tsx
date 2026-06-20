@@ -368,6 +368,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   // here so getRelPos() can convert their bounding rect into a
   // coordinate inside the POS card.
   const posCardRef = useRef<HTMLDivElement | null>(null)
+  const invCardRef = useRef<HTMLDivElement | null>(null)
   const tileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const continueRef = useRef<HTMLButtonElement | null>(null)
@@ -468,6 +469,17 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       Drinks: prev.Drinks + nextCatDelta.Drinks,
     }))
     setPaid(method); setPaidFading(false); setTicket((v) => v + 1)
+    // Phone-only: the inventory card stacks BELOW the POS card on a
+    // narrow viewport, so the depletion animation lands off-screen
+    // while the user is still parked on the POS. Scroll it into view
+    // before the bars start dropping so the cause→effect beat of the
+    // chapter ("sell a dish → stock counts itself") actually reads.
+    // Desktop/tablet keep them side-by-side; no-op there.
+    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+      timers.current.push(setTimeout(() => {
+        invCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 1300))
+    }
     // 1500ms in: kick off the check overlay's fade-out.
     timers.current.push(setTimeout(() => setPaidFading(true), 1500))
     // 1850ms in: overlay is fully transparent → unmount it AND
@@ -1006,6 +1018,11 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-pos{grid-template-columns:1fr!important}
           .fs-pos-menu{border-right:none!important;border-bottom:1px solid #EEF0F3!important}
           .fs-pos-order{min-height:auto!important}
+          /* Cap the cart list so adding items doesn't push the POS card
+             taller and taller — the rail scrolls internally instead.
+             Without this the inventory card slides further off-screen
+             with every tap, even with the auto-scroll below. */
+          .fs-cart-list{max-height:160px!important;overflow-y:auto!important}
           /* Chapter 2 — Staffing on top, Finance below. */
           .fs-ch2{grid-template-columns:1fr!important}
           /* Chapter 3 — chart on top, category + payment mix below. */
@@ -1099,7 +1116,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
                 <span style={{ fontSize: 13, fontWeight: 700 }}>{t('Current order', 'Orden actual')}</span>
                 <span onClick={() => { if (!isPlaying) clearOrder() }} style={mono({ cursor: isPlaying ? 'default' : 'pointer', fontSize: 11, color: '#9CA3AF' })}>{t('Clear', 'Limpiar')}</span>
               </div>
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div className="fs-cart-list" style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
                 {order.length === 0 && (
                   <div style={mono({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', color: '#C3C7CE', fontSize: 11.5, lineHeight: 1.6, padding: '24px 8px' })}>
                     {t('No items yet.', 'Sin platillos aún.')}<br />{t('Tap a dish to start the ticket.', 'Toca un platillo para empezar.')}
@@ -1190,7 +1207,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
 
         {/* Inventory */}
-        <div style={{ ...cardStyle, padding: '14px 16px' }}>
+        <div ref={invCardRef} style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Inventory', 'Inventario')}</span>
             <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('sorted by urgency', 'ordenado por urgencia')}</span>

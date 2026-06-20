@@ -20,6 +20,11 @@ const PROBLEMS = [
 // the cards scroll into view (the static state shouldn't sit there
 // pretending nothing's about to happen).
 const DWELL = [800, 1700, 1600, 1750, 2600]
+// Phone uses a single-card crossfade slideshow (see CSS below), so each
+// dwell is the only time the reader gets with that card — at desktop
+// speeds it looked like flashcards. These are calibrated to feel like
+// "one beat of reading aloud" per card on a phone-held cadence.
+const DWELL_PHONE = [2200, 2700, 2600, 2800, 3500]
 
 export default function ProblemCards() {
   const [active, setActive] = useState(0)
@@ -40,12 +45,15 @@ export default function ProblemCards() {
         for (const e of entries) {
           if (e.isIntersecting && e.intersectionRatio >= 0.3 && !started.current) {
             started.current = true
+            const dwells = typeof window !== 'undefined' && window.innerWidth <= 640
+              ? DWELL_PHONE
+              : DWELL
             const step = () => {
               timer.current = setTimeout(() => {
                 idx.current = (idx.current + 1) % PROBLEMS.length
                 setActive(idx.current)
                 step()
-              }, DWELL[idx.current])
+              }, dwells[idx.current])
             }
             step()
             break

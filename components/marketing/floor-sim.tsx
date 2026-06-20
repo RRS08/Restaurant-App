@@ -1280,8 +1280,8 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             'Asignas el turno, y los libros se actualizan solos.'
           )}</div>
           <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
-            'Labor on the schedule, stock in the walk-in, every other expense — all of it lands in Finance automatically, matched against the day’s revenue, with bank context from Plaid. Your net is live. Your books at month-end aren’t a project; they’re already done.',
-            'Mano de obra en el horario, inventario en la cocina, todos los demás gastos — todo cae en Finanzas automáticamente, comparado contra la venta del día, con contexto del banco vía Plaid. Tu utilidad va en vivo. Cerrar el mes no es un proyecto; ya está hecho.'
+            'Labor, stock, and every other expense lands in Finance automatically — matched against the day’s revenue, with bank context from Plaid. Your net is live, and month-end is already done.',
+            'Mano de obra, inventario y cada gasto caen en Finanzas automáticamente — comparados contra la venta del día, con contexto del banco vía Plaid. Tu utilidad va en vivo, y el cierre del mes ya está hecho.'
           )}</p>
         </div>
       </div>

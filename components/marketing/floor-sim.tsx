@@ -51,8 +51,6 @@ interface MenuItem {
 const MENU_ES: MenuItem[] = [
   { id: 'pastor',   name: 'Tacos al Pastor', price: 3.5,  cat: 'Tacos',    inv: [['pastor', 6], ['tortillas', 10]] },
   { id: 'asada',    name: 'Tacos de Asada',  price: 3.75, cat: 'Tacos',    inv: [['tortillas', 10]] },
-  { id: 'birria',   name: 'Quesabirria',     price: 4.75, cat: 'Tacos',    inv: [['birria', 4], ['queso', 3], ['tortillas', 8]] },
-  { id: 'pollo',    name: 'Tacos de Pollo',  price: 3.25, cat: 'Tacos',    inv: [['tortillas', 10]] },
   { id: 'ceviche',  name: 'Ceviche Tostada', price: 5.5,  cat: 'Mariscos', inv: [['limes', 5]] },
   { id: 'camaron',  name: 'Camarones',       price: 7.5,  cat: 'Mariscos', inv: [['limes', 4]] },
   { id: 'elote',    name: 'Elote',           price: 4.0,  cat: 'Sides',    inv: [['queso', 4]] },
@@ -67,8 +65,6 @@ const MENU_ES: MenuItem[] = [
 const MENU_EN: MenuItem[] = [
   { id: 'pastor',   name: 'Smash Burger',    price: 8.5,  cat: 'Tacos',    inv: [['pastor', 6], ['tortillas', 10]] },
   { id: 'asada',    name: 'Classic Cheese',  price: 8.75, cat: 'Tacos',    inv: [['tortillas', 10]] },
-  { id: 'birria',   name: 'Bacon Stack',     price: 10.5, cat: 'Tacos',    inv: [['birria', 4], ['queso', 3], ['tortillas', 8]] },
-  { id: 'pollo',    name: 'Crispy Chicken',  price: 9.0,  cat: 'Tacos',    inv: [['tortillas', 10]] },
   { id: 'ceviche',  name: 'Pulled Pork Sub', price: 9.5,  cat: 'Mariscos', inv: [['limes', 5]] },
   { id: 'camaron',  name: 'BLT Club',        price: 9.0,  cat: 'Mariscos', inv: [['limes', 4]] },
   { id: 'elote',    name: 'Loaded Fries',    price: 5.5,  cat: 'Sides',    inv: [['queso', 4]] },
@@ -223,12 +219,10 @@ type ScriptStep =
 // Cash where a real person pauses to confirm or pick.
 const SCRIPT: { at: number; step: ScriptStep }[] = [
   { at: 800,  step: { type: 'tap', itemId: 'pastor' } },     // First tap — eye finds tile, finger arrives
-  { at: 1750, step: { type: 'tab', cat: 'Sides' } },          // Switch to Sides (think about next item)
-  { at: 2450, step: { type: 'tap', itemId: 'elote' } },       // Elote (found it in the new tab)
-  { at: 3400, step: { type: 'tab', cat: 'Drinks' } },         // Switch to Drinks
-  { at: 4100, step: { type: 'tap', itemId: 'horchata' } },    // Horchata
-  { at: 5200, step: { type: 'continue' } },                   // Continue (longer beat — eye scans the order)
-  { at: 6150, step: { type: 'pay', method: 'Cash' } },        // Cash (slight pause to choose payment)
+  { at: 1850, step: { type: 'tab', cat: 'Drinks' } },         // Switch to Drinks (think about next item)
+  { at: 2700, step: { type: 'tap', itemId: 'horchata' } },    // Horchata
+  { at: 3850, step: { type: 'continue' } },                   // Continue (eye scans the order)
+  { at: 4750, step: { type: 'pay', method: 'Cash' } },        // Cash
 ]
 // Buffer accounts for the staggered pay sequence: the last step
 // (pay) holds the check 1500ms, fades 350ms, then bars run their
@@ -996,8 +990,19 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
            drag offsets keep working unchanged.
            ============================================================ */
         @media (max-width: 640px){
-          /* Chapter 1 — POS card on top, Inventory below. */
-          .fs-ch1{grid-template-columns:1fr!important}
+          /* Chapter 1 — POS card on top, Inventory below.
+             On phone the two cards visually fuse: zero gap between
+             them, flush borders (POS loses bottom-radius, Inventory
+             loses top-radius), so they read as one continuous panel
+             rather than two boxes the user has to scroll between. */
+          .fs-ch1{grid-template-columns:1fr!important;gap:0!important}
+          .fs-ch1 > div:first-child{border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}
+          .fs-ch1 > div:last-child{border-top-left-radius:0!important;border-top-right-radius:0!important;border-top:none!important}
+          /* "POS · demo in progress · Counter 1" header strip — hide
+             on phone. The POS card sits at the top of a tight one-
+             screen demo; the header just steals vertical pixels for
+             info the user can infer from context. */
+          .fs-pos-header{display:none!important}
           /* Inside the POS card: menu on top, order rail below
              instead of side-by-side. The order rail loses its
              min-height so it flows with content. */
@@ -1037,16 +1042,13 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
              green caps for no payoff before the chapters carry the
              framing themselves. */
           .fs-status{display:none!important}
-          /* TODAY'S READ insight panel — on desktop the chart's fixed
-             150px height comfortably hosts the absolute-positioned
-             overlay; on phone the same content overflows because
-             rows wrap. Compact the panel and let it grow below the
-             chart edge so nothing gets clipped. */
-          .fs-insight{padding:10px 12px!important;bottom:auto!important;min-height:calc(100% + 12px)}
-          /* Tighten the table rows (4th child) — smaller gap, smaller
-             font, narrower label column so long values like
-             "Burgers · 49% mix (Smash Burger #1 · 24 sold)" stop
-             wrapping past the box bottom. */
+          /* TODAY'S READ insight panel — phone-specific tightening
+             (box itself already grows with content via min-height in
+             the inline style, applies everywhere). Smaller padding,
+             tighter table rows, narrower label column so long values
+             like "Burgers · 49% mix (Smash Burger #1 · 24 sold)"
+             stop wrapping past the box bottom. */
+          .fs-insight{padding:10px 12px!important}
           .fs-insight > div:nth-child(4){margin-top:10px!important;gap:3px!important;font-size:10.5px!important}
           .fs-insight > div:nth-child(4) > div > span:first-child{width:38px!important}
           /* Finance card top row — three KPIs squeezed into a row.
@@ -1091,7 +1093,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       <div className="fs-ch1" style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14 }}>
         {/* POS */}
         <div ref={posCardRef} style={{ ...cardStyle, overflow: 'hidden', position: 'relative' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #EEF0F3' }}>
+          <div className="fs-pos-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid #EEF0F3' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <span style={{ fontSize: 15, fontWeight: 700 }}>POS</span>
               <span style={mono({ fontSize: 11, color: '#9CA3AF' })}>{isPlaying ? t('demo in progress…', 'demo en curso…') : t('tap an item to ring it up', 'toca un platillo para cobrarlo')}</span>
@@ -1239,7 +1241,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Inventory', 'Inventario')}</span>
             <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('sorted by urgency', 'ordenado por urgencia')}</span>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+          <div className="fs-inv-rows" style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
             {invRows.map((r) => (
               <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: 11 }}>
                 <span style={{ width: 3, alignSelf: 'stretch', borderRadius: 2, background: r.statusColor }} />
@@ -1666,7 +1668,8 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
                   className="fs-insight"
                   style={{
                     position: 'absolute',
-                    top: -6, left: -6, right: -6, bottom: -6,
+                    top: -6, left: -6, right: -6,
+                    minHeight: 'calc(100% + 12px)',
                     background: 'rgba(24,24,27,0.96)',
                     color: '#FAF9F6',
                     borderRadius: 11,

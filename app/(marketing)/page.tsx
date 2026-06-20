@@ -336,6 +336,54 @@ export default async function MarketingPage() {
           /* Language toggle — slightly smaller and tucked further
              into the corner so it doesn't sit over the CTA. */
           .mk-lang-toggle{bottom:14px!important;right:14px!important}
+
+          /* PHONE HERO REVEAL — sequenced single-focal-point intro.
+             0–6.5s: the receipt is the only thing on screen,
+                     vertically centered, playing through its
+                     existing print-and-Checked animation
+             6.5–7.2s: receipt fades + lifts away
+             7.3s: hero text fades in to take over the screen
+             The receipt is position:absolute so it doesn't reserve
+             layout space — the text content sits where it always
+             does once it appears. The hero stays opaque-empty in
+             the background during the receipt phase because all
+             the text inside has opacity 0 via .mk-hero-text. */
+          .mk-hero{position:relative!important}
+          .mk-hero-receipt{
+            position:absolute!important;
+            top:50%!important;left:50%!important;
+            transform:translate(-50%,-50%)!important;
+            width:70vw!important;max-width:280px!important;min-width:0!important;
+            margin:0!important;
+            z-index:5!important;
+            animation:mkPhoneReceiptOut 700ms cubic-bezier(0.4,0,0.6,1) 6500ms forwards;
+          }
+          .mk-hero-text{
+            opacity:0;
+            animation:mkPhoneTextIn 700ms cubic-bezier(0.22,0.7,0.2,1) 7300ms forwards;
+          }
+        }
+        @keyframes mkPhoneReceiptOut{
+          0%{opacity:1;transform:translate(-50%,-50%) scale(1)}
+          100%{opacity:0;transform:translate(-50%,calc(-50% - 16px)) scale(0.96)}
+        }
+        @keyframes mkPhoneTextIn{
+          0%{opacity:0;transform:translateY(14px)}
+          100%{opacity:1;transform:translateY(0)}
+        }
+        /* Reduced-motion fallback on phones: drop the choreography
+           and put the hero in its normal stacked state with both
+           pieces visible at once. */
+        @media (max-width: 640px) and (prefers-reduced-motion: reduce){
+          .mk-hero-text{opacity:1!important;animation:none!important}
+          .mk-hero-receipt{
+            position:static!important;
+            top:auto!important;left:auto!important;
+            transform:none!important;
+            width:auto!important;max-width:300px!important;
+            margin:0 auto!important;
+            animation:none!important;
+          }
         }
       `}</style>
 
@@ -360,7 +408,7 @@ export default async function MarketingPage() {
           marketing tagline from the rest of the page. */}
       <section className="mk-hero" style={wrap({ padding: '40px 24px', minHeight: 'calc(100vh - 60px)', display: 'flex', alignItems: 'center' })}>
         <div className="mk-hero-grid" style={{ width: '100%', display: 'flex', flexWrap: 'wrap', gap: 48, alignItems: 'center' }}>
-          <div style={{ flex: '1 1 440px' }}>
+          <div className="mk-hero-text" style={{ flex: '1 1 440px' }}>
             <div style={{ ...eyebrow, ...enter(0) }}>{t('Daily operating system · Made for owners', 'Sistema operativo del día · Hecho para dueños')}</div>
             <h1 style={{ fontSize: 'clamp(38px,5.4vw,66px)', lineHeight: 0.98, letterSpacing: '-2.2px', fontWeight: 700, margin: '22px 0 0', ...enter(120) }}>{t('Run the whole place from the counter you’re already standing at.', 'Maneja todo tu lugar desde el mostrador donde ya estás parado.')}</h1>
             <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, your cash, and your books at the same time. So “what happened today” stops being a Sunday-night guess with a calculator and a shoebox of receipts.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo. Así “qué pasó hoy” deja de ser una adivinanza del domingo en la noche con una calculadora y una caja de recibos.')}</p>

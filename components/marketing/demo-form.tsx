@@ -60,8 +60,8 @@ export default function DemoForm({ lang = 'en' }: Props) {
           <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: '#FAF9F6', color: '#18181B', fontSize: 24 }}>✓</div>
           <div style={{ fontSize: 21, fontWeight: 700, marginTop: 18 }}>{t('You’re on the list.', 'Ya quedaste en la lista.')}</div>
           <p style={{ fontSize: 15, color: '#C9C9CE', margin: '10px 0 0', lineHeight: 1.5 }}>{t(
-            'I’ll reach out within a day to set up your demo. Talk soon. — Renato Ruiz',
-            'Te contacto en menos de un día para agendar tu demo. Hablamos pronto. — Renato Ruiz'
+            'I’ll reach out within a day to set up your demo. Talk soon. — Renato Ruiz Sandoval',
+            'Te contacto en menos de un día para agendar tu demo. Hablamos pronto. — Renato Ruiz Sandoval'
           )}</p>
         </div>
       </div>

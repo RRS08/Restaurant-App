@@ -370,8 +370,8 @@ export default async function MarketingPage() {
             </div>
             <div style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>
               <span>{t('Owner-operator first', 'Hecho para dueños')}</span><span style={{ color: '#D0D0CC' }}>·</span>
-              <span>{t('Live the same afternoon', 'Activo la misma tarde')}</span><span style={{ color: '#D0D0CC' }}>·</span>
-              <span>{t('No CSV import', 'Sin imports técnicos')}</span>
+              <span>{t('Set up in person', 'Instalado en persona')}</span><span style={{ color: '#D0D0CC' }}>·</span>
+              <span>{t('Built to make sense', 'Sin complicaciones')}</span>
             </div>
           </div>
 

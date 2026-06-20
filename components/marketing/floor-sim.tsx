@@ -1026,9 +1026,24 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-connector{margin:36px 0!important}
           /* Chapter heads — wrap title to two lines naturally. */
           .fs-chap{margin-bottom:20px!important}
-          /* Status line — let the long all-caps text wrap on small
-             screens instead of overflowing. */
-          .fs-status{flex-wrap:wrap!important;letter-spacing:0.08em!important;line-height:1.5!important}
+          /* Status line — hide on phone. On desktop it pairs with the
+             page-level H3 to frame the demo; on phone the H3 is already
+             hidden, and this LIVE DEMO ring just wraps to two lines of
+             green caps for no payoff before the chapters carry the
+             framing themselves. */
+          .fs-status{display:none!important}
+          /* TODAY'S READ insight panel — on desktop the chart's fixed
+             150px height comfortably hosts the absolute-positioned
+             overlay; on phone the same content overflows because
+             rows wrap. Compact the panel and let it grow below the
+             chart edge so nothing gets clipped. */
+          .fs-insight{padding:10px 12px!important;bottom:auto!important;min-height:calc(100% + 12px)}
+          /* Tighten the table rows (4th child) — smaller gap, smaller
+             font, narrower label column so long values like
+             "Burgers · 49% mix (Smash Burger #1 · 24 sold)" stop
+             wrapping past the box bottom. */
+          .fs-insight > div:nth-child(4){margin-top:10px!important;gap:3px!important;font-size:10.5px!important}
+          .fs-insight > div:nth-child(4) > div > span:first-child{width:38px!important}
           /* Finance card top row — three KPIs go on multiple lines
              instead of cramming. */
           .fs-fin-kpis{gap:14px!important}
@@ -1632,6 +1647,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
                   while shifting attention to the recap content. */}
               {c3Insight && (
                 <div
+                  className="fs-insight"
                   style={{
                     position: 'absolute',
                     top: -6, left: -6, right: -6, bottom: -6,

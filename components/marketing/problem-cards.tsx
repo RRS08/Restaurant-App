@@ -59,23 +59,87 @@ export default function ProblemCards() {
   }, [])
 
   return (
-    <div ref={ref} style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+    <div ref={ref} className="mk-problem-cards" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      {/* Phone-only override: stop the five-card grid (which on a
+          narrow viewport stacks into five stacked rows with the
+          black spotlight visibly cycling through them — busy, and
+          the user can't read all five at a glance anyway). On phone
+          the grid collapses into a single absolute-stacked deck of
+          cards, only the active one visible, crossfading on dwell.
+          Same dwelling logic upstairs; the visual presentation
+          becomes a single-card slideshow with a row of position
+          dots underneath so the "this is a series of five" intent
+          stays obvious. */}
+      <style>{`
+        @media (max-width: 640px) {
+          .mk-problem-cards {
+            position: relative;
+            min-height: 160px;
+            display: block !important;
+          }
+          .mk-problem-card {
+            position: absolute !important;
+            top: 0; left: 0; right: 0;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .45s ease;
+            flex: none !important;
+          }
+          .mk-problem-card.is-active {
+            opacity: 1;
+            pointer-events: auto;
+          }
+          .mk-problem-dots {
+            display: flex !important;
+            gap: 8px;
+            justify-content: center;
+            position: absolute;
+            left: 0; right: 0;
+            bottom: -22px;
+          }
+          .mk-problem-dots > span {
+            width: 6px; height: 6px; border-radius: 50%;
+            background: rgba(24,24,27,0.18);
+            transition: background .35s ease, transform .35s ease;
+          }
+          .mk-problem-dots > span.is-active {
+            background: #18181B;
+            transform: scale(1.35);
+          }
+        }
+        .mk-problem-dots { display: none; }
+        @media (prefers-reduced-motion: reduce) {
+          .mk-problem-card { transition: none !important; }
+        }
+      `}</style>
       {PROBLEMS.map((p, i) => {
         const on = i === active
         return (
-          <div key={p.n} style={{
-            flex: '1 1 160px',
-            background: on ? '#18181B' : '#FFFFFF',
-            border: `1px solid ${on ? '#18181B' : '#E7E6E2'}`,
-            borderRadius: 13, padding: 18,
-            transition: 'background .85s ease, border-color .85s ease',
-          }}>
+          <div
+            key={p.n}
+            className={`mk-problem-card${on ? ' is-active' : ''}`}
+            style={{
+              flex: '1 1 160px',
+              background: on ? '#18181B' : '#FFFFFF',
+              border: `1px solid ${on ? '#18181B' : '#E7E6E2'}`,
+              borderRadius: 13, padding: 18,
+              transition: 'background .85s ease, border-color .85s ease',
+            }}
+          >
             <div style={{ fontFamily: MONO, fontSize: 11, color: on ? '#6B6B70' : '#A1A1A6', transition: 'color .85s ease' }}>{p.n}</div>
             <div style={{ fontSize: 15.5, fontWeight: 600, marginTop: 8, color: on ? '#FAF9F6' : '#18181B', transition: 'color .85s ease' }}>{p.t}</div>
             <div style={{ fontSize: 13, marginTop: 4, lineHeight: 1.45, color: on ? '#C9C9CE' : '#6B6B70', transition: 'color .85s ease' }}>{p.d}</div>
           </div>
         )
       })}
+      {/* Phone-only position dots. Hidden on tablet+ via the CSS
+          above; the desktop layout already shows all five cards
+          so an index indicator would be noise. */}
+      <div className="mk-problem-dots" aria-hidden="true">
+        {PROBLEMS.map((p, i) => (
+          <span key={p.n} className={i === active ? 'is-active' : undefined} />
+        ))}
+      </div>
     </div>
   )
 }

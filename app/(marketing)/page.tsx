@@ -272,6 +272,10 @@ export default async function MarketingPage() {
         .mk-marquee:hover{animation-play-state:paused}
         .mk-sec{scroll-margin-top:96px}
 
+        /* Act 1 phone-only short paragraph — hidden by default;
+           the mobile media-query block below promotes it back. */
+        .mk-problem-p-short{display:none}
+
         /* ============================================================
            Mobile redesign — single breakpoint at 640px. The page is
            already wrap-friendly via clamp() font sizes and flex 1 1
@@ -336,6 +340,16 @@ export default async function MarketingPage() {
           /* Language toggle — slightly smaller and tucked further
              into the corner so it doesn't sit over the CTA. */
           .mk-lang-toggle{bottom:14px!important;right:14px!important}
+
+          /* Act 1 problem section — reorder on phone.
+             Default render order: long-p → ProblemCards → short-p.
+             On phone: long-p hidden, ProblemCards first, short-p
+             after. Flex order property handles the swap without
+             touching the DOM order React produced. */
+          .mk-act1-problem{display:flex!important;flex-direction:column!important;gap:28px!important}
+          .mk-problem-p-long{display:none!important}
+          .mk-problem-cards-wrap{order:1}
+          .mk-problem-p-short{order:2;display:block!important}
 
           /* PHONE HERO REVEAL — sequenced single-focal-point intro.
              0–6.5s: the receipt is the only thing on screen,
@@ -503,13 +517,29 @@ export default async function MarketingPage() {
         </div>
       </section>
 
-      {/* problem */}
-      <section className="mk-section" style={wrap({ padding: '36px 24px 8px' })}>
-        <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '0 0 44px', maxWidth: 620 }}>{t(
+      {/* problem
+          Desktop / tablet: long paragraph above the ProblemCards
+          (sets up the "5 disconnected tools" idea before the
+          cycling spotlight visualizes them).
+
+          Phone: title + ProblemCards already show the 5 things —
+          the long paragraph reads as a wall of text on a small
+          screen. We hide the long paragraph and show a condensed
+          version that sits AFTER the cards (CSS flex order). Cards
+          carry the visual; the short paragraph just delivers the
+          payoff line. */}
+      <section className="mk-section mk-act1-problem" style={wrap({ padding: '36px 24px 8px' })}>
+        <p className="mk-problem-p-long" style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '0 0 44px', maxWidth: 620 }}>{t(
           'An independent restaurant runs on five different things at once — sales at the counter, labor on the schedule, inventory in the walk-in, money in the bank, and your head holding all of it together. None of them talk to each other. So stock gets tracked by hand until you run out of your bestseller in the middle of the rush. Money never quite squares because credits, invoices, delayed payouts, and payroll all live somewhere different. And the real picture — how today\'s sales actually compared to today\'s labor and today\'s stock burn — gets stitched together by hand in a spreadsheet at 11 PM on a Sunday. That\'s the mess Checked replaces. Not by being one more app, but by making one screen where a sale moves inventory, inventory moves finance, and finance answers the question you actually have: am I making money tonight.',
           'Un restaurante independiente corre con cinco cosas a la vez — ventas en la caja, personal en el horario, inventario en la cocina, dinero en el banco, y tu cabeza aguantando todo. Ninguno se habla con el otro. Por eso el inventario se lleva a mano hasta que se acaba tu platillo estrella en plena hora pico. El dinero nunca cuadra del todo porque las propinas, las facturas, los depósitos atrasados y la nómina viven cada uno por su lado. Y la foto real — cómo se compararon de verdad las ventas de hoy contra el costo de mano de obra y el consumo de inventario — la armas a mano en una hoja de cálculo a las 11 PM un domingo. Ese es el desorden que Checked reemplaza. No siendo una app más, sino haciendo una sola pantalla donde una venta mueve el inventario, el inventario mueve las finanzas, y las finanzas responden la pregunta que de verdad tienes: ¿estoy ganando dinero esta noche?'
         )}</p>
-        <ProblemCards />
+        <div className="mk-problem-cards-wrap">
+          <ProblemCards />
+        </div>
+        <p className="mk-problem-p-short" style={{ fontSize: 16, lineHeight: 1.55, color: '#52525B', margin: 0, maxWidth: 620 }}>{t(
+          'None of those five things talk to each other. So stock, labor, and money get stitched together by hand at 11 PM on a Sunday. Checked replaces that with one screen — where a sale moves inventory, inventory moves finance, and finance answers the only question you have: am I making money tonight.',
+          'Ninguna de esas cinco cosas se habla entre sí. Por eso el stock, la mano de obra y el dinero se cuadran a mano a las 11 PM un domingo. Checked reemplaza eso con una sola pantalla — donde una venta mueve el inventario, el inventario mueve las finanzas, y las finanzas responden la única pregunta que tienes: ¿estoy ganando dinero esta noche?'
+        )}</p>
       </section>
 
       {/* live demo — extra top padding so the pivot from "five

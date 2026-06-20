@@ -21,10 +21,14 @@ const PROBLEMS = [
 // pretending nothing's about to happen).
 const DWELL = [800, 1700, 1600, 1750, 2600]
 // Phone uses a single-card crossfade slideshow (see CSS below), so each
-// dwell is the only time the reader gets with that card — at desktop
-// speeds it looked like flashcards. These are calibrated to feel like
-// "one beat of reading aloud" per card on a phone-held cadence.
-const DWELL_PHONE = [2200, 2700, 2600, 2800, 3500]
+// dwell is the only time the reader gets with that card. Unlike desktop,
+// the phone version doesn't get to "kick off" the first card with a
+// shorter dwell — on a slideshow that loops forever, a short first dwell
+// reads as a stutter every time the cycle restarts (card 4 → card 0 → fast
+// jump to card 1). Phone dwells are uniform across 0–3 with the last card
+// ("Your head. Everything else. Until 11 PM.") getting a beat of extra
+// emphasis as the punchline.
+const DWELL_PHONE = [2800, 2800, 2800, 2800, 3300]
 
 export default function ProblemCards() {
   const [active, setActive] = useState(0)

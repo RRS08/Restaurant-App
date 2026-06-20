@@ -337,13 +337,12 @@ export default async function MarketingPage() {
 
           /* Hero signals row: "Owner-operator first · Easy to install
              · Built to make sense". Three short claims meant to read
-             as one beat. On phone the default flex-wrap split them
-             across two lines, breaking the rhythm. Force one line
-             via nowrap + smaller font + overflow-x scroll as a
-             safety for the narrowest devices. Scrollbar hidden so
-             it still reads as a clean strip. */
-          .mk-hero-signals{flex-wrap:nowrap!important;font-size:10.5px!important;gap:0 6px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch;white-space:nowrap!important}
-          .mk-hero-signals::-webkit-scrollbar{display:none}
+             as one beat. At 10.5px the EN copy (~54 chars + dots)
+             still overflowed 360px viewports and got clipped at
+             "Built to make sens". Drop to 9px with tight 4px gap and
+             zero letter-spacing — fits visibly inside 320px viewports
+             without needing horizontal scroll. */
+          .mk-hero-signals{flex-wrap:nowrap!important;font-size:9px!important;gap:0 4px!important;letter-spacing:0!important;white-space:nowrap!important;overflow:visible!important}
           .mk-hero-signals > span{flex:0 0 auto}
 
           /* FloorSim intro H3 ("Here's what that looks like in

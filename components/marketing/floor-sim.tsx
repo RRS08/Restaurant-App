@@ -314,6 +314,11 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   const [c2Confirm, setC2Confirm] = useState(false)
   const [c2ConfirmFading, setC2ConfirmFading] = useState(false)
   const [laborSpend, setLaborSpend] = useState(LABOR_BEFORE)
+  // Highlight pulse on the Scheduled labor row the moment the
+  // labor number ticks up — gives the demo viewer an obvious
+  // "the shift assignment moved the money" cue. See Chapter 2
+  // script step at 4100ms.
+  const [laborPulse, setLaborPulse] = useState(false)
   const [c2Touches, setC2Touches] = useState<{ id: number; x: number; y: number }[]>([])
   const c2TouchIdRef = useRef(0)
   // Persistent touch dot that rides along with the dragged Pork
@@ -629,6 +634,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
     setC2Confirm(false)
     setC2ConfirmFading(false)
     setLaborSpend(LABOR_BEFORE)
+    setLaborPulse(false)
     setC2Touches([])
     setDragTouchPos(null)
 
@@ -664,7 +670,14 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       setC2Confirm(false)
       setC2ConfirmFading(false)
       setLaborSpend(LABOR_AFTER)
+      // Kick off the "money moved" pulse: glow on the Scheduled
+      // labor row + a floating "+$77.00" delta + a brief bar
+      // brightness flash. The duration matches the bar-width
+      // transition (850ms) plus a settle tail so the eye sees
+      // the cause-and-effect clearly.
+      setLaborPulse(true)
     }, 4100))
+    timers.current.push(setTimeout(() => setLaborPulse(false), 6000))
     // 5800ms: settle, demo finished
     timers.current.push(setTimeout(() => setC2Playing(false), 5800))
   }
@@ -928,6 +941,27 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       <style>{`
         @keyframes fsPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.78)}}
         @keyframes fsPop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+        /* "Money moved" cues for Chapter 2's labor row.
+           fsLaborPulse: a tinted backplate that pops in over the
+                         Scheduled labor row, sits for ~1s, then
+                         fades out. Tells the demo viewer THIS row
+                         is the one that just changed.
+           fsLaborDelta: a small "+$77.00" indicator that floats up
+                         and fades from the labor amount on the
+                         right. Anchors the cause-and-effect: the
+                         shift you just scheduled cost this much. */
+        @keyframes fsLaborPulse{
+          0%{opacity:0;transform:scale(0.94)}
+          18%{opacity:1;transform:scale(1)}
+          70%{opacity:1;transform:scale(1)}
+          100%{opacity:0;transform:scale(1)}
+        }
+        @keyframes fsLaborDelta{
+          0%{opacity:0;transform:translateY(2px)}
+          18%{opacity:1;transform:translateY(-4px)}
+          80%{opacity:1;transform:translateY(-22px)}
+          100%{opacity:0;transform:translateY(-32px)}
+        }
         /* Touch dot lifecycle, timed to Apple's published UIKit
            standards. UIView's default animation duration is 0.25s
            with an easeInOut curve. We apply that to a finger's
@@ -1412,25 +1446,77 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
                 confirmed spend. Inventory + operating ARE posted
                 (consumption + paid bills), so no tag there. */}
             {[
-              { label: t('Scheduled labor', 'Mano de obra'), tag: t('est.', 'est.'), amt: fmt(laborSpend), w: laborPct + '%',     c: '#7C5CFF' },
-              { label: t('Inventory', 'Inventario'),         tag: null,               amt: fmt(INVENTORY_SPEND), w: inventoryPct + '%', c: '#F59E0B' },
-              { label: t('Operating', 'Operación'),          tag: null,               amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#16A34A' },
-            ].map((row) => (
-              <div key={row.label}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
-                    <span>{row.label}</span>
-                    {row.tag && (
-                      <span style={mono({ fontSize: 9.5, letterSpacing: '0.04em', color: '#9CA3AF', background: '#F4F5F7', border: '1px solid #E6E8EC', borderRadius: 4, padding: '1px 5px' })}>{row.tag}</span>
-                    )}
-                  </span>
-                  <span style={mono({ color: '#71717A' })}>{row.amt}</span>
+              { label: t('Scheduled labor', 'Mano de obra'), tag: t('est.', 'est.'), amt: fmt(laborSpend), w: laborPct + '%',     c: '#7C5CFF', key: 'labor' },
+              { label: t('Inventory', 'Inventario'),         tag: null,               amt: fmt(INVENTORY_SPEND), w: inventoryPct + '%', c: '#F59E0B', key: 'inv' },
+              { label: t('Operating', 'Operación'),          tag: null,               amt: fmt(OPERATING_SPEND), w: operatingPct + '%', c: '#16A34A', key: 'op' },
+            ].map((row) => {
+              const pulse = row.key === 'labor' && laborPulse
+              return (
+                <div key={row.label} style={{ position: 'relative' }}>
+                  {/* "Money moved" backplate — tinted purple to
+                      match the labor bar color, sits behind the
+                      row content for ~1.6s when the labor amount
+                      ticks up. */}
+                  {pulse && (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        position: 'absolute',
+                        top: -4, left: -8, right: -8, bottom: -4,
+                        borderRadius: 8,
+                        background: 'rgba(124, 92, 255, 0.12)',
+                        boxShadow: '0 0 0 1px rgba(124, 92, 255, 0.25)',
+                        animation: 'fsLaborPulse 1.6s cubic-bezier(0.22, 0.7, 0.2, 1) forwards',
+                        pointerEvents: 'none',
+                        zIndex: 0,
+                      }}
+                    />
+                  )}
+                  {/* Floating delta — anchored to the right edge
+                      where the amount sits; floats up + fades to
+                      sell the "the shift cost this much" beat. */}
+                  {pulse && (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        ...mono({ fontSize: 11.5, fontWeight: 700, letterSpacing: '0.02em' }),
+                        position: 'absolute',
+                        right: -2, top: -2,
+                        color: '#7C5CFF',
+                        animation: 'fsLaborDelta 1.6s cubic-bezier(0.22, 0.7, 0.2, 1) forwards',
+                        pointerEvents: 'none',
+                        zIndex: 3,
+                      }}
+                    >
+                      +{fmt(LABOR_AFTER - LABOR_BEFORE)}
+                    </span>
+                  )}
+                  <div style={{ position: 'relative', zIndex: 1 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
+                        <span>{row.label}</span>
+                        {row.tag && (
+                          <span style={mono({ fontSize: 9.5, letterSpacing: '0.04em', color: '#9CA3AF', background: '#F4F5F7', border: '1px solid #E6E8EC', borderRadius: 4, padding: '1px 5px' })}>{row.tag}</span>
+                        )}
+                      </span>
+                      <span style={mono({ color: pulse ? '#7C5CFF' : '#71717A', fontWeight: pulse ? 700 : 400, transition: 'color .3s, font-weight .3s' })}>{row.amt}</span>
+                    </div>
+                    <div style={{ height: 5, background: '#EDEFF2', borderRadius: 99, overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          height: '100%',
+                          width: row.w,
+                          background: row.c,
+                          borderRadius: 99,
+                          transition: 'width .85s cubic-bezier(.22, .7, .2, 1), box-shadow .35s ease',
+                          boxShadow: pulse ? '0 0 10px rgba(124, 92, 255, 0.75)' : 'none',
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div style={{ height: 5, background: '#EDEFF2', borderRadius: 99, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: row.w, background: row.c, borderRadius: 99, transition: 'width .85s cubic-bezier(.22, .7, .2, 1)' }} />
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         </div>
       </div>

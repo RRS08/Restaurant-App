@@ -356,16 +356,30 @@ export default async function MarketingPage() {
             width:70vw!important;max-width:280px!important;min-width:0!important;
             margin:0!important;
             z-index:5!important;
-            animation:mkPhoneReceiptOut 700ms cubic-bezier(0.4,0,0.6,1) 6500ms forwards;
+            /* Two-stage choreography in one rule: fade in (overrides
+               the inline enter(280) mkFadeUp animation that would
+               otherwise win the cascade), then fade out + visibility:
+               hidden at 6.5s so the element is fully gone — not just
+               transparent — once the text takes over. The !important
+               on the whole animation property is required to beat
+               the inline style. */
+            animation:
+              mkPhoneReceiptIn 700ms cubic-bezier(0.22,0.7,0.2,1) 280ms backwards,
+              mkPhoneReceiptOut 700ms cubic-bezier(0.4,0,0.6,1) 6500ms forwards
+            !important;
           }
           .mk-hero-text{
             opacity:0;
             animation:mkPhoneTextIn 700ms cubic-bezier(0.22,0.7,0.2,1) 7300ms forwards;
           }
         }
+        @keyframes mkPhoneReceiptIn{
+          0%{opacity:0;transform:translate(-50%,calc(-50% + 12px)) scale(0.97)}
+          100%{opacity:1;transform:translate(-50%,-50%) scale(1)}
+        }
         @keyframes mkPhoneReceiptOut{
-          0%{opacity:1;transform:translate(-50%,-50%) scale(1)}
-          100%{opacity:0;transform:translate(-50%,calc(-50% - 16px)) scale(0.96)}
+          0%{opacity:1;transform:translate(-50%,-50%) scale(1);visibility:visible;pointer-events:auto}
+          100%{opacity:0;transform:translate(-50%,calc(-50% - 16px)) scale(0.96);visibility:hidden;pointer-events:none}
         }
         @keyframes mkPhoneTextIn{
           0%{opacity:0;transform:translateY(14px)}
@@ -463,7 +477,7 @@ export default async function MarketingPage() {
               </div>
               <div style={{ borderTop: '1px dashed #D8D8D4', padding: '13px 0 0', display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: '#6B6B70', ...typeIn(3790, 550) }}><span>{t('Stock updated', 'Inventario actualizado')}</span><span style={{ color: '#18181B' }}>{t('−3 ingredients', '−3 ingredientes')}</span></div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 600, ...typeIn(4440, 500) }}><span>TOTAL</span><span>$15.25</span></div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 600, ...typeIn(4440, 500) }}><span>TOTAL</span><span>15.25</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingTop: 12, borderTop: '1px dashed #D8D8D4', ...typeIn(5040, 700) }}>
                   <span style={{ color: '#6B6B70' }}>{t('Next morning', 'A la mañana siguiente')}</span>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{t('Checked', 'Checked')} <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#18181B', color: '#FFF', fontSize: 10, ...popIn(5840) }}>✓</span></span>

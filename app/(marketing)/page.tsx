@@ -191,10 +191,10 @@ export default async function MarketingPage() {
     },
     {
       n: '04',
-      t: t('Never a forced sale.', 'Nunca una venta forzada.'),
+      t: t('Right fit only.', 'Solo si funciona.'),
       d: t(
-        'If Checked isn’t right for your place, I’ll tell you. We only work together when there’s a real fit — that’s how this lasts.',
-        'Si Checked no es para tu lugar, te lo digo. Solo trabajamos juntos cuando de verdad hace sentido — así es como esto dura.'
+        'We work together when it’s a fit for both sides. If it’s not, finding that out early beats finding out later.',
+        'Trabajamos juntos cuando es un buen encaje para ambos. Si no lo es, mejor descubrirlo temprano que tarde.'
       ),
     },
   ]
@@ -524,7 +524,7 @@ export default async function MarketingPage() {
               },
             ].map((row) => (
               <div key={row.t} className="mk-act2-row" style={{ display: 'flex', gap: 'clamp(16px,4vw,44px)', flexWrap: 'wrap', alignItems: 'baseline', borderTop: '1px solid #E2E0DA', borderBottom: row.bottom ? '1px solid #E2E0DA' : undefined, padding: '24px 0' }}>
-                <div className="mk-act2-row-title" style={{ flex: '0 0 auto', minWidth: 230, fontSize: 'clamp(34px,5vw,56px)', fontWeight: 700, letterSpacing: '-2.2px', lineHeight: 0.92 }}>{row.t}</div>
+                <div className="mk-act2-row-title" style={{ flex: '0 0 clamp(260px,22vw,320px)', fontSize: 'clamp(34px,5vw,56px)', fontWeight: 700, letterSpacing: '-2.2px', lineHeight: 0.92 }}>{row.t}</div>
                 <p style={{ flex: '1 1 320px', fontSize: 17, lineHeight: 1.5, color: '#52525B', margin: 0 }}>{row.d}</p>
               </div>
             ))}

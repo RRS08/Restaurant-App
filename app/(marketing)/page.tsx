@@ -398,6 +398,14 @@ export default async function MarketingPage() {
           /* Final CTA — stack form below text; tighter padding. */
           .mk-cta-section{padding:60px 18px!important}
           .mk-cta-grid{gap:32px!important}
+          /* Demo form's internal 26px padding inset its inputs 26px
+             further from the section edge than the unboxed text
+             above ("Let's get your place Checked.") — so the text
+             read as left-aligned and the form read as centered.
+             Drop padding to 16, drop border to none on phone so the
+             form visually flows into the section like the text does
+             rather than reading as a separate centered card. */
+          .mk-demo-form{padding:16px!important;border:none!important;background:transparent!important}
 
           /* Footer — center-align on phone so the brand + tagline
              + copyright stack vertically. */

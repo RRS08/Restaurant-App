@@ -55,7 +55,7 @@ export default function DemoForm({ lang = 'en' }: Props) {
 
   if (state?.ok) {
     return (
-      <div style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
+      <div className="mk-demo-form" style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
         <div style={{ textAlign: 'center', padding: '24px 8px' }}>
           <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: '50%', background: '#FAF9F6', color: '#18181B', fontSize: 24 }}>✓</div>
           <div style={{ fontSize: 21, fontWeight: 700, marginTop: 18 }}>{t('You’re on the list.', 'Ya quedaste en la lista.')}</div>
@@ -69,7 +69,7 @@ export default function DemoForm({ lang = 'en' }: Props) {
   }
 
   return (
-    <form action={action} style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
+    <form action={action} className="mk-demo-form" style={{ flex: '1 1 360px', background: '#232327', border: '1px solid #34343A', borderRadius: 18, padding: 26 }}>
       <label style={label} htmlFor="demo_email">{t('Your email', 'Tu correo')}</label>
       <input
         id="demo_email"

@@ -218,11 +218,11 @@ type ScriptStep =
 // in the same context, and a longer beat before Continue + before
 // Cash where a real person pauses to confirm or pick.
 const SCRIPT: { at: number; step: ScriptStep }[] = [
-  { at: 800,  step: { type: 'tap', itemId: 'pastor' } },     // First tap — eye finds tile, finger arrives
-  { at: 1850, step: { type: 'tab', cat: 'Drinks' } },         // Switch to Drinks (think about next item)
-  { at: 2700, step: { type: 'tap', itemId: 'horchata' } },    // Horchata
-  { at: 3850, step: { type: 'continue' } },                   // Continue (eye scans the order)
-  { at: 4750, step: { type: 'pay', method: 'Cash' } },        // Cash
+  { at: 1200, step: { type: 'tap', itemId: 'pastor' } },     // First tap — give a real beat to register
+  { at: 2500, step: { type: 'tab', cat: 'Drinks' } },        // Switch to Drinks (deliberate, not rushed)
+  { at: 3700, step: { type: 'tap', itemId: 'horchata' } },   // Horchata
+  { at: 5100, step: { type: 'continue' } },                  // Continue (eye scans the order)
+  { at: 6500, step: { type: 'pay', method: 'Cash' } },       // Cash
 ]
 // Buffer accounts for the staggered pay sequence: the last step
 // (pay) holds the check 1500ms, fades 350ms, then bars run their

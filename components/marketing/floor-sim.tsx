@@ -990,19 +990,20 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
            drag offsets keep working unchanged.
            ============================================================ */
         @media (max-width: 640px){
-          /* Chapter 1 — POS card on top, Inventory below.
-             On phone the two cards visually fuse: zero gap between
-             them, flush borders (POS loses bottom-radius, Inventory
-             loses top-radius), so they read as one continuous panel
-             rather than two boxes the user has to scroll between. */
-          .fs-ch1{grid-template-columns:1fr!important;gap:0!important}
-          .fs-ch1 > div:first-child{border-bottom-left-radius:0!important;border-bottom-right-radius:0!important}
-          .fs-ch1 > div:last-child{border-top-left-radius:0!important;border-top-right-radius:0!important;border-top:none!important}
+          /* Chapter 1 — POS card on top, Inventory below, single
+             column with a small breathing gap between cards (kept
+             as two distinct panels). */
+          .fs-ch1{grid-template-columns:1fr!important;gap:10px!important}
           /* "POS · demo in progress · Counter 1" header strip — hide
              on phone. The POS card sits at the top of a tight one-
              screen demo; the header just steals vertical pixels for
              info the user can infer from context. */
           .fs-pos-header{display:none!important}
+          /* Inventory — only show the four most-urgent rows on phone.
+             Six rows compete with the POS card for vertical space
+             and rows 5-6 are almost always in "OK" state (not the
+             story the chapter is telling). */
+          .fs-inv-rows > div:nth-child(n+5){display:none!important}
           /* Inside the POS card: menu on top, order rail below
              instead of side-by-side. The order rail loses its
              min-height so it flows with content. */
@@ -1016,13 +1017,12 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-tabs-row{flex-wrap:nowrap!important;gap:5px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
           .fs-tabs-row::-webkit-scrollbar{display:none}
           .fs-tab{font-size:11.5px!important;padding:6px 10px!important;white-space:nowrap!important;flex:0 0 auto!important}
-          /* Cap the cart list so adding items doesn't push the POS card
-             taller — the rail scrolls internally instead. Combined with
-             tighter padding above, the POS card stays compact enough
-             that the Inventory card below sits within a thumb-scroll of
-             the bars-deplete moment. No auto-scroll: that pulled the
-             phone around mid-animation. */
-          .fs-cart-list{max-height:110px!important;overflow-y:auto!important}
+          /* Lock the cart middle to a fixed 90px — accommodates 2 items
+             comfortably AND is the height of the empty-state placeholder
+             ("No items yet · Tap a dish…") so the POS card stays exactly
+             the same size whether 0, 1, or 2 items are in the cart. No
+             more growing as the script taps items in. */
+          .fs-cart-list{height:90px!important;min-height:90px!important;max-height:90px!important;overflow-y:auto!important}
           /* Chapter 2 — Staffing on top, Finance below. */
           .fs-ch2{grid-template-columns:1fr!important}
           /* Bench row holds 4 staff cards in nowrap — on phone that
@@ -1033,13 +1033,15 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           /* Chapter 3 — chart on top, category + payment mix below. */
           .fs-ch3{grid-template-columns:1fr!important;gap:24px!important}
           /* Chapter connectors ("Each ticket depletes..." and
-             "Every ticket, shift, and invoice rolls up...") — hide
-             on phone. On desktop they're narrative bridges that
-             tie the three chapters into one flowing demo; on
-             phone where every chapter takes its own viewport,
-             they just add vertical filler between simulations the
-             user already sees the cause-and-effect of. */
-          .fs-connector{display:none!important}
+             "Every ticket, shift, and invoice rolls up...") — on
+             desktop they're narrative bridges that tie the three
+             chapters together; on phone the text reads as filler
+             between simulations. Hide the contents but keep the
+             container as a 28px vertical spacer so chapters don't
+             slam into each other (Inventory's last bar against
+             Chapter 2's number badge, etc.). */
+          .fs-connector{height:28px!important;margin:0!important;padding:0!important;overflow:hidden!important}
+          .fs-connector > *{display:none!important}
           /* Chapter heads — wrap title to two lines naturally. */
           .fs-chap{margin-bottom:20px!important}
           /* Status line — hide on phone. On desktop it pairs with the

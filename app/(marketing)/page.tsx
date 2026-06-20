@@ -377,7 +377,7 @@ export default async function MarketingPage() {
              fit at 360px without scroll. */
           .mk-act2-converge{flex-wrap:nowrap!important;gap:4px!important;overflow-x:hidden!important}
           .mk-act2-pills{flex-wrap:nowrap!important;gap:3px!important;flex:0 1 auto;min-width:0}
-          .mk-act2-pills > span{font-size:8px!important;padding:2px 5px!important;border-radius:5px!important;letter-spacing:0!important}
+          .mk-act2-pills > span{font-size:8px!important;padding:2px 5px!important;border-radius:5px!important;letter-spacing:0!important;animation:none!important;opacity:1!important}
           .mk-act2-arrow{display:none!important}
           .mk-act2-one{font-size:9px!important;padding:3px 7px!important;flex:0 0 auto;gap:5px!important}
           .mk-act2-one svg{width:10px!important;height:10px!important}

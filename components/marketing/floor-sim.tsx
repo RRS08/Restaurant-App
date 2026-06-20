@@ -941,7 +941,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   const handlePay = (m: string) => { if (!isPlaying) pay(m) }
 
   return (
-    <div ref={containerRef} style={{ color: '#18181B' }}>
+    <div ref={containerRef} style={{ color: '#18181B', overflowX: 'hidden' }}>
       <style>{`
         @keyframes fsPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.35;transform:scale(.78)}}
         @keyframes fsPop{0%{transform:scale(.6);opacity:0}60%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
@@ -1020,6 +1020,11 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-cart-list{max-height:110px!important;overflow-y:auto!important}
           /* Chapter 2 — Staffing on top, Finance below. */
           .fs-ch2{grid-template-columns:1fr!important}
+          /* Bench row holds 4 staff cards in nowrap — on phone that
+             pushes the rightmost cards past the card edge. Wrap to
+             a 2×2 grid so every name is visible. */
+          .fs-bench-row{flex-wrap:wrap!important}
+          .fs-bench-row > div{flex:1 1 calc(50% - 6px)!important;min-width:0!important}
           /* Chapter 3 — chart on top, category + payment mix below. */
           .fs-ch3{grid-template-columns:1fr!important;gap:24px!important}
           /* Connectors — keep but reduce vertical room. */
@@ -1044,10 +1049,21 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
              wrapping past the box bottom. */
           .fs-insight > div:nth-child(4){margin-top:10px!important;gap:3px!important;font-size:10.5px!important}
           .fs-insight > div:nth-child(4) > div > span:first-child{width:38px!important}
-          /* Finance card top row — three KPIs go on multiple lines
-             instead of cramming. */
-          .fs-fin-kpis{gap:14px!important}
-          .fs-fin-kpis>div{flex:1 1 100px!important}
+          /* Finance card top row — three KPIs squeezed into a row.
+             At desktop they sit side-by-side with vertical borders +
+             20px padding-left, total ~420px wide. On phone that
+             punches through the right edge. Drop the basis to 70px
+             so all three wrap to flex-rows fluidly, shrink the
+             amount font, and lose the per-item left-padding that
+             the dividers add. */
+          .fs-fin-kpis{gap:10px!important}
+          .fs-fin-kpis>div{flex:1 1 70px!important;padding-left:0!important;border-left:none!important}
+          .fs-fin-kpis>div>div:last-child{font-size:14px!important}
+          /* "live with bank context" sits beside the Finance title
+             via space-between; on phone the long EN copy collides
+             with the title and clips. Drop to two-line wrap by
+             hiding the label suffix; keep the green dot. */
+          .fs-fin-status{font-size:9px!important;letter-spacing:0!important}
         }
       `}</style>
 
@@ -1326,7 +1342,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
                 pills — the drag itself (and the empty MID slot
                 above) is what tells the story; an additional pill
                 here would just compete for attention. */}
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'nowrap' }}>
+            <div className="fs-bench-row" style={{ display: 'flex', gap: 6, flexWrap: 'nowrap' }}>
               {BENCH_FOH.map((s) => {
                 const isPorkAdams = s.id === 'pork-adams'
                 const lifted = isPorkAdams && dragState === 'lift'
@@ -1454,7 +1470,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         <div style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Finance', 'Finanzas')}</span>
-            <span style={mono({ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: GREEN })}>
+            <span className="fs-fin-status" style={mono({ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10, color: GREEN })}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: GREEN, display: 'inline-block' }} />{t('live with bank context', 'en vivo con contexto del banco')}
             </span>
           </div>

@@ -357,6 +357,15 @@ export default async function MarketingPage() {
              user lands on the demo faster. */
           .mk-floorsim-h3{display:none!important}
 
+          /* Language toggle — desktop's bottom-right pill is fine
+             when there's spare canvas; on a phone it parks itself
+             over actual demo content (Finance bars in particular).
+             Shrink everything: font, padding, and pull the pill
+             tighter into the corner so the visible footprint is
+             closer to a label than a button bar. */
+          .mk-lang-toggle{bottom:10px!important;right:10px!important;padding:2px!important;font-size:9.5px!important;letter-spacing:0.06em!important}
+          .mk-lang-toggle button{padding:4px 9px!important}
+
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */

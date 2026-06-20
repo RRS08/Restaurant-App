@@ -1082,8 +1082,8 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             'Vendes un platillo, y el inventario se cuenta solo.'
           )}</div>
           <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
-            'A tile gets tapped at the counter. The recipe pulls straight from your stock the moment it’s rung — no second screen, no clipboard, no end-of-night count. Watch the ingredients on the right move as the order goes in.',
-            'Tocas un botón en la caja. La receta saca directo del inventario en el momento — sin segunda pantalla, sin tabla, sin conteo a fin de noche. Mira cómo se mueven los ingredientes a la derecha mientras entra la orden.'
+            'Tap a tile. The recipe pulls straight from your stock the moment it’s rung — no second screen, no clipboard, no end-of-night count.',
+            'Tocas un botón. La receta saca directo del inventario en el momento — sin segunda pantalla, sin tabla, sin conteo a fin de noche.'
           )}</p>
         </div>
       </div>
@@ -1588,8 +1588,8 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
             'Cierras el día, y el día se lee solo.'
           )}</div>
           <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#52525B', margin: '6px 0 0', maxWidth: 660 }}>{t(
-            'What sold, how people paid, where the week is trending — a single honest picture, plain enough to read between the lunch and dinner rush. The chart’s last bar is today; it grew with every order rung above.',
-            'Qué se vendió, cómo pagó la gente, hacia dónde va la semana — una sola foto honesta, clara para leer entre la comida y la cena. La última barra del gráfico es hoy; creció con cada orden que cobraste arriba.'
+            'What sold, how people paid, where the week is trending — one honest picture, plain enough to read between rushes. The chart’s last bar is today.',
+            'Qué se vendió, cómo pagó la gente, hacia dónde va la semana — una sola foto honesta, clara para leer entre la comida y la cena. La última barra del gráfico es hoy.'
           )}</p>
         </div>
       </div>

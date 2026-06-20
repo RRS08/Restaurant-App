@@ -385,7 +385,8 @@ export default async function MarketingPage() {
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
           .mk-act2-row{gap:8px!important;padding:18px 0!important}
-          .mk-act2-row-title{flex:0 0 100%!important;min-width:0!important}
+          .mk-act2-row-title{flex:0 0 100%!important;min-width:0!important;font-size:26px!important;letter-spacing:-1.2px!important}
+          .mk-act2-row p{font-size:14.5px!important;line-height:1.5!important}
 
           /* Dark setup card — tighter padding so the four step
              tiles don't get cramped between the wall and the
@@ -504,7 +505,7 @@ export default async function MarketingPage() {
           <div className="mk-hero-text" style={{ flex: '1 1 440px' }}>
             <div style={{ ...eyebrow, ...enter(0) }}>{t('Daily operating system · Made for owners', 'Sistema operativo del día · Hecho para dueños')}</div>
             <h1 style={{ fontSize: 'clamp(38px,5.4vw,66px)', lineHeight: 0.98, letterSpacing: '-2.2px', fontWeight: 700, margin: '22px 0 0', ...enter(120) }}>{t('Run the whole place from the counter you’re already standing at.', 'Maneja todo tu lugar desde el mostrador donde ya estás parado.')}</h1>
-            <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, your cash, and your books at the same time. So “what happened today” stops being a Sunday-night guess with a calculator and a shoebox of receipts.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo. Así “qué pasó hoy” deja de ser una adivinanza del domingo en la noche con una calculadora y una caja de recibos.')}</p>
+            <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, cash, and books at the same time.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo.')}</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 30, ...enter(400) }}>
               <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
               <a className="mk-hero-cta" href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
@@ -658,24 +659,24 @@ export default async function MarketingPage() {
               {
                 t: t('One package.', 'Un solo paquete.'),
                 d: t(
-                  'Everything your floor needs — POS, inventory, staffing, finance, analytics — on one screen and one bill. No starter tier with the essentials sold back as add-ons. No fees that creep up over time. No locked hardware. One price. What you see is what you pay, for as long as we work together.',
-                  'Todo lo que tu piso necesita — POS, inventario, personal, finanzas, analíticas — en una sola pantalla y una sola cuenta. Sin un plan básico que te vende lo esencial como extras. Sin cargos que suben con el tiempo. Sin hardware bloqueado. Un solo precio. Lo que ves es lo que pagas, mientras trabajemos juntos.'
+                  'POS, inventory, staffing, finance, analytics — one screen, one bill. No starter tier with essentials sold as add-ons. No creeping fees. No locked hardware. What you see is what you pay.',
+                  'POS, inventario, personal, finanzas, analíticas — una pantalla, una cuenta. Sin plan básico que vende lo esencial como extras. Sin cargos que suben. Sin hardware bloqueado. Lo que ves es lo que pagas.'
                 ),
                 bottom: false,
               },
               {
                 t: t('One promise.', 'Una sola promesa.'),
                 d: t(
-                  'The day you’re installed isn’t the last day we show up. The price you signed up at stays. Cancellation is one click, not a phone tree. New features get built because you asked for them, not because we needed a new tier to charge for. We earn growth by serving you better — not by squeezing more out of you.',
-                  'El día que te instalamos no es el último día que nos ves. El precio con el que entras se queda. Cancelar es un clic, no un menú telefónico. Las funciones nuevas las hacemos porque tú las pediste, no porque necesitamos un plan nuevo que cobrarte. Crecemos sirviéndote mejor — no exprimiéndote más.'
+                  'Install isn’t the last day we show up. Your price stays. Cancellation is one click, not a phone tree. New features get built because you asked for them — not to justify a new tier.',
+                  'Instalarte no es el último día que nos ves. Tu precio se queda. Cancelar es un clic, no un menú telefónico. Las funciones nuevas las hacemos porque las pediste — no para vender un plan nuevo.'
                 ),
                 bottom: false,
               },
               {
                 t: t('One person.', 'Una sola persona.'),
                 d: t(
-                  'You reach a human — the founder who built this. If your kitchen ticket printer dies during dinner service, you call me and I pick up. That’s the part of the company we’ll never outgrow.',
-                  'Te contesta una persona — el fundador que construyó esto. Si la impresora de comandas muere en plena cena, me llamas y contesto. Esa parte de la empresa nunca la vamos a perder.'
+                  'You reach a human — the founder who built this. Ticket printer dies during dinner service? You call me and I pick up. That’s the part we’ll never outgrow.',
+                  'Te contesta una persona — el fundador que construyó esto. ¿Se muere la impresora de comandas en plena cena? Me llamas y contesto. Esa parte nunca la vamos a perder.'
                 ),
                 bottom: true,
               },

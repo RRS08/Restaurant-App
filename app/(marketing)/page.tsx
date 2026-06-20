@@ -317,7 +317,7 @@ export default async function MarketingPage() {
              side-by-side on desktop; on mobile they stack with
              extra row padding for breathing room. */
           .mk-act2-row{gap:8px!important;padding:18px 0!important}
-          .mk-act2-row-title{min-width:0!important}
+          .mk-act2-row-title{flex:0 0 100%!important;min-width:0!important}
 
           /* Dark setup card — tighter padding so the four step
              tiles don't get cramped between the wall and the
@@ -418,7 +418,7 @@ export default async function MarketingPage() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 600, ...typeIn(4440, 500) }}><span>TOTAL</span><span>$15.25</span></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingTop: 12, borderTop: '1px dashed #D8D8D4', ...typeIn(5040, 700) }}>
                   <span style={{ color: '#6B6B70' }}>{t('Next morning', 'A la mañana siguiente')}</span>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{t('reconciled', 'conciliado')} <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#18181B', color: '#FFF', fontSize: 10, ...popIn(5840) }}>✓</span></span>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{t('Checked', 'Checked')} <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, borderRadius: '50%', background: '#18181B', color: '#FFF', fontSize: 10, ...popIn(5840) }}>✓</span></span>
                 </div>
               </div>
             </div>

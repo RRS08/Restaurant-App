@@ -367,19 +367,20 @@ export default async function MarketingPage() {
           .mk-lang-toggle button{padding:4px 9px!important}
 
           /* Act 2 "five disconnected tools → One screen" converge row.
-             Default wraps onto 3 lines on phone: 4 grey pills, then
-             Whiteboard alone, then arrow + black "One screen" pill.
-             Breaks the cause-and-effect visual story. Force the whole
-             row to nowrap, shrink everything, allow horizontal scroll
-             as the safety so it never wraps even at 320px. Scrollbar
-             hidden so it still reads as a clean strip. */
-          .mk-act2-converge{flex-wrap:nowrap!important;gap:6px!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch}
-          .mk-act2-converge::-webkit-scrollbar{display:none}
-          .mk-act2-pills{flex-wrap:nowrap!important;gap:4px!important;flex:0 0 auto}
-          .mk-act2-pills > span{font-size:9px!important;padding:3px 6px!important;border-radius:5px!important}
-          .mk-act2-arrow{font-size:14px!important;flex:0 0 auto}
-          .mk-act2-one{font-size:10px!important;padding:4px 9px!important;flex:0 0 auto}
-          .mk-act2-one svg{width:11px!important;height:11px!important}
+             Default wraps onto 3 lines on phone; previous shrink
+             still didn't fit because 5 pills + arrow + One screen
+             pill exceeds 330px usable width. Tightened harder:
+             font 8px pills with 2/5 padding, gap 3, arrow hidden
+             on phone (the pills sitting flush against the One
+             screen pill carry the visual without it), One screen
+             pill compressed to font 9 with 3/7 padding. Sized to
+             fit at 360px without scroll. */
+          .mk-act2-converge{flex-wrap:nowrap!important;gap:4px!important;overflow-x:hidden!important}
+          .mk-act2-pills{flex-wrap:nowrap!important;gap:3px!important;flex:0 1 auto;min-width:0}
+          .mk-act2-pills > span{font-size:8px!important;padding:2px 5px!important;border-radius:5px!important;letter-spacing:0!important}
+          .mk-act2-arrow{display:none!important}
+          .mk-act2-one{font-size:9px!important;padding:3px 7px!important;flex:0 0 auto;gap:5px!important}
+          .mk-act2-one svg{width:10px!important;height:10px!important}
 
           /* Act 2 One/One/One — the title and description sit
              side-by-side on desktop; on mobile they stack with

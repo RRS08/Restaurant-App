@@ -1032,8 +1032,14 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
           .fs-bench-row > div{flex:1 1 calc(50% - 6px)!important;min-width:0!important}
           /* Chapter 3 — chart on top, category + payment mix below. */
           .fs-ch3{grid-template-columns:1fr!important;gap:24px!important}
-          /* Connectors — keep but reduce vertical room. */
-          .fs-connector{margin:36px 0!important}
+          /* Chapter connectors ("Each ticket depletes..." and
+             "Every ticket, shift, and invoice rolls up...") — hide
+             on phone. On desktop they're narrative bridges that
+             tie the three chapters into one flowing demo; on
+             phone where every chapter takes its own viewport,
+             they just add vertical filler between simulations the
+             user already sees the cause-and-effect of. */
+          .fs-connector{display:none!important}
           /* Chapter heads — wrap title to two lines naturally. */
           .fs-chap{margin-bottom:20px!important}
           /* Status line — hide on phone. On desktop it pairs with the

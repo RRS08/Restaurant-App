@@ -366,6 +366,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
   // here so getRelPos() can convert their bounding rect into a
   // coordinate inside the POS card.
   const posCardRef = useRef<HTMLDivElement | null>(null)
+  const invCardRef = useRef<HTMLDivElement | null>(null)
   const tileRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const continueRef = useRef<HTMLButtonElement | null>(null)
@@ -466,6 +467,16 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
       Drinks: prev.Drinks + nextCatDelta.Drinks,
     }))
     setPaid(method); setPaidFading(false); setTicket((v) => v + 1)
+    // Phone-only second pull: now glide down to the inventory card so
+    // the bars-deplete moment lands in the viewport. Pairs with the
+    // initial POS centering at startScript() — the two scrolls read
+    // as a guided "watch this → now watch this" rather than a single
+    // mid-animation yank.
+    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+      timers.current.push(setTimeout(() => {
+        invCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }, 1300))
+    }
     // 1500ms in: kick off the check overlay's fade-out.
     timers.current.push(setTimeout(() => setPaidFading(true), 1500))
     // 1850ms in: overlay is fully transparent → unmount it AND
@@ -536,6 +547,17 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
     setTab('Tacos')
     setPaid(null)
     setTouches([])
+
+    // Phone-only: park the user on the POS card before the script
+    // starts ringing items up. The intersection observer fires when
+    // the POS is 30% in view, which often means it's still in the
+    // bottom half of the viewport — items get tapped off-screen.
+    // Centering at script start (and re-centering on inventory at
+    // payment time, in pay()) makes the demo feel guided rather
+    // than something happening past the fold.
+    if (typeof window !== 'undefined' && window.innerWidth <= 640) {
+      posCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
 
     // Schedule each step at its time. No cursor pre-glide.
     SCRIPT.forEach(({ at, step }) => {
@@ -1203,7 +1225,7 @@ export default function FloorSim({ lang = 'en' }: FloorSimProps) {
         </div>
 
         {/* Inventory */}
-        <div style={{ ...cardStyle, padding: '14px 16px' }}>
+        <div ref={invCardRef} style={{ ...cardStyle, padding: '14px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 13 }}>
             <span style={{ fontSize: 14, fontWeight: 700 }}>{t('Inventory', 'Inventario')}</span>
             <span style={mono({ fontSize: 10.5, color: '#9CA3AF' })}>{t('sorted by urgency', 'ordenado por urgencia')}</span>

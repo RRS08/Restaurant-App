@@ -13,9 +13,14 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Checked — Restaurant operations, checked.",
+  // metadataBase is the origin Next.js uses to resolve any relative
+  // image / OG / Twitter URLs. Set to the production domain so
+  // shared links (Slack, iMessage, Twitter, etc.) always resolve
+  // full absolute paths regardless of which deploy generated them.
+  metadataBase: new URL("https://onchecked.app"),
+  title: "Checked — Restaurant and retail operations, checked.",
   description:
-    "Sales, inventory, staffing, and finance for restaurants — one surface, one truth, one tap to the next thing that needs attention.",
+    "Sales, inventory, staffing, and finance for independent restaurants and retail shops — one surface, one truth, one tap to the next thing that needs attention.",
 };
 
 // Viewport meta — required for tablet (iPad) Safari to render at

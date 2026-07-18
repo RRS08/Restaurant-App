@@ -26,13 +26,22 @@ import { submitDemoLead } from '@/app/actions/demo-leads'
 
 const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
 
+// Concept options span both sides of the business — food service
+// concepts first, then retail concepts. Order matters: it hints
+// what we're best known for while making clear retail is welcome.
 const CONCEPTS_EN = [
   'Taqueria / tacos', 'Mariscos', 'Panadería / bakery', 'BBQ',
-  'Breakfast / cafe', 'Burgers', 'Other',
+  'Breakfast / cafe', 'Burgers',
+  'Boutique / apparel', 'Convenience / c-store', 'Gift / specialty',
+  'Beauty / cosmetics', 'Other retail',
+  'Other',
 ]
 const CONCEPTS_ES = [
   'Taquería / tacos', 'Mariscos', 'Panadería', 'BBQ',
-  'Desayunos / café', 'Hamburguesas', 'Otro',
+  'Desayunos / café', 'Hamburguesas',
+  'Boutique / ropa', 'Tienda de conveniencia', 'Regalos / especialidad',
+  'Belleza / cosméticos', 'Otro retail',
+  'Otro',
 ]
 
 interface Props {

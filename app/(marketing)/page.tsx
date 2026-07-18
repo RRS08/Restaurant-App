@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------
-// Marketing landing page — checked.app/
+// Marketing landing page — onchecked.app/
 //
 // Server component. Renders the marketing site and mounts client
 // islands: <FloorSim />, <DemoForm />, <LanguageToggle />.
@@ -122,8 +122,8 @@ export default async function MarketingPage() {
     {
       t: t('Your data is yours — always.', 'Tu información es tuya — siempre.'),
       d: t(
-        'Walled off from every other restaurant by row-level security. Encrypted at rest and in transit. Exportable any time, with no friction. If Checked ever closes its doors, you take everything with you.',
-        'Aislada de cualquier otro restaurante con seguridad a nivel de fila. Encriptada en reposo y en tránsito. Exportable cuando quieras, sin trabas. Si algún día Checked cierra, te llevas todo contigo.'
+        'Walled off from every other business by row-level security. Encrypted at rest and in transit. Exportable any time, with no friction. If Checked ever closes its doors, you take everything with you.',
+        'Aislada de cualquier otro negocio con seguridad a nivel de fila. Encriptada en reposo y en tránsito. Exportable cuando quieras, sin trabas. Si algún día Checked cierra, te llevas todo contigo.'
       ),
     },
   ]
@@ -526,7 +526,7 @@ export default async function MarketingPage() {
           <div className="mk-hero-text" style={{ flex: '1 1 440px' }}>
             <div style={{ ...eyebrow, ...enter(0) }}>{t('Daily operating system · Made for owners', 'Sistema operativo del día · Hecho para dueños')}</div>
             <h1 style={{ fontSize: 'clamp(38px,5.4vw,66px)', lineHeight: 0.98, letterSpacing: '-2.2px', fontWeight: 700, margin: '22px 0 0', ...enter(120) }}>{t('Run the whole place from the counter you’re already standing at.', 'Maneja todo tu lugar desde el mostrador donde ya estás parado.')}</h1>
-            <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, cash, and books at the same time.', 'Checked es el sistema operativo que los restaurantes independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo.')}</p>
+            <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants and retail shops have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, cash, and books at the same time.', 'Checked es el sistema operativo que restaurantes y tiendas independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo.')}</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 30, ...enter(400) }}>
               <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
               <a className="mk-hero-cta" href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
@@ -636,8 +636,8 @@ export default async function MarketingPage() {
       <section className="mk-section mk-act-pad-top mk-act-pad-bottom" style={wrap({ padding: '96px 24px 64px' })}>
         <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 24 }}>
           <h3 className="mk-floorsim-h3" style={{ fontSize: 'clamp(22px,2.8vw,32px)', lineHeight: 1.08, letterSpacing: '-1px', fontWeight: 700, margin: 0, maxWidth: 620 }}>{t(
-            'Here’s what that looks like in motion. The same restaurant, on one screen, across one real day.',
-            'Así se ve en movimiento. El mismo restaurante, en una sola pantalla, a lo largo de un día real.'
+            'Here’s what that looks like in motion. The same place, on one screen, across one real day.',
+            'Así se ve en movimiento. El mismo lugar, en una sola pantalla, a lo largo de un día real.'
           )}</h3>
           <p className="mk-livedemo-caption" style={mono({ fontSize: 12.5, color: '#6B6B70', maxWidth: 240, lineHeight: 1.6 })}>{t(
             'The actual product, not a mockup. Plays itself as you scroll — three moments, from a single ring to close.',
@@ -656,8 +656,8 @@ export default async function MarketingPage() {
               <div style={eyebrow}>{t('Why get it from us', 'Por qué con nosotros')}</div>
               <h2 style={{ fontSize: 'clamp(26px,3.4vw,40px)', lineHeight: 1.05, letterSpacing: '-1.3px', fontWeight: 700, margin: '8px 0 0', maxWidth: 760 }}>{t('Same software. Same price. Same person. For as long as we work together.', 'Mismo software. Mismo precio. Misma persona. Mientras trabajemos juntos.')}</h2>
               <p style={{ fontSize: 17, lineHeight: 1.55, color: '#52525B', margin: '20px 0 0', maxWidth: 700 }}>{t(
-                'Independent restaurants get underserved, expected to figure out software no one ever explained to them, and overcharged by every alternative on the market. Checked is built to be the opposite.',
-                'Los restaurantes independientes están desatendidos, se espera que entiendan un software que nadie les explicó, y los sobrecobra cualquier alternativa del mercado. Checked está hecho para ser lo opuesto.'
+                'Independent restaurants and retail shops get underserved, expected to figure out software no one ever explained to them, and overcharged by every alternative on the market. Checked is built to be the opposite.',
+                'Los restaurantes y tiendas independientes están desatendidos, se espera que entiendan un software que nadie les explicó, y los sobrecobra cualquier alternativa del mercado. Checked está hecho para ser lo opuesto.'
               )}</p>
             </div>
           </div>
@@ -842,7 +842,7 @@ export default async function MarketingPage() {
       {/* FOOTER */}
       <footer className="mk-footer" style={wrap({ padding: '34px 24px 48px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 18 })}>
         <BrandLockup size="sm" />
-        <div style={mono({ fontSize: 12, color: '#A1A1A6' })}>{t('The daily operating system for independent restaurants.', 'El sistema operativo del día a día para restaurantes independientes.')}</div>
+        <div style={mono({ fontSize: 12, color: '#A1A1A6' })}>{t('The daily operating system for independent restaurants and retail shops.', 'El sistema operativo del día a día para restaurantes y tiendas independientes.')}</div>
         <div style={mono({ fontSize: 12, color: '#A1A1A6' })}>© 2026 Checked</div>
       </footer>
       <LanguageToggle currentLang={lang} />

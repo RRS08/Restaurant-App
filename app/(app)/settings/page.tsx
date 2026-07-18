@@ -33,6 +33,8 @@ import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
 import AccessCodesCard from './access-codes-card'
 import LanguageCard from './language-card'
+import GoDaddySalesImportCard from './godaddy-sales-import-card'
+import GoDaddyMenuImportCard from './godaddy-menu-import-card'
 import { getLang, getT } from '@/lib/i18n-server'
 
 export default async function SettingsPage() {
@@ -285,6 +287,20 @@ export default async function SettingsPage() {
             manager (location-scoped) or staff via email. */}
         {(isOwner && restaurantId) && (
           <TeamCard lang={lang} locations={teamLocations} invitations={teamInvitations} />
+        )}
+
+        {/* GoDaddy CSV imports — owner-only. Two one-shot upload
+            surfaces (sales + menu) that hit the same godaddy_csv
+            adapter as the future live API sync will. Reruns are
+            safe: sales dedupe by (provider, order id), menu upserts
+            by (source, external item id). Kept in Settings rather
+            than dev-tools so real customers can migrate historical
+            GoDaddy data on their own. */}
+        {(isOwner && restaurantId) && teamLocations.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <GoDaddySalesImportCard locations={teamLocations} />
+            <GoDaddyMenuImportCard locations={teamLocations} />
+          </div>
         )}
 
         {readiness && <SystemStatusCard lang={lang} readiness={readiness} />}

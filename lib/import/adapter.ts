@@ -28,6 +28,8 @@ import { customJsonSourceAdapter } from './adapters/custom-json'
 import { cloverSourceAdapter } from './adapters/clover'
 import { toastSourceAdapter } from './adapters/toast'
 import { squareSourceAdapter } from './adapters/square'
+import { godaddyPosSourceAdapter, godaddyOnlineSourceAdapter } from './adapters/godaddy'
+import { godaddyCsvSourceAdapter } from './adapters/godaddy-csv'
 
 // ================================================================
 // Source identity
@@ -39,9 +41,17 @@ export type SourceId =
   | 'square'
   | 'toast'
   | 'clover'
+  // GoDaddy Commerce — one provider, two channels (see adapters/godaddy.ts)
+  | 'godaddy_pos'
+  | 'godaddy_online'
   // File / custom adapters (not implemented yet)
   | 'csv'
   | 'custom_json'
+  // GoDaddy manual CSV export parser (one-shot file import; see
+  // adapters/godaddy-csv.ts). Never a connection provider — the
+  // import action tags rows as godaddy_pos / godaddy_online so a CSV
+  // backfill and the eventual API sync share one sales stream.
+  | 'godaddy_csv'
 
 export type SourceKind = 'api' | 'file' | 'custom' | 'mock'
 
@@ -148,6 +158,12 @@ export function getSourceAdapter(id: SourceId): SourceAdapter {
       return toastSourceAdapter
     case 'square':
       return squareSourceAdapter
+    case 'godaddy_pos':
+      return godaddyPosSourceAdapter
+    case 'godaddy_online':
+      return godaddyOnlineSourceAdapter
+    case 'godaddy_csv':
+      return godaddyCsvSourceAdapter
     default:
       throw new Error(`Source adapter '${id}' is not implemented yet.`)
   }
@@ -159,6 +175,8 @@ export function isKnownSourceId(id: string): id is SourceId {
     id === 'square' ||
     id === 'toast' ||
     id === 'clover' ||
+    id === 'godaddy_pos' ||
+    id === 'godaddy_online' ||
     id === 'csv' ||
     id === 'custom_json'
   )

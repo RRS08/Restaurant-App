@@ -29,6 +29,7 @@ import {
   disconnectExternalPos,
   importCsvMenu,
   importCsvOrders,
+  importGodaddyCsvOrders,
   importCustomJsonMenu,
   importCustomJsonOrders,
 } from '@/app/actions/pos-import'
@@ -100,6 +101,7 @@ export default function DevTools({
   const [resetState, resetAction, resetPending]                 = useActionState(resetExternalPosData, null)
   const [csvMenuState, csvMenuAction, csvMenuPending]           = useActionState(importCsvMenu, null)
   const [csvOrdersState, csvOrdersAction, csvOrdersPending]     = useActionState(importCsvOrders, null)
+  const [gdCsvState, gdCsvAction, gdCsvPending]                 = useActionState(importGodaddyCsvOrders, null)
   const [jsonMenuState, jsonMenuAction, jsonMenuPending]        = useActionState(importCustomJsonMenu, null)
   const [jsonOrdersState, jsonOrdersAction, jsonOrdersPending]  = useActionState(importCustomJsonOrders, null)
 
@@ -277,6 +279,8 @@ export default function DevTools({
               <option value="clover">Clover</option>
               <option value="toast">Toast</option>
               <option value="square">Square</option>
+              <option value="godaddy_pos">GoDaddy POS</option>
+              <option value="godaddy_online">GoDaddy Online Store</option>
               <option value="csv" disabled>CSV (use the CSV import panel below)</option>
               <option value="custom_json" disabled>Custom JSON (use the JSON import panel below)</option>
             </select>
@@ -292,7 +296,8 @@ export default function DevTools({
               'Credentials JSON (API adapters only).\n' +
               'Clover: { "api_token": "xxxx", "merchant_id": "ABC123", "base_url": "https://apisandbox.dev.clover.com" }\n' +
               'Toast:  { "client_id": "xxxx", "client_secret": "yyyy", "restaurant_guid": "ZZZZ", "base_url": "https://ws-sandbox-api.eng.toasttab.com" }\n' +
-              'Square: { "access_token": "EAAA...", "location_id": "LXXX", "base_url": "https://connect.squareupsandbox.com" }'
+              'Square: { "access_token": "EAAA...", "location_id": "LXXX", "base_url": "https://connect.squareupsandbox.com" }\n' +
+              'GoDaddy: { "store_id": "STORE123", "client_id": "xxxx", "client_secret": "yyyy" }  (or "access_token" instead of client_id/secret)'
             }
             className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] font-mono placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" />
           {connectState && 'ok' in connectState && <span className="text-[11px] text-green-700">{connectState.message}</span>}
@@ -387,6 +392,8 @@ export default function DevTools({
               <option value="square">square</option>
               <option value="clover">clover</option>
               <option value="toast">toast</option>
+              <option value="godaddy_pos">godaddy_pos</option>
+              <option value="godaddy_online">godaddy_online</option>
               <option value="mock">mock</option>
               <option value="csv">csv</option>
               <option value="custom_json">custom_json</option>
@@ -485,6 +492,64 @@ ord_0002,2026-04-12T14:00:00Z,12.50,cash,completed,itm_wings,Buffalo Wings,1,9.0
               {csvOrdersState && 'error' in csvOrdersState && <p className="text-[11px] text-red-600 mt-2">{csvOrdersState.error}</p>}
             </form>
           </div>
+        )}
+      </div>
+
+      {/* ------------- 5b. GoDaddy sales CSV (while API access is pending) ------------- */}
+      <div className="rounded-xl border border-gray-200 bg-white p-5">
+        <div className="mb-3">
+          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">GoDaddy sales CSV</p>
+          <h3 className="text-sm font-semibold text-gray-900 mt-0.5">Import GoDaddy sales from a dashboard export</h3>
+          <p className="text-[11px] text-gray-500 mt-1 leading-relaxed max-w-xl">
+            Start capturing GoDaddy sales now, before the API/developer account is live. Export a
+            sales/orders report from the GoDaddy Commerce dashboard (POS or online store) and upload
+            it here. Columns are auto-detected and messy exports (currency symbols, refunds, split
+            date/time) are handled. Rows are tagged <code className="text-gray-600">godaddy_pos</code> /{' '}
+            <code className="text-gray-600">godaddy_online</code> so they merge cleanly with the live
+            API sync later. Re-uploading the same export is safe — duplicates are skipped.
+          </p>
+        </div>
+
+        {locations.length === 0 ? (
+          <p className="text-[11px] text-red-600">No locations found for this restaurant.</p>
+        ) : (
+          <form action={gdCsvAction} className="rounded-lg border border-gray-100 p-3">
+            <p className="text-[11px] font-semibold text-gray-700 mb-1">Sales / orders CSV</p>
+            <p className="text-[10px] text-gray-400 mb-2 leading-relaxed">
+              Auto-detected columns (any reasonable header works): an order/transaction id and a date
+              are required. Item name/id + quantity + price are used when present (one row per item);
+              otherwise each row is treated as a whole sale. Optional: total, tax, tip, discount,
+              payment method, status. <span className="text-amber-600">Column names are PROVISIONAL</span> —
+              tell me the real export headers if any column isn&apos;t picked up.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-2">
+              <select name="channel" defaultValue="pos"
+                className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="pos">POS (in-store)</option>
+                <option value="online">Online store</option>
+              </select>
+              <select name="location_id" required defaultValue=""
+                className="flex-1 min-w-[10rem] rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="" disabled>Select location…</option>
+                {locations.map((loc) => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+              </select>
+            </div>
+            <textarea name="input" rows={6} required
+              placeholder={
+                `Order ID,Date,Item,Qty,Unit Price,Line Total,Payment Method,Status
+1001,2026-07-15 13:04,House Burger,1,$14.00,$14.00,Visa,Paid
+1001,2026-07-15 13:04,Fries,2,$3.50,$7.00,Visa,Paid
+1002,7/15/2026 2:11 PM,,,,"$12.50",Cash,Paid
+1003,2026-07-15,Cola,1,$3.00,($3.00),Card,Refunded`
+              }
+              className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] font-mono placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 mb-2" />
+            <button type="submit" disabled={gdCsvPending}
+              className="rounded-lg bg-gray-900 text-white text-xs font-semibold px-3 py-1.5 hover:bg-gray-800 disabled:opacity-60 transition-colors">
+              {gdCsvPending ? 'Importing…' : 'Import GoDaddy sales CSV'}
+            </button>
+            {gdCsvState && 'ok' in gdCsvState && <p className="text-[11px] text-green-700 mt-2">{gdCsvState.message}</p>}
+            {gdCsvState && 'error' in gdCsvState && <p className="text-[11px] text-red-600 mt-2">{gdCsvState.error}</p>}
+          </form>
         )}
       </div>
 

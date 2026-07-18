@@ -244,6 +244,7 @@ export async function syncExternalPosMenu(
   }
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/settings')
 
   if (failedCount === connections.length) {
@@ -346,9 +347,12 @@ export async function syncExternalPosOrders(
   }
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/dashboard')
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/settings')
 
   if (failedCount === connections.length) {
@@ -499,6 +503,7 @@ export async function importCsvMenu(
     if (result.error) return { error: result.error }
 
     revalidatePath('/menu')
+    revalidatePath('/web/menu')
     revalidatePath('/settings')
     return {
       ok: true,
@@ -554,9 +559,12 @@ export async function importCsvOrders(
     if (result.error) return { error: result.error }
 
     revalidatePath('/sales')
+    revalidatePath('/web/sales')
     revalidatePath('/dashboard')
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
     revalidatePath('/inventory')
+    revalidatePath('/web/inventory')
     revalidatePath('/settings')
     return {
       ok: true,
@@ -568,6 +576,167 @@ export async function importCsvOrders(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown CSV error.'
+    return { error: msg }
+  }
+}
+
+// ----------------------------------------------------------------
+// GoDaddy sales CSV — one-shot, location-targeted.
+//
+// Lets an owner ingest sales from a GoDaddy Commerce dashboard export
+// (POS/Poynt transactions export or online storefront orders export)
+// BEFORE the GoDaddy developer account / API is live. Reuses the same
+// one-shot machinery as the CSV/JSON imports above: no connection row,
+// no stored credentials, no sync cursor.
+//
+// The parser (`godaddy_csv` adapter) is channel-agnostic, but the rows
+// are TAGGED with the channel-specific provider the future API sync
+// will also use — `godaddy_pos` or `godaddy_online` — so the CSV
+// backfill and the eventual live API sync form ONE unified GoDaddy
+// sales stream and dedupe against each other by (provider, order id).
+// The location-aware dedupe key means re-uploading the same export is
+// safe (duplicates are skipped, not double-inserted).
+// ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// GoDaddy menu CSV — one-shot menu import from a GoDaddy Commerce
+// products/catalog export.
+//
+// Uses the same `godaddy_csv` adapter as the orders import — the
+// adapter's `listMenu` branch parses the same file family (POS or
+// storefront product exports) into the canonical NormalizedMenu
+// shape. Rewrites of the same file are safe: upserts key on
+// (source, external item id), so re-uploading updates in place.
+//
+// Owner-only. Same rationale as importCsvMenu: bypassing the
+// external-POS connection flow means a non-owner could otherwise
+// rewrite the menu wholesale.
+// ----------------------------------------------------------------
+export async function importGodaddyCsvMenu(
+  prevState: Result | null,
+  formData: FormData
+): Promise<Result> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
+
+  const validated = await validateImportInput(formData)
+  if ('error' in validated) return { error: validated.error }
+
+  const locErr = await verifyLocation(ctx, validated.locationId)
+  if (locErr) return { error: locErr }
+
+  // Channel decides which provider tag the menu rows land under, so
+  // a future live GoDaddy API menu sync joins the same stream and
+  // upserts against the same (source, external item id) keys.
+  const channel = ((formData.get('channel') as string | null) ?? 'pos').trim()
+  const sourceId: SourceId = channel === 'online' ? 'godaddy_online' : 'godaddy_pos'
+  const label = channel === 'online' ? 'GoDaddy Online Store' : 'GoDaddy POS'
+
+  try {
+    const adapter = getSourceAdapter('godaddy_csv')
+    const meta: SyncMeta = {}
+    const menu = await adapter.listMenu({
+      credentials: null,
+      since: null,
+      input: validated.input,
+      meta,
+    })
+
+    if (menu.items.length === 0 && menu.categories.length === 0) {
+      return { error: 'GoDaddy CSV parsed successfully but contained no menu rows.' }
+    }
+
+    const result = await ingestMenu({
+      supabase: ctx.supabase,
+      restaurantId: ctx.restaurantId,
+      sourceId,
+      menu,
+    })
+    if (result.error) return { error: result.error }
+
+    revalidatePath('/menu')
+    revalidatePath('/web/menu')
+    revalidatePath('/settings')
+    return {
+      ok: true,
+      message:
+        `${label} menu import: ${result.categoriesUpserted} categories, ${result.itemsUpserted} items` +
+        formatImportTransparency(meta, 'row') + '.',
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown GoDaddy CSV error.'
+    return { error: msg }
+  }
+}
+
+export async function importGodaddyCsvOrders(
+  prevState: Result | null,
+  formData: FormData
+): Promise<Result> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  // Owner-only — one-shot imports write sales/inventory/finance state
+  // directly, same rationale as importCsvOrders above.
+  const ownerErr = await requireOwnerResult(ctx.restaurantId)
+  if (ownerErr) return { error: ownerErr }
+
+  const validated = await validateImportInput(formData)
+  if ('error' in validated) return { error: validated.error }
+
+  const locErr = await verifyLocation(ctx, validated.locationId)
+  if (locErr) return { error: locErr }
+
+  // Channel picks the provider tag (defaults to POS). Both are valid
+  // SourceIds and match what the GoDaddy API adapters emit.
+  const channel = ((formData.get('channel') as string | null) ?? 'pos').trim()
+  const sourceId: SourceId = channel === 'online' ? 'godaddy_online' : 'godaddy_pos'
+  const label = channel === 'online' ? 'GoDaddy Online Store' : 'GoDaddy POS'
+
+  try {
+    const adapter = getSourceAdapter('godaddy_csv')
+    const meta: SyncMeta = {}
+    const orders = await adapter.listOrders({
+      credentials: null,
+      since: null,
+      input: validated.input,
+      meta,
+    })
+
+    if (orders.length === 0) {
+      return { error: 'GoDaddy CSV parsed successfully but contained no orders.' }
+    }
+
+    const result = await ingestOrders({
+      supabase: ctx.supabase,
+      restaurantId: ctx.restaurantId,
+      locationId: validated.locationId,
+      sourceId,
+      orders,
+      meta,
+    })
+    if (result.error) return { error: result.error }
+
+    revalidatePath('/sales')
+    revalidatePath('/web/sales')
+    revalidatePath('/dashboard')
+    revalidatePath('/finance')
+    revalidatePath('/web/finance')
+    revalidatePath('/inventory')
+    revalidatePath('/web/inventory')
+    revalidatePath('/settings')
+    return {
+      ok: true,
+      message:
+        `${label} CSV import: ${result.ordersInserted} new, ${result.ordersSkipped} duplicate${result.ordersSkipped === 1 ? '' : 's'}, ` +
+        `${result.placeholdersCreated} placeholder item${result.placeholdersCreated === 1 ? '' : 's'}, ` +
+        `${result.inventoryDepletionsWritten} inventory movement${result.inventoryDepletionsWritten === 1 ? '' : 's'}` +
+        formatImportTransparency(meta, 'row') + '.',
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown GoDaddy CSV error.'
     return { error: msg }
   }
 }
@@ -625,6 +794,7 @@ export async function importCustomJsonMenu(
     if (result.error) return { error: result.error }
 
     revalidatePath('/menu')
+    revalidatePath('/web/menu')
     revalidatePath('/settings')
     return {
       ok: true,
@@ -680,9 +850,12 @@ export async function importCustomJsonOrders(
     if (result.error) return { error: result.error }
 
     revalidatePath('/sales')
+    revalidatePath('/web/sales')
     revalidatePath('/dashboard')
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
     revalidatePath('/inventory')
+    revalidatePath('/web/inventory')
     revalidatePath('/settings')
     return {
       ok: true,

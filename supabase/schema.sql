@@ -1217,8 +1217,9 @@ create table if not exists public.external_pos_connections (
   restaurant_id            uuid not null references public.restaurants(id) on delete cascade,
   location_id              uuid not null references public.locations(id) on delete cascade unique,
   -- `provider` is a generic source adapter id now: API-based (square,
-  -- toast, clover), file-based (csv), custom (custom_json), or mock.
-  provider                 text not null check (provider in ('mock', 'square', 'toast', 'clover', 'csv', 'custom_json')),
+  -- toast, clover, godaddy_pos, godaddy_online), file-based (csv),
+  -- custom (custom_json), or mock.
+  provider                 text not null check (provider in ('mock', 'square', 'toast', 'clover', 'godaddy_pos', 'godaddy_online', 'csv', 'custom_json')),
   -- Provider-specific store/location identifier (e.g. Square location_id,
   -- Toast restaurantGuid). Kept opaque so any provider can use it.
   external_store_id        text,
@@ -1270,7 +1271,7 @@ do $$ begin
     alter table public.external_pos_connections drop constraint external_pos_connections_provider_check;
   end if;
   alter table public.external_pos_connections add constraint external_pos_connections_provider_check
-    check (provider in ('mock', 'square', 'toast', 'clover', 'csv', 'custom_json'));
+    check (provider in ('mock', 'square', 'toast', 'clover', 'godaddy_pos', 'godaddy_online', 'csv', 'custom_json'));
 end $$;
 
 alter table public.external_pos_connections enable row level security;

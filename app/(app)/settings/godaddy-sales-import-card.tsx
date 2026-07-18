@@ -48,49 +48,61 @@ export default function GoDaddySalesImportCard({ locations }: Props) {
   // read the text on submit without another user interaction.
   const [file, setFile] = useState<File | null>(null)
   const [reading, setReading] = useState(false)
+  // Client-side failures (no file, unreadable file, form not ready).
+  // Rendered inline next to the server result — never `alert()`, and
+  // never swallowed, so the button can't appear to do nothing.
+  const [clientError, setClientError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
 
-  // Read the picked file into text and stash it in the hidden
-  // textarea. Called on submit; guards against submit-with-no-file
-  // and against unreadable files (non-UTF8, gigantic). We drop the
-  // browser's async File.text() into the textarea and let the form
-  // action serialize it into the FormData normally.
-  const readIntoTextarea = async (): Promise<boolean> => {
-    if (!file) return false
-    if (!inputRef.current) return false
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+
+    // Capture the form element SYNCHRONOUSLY.
+    //
+    // React nulls SyntheticEvent.currentTarget the moment this handler
+    // yields at its first `await` (react-dom sets `event.currentTarget
+    // = null` right after the listener returns). Reading it after the
+    // await would give null, and `new FormData(null)` throws — inside
+    // an async handler that becomes an unhandled rejection React does
+    // not surface, so the button silently does nothing. This was the
+    // bug: capture first, use later.
+    const form = e.currentTarget
+
+    setClientError(null)
+
+    if (!file) {
+      setClientError('Pick a CSV file first.')
+      return
+    }
+    if (!inputRef.current) {
+      setClientError('Form is not ready — reload the page and try again.')
+      return
+    }
+
     setReading(true)
     try {
       const text = await file.text()
+      if (!text.trim()) {
+        setClientError('That file is empty.')
+        return
+      }
+      // Stash the CSV body in the hidden textarea so the action
+      // receives the same string shape as the paste-based flow.
       inputRef.current.value = text
-      return true
-    } catch {
-      return false
+      action(new FormData(form))
+      // The file selection is intentionally preserved so a failed
+      // import (e.g. unrecognized headers) can be retried in one tap.
+      // Re-importing is dedupe-safe, so keeping it is harmless.
+    } catch (err) {
+      setClientError(
+        err instanceof Error
+          ? `Could not read that file: ${err.message}`
+          : 'Could not read that file. Is it a plain-text CSV?',
+      )
     } finally {
       setReading(false)
     }
-  }
-
-  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    // Read the file BEFORE the form submits so `input` carries text.
-    // If nothing selected, block with a soft error — no exception.
-    if (!file) {
-      e.preventDefault()
-      alert('Pick a CSV file first.')
-      return
-    }
-    e.preventDefault()
-    const ok = await readIntoTextarea()
-    if (!ok) {
-      alert('Could not read that file. Is it a plain-text CSV?')
-      return
-    }
-    // Manually submit the form now that hidden input is populated.
-    const fd = new FormData(e.currentTarget)
-    action(fd)
-    // Clear the file input so a follow-up import can start fresh.
-    setFile(null)
-    if (fileRef.current) fileRef.current.value = ''
   }
 
   const disabled = pending || reading || !file || locations.length === 0
@@ -193,10 +205,13 @@ export default function GoDaddySalesImportCard({ locations }: Props) {
             >
               {pending || reading ? 'Importing…' : 'Import sales'}
             </button>
-            {state && 'ok' in state && (
+            {clientError && (
+              <p className="text-[12px] text-red-700">{clientError}</p>
+            )}
+            {!clientError && state && 'ok' in state && (
               <p className="text-[12px] text-emerald-700">{state.message}</p>
             )}
-            {state && 'error' in state && (
+            {!clientError && state && 'error' in state && (
               <p className="text-[12px] text-red-700">{state.error}</p>
             )}
           </div>

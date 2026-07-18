@@ -232,6 +232,26 @@ function applyMeta(meta: SyncMeta | undefined, rawCount: number, errors: string[
   }
 }
 
+/**
+ * Human-readable "which header did each logical column bind to?" map.
+ * Surfaced when a file yields no usable rows so the operator can see
+ * exactly what was and wasn't recognized instead of a bare "no orders"
+ * — the PROVISIONAL alias lists make this the most likely failure.
+ */
+function describeMapping(header: string[], col: Record<ColKey, number | undefined>): string {
+  const interesting: ColKey[] = [
+    'orderId', 'date', 'time', 'itemName', 'itemId',
+    'qty', 'unitPrice', 'lineTotal', 'orderTotal', 'status', 'payment',
+  ]
+  return interesting
+    .map((k) => {
+      const idx = col[k]
+      const bound = idx === undefined ? '(not found)' : `"${(header[idx] ?? '').trim()}"`
+      return `${k}=${bound}`
+    })
+    .join(', ')
+}
+
 function summarize(errors: string[]): string {
   const MAX = 5
   const head = errors.slice(0, MAX).join(' | ')
@@ -405,8 +425,19 @@ function parseOrdersCsv(input: string, meta?: SyncMeta): NormalizedOrder[] {
 
   applyMeta(meta, rawCount, errors)
 
-  // Fatal only when the file had rows but produced no usable orders.
-  if (out.length === 0 && errors.length > 0) throw new Error(summarize(errors))
+  // Nothing usable came out. Never return an empty array silently —
+  // that renders as "the button did nothing". Report what was seen,
+  // what each column bound to, and the row-level reasons, so a header
+  // mismatch against the PROVISIONAL alias lists is immediately
+  // diagnosable from the UI message alone.
+  if (out.length === 0) {
+    const detail = errors.length > 0 ? ` ${summarize(errors)}` : ''
+    throw new Error(
+      `No sales rows were recognized. Read ${rawCount} data row${rawCount === 1 ? '' : 's'}. ` +
+      `Column mapping: ${describeMapping(header, col)}. ` +
+      `Headers found: ${foundHeaders}.${detail}`
+    )
+  }
 
   return out
 }

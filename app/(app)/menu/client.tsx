@@ -172,7 +172,6 @@ export default function MenuClient({
       ? t('Build the menu your in-app POS reads from.', 'Construye el menú que lee tu POS integrado.')
       : t('Manage sections, items, and recipe links.', 'Administra secciones, artículos y vínculos de receta.')
 
-  const [addSectionOpen, setAddSectionOpen] = useState(false)
   const [addItemTo, setAddItemTo] = useState<string | null>(null)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
 
@@ -259,24 +258,11 @@ export default function MenuClient({
       {/* menu-building surface.                                            */}
       {/* ================================================================ */}
       {categories.length === 0 ? (
-        <EmptyMenuState onAddSection={() => setAddSectionOpen(true)} t={t} />
+        <EmptyMenuState t={t} />
       ) : (
         <>
           <div className="mb-4 flex items-center justify-end">
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setAddSectionOpen((o) => !o)}
-                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                {t('+ Add section', '+ Agregar sección')}
-              </button>
-              {addSectionOpen && (
-                <Popover onClose={() => setAddSectionOpen(false)} className="right-0 top-full mt-1.5 w-72">
-                  <AddSectionForm onClose={() => setAddSectionOpen(false)} t={t} />
-                </Popover>
-              )}
-            </div>
+            <AddSectionButton popoverClassName="right-0 top-full mt-1.5 w-72" t={t} />
           </div>
 
           <div className="space-y-10">
@@ -336,20 +322,46 @@ function SourceChip({ operatingMode, t }: { operatingMode: OperatingMode; t: T }
 // ================================================================
 // EmptyMenuState — the no-sections nudge.
 // ================================================================
-function EmptyMenuState({ onAddSection, t }: { onAddSection: () => void; t: T }) {
+function EmptyMenuState({ t }: { t: T }) {
   return (
     <div className="rounded-xl border-2 border-dashed border-gray-200 bg-white px-6 py-16 text-center">
       <p className="text-sm font-semibold text-gray-700">{t('No menu sections yet', 'Aún no hay secciones de menú')}</p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
         {t('Sections group items the way they appear at the POS. Add one to start.', 'Las secciones agrupan los artículos como aparecen en el POS. Agrega una para comenzar.')}
       </p>
+      <div className="mt-4">
+        <AddSectionButton popoverClassName="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72" t={t} />
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// AddSectionButton — the "+ Add section" trigger and its popover,
+// kept together in one component.
+//
+// These used to be split: the page owned an `addSectionOpen` flag and
+// only the populated branch rendered the popover, so the empty state's
+// button flipped a flag nothing read — the one button a brand-new
+// menu actually needs did nothing. Co-locating trigger and popover
+// makes that drift impossible.
+// ================================================================
+function AddSectionButton({ popoverClassName, t }: { popoverClassName: string; t: T }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="relative inline-block">
       <button
         type="button"
-        onClick={onAddSection}
-        className="mt-4 px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+        onClick={() => setOpen((o) => !o)}
+        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
       >
         {t('+ Add section', '+ Agregar sección')}
       </button>
+      {open && (
+        <Popover onClose={() => setOpen(false)} className={popoverClassName}>
+          <AddSectionForm onClose={() => setOpen(false)} t={t} />
+        </Popover>
+      )}
     </div>
   )
 }
@@ -687,8 +699,21 @@ function Popover({
 // ================================================================
 function AddSectionForm({ onClose, t }: { onClose: () => void; t: T }) {
   const [state, action, pending] = useActionState(createCategory, null)
+
+  // Close only once a submit has actually settled clean. The old
+  // `action={(fd) => { action(fd); if (!state?.error) onClose() }}`
+  // read `state` from the pre-submit render — always null on the
+  // first try — so it closed unconditionally and threw away the
+  // server's error ("Only the owner can edit the menu.", duplicate
+  // name, RLS failure). The button looked inert on every rejection.
+  const wasPending = useRef(false)
+  useEffect(() => {
+    if (wasPending.current && !pending && !state?.error) onClose()
+    wasPending.current = pending
+  }, [pending, state, onClose])
+
   return (
-    <form action={(fd) => { action(fd); if (!state?.error) onClose() }} className="space-y-3">
+    <form action={action} className="space-y-3">
       <p className="text-xs font-semibold text-gray-900">{t('New section', 'Nueva sección')}</p>
       <input
         name="name"

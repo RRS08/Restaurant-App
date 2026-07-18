@@ -39,40 +39,53 @@ export default function GoDaddyMenuImportCard({ locations }: Props) {
 
   const [file, setFile] = useState<File | null>(null)
   const [reading, setReading] = useState(false)
+  // Client-side failures surfaced inline — never `alert()`, never
+  // swallowed, so the button can't appear to do nothing.
+  const [clientError, setClientError] = useState<string | null>(null)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
 
-  const readIntoTextarea = async (): Promise<boolean> => {
-    if (!file) return false
-    if (!inputRef.current) return false
+  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+
+    // Capture the form element SYNCHRONOUSLY — React nulls
+    // SyntheticEvent.currentTarget as soon as this handler yields at
+    // its first `await`, so reading it afterwards gives null and
+    // `new FormData(null)` throws into an unhandled rejection that
+    // React never surfaces (the button just does nothing).
+    const form = e.currentTarget
+
+    setClientError(null)
+
+    if (!file) {
+      setClientError('Pick a CSV file first.')
+      return
+    }
+    if (!inputRef.current) {
+      setClientError('Form is not ready — reload the page and try again.')
+      return
+    }
+
     setReading(true)
     try {
       const text = await file.text()
+      if (!text.trim()) {
+        setClientError('That file is empty.')
+        return
+      }
       inputRef.current.value = text
-      return true
-    } catch {
-      return false
+      action(new FormData(form))
+      // File selection preserved so a failed import can be retried in
+      // one tap; re-importing is upsert/dedupe-safe.
+    } catch (err) {
+      setClientError(
+        err instanceof Error
+          ? `Could not read that file: ${err.message}`
+          : 'Could not read that file. Is it a plain-text CSV?',
+      )
     } finally {
       setReading(false)
     }
-  }
-
-  const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
-    if (!file) {
-      e.preventDefault()
-      alert('Pick a CSV file first.')
-      return
-    }
-    e.preventDefault()
-    const ok = await readIntoTextarea()
-    if (!ok) {
-      alert('Could not read that file. Is it a plain-text CSV?')
-      return
-    }
-    const fd = new FormData(e.currentTarget)
-    action(fd)
-    setFile(null)
-    if (fileRef.current) fileRef.current.value = ''
   }
 
   const disabled = pending || reading || !file || locations.length === 0
@@ -168,10 +181,13 @@ export default function GoDaddyMenuImportCard({ locations }: Props) {
             >
               {pending || reading ? 'Importing…' : 'Import menu'}
             </button>
-            {state && 'ok' in state && (
+            {clientError && (
+              <p className="text-[12px] text-red-700">{clientError}</p>
+            )}
+            {!clientError && state && 'ok' in state && (
               <p className="text-[12px] text-emerald-700">{state.message}</p>
             )}
-            {state && 'error' in state && (
+            {!clientError && state && 'error' in state && (
               <p className="text-[12px] text-red-700">{state.error}</p>
             )}
           </div>

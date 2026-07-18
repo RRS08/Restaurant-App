@@ -523,7 +523,24 @@ function parseMenuCsv(input: string, meta?: SyncMeta): NormalizedMenu {
   }
 
   applyMeta(meta, rawCount, errors)
-  if (items.length === 0 && errors.length > 0) throw new Error(summarize(errors))
+
+  // Same rule as the orders parser: never hand back an empty result
+  // silently — that renders in the UI as "the button did nothing".
+  // Report what was read and what each column bound to so a mismatch
+  // against the PROVISIONAL alias lists is diagnosable from the error
+  // message alone.
+  if (items.length === 0) {
+    const detail = errors.length > 0 ? ` ${summarize(errors)}` : ''
+    const bound = (label: string, idx: number | undefined) =>
+      `${label}=${idx === undefined ? '(not found)' : `"${(header[idx] ?? '').trim()}"`}`
+    throw new Error(
+      `No product rows were recognized. Read ${rawCount} data row${rawCount === 1 ? '' : 's'}. ` +
+      `Column mapping: ${[
+        bound('name', nameIdx), bound('price', priceIdx), bound('id', idIdx),
+        bound('category', catIdx), bound('active', activeIdx),
+      ].join(', ')}. Headers found: ${foundHeaders}.${detail}`
+    )
+  }
 
   return { categories: Array.from(categories.values()), items }
 }

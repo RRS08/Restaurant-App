@@ -118,7 +118,9 @@ export async function mergeInventoryItems(
   })
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   revalidatePath('/dashboard')
 
@@ -293,7 +295,9 @@ export async function cleanupDuplicateInventoryItems() {
   }
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/dashboard')
 
   return {
@@ -490,6 +494,7 @@ export async function runInventoryIntegrityChecks() {
   }
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
 
   return { error: null, issues }
 }

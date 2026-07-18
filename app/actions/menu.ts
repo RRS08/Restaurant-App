@@ -52,6 +52,7 @@ export async function createCategory(
   }
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   redirect('/menu')
 }
 
@@ -126,6 +127,7 @@ export async function createMenuItemInSection(
   }
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   return null // success — stay on the menu page
 }
 
@@ -172,6 +174,7 @@ export async function createMenuItem(
   }
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   redirect('/menu')
 }
 
@@ -190,6 +193,7 @@ export async function deleteCategory(formData: FormData) {
   await ctx.supabase.from('menu_categories').delete().eq('id', categoryId)
   await logAudit(ctx, null, 'delete_menu_category', 'menu_categories', categoryId)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
 }
 
 // Deletes a menu item. Recipe components are removed automatically
@@ -224,6 +228,7 @@ export async function deleteMenuItem(
       await ctx.supabase.from('menu_items').update({ active: false }).eq('id', itemId)
       await logAudit(ctx, null, 'deactivate_menu_item', 'menu_items', itemId, { reason: 'order_history' })
       revalidatePath('/menu')
+      revalidatePath('/web/menu')
       return { error: 'Item has order history and cannot be fully deleted. It has been deactivated instead.' }
     }
     return { error: error.message }
@@ -231,6 +236,7 @@ export async function deleteMenuItem(
 
   await logAudit(ctx, null, 'delete_menu_item', 'menu_items', itemId)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   return null
 }
 
@@ -320,6 +326,7 @@ export async function updateMenuItemPrice(
   await logAudit(ctx, null, 'update_menu_item_price', 'menu_items', itemId, { price })
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   return null
 }
@@ -352,6 +359,7 @@ export async function setMenuItemActive(
   // POS strip + Menu page both read from menu_items; both need to
   // reflect the flag change immediately.
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   return null
 }
@@ -408,6 +416,7 @@ export async function setMenuItemAvailabilityOverride(
   })
 
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   return null
 }

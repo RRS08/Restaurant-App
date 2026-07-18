@@ -49,6 +49,8 @@ const VALID_PROVIDERS = new Set([
   'square',
   'clover',
   'toast',
+  'godaddy_pos',
+  'godaddy_online',
   'mock',
   'csv',
   'custom_json',
@@ -158,8 +160,10 @@ export async function resetExternalPosData(
 
   revalidatePath('/settings')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
 
   const ord = (deletedOrders ?? []).length
   const itm = (deletedItems ?? []).length

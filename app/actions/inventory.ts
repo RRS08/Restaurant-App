@@ -80,6 +80,7 @@ export async function createInventoryItem(
 
   await logAudit(ctx, locationId, 'create_inventory_item', 'inventory_items')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   redirect('/inventory')
 }
 
@@ -111,6 +112,7 @@ export async function updateThreshold(formData: FormData) {
     .eq('id', itemId)
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
 }
 
 export async function createInventoryCount(
@@ -148,6 +150,7 @@ export async function createInventoryCount(
 
   await logAudit(ctx, locationId, 'create_inventory_count', 'inventory_counts')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   redirect('/inventory')
 }
 
@@ -203,6 +206,7 @@ export async function createInventoryTransaction(
 
   await logAudit(ctx, locationId, 'create_inventory_transaction', 'inventory_transactions')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   redirect('/inventory')
 }
 
@@ -260,6 +264,7 @@ export async function archiveInventoryItem(
   }
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/menu')
   revalidatePath('/pos')
   return null
@@ -302,6 +307,7 @@ export async function deleteInventoryItem(formData: FormData): Promise<{ error: 
 
   await ctx.supabase.from('inventory_items').delete().eq('id', itemId)
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return undefined
 }
 
@@ -392,6 +398,7 @@ export async function createRestockOrder(
 
   await logAudit(ctx, item.location_id, 'create_restock_order', 'restock_orders')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -427,6 +434,7 @@ export async function markRestockOrdered(
 
   await logAudit(ctx, order.location_id, 'mark_restock_ordered', 'restock_orders', orderId)
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -769,6 +777,7 @@ export async function markRestockReceived(
     deficit_cleared: deficitToClear > 0 ? deficitToClear : null,
   })
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/finance')
   return null
 }
@@ -847,6 +856,7 @@ export async function closeRestockBatch(
     { count: closableIds.length, short_close: true },
   )
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/finance')
   return null
 }
@@ -880,6 +890,7 @@ export async function cancelRestockOrder(
 
   await logAudit(ctx, order.location_id, 'cancel_restock_order', 'restock_orders', orderId)
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -938,6 +949,7 @@ export async function updateRestockQuantity(
   if (error) return { error: formatError('restock order', error) }
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -1033,6 +1045,7 @@ export async function updateRestockOrderDetails(
   if (error) return { error: formatError('restock order', error) }
 
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -1072,6 +1085,7 @@ export async function placeAllDrafts(
 
   await logAudit(ctx, null, 'place_restock_drafts', 'restock_orders', undefined, { count })
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }
 
@@ -1263,5 +1277,6 @@ export async function placeRestockTicket(
     },
   )
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return null
 }

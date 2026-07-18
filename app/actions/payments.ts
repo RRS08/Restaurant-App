@@ -261,7 +261,9 @@ async function persistIntentResult(
   await reconcileOrderPaymentStatus(supabase, intentRow.order_id, normalized.status)
   if (intentRow.order_id) {
     revalidatePath('/sales')
+    revalidatePath('/web/sales')
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
   }
 
   return null
@@ -460,6 +462,7 @@ export async function createPaymentIntent(
   if (persistErr) return persistErr
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/pos')
   return {
     ok: true,
@@ -799,6 +802,7 @@ export async function refreshPaymentIntent(
   if (persistErr) return persistErr
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/pos')
   return { ok: true, message: `Status: ${normalized.status}.`, status: normalized.status }
 }
@@ -982,6 +986,7 @@ export async function cancelPaymentIntent(
   if (persistErr) return persistErr
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/pos')
   return { ok: true, message: `Payment ${normalized.status}.` }
 }

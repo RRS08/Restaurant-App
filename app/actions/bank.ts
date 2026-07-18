@@ -142,6 +142,7 @@ export async function exchangePlaidPublicToken(
 
     revalidatePath('/settings')
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
     return {
       ok: true,
       message: `Connected ${persisted.accountCount} account${persisted.accountCount === 1 ? '' : 's'}.`,
@@ -400,6 +401,7 @@ export async function syncBankTransactions(
   }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/settings')
 
   if (failedItems > 0 && failedItems === itemsMap.size) {
@@ -467,6 +469,7 @@ export async function disconnectBank(
 
   revalidatePath('/settings')
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return { ok: true, message: 'Disconnected bank.' }
 }
 
@@ -618,6 +621,7 @@ export async function connectSandboxItem(
 
     revalidatePath('/settings')
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
     return {
       ok: true,
       message:
@@ -863,6 +867,7 @@ export async function createSandboxRentTransaction(
   }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/settings')
 
   // Was the just-created rent actually persisted by Plaid?
@@ -1001,6 +1006,7 @@ export async function settleBankTransaction(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return { ok: true, message: `Settled as ${kind}.` }
 }
 
@@ -1027,6 +1033,7 @@ export async function ignoreBankTransaction(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return { ok: true, message: 'Ignored.' }
 }
 
@@ -1053,6 +1060,7 @@ export async function markBankTransactionNotAMatch(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return { ok: true, message: 'Marked for later review.' }
 }
 
@@ -1079,6 +1087,7 @@ export async function reopenBankTransaction(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return { ok: true, message: 'Reopened.' }
 }
 
@@ -1136,6 +1145,7 @@ export async function settleBankTransactionGroup(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return {
     ok: true,
     message: `Settled ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'} as ${kind}.`,
@@ -1165,6 +1175,7 @@ export async function ignoreBankTransactionGroup(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return {
     ok: true,
     message: `Ignored ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'}.`,
@@ -1194,6 +1205,7 @@ export async function markBankTransactionGroupNotAMatch(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return {
     ok: true,
     message: `Marked ${txnIds.length} transaction${txnIds.length === 1 ? '' : 's'} for later review.`,
@@ -1350,6 +1362,7 @@ export async function seedSandboxBankTransactions(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/dev-tools')
   return {
     ok: true,
@@ -1378,6 +1391,7 @@ export async function clearSandboxBankTransactions(
   if (error) return { error: error.message }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/dev-tools')
   return {
     ok: true,
@@ -1454,6 +1468,7 @@ export async function resetFinanceBankSandbox(
 
   if (!visibleRow) {
     revalidatePath('/finance')
+    revalidatePath('/web/finance')
     revalidatePath('/dev-tools')
     revalidatePath('/settings')
     return {
@@ -1509,6 +1524,7 @@ export async function resetFinanceBankSandbox(
   if (delErr) return { error: `Bank transactions wipe failed: ${delErr.message}` }
 
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   revalidatePath('/dev-tools')
   revalidatePath('/settings')
   const n = deleted?.length ?? 0

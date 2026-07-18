@@ -71,6 +71,7 @@ export async function addStaffingRole(
 
   if (error) return { error: formatError('role', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -164,6 +165,7 @@ export async function createShiftSection(
   })
   if (error) return { error: formatError('block', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -229,6 +231,7 @@ export async function updateShiftSection(
     .eq('restaurant_id', ctx.restaurantId)
   if (error) return { error: formatError('block', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -256,6 +259,7 @@ export async function deleteShiftSection(
     .eq('restaurant_id', ctx.restaurantId)
   if (error) return { error: formatError('block', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -296,6 +300,7 @@ export async function quickAssignShift(
 
   if (error) return { error: error.message }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -354,6 +359,7 @@ export async function createEmployee(
   if (error) return { error: formatError('employee', error) }
   await logAudit(ctx, locationId, 'create_employee', 'employees')
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -436,6 +442,7 @@ export async function updateEmployee(
   if (error) return { error: formatError('employee', error) }
   await logAudit(ctx, null, 'update_employee', 'employees', employeeId)
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -484,6 +491,7 @@ export async function archiveEmployee(
   if (error) return { error: formatError('employee', error) }
   await logAudit(ctx, null, 'archive_employee', 'employees', employeeId)
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -524,6 +532,7 @@ export async function createShift(
 
   if (error) return { error: formatError('shift', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -557,6 +566,7 @@ export async function updateShift(
 
   if (error) return { error: formatError('shift', error) }
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -577,6 +587,7 @@ export async function deleteShift(
 
   await ctx.supabase.from('shifts').delete().eq('id', shiftId)
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return null
 }
 
@@ -612,6 +623,7 @@ export async function clearAllEmployees() {
   await logAudit(ctx, null, 'clear_all_employees', 'employees', undefined, { archived_count: count })
 
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return { error: null, cleared: count, message: `Archived ${count} employee${count !== 1 ? 's' : ''} and cleared all shifts.` }
 }
 
@@ -637,5 +649,6 @@ export async function resetStaffingSetup() {
   await logAudit(ctx, null, 'reset_staffing_setup')
 
   revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
   return { error: null, message: 'Staffing reset complete. Visit Staffing to run setup again.' }
 }

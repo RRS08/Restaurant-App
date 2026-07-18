@@ -48,6 +48,7 @@ export async function addRecipeComponent(
 
   revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   return null
 }
 
@@ -102,6 +103,7 @@ export async function updateRecipeComponentQuantity(
 
   if (menuItemId) revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   return null
 }
@@ -124,6 +126,7 @@ export async function removeRecipeComponent(formData: FormData) {
   })
   revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
 }
 
 // Returns { item: { id, name, unitOfMeasure } } on success so the
@@ -179,6 +182,7 @@ export async function createInlineInventoryItem(
 
   if (existing) {
     revalidatePath('/menu')
+    revalidatePath('/web/menu')
     return {
       item: { id: existing.id, name: existing.name, unitOfMeasure: existing.unit_of_measure },
     }
@@ -204,6 +208,7 @@ export async function createInlineInventoryItem(
 
   revalidatePath(`/menu/${menuItemId}/recipe`)
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   return {
     item: { id: created.id, name: created.name, unitOfMeasure: created.unit_of_measure },
   }

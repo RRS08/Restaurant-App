@@ -233,6 +233,7 @@ export async function createOrder(
   if (orderStatus === 'voided') {
     await logAudit(ctx, locationId, 'create_order', 'orders', order.id, { total_amount: totalAmount, status: orderStatus, source })
     revalidatePath('/sales')
+    revalidatePath('/web/sales')
     const voidRedirect = (formData.get('redirect_to') as string | null)?.trim()
     redirect(voidRedirect && voidRedirect.startsWith('/') ? voidRedirect : '/sales')
   }
@@ -357,13 +358,16 @@ export async function createOrder(
   })
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   // Menu and POS both read inventory stock + transactions to compute
   // projected availability (and POS auto-disables on stock-out). A
   // sale that writes a depletion transaction must invalidate those
   // surfaces too, otherwise the new state shows up everywhere except
   // where the manager actually looks for it.
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/pos')
   // Callers (e.g. /pos) can supply their own return target so the
   // POS surface stays on /pos after a sale instead of jumping away.
@@ -503,7 +507,10 @@ export async function voidOrder(
   })
 
   revalidatePath('/sales')
+  revalidatePath('/web/sales')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return null
 }

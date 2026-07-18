@@ -73,7 +73,9 @@ export async function setActiveSeed(
   revalidatePath('/dev-tools')
   revalidatePath('/pos')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return { ok: true }
 }
 
@@ -224,7 +226,9 @@ export async function installSeed(
   revalidatePath('/dev-tools')
   revalidatePath('/pos')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return {
     ok: true,
     counts: {
@@ -312,6 +316,7 @@ export async function refreshSeedCounts(
 
   revalidatePath('/dev-tools')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   revalidatePath('/pos')
   return { ok: true, topped: rows.length }
 }
@@ -361,7 +366,9 @@ export async function uninstallSeed(
   revalidatePath('/dev-tools')
   revalidatePath('/pos')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return { ok: true }
 }
 
@@ -412,7 +419,9 @@ export async function tagCurrentDataAs(
   revalidatePath('/dev-tools')
   revalidatePath('/pos')
   revalidatePath('/menu')
+  revalidatePath('/web/menu')
   revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
   return {
     ok: true,
     tagged: {

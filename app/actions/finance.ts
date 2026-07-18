@@ -71,5 +71,6 @@ export async function createExpense(
 
   await logAudit(ctx, locationId, 'create_expense', 'expenses', undefined, { amount, category })
   revalidatePath('/finance')
+  revalidatePath('/web/finance')
   return null
 }

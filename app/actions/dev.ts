@@ -66,6 +66,7 @@ async function upsertDevState(
   if (error) return { error: error.message }
   revalidatePath('/settings')
   revalidatePath('/analytics')
+  revalidatePath('/web/analytics')
   revalidatePath('/dashboard')
   return null
 }
@@ -167,6 +168,7 @@ export async function resetReadiness(
   if (error) return { error: error.message }
   revalidatePath('/settings')
   revalidatePath('/analytics')
+  revalidatePath('/web/analytics')
   revalidatePath('/dashboard')
   return null
 }

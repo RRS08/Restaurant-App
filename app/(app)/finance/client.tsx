@@ -159,7 +159,7 @@ function useCountUp(target: number, durationMs = 800): number {
 // ----------------------------------------------------------------
 function PageShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6" style={{ color: INK }}>
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-4" style={{ color: INK }}>
       {children}
     </div>
   )
@@ -176,12 +176,12 @@ export default function FinanceDashboardClient({
   return (
     <PageShell>
       {/* Page title — small, calm; the balance below is the star. */}
-      <div className="mb-6 flex items-baseline justify-between gap-4">
+      <div className="mb-3 flex items-baseline justify-between gap-4">
         <div>
-          <h1 className="text-[26px] leading-tight font-semibold tracking-tight" style={{ color: INK }}>
+          <h1 className="text-[22px] leading-tight font-semibold tracking-tight" style={{ color: INK }}>
             {t('Finance', 'Finanzas')}
           </h1>
-          <p className="mt-1 text-[13px]" style={{ color: MUTED }}>
+          <p className="mt-0.5 text-[12px]" style={{ color: MUTED }}>
             {t('The week at a glance.', 'La semana de un vistazo.')}
           </p>
         </div>
@@ -194,16 +194,16 @@ export default function FinanceDashboardClient({
         </Link>
       </div>
 
-      {/* 1 · Balance anchor */}
-      <BalanceCard bank={bank} lastWeekNet={week.lastWeekNet} lang={lang} />
-
-      {/* 2 · Weekly progress rings */}
-      <div className="mt-5">
+      {/* Row 1 — Balance (2/3) + Rings (1/3) side by side on desktop,
+                 stacked on narrow. Keeps the anchor + progress in
+                 one glance instead of two vertical rows. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-3">
+        <BalanceCard bank={bank} lastWeekNet={week.lastWeekNet} lang={lang} />
         <ProgressRings week={week} baselines={baselines} lang={lang} />
       </div>
 
-      {/* 3 · Money In / Money Out */}
-      <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Row 2 — Money In / Money Out */}
+      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
         <FlowCard
           direction="in"
           label={t('Money in this week', 'Ingresos esta semana')}
@@ -220,27 +220,22 @@ export default function FinanceDashboardClient({
         />
       </div>
 
-      {/* 4 · Net + streak context */}
-      <div className="mt-5">
-        <NetLine net={week.net} streak={week.streakWeeks} lang={lang} />
+      {/* Row 3 — Net line (+ streak) and optional nudge share one
+                 compact horizontal strip so we don't stack a
+                 whole extra card. */}
+      <div className="mt-3">
+        <NetAndNudge net={week.net} streak={week.streakWeeks} nudge={nudge} lang={lang} />
       </div>
 
-      {/* 5 · Sunday recap (only when the server said so) */}
+      {/* Row 4 — Sunday recap (only when the server said so) */}
       {recap && (
-        <div className="mt-5">
+        <div className="mt-3">
           <RecapCard text={recap} lang={lang} />
         </div>
       )}
 
-      {/* 6 · Smart nudge (server picked at most one line) */}
-      {nudge && (
-        <div className="mt-5">
-          <NudgeLine text={nudge} lang={lang} />
-        </div>
-      )}
-
-      {/* 7 · Recent activity ledger */}
-      <div className="mt-6">
+      {/* Row 5 — Recent activity ledger */}
+      <div className="mt-3">
         <LedgerSection rows={ledger} lang={lang} />
       </div>
     </PageShell>
@@ -261,22 +256,22 @@ function BalanceCard({
   if (!bank.connected) {
     return (
       <section
-        className="rounded-2xl px-6 py-6"
+        className="rounded-xl px-5 py-4"
         style={{ background: SAND, border: `1px solid ${HAIR}` }}
       >
-        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
           {t('In the bank', 'En el banco')}
         </p>
-        <p className="mt-3 text-[15px] leading-relaxed" style={{ color: SLATE, maxWidth: 520 }}>
+        <p className="mt-2 text-[13px] leading-snug" style={{ color: SLATE, maxWidth: 520 }}>
           {t(
-            'Connect your bank to see your real balance here. Without it, everything below still works — we just fall back to sales for the "money in" number.',
-            'Conecta tu banco para ver tu saldo real aquí. Sin él, todo lo de abajo sigue funcionando — usamos las ventas como referencia para "ingresos".'
+            'Connect your bank to see your real balance. Everything below still works without it.',
+            'Conecta tu banco para ver tu saldo real. Todo lo de abajo funciona sin él.'
           )}
         </p>
-        <div className="mt-4">
+        <div className="mt-3">
           <Link
             href="/settings"
-            className="inline-flex items-center gap-2 h-10 px-4 rounded-lg text-[13px] font-semibold transition-colors"
+            className="inline-flex items-center gap-2 h-8 px-3 rounded-md text-[12px] font-semibold transition-colors"
             style={{ background: INK, color: CREAM }}
           >
             {t('Connect bank', 'Conectar banco')} →
@@ -288,29 +283,29 @@ function BalanceCard({
 
   return (
     <section
-      className="rounded-2xl px-6 py-6"
+      className="rounded-xl px-5 py-4"
       style={{ background: SAND, border: `1px solid ${HAIR}` }}
     >
-      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
         {t('In the bank', 'En el banco')}
       </p>
       <p
-        className="mt-2 leading-none tabular-nums"
-        style={{ fontSize: 'clamp(40px, 6vw, 56px)', fontWeight: 700, letterSpacing: '-1.6px', color: INK }}
+        className="mt-1 leading-none tabular-nums"
+        style={{ fontSize: 'clamp(32px, 4.5vw, 42px)', fontWeight: 700, letterSpacing: '-1.2px', color: INK }}
       >
         {fmt(shown, { compact: true })}
       </p>
-      <div className="mt-3 flex items-baseline gap-2 flex-wrap">
-        <span className="text-[13px]" style={{ color: SLATE }}>
+      <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+        <span className="text-[12px]" style={{ color: SLATE }}>
           {t('Last week net', 'Neto semana pasada')}:
         </span>
         <span
-          className="text-[13px] font-semibold tabular-nums"
+          className="text-[12px] font-semibold tabular-nums"
           style={{ color: lastWeekNet >= 0 ? UP : DOWN_WARM }}
         >
           {fmtDelta(lastWeekNet)}
         </span>
-        <span className="text-[11px]" style={{ color: MUTED }}>
+        <span className="text-[10.5px]" style={{ color: MUTED }}>
           · {bank.accountCount === 1
               ? t('1 account', '1 cuenta')
               : `${bank.accountCount} ${t('accounts', 'cuentas')}`}
@@ -333,22 +328,22 @@ function ProgressRings({
   if (!baselines.enoughHistory) {
     return (
       <section
-        className="rounded-2xl px-6 py-5"
+        className="rounded-xl px-4 py-4 h-full flex flex-col justify-center"
         style={{ background: CREAM, border: `1px solid ${HAIR}` }}
       >
-        <div className="flex items-start gap-4">
+        <div className="flex items-start gap-3">
           <RingLearningIcon />
-          <div>
-            <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+          <div className="min-w-0">
+            <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
               {t('Weekly rings', 'Anillos semanales')}
             </p>
-            <p className="mt-1.5 text-[15px] font-semibold" style={{ color: INK }}>
+            <p className="mt-1 text-[13px] font-semibold" style={{ color: INK }}>
               {t('Learning your typical week', 'Aprendiendo tu semana promedio')}
             </p>
-            <p className="mt-1 text-[12.5px]" style={{ color: SLATE, maxWidth: 520 }}>
+            <p className="mt-0.5 text-[11.5px] leading-snug" style={{ color: SLATE }}>
               {t(
-                'After 4 weeks of activity, this section will show where you are vs. your typical week — revenue, expenses, and net all in one glance.',
-                'Después de 4 semanas de actividad, aquí verás cómo va la semana comparada con tu típica — ingresos, gastos y neto de un vistazo.'
+                'After 4 weeks of activity, this fills in.',
+                'Se llena tras 4 semanas de actividad.'
               )}
             </p>
           </div>
@@ -369,18 +364,18 @@ function ProgressRings({
 
   return (
     <section
-      className="rounded-2xl px-6 py-5"
+      className="rounded-xl px-4 py-3 h-full"
       style={{ background: CREAM, border: `1px solid ${HAIR}` }}
     >
-      <div className="flex items-start gap-6 flex-wrap">
+      <div className="flex items-center gap-3 h-full">
         <RingsSvg inPct={inPct} outPct={outPct} netPct={netPct} />
-        <div className="flex-1 min-w-[200px]">
-          <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-            {t('This week vs typical', 'Esta semana vs promedio')}
+        <div className="flex-1 min-w-0">
+          <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+            {t('vs typical', 'vs promedio')}
           </p>
-          <div className="mt-2 space-y-1.5">
-            <RingLegend color={RING_IN} label={t('Revenue', 'Ingresos')} value={inPct} baseline={baselines.moneyIn ?? 0} />
-            <RingLegend color={RING_OUT} label={t('Expenses', 'Gastos')} value={outPct} baseline={baselines.moneyOut ?? 0} />
+          <div className="mt-1.5 space-y-1">
+            <RingLegend color={RING_IN} label={t('Rev.', 'Ing.')} value={inPct} baseline={baselines.moneyIn ?? 0} />
+            <RingLegend color={RING_OUT} label={t('Exp.', 'Gto.')} value={outPct} baseline={baselines.moneyOut ?? 0} />
             <RingLegend color={RING_NET} label={t('Net', 'Neto')} value={netPct} baseline={baselines.net ?? 0} />
           </div>
         </div>
@@ -392,12 +387,12 @@ function ProgressRings({
 function RingLegend({ color, label, value, baseline }: { color: string; label: string; value: number; baseline: number }) {
   const pct = Math.round(Math.min(1.5, Math.max(0, value)) * 100)
   return (
-    <div className="flex items-center gap-3 text-[13px]">
-      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: color }} />
-      <span style={{ color: INK, minWidth: 74 }}>{label}</span>
-      <span className="font-mono tabular-nums" style={{ color: SLATE }}>{pct}%</span>
-      <span style={{ color: MUTED, fontSize: 11 }}>
-        · typical {fmt(baseline, { compact: true })}
+    <div className="flex items-center gap-2 text-[11.5px]">
+      <span className="inline-block w-2 h-2 rounded-full" style={{ background: color }} />
+      <span style={{ color: INK, minWidth: 32 }}>{label}</span>
+      <span className="font-mono tabular-nums" style={{ color: SLATE, minWidth: 34 }}>{pct}%</span>
+      <span style={{ color: MUTED, fontSize: 10.5 }} className="truncate">
+        {fmt(baseline, { compact: true })}
       </span>
     </div>
   )
@@ -421,11 +416,11 @@ function RingsSvg({ inPct, outPct, netPct }: { inPct: number; outPct: number; ne
     return () => cancelAnimationFrame(raf)
   }, [inPct, outPct, netPct])
 
-  const size = 140
+  const size = 96
   const cx = size / 2
   const cy = size / 2
-  const stroke = 10
-  const gap = 4
+  const stroke = 7
+  const gap = 3
   // radii: outer, middle, inner
   const r1 = cx - stroke / 2 - 2
   const r2 = r1 - stroke - gap
@@ -511,28 +506,28 @@ function FlowCard({
 
   return (
     <section
-      className="rounded-2xl px-5 py-5"
+      className="rounded-xl px-4 py-3"
       style={{ background: CREAM, border: `1px solid ${HAIR}` }}
     >
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
           {label}
         </p>
         <span
-          className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md"
+          className="text-[10px] font-mono uppercase tracking-[0.08em] px-1.5 py-0.5 rounded"
           style={{ background: SAND, color: SLATE }}
         >
           {chip}
         </span>
       </div>
       <p
-        className="mt-3 leading-none tabular-nums"
-        style={{ fontSize: 'clamp(28px, 4vw, 36px)', fontWeight: 700, letterSpacing: '-1px', color: accent }}
+        className="mt-1.5 leading-none tabular-nums"
+        style={{ fontSize: 'clamp(22px, 3vw, 28px)', fontWeight: 700, letterSpacing: '-0.6px', color: accent }}
       >
         {direction === 'in' ? '+' : ''}
         {fmt(shown, { compact: true })}
       </p>
-      <div className="mt-4">
+      <div className="mt-2">
         <Sparkline values={spark} color={accent} />
       </div>
     </section>
@@ -544,7 +539,7 @@ function FlowCard({
 function Sparkline({ values, color }: { values: number[]; color: string }) {
   const [drawn, setDrawn] = useState(0)
   const w = 240
-  const h = 32
+  const h = 22
   const max = Math.max(1, ...values)
   const pts = values.map((v, i) => {
     const x = (i / Math.max(1, values.length - 1)) * (w - 4) + 2
@@ -597,38 +592,47 @@ function Sparkline({ values, color }: { values: number[]; color: string }) {
 }
 
 // ----------------------------------------------------------------
-// NetLine — one-liner summary of the week's net. Streak context
-// appears only when it's earned (2+ weeks in a row).
+// NetAndNudge — compact horizontal strip combining the week's net
+// number (with optional streak line) and the smart nudge (if the
+// server picked one). Rendered on one row on desktop, stacks on
+// narrow. Uses less vertical space than two separate cards.
 // ----------------------------------------------------------------
-function NetLine({ net, streak, lang }: { net: number; streak: number; lang: Lang }) {
+function NetAndNudge({
+  net, streak, nudge, lang,
+}: { net: number; streak: number; nudge: string | null; lang: Lang }) {
   const t = makeT(lang)
   const positive = net > 0
   const streakLabel = (() => {
     if (streak < 2) return null
-    if (streak === 2) return t('Two profitable weeks in a row', 'Dos semanas positivas seguidas')
-    if (streak === 3) return t('3 weeks in a row — nice run', '3 semanas seguidas — buena racha')
-    if (streak >= 4) return t(`${streak} profitable weeks in a row`, `${streak} semanas positivas seguidas`)
+    if (streak === 2) return t('2 weeks in a row', '2 semanas seguidas')
+    if (streak === 3) return t('3 weeks — nice run', '3 semanas — buena racha')
+    if (streak >= 4) return t(`${streak} weeks in a row`, `${streak} semanas seguidas`)
     return null
   })()
 
   return (
     <section
-      className="rounded-2xl px-5 py-4 flex items-baseline flex-wrap gap-x-4 gap-y-1"
+      className="rounded-xl px-4 py-2.5 flex items-center flex-wrap gap-x-4 gap-y-1"
       style={{ background: CREAM, border: `1px solid ${HAIR}` }}
     >
-      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-        {t('Net this week', 'Neto de esta semana')}
+      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+        {t('Net', 'Neto')}
       </p>
       <p
-        className="text-[22px] leading-none font-semibold tabular-nums"
-        style={{ color: positive ? UP : DOWN_WARM, letterSpacing: '-0.5px' }}
+        className="text-[16px] leading-none font-semibold tabular-nums"
+        style={{ color: positive ? UP : DOWN_WARM, letterSpacing: '-0.3px' }}
       >
         {fmtDelta(net)}
       </p>
       {streakLabel && (
-        <p className="text-[13px]" style={{ color: SLATE }}>
-          <span style={{ marginRight: 6 }}>🎉</span>
-          {streakLabel}
+        <p className="text-[12px]" style={{ color: SLATE }}>
+          🎉 {streakLabel}
+        </p>
+      )}
+      {nudge && (
+        <p className="text-[12px] leading-snug flex-1 min-w-[200px]" style={{ color: SLATE }}>
+          <span style={{ marginRight: 4 }}>💬</span>
+          {nudge}
         </p>
       )}
     </section>
@@ -642,36 +646,19 @@ function RecapCard({ text, lang }: { text: string; lang: Lang }) {
   const t = makeT(lang)
   return (
     <section
-      className="rounded-2xl px-5 py-4"
+      className="rounded-xl px-4 py-3"
       style={{
         background: `linear-gradient(180deg, ${SAND} 0%, ${CREAM} 100%)`,
         border: `1px solid ${HAIR}`,
       }}
     >
-      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: DOWN_WARM }}>
+      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: DOWN_WARM }}>
         {t('Last week wrapped', 'Semana pasada')}
       </p>
-      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: INK }}>
+      <p className="mt-1 text-[13px] leading-snug" style={{ color: INK }}>
         {text}
       </p>
     </section>
-  )
-}
-
-// ----------------------------------------------------------------
-// NudgeLine — the colleague voice, calm. Server picks at most one.
-// ----------------------------------------------------------------
-function NudgeLine({ text, lang }: { text: string; lang: Lang }) {
-  const t = makeT(lang)
-  return (
-    <p
-      className="text-[13.5px] leading-relaxed px-1"
-      style={{ color: SLATE }}
-    >
-      <span aria-hidden="true" style={{ marginRight: 8 }}>💬</span>
-      <span style={{ color: MUTED, marginRight: 6 }}>{t('Heads up:', 'Aviso:')}</span>
-      {text}
-    </p>
   )
 }
 
@@ -682,23 +669,27 @@ function NudgeLine({ text, lang }: { text: string; lang: Lang }) {
 function LedgerSection({ rows, lang }: { rows: LedgerRow[]; lang: Lang }) {
   const t = makeT(lang)
 
+  // Cap at 10 rows to keep the dashboard compact; owners who want
+  // more open the detailed workspace.
+  const visible = rows.slice(0, 10)
+
   return (
     <section>
-      <div className="flex items-baseline justify-between mb-3">
-        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+      <div className="flex items-baseline justify-between mb-2">
+        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
           {t('Recent activity', 'Actividad reciente')}
         </p>
         <span className="text-[10.5px] font-mono uppercase tracking-[0.1em]" style={{ color: MUTED }}>
-          {rows.length}
+          {visible.length}
         </span>
       </div>
-      {rows.length === 0 ? (
-        <p className="text-[13px] px-1 py-6 text-center" style={{ color: MUTED }}>
+      {visible.length === 0 ? (
+        <p className="text-[12px] px-1 py-5 text-center" style={{ color: MUTED }}>
           {t('Nothing yet — quiet start to the week.', 'Nada aún — semana empieza tranquila.')}
         </p>
       ) : (
-        <ul className="rounded-2xl overflow-hidden" style={{ background: CREAM, border: `1px solid ${HAIR}` }}>
-          {rows.map((r, idx) => (
+        <ul className="rounded-xl overflow-hidden" style={{ background: CREAM, border: `1px solid ${HAIR}` }}>
+          {visible.map((r, idx) => (
             <li
               key={r.id}
               style={{ borderTop: idx === 0 ? 'none' : `1px solid ${HAIR}` }}
@@ -720,26 +711,26 @@ function LedgerRow({ row, lang }: { row: LedgerRow; lang: Lang }) {
 
   return (
     <div
-      className="grid gap-3 px-4 py-3 items-center"
-      style={{ gridTemplateColumns: '24px minmax(0, 1fr) minmax(0, auto) 90px' }}
+      className="grid gap-2 px-3 py-1.5 items-center"
+      style={{ gridTemplateColumns: '20px minmax(0, 1fr) minmax(0, auto) 80px' }}
     >
       {/* Icon */}
       <div
-        className="flex items-center justify-center w-6 h-6 rounded-full text-[13px] font-bold"
-        style={{ background: `${iconColor}15`, color: iconColor }}
+        className="flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold"
+        style={{ background: `${iconColor}18`, color: iconColor }}
         aria-hidden="true"
       >
         {isIn ? '+' : '−'}
       </div>
 
-      {/* Label + sub */}
-      <div className="min-w-0">
-        <p className="text-[14px] font-semibold truncate" style={{ color: INK }}>
+      {/* Label + sub — sub inlined next to label to save vertical space */}
+      <div className="min-w-0 flex items-baseline gap-2">
+        <p className="text-[13px] font-semibold truncate" style={{ color: INK }}>
           {row.label}
         </p>
         {row.sub && (
-          <p className="text-[11.5px] mt-0.5 truncate" style={{ color: MUTED }}>
-            {row.sub}
+          <p className="text-[11px] truncate" style={{ color: MUTED }}>
+            · {row.sub}
           </p>
         )}
       </div>
@@ -754,27 +745,27 @@ function LedgerRow({ row, lang }: { row: LedgerRow; lang: Lang }) {
           />
         ) : row.category ? (
           <span
-            className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md"
+            className="text-[10px] font-mono uppercase tracking-[0.08em] px-1.5 py-0.5 rounded"
             style={{ background: SAND, color: SLATE }}
           >
             {row.category}
           </span>
         ) : (
-          <span className="text-[10.5px] font-mono uppercase tracking-[0.1em]" style={{ color: MUTED }}>
+          <span className="text-[10px] font-mono uppercase tracking-[0.08em]" style={{ color: MUTED }}>
             {row.kind === 'order' ? t('Sale', 'Venta') : t('Bank', 'Banco')}
           </span>
         )}
       </div>
 
-      {/* Amount + time */}
-      <div className="text-right min-w-0">
+      {/* Amount + time inlined on one line */}
+      <div className="text-right min-w-0 flex items-baseline justify-end gap-2">
         <p
-          className="text-[14px] font-semibold font-mono tabular-nums"
+          className="text-[13px] font-semibold font-mono tabular-nums"
           style={{ color: isIn ? UP : SPEND }}
         >
           {isIn ? '+' : '−'}{fmt(row.amount)}
         </p>
-        <p className="text-[11px] mt-0.5" style={{ color: MUTED }}>
+        <p className="text-[10.5px]" style={{ color: MUTED }}>
           {formatTime(row.timestamp)}
         </p>
       </div>

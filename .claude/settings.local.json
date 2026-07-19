@@ -29,7 +29,21 @@
       "WebFetch(domain:support.apple.com)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "WebFetch(domain:docs.poynt.com)",
+      "Bash(grep -n \"strip BOM\\\\|replace\\(/\\\\^\\\\\\\\\\\\\\\\uFEFF\" lib/import/adapters/godaddy-csv.ts)",
+      "Bash(npx eslint *)",
+      "Bash(node \"C:/Users/Renato/AppData/Local/Temp/claude/C--Users-Renato-OneDrive-Desktop-restaurant-app/1b4383cf-7714-4ff1-9b25-9a269d2907a2/scratchpad/csv-test.cjs\")",
+      "Bash(npx next *)",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\('react',p.dependencies.react,'| next',p.dependencies.next\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(node \"C:/Users/Renato/AppData/Local/Temp/claude/C--Users-Renato-OneDrive-Desktop-restaurant-app/1b4383cf-7714-4ff1-9b25-9a269d2907a2/scratchpad/verify-fix.cjs\")",
+      "Bash(node \"C:/Users/Renato/AppData/Local/Temp/claude/C--Users-Renato-OneDrive-Desktop-restaurant-app/1b4383cf-7714-4ff1-9b25-9a269d2907a2/scratchpad/csv-test2.cjs\")",
+      "Bash(node \"C:/Users/Renato/AppData/Local/Temp/claude/C--Users-Renato-OneDrive-Desktop-restaurant-app/1b4383cf-7714-4ff1-9b25-9a269d2907a2/scratchpad/sales-verify.cjs\")",
+      "Bash(node \"C:/Users/Renato/AppData/Local/Temp/claude/C--Users-Renato-OneDrive-Desktop-restaurant-app/1b4383cf-7714-4ff1-9b25-9a269d2907a2/scratchpad/menu-verify.cjs\")",
+      "Bash(git fetch *)"
     ]
   }
 }

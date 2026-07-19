@@ -1,3141 +1,868 @@
 'use client'
 
 // ----------------------------------------------------------------
-// Finance Client Component
+// FinanceDashboardClient — the warm, alive, at-a-glance surface.
 //
-// Page reads as four bands:
+// Sections top-down:
+//   1. Balance anchor (big number, delta, count-up on mount)
+//   2. Weekly progress rings (revenue / expenses / net vs typical
+//      week — or "learning your typical week" state under 4 weeks
+//      of history)
+//   3. Money In / Money Out cards (sparkline + attribution chip)
+//   4. Net line (this week) with streak / context if it's earned
+//   5. Sunday recap (Sun / Mon of the following week only)
+//   6. Smart nudge (max one line, colleague tone, never alarm)
+//   7. Recent activity ledger (expense rows categorize on tap)
+//   8. Small footer link → /finance/details for the classic workspace
 //
-//   1. Header
-//   2. Top summary — 3 disciplined metric cards (Revenue / Expenses /
-//      Net activity), with Net activity emphasized
-//   3. Operational drivers — Scheduled labor / Inventory spend /
-//      Operating. All three are clickable and open drawers.
-//      Operating is the bank-connection entry point in the
-//      not-connected state.
-//
-//      "Operating" = business expenses outside Labor and Inventory:
-//      rent, utilities, marketing, subscriptions, insurance, repairs,
-//      bank fees, professional services, loan payments. A separate
-//      Bank Review verification workflow is planned for a later pass
-//      — it is intentionally NOT built here.
-//   4. Lower row — Recent activity (left) + Log expense (right),
-//      visually balanced.
-//
-// All Finance logic + states preserved from prior passes:
-//   - laborState (4 honest variants)
-//   - bankState (3 variants)
-//   - source-of-truth chip
-//   - empty-state nudges
+// Warm palette:
+//   • Never a red arrow. Warm neutral for down / negative.
+//   • Money in = forward green. Money out = warm slate, not red.
+//   • Emoji sparingly, only in earned moments.
 // ----------------------------------------------------------------
 
-import { useEffect, useState, useActionState, useMemo, useTransition } from 'react'
-import { useSearchParams } from 'next/navigation'
-import { makeT, type Lang } from '@/lib/i18n'
-import { createExpense } from '@/app/actions/finance'
-import {
-  connectSandboxItem,
-  createSandboxRentTransaction,
-  settleBankTransaction,
-  ignoreBankTransaction,
-  markBankTransactionNotAMatch,
-  reopenBankTransaction,
-  settleBankTransactionGroup,
-  ignoreBankTransactionGroup,
-  markBankTransactionGroupNotAMatch,
-} from '@/app/actions/bank'
+import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from 'react'
+import Link from 'next/link'
+import { updateExpenseCategory } from '@/app/actions/finance'
 import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
-import { ConnectBankButton } from '@/components/bank/connect-bank-button'
-import {
-  suggestSettlementKind,
-  looksPersonal,
-  groupBankTransactions,
-  type SuggestedKind,
-  type BankReviewGroup,
-} from '@/lib/finance/matching'
+import { makeT, type Lang } from '@/lib/i18n'
 
-interface RecentExpense {
+// Duplicate small style helpers here so the component stays a
+// self-contained "read the file to understand it" surface.
+const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
+const mono = (extra: CSSProperties = {}): CSSProperties => ({ fontFamily: MONO, ...extra })
+
+// ----------------------------------------------------------------
+// Prop shapes match the server-side computation. If those change,
+// TypeScript will surface the mismatch here.
+// ----------------------------------------------------------------
+type Kind = 'order' | 'expense' | 'bank_credit' | 'bank_debit'
+
+interface LedgerRow {
   id: string
-  category: string
+  kind: Kind
   amount: number
-  expenseDate: string
-  vendorName: string | null
-  notes: string | null
-  isInventoryRelated: boolean
-  source: string
-  locationId: string
-  locationName: string | null
+  label: string
+  sub: string | null
+  category: string | null
+  categoryEditable: boolean
+  timestamp: string
 }
-
-interface BankAccountSummary {
-  id: string
-  provider: string
-  accountName: string
-  accountMask: string | null
-  institutionName: string | null
-  lastSyncedAt: string | null
-}
-
-type LaborState = 'no_employees' | 'no_shifts' | 'missing_rates' | 'ok'
-type BankState = 'not_connected' | 'connected_unsynced' | 'connected_synced'
-
-interface LaborByArea { area: 'foh' | 'boh' | 'unassigned'; hours: number; cost: number; shiftCount: number }
-interface LaborByRole { role: string; hours: number; cost: number; shiftCount: number; missingRate: boolean }
-interface LaborByEmployee { name: string; hours: number; cost: number; shiftCount: number; hourlyRate: number | null }
 
 interface Props {
   lang: Lang
-  locations: { id: string; name: string }[]
-  defaultLocationId: string | null
-  plaidConfigured: boolean
-  plaidSandbox: boolean
-  isDev: boolean
-  cards: {
-    expenseTotal7d: number
-    expenseCount7d: number
-    revenue7d: number
-    inventorySpend7d: number
-    laborEstimate: number
-    laborRatedShiftCount: number
-    laborUnratedShiftCount: number
-    totalShiftCount: number
-    ratedEmployeeCount: number
-    laborState: LaborState
-  }
-  laborBreakdown: {
-    byArea: LaborByArea[]
-    byRole: LaborByRole[]
-    byEmployee: LaborByEmployee[]
-  }
-  inventoryBreakdown: {
-    byCategory: { label: string; amount: number; count: number }[]
-    byVendor: { label: string; amount: number; count: number }[]
-  }
   bank: {
-    accounts: BankAccountSummary[]
-    externalSpend7d: number
-    recognizedExternalSpend7d: number
-    bankInventoryConfirmed7d: number
-    externalSpendCount7d: number
-    unresolvedCount7d: number
-    externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]
-    recentUnresolved: {
-      id: string; description: string | null; merchantName: string | null
-      amount: number; postedAt: string
-    }[]
-    inflow7d: number
-    outflow7d: number
-    txnCount7d: number
-    state: BankState
-    review: {
-      rows: BankReviewRow[]
-      counts: {
-        unreviewed: number
-        unreviewedInflow: number
-        unreviewedOutflow: number
-        settled: number
-        ignored: number
-        notAMatch: number
+    connected: boolean
+    balance: number
+    latestSyncAt: string | null
+    accountCount: number
+  }
+  week: {
+    startISO: string
+    moneyIn: number
+    moneyOut: number
+    net: number
+    inChip: string
+    outChip: string
+    inSpark: number[]
+    outSpark: number[]
+    lastWeekNet: number
+    streakWeeks: number
+  }
+  baselines: {
+    moneyIn: number | null
+    moneyOut: number | null
+    net: number | null
+    enoughHistory: boolean
+  }
+  ledger: LedgerRow[]
+  nudge: string | null
+  recap: string | null
+}
+
+// ----------------------------------------------------------------
+// Warm palette tokens. Ink for primary text; olive-forward "up"
+// green; warm slate for outflow (not red — spending is neutral,
+// not bad); soft cream and sand for surfaces.
+// ----------------------------------------------------------------
+const INK = '#18181B'
+const SLATE = '#52525B'
+const MUTED = '#9CA3AF'
+const HAIR = '#E7E6E2'
+const CREAM = '#FAF9F6'
+const SAND = '#F4F1EA'
+const UP = '#16A34A'         // forward green — earned money, positive delta
+const DOWN_WARM = '#B45309'  // warm terra — negative / decline, not alarm
+const SPEND = '#78716C'      // warm slate — money out, neutral
+const RING_IN = '#16A34A'    // ring 1 fill
+const RING_OUT = '#D4A056'   // ring 2 fill
+const RING_NET = '#3F6B4C'   // ring 3 fill, deeper green
+
+// USD formatter used across the page. Compact (no decimals) for big
+// anchor numbers; full for ledger amounts.
+const fmt = (n: number, opts?: { compact?: boolean }): string => {
+  const abs = Math.abs(n)
+  if (opts?.compact) {
+    return `${n < 0 ? '-' : ''}$${Math.round(abs).toLocaleString('en-US')}`
+  }
+  return `${n < 0 ? '-' : ''}$${abs.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+}
+
+// Format a delta with a leading "+" for positive amounts; used
+// in "vs last week" lines and streak lines.
+const fmtDelta = (n: number, opts?: { compact?: boolean }): string => {
+  if (n === 0) return fmt(0, opts)
+  return `${n > 0 ? '+' : '-'}$${Math.abs(n).toFixed(opts?.compact ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
+}
+
+// ----------------------------------------------------------------
+// useCountUp — animate a numeric value from 0 to `target` on mount
+// or when `target` changes. Uses requestAnimationFrame; ~800ms
+// duration. Respects prefers-reduced-motion by jumping instantly.
+// ----------------------------------------------------------------
+function useCountUp(target: number, durationMs = 800): number {
+  const [value, setValue] = useState(0)
+  const startedRef = useRef(false)
+
+  useEffect(() => {
+    // Respect reduced motion — jump to target.
+    if (typeof window !== 'undefined') {
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      if (reduced) {
+        setValue(target)
+        return
       }
     }
-  }
-  recentExpenses: RecentExpense[]
+    let raf: number
+    const startAt = performance.now()
+    const from = startedRef.current ? value : 0
+    startedRef.current = true
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - startAt) / durationMs)
+      // ease-out cubic
+      const eased = 1 - Math.pow(1 - t, 3)
+      setValue(from + (target - from) * eased)
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, durationMs])
+
+  return value
 }
 
-export interface BankReviewRow {
-  id: string
-  direction: 'inflow' | 'outflow'
-  amount: number
-  rawCategory: string | null
-  merchantName: string | null
-  description: string | null
-  postedAt: string
-  reviewState: 'unreviewed' | 'settled' | 'ignored' | 'not_a_match'
-  settledKind: 'revenue' | 'inventory' | 'labor' | 'operating' | null
+// ----------------------------------------------------------------
+// PageShell — reproduces the classic app-shell page frame so this
+// page reads as part of the tablet product family. Title + optional
+// subtitle up top, generous horizontal padding, cream page.
+// ----------------------------------------------------------------
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-6" style={{ color: INK }}>
+      {children}
+    </div>
+  )
 }
 
-type DrawerKind =
-  | 'revenue'
-  | 'spend'
-  | 'net'
-  | 'labor'
-  | 'inventory'
-  | 'operating'
-  | 'bank_review'
-  | 'log_expense'
-  | null
-
-export default function FinanceClient({
-  lang,
-  locations: _locations,
-  defaultLocationId,
-  plaidConfigured,
-  plaidSandbox,
-  isDev,
-  cards,
-  laborBreakdown,
-  inventoryBreakdown,
-  bank,
-  recentExpenses,
+// ----------------------------------------------------------------
+// Main component
+// ----------------------------------------------------------------
+export default function FinanceDashboardClient({
+  lang, bank, week, baselines, ledger, nudge, recap,
 }: Props) {
   const t = makeT(lang)
-  const [state, action, pending] = useActionState(createExpense, null)
-  const [locationId] = useState(defaultLocationId ?? '')
-  const [drawer, setDrawer] = useState<DrawerKind>(null)
-  const [activityPage, setActivityPage] = useState(0)
-  const ACTIVITY_PAGE_SIZE = 6
-
-  // Dashboard's "Add manual expense" quick action navigates to
-  // /finance?log=1 (or ?log=expense) — opening the Log Expense
-  // drawer automatically the moment the page mounts. Manual entry
-  // is no longer a dominant card on the page; it lives in a drawer
-  // reachable from here or from Dashboard.
-  const searchParams = useSearchParams()
-  useEffect(() => {
-    const logParam = searchParams?.get('log')
-    if (logParam === '1' || logParam === 'expense') {
-      setDrawer('log_expense')
-    }
-  }, [searchParams])
-
-  // When createExpense returns success (state=null after submit
-  // settles), close the Log Expense drawer so the user lands back
-  // on the page with the new row visible in Recent activity. We
-  // can't distinguish "first mount null" from "success null", so
-  // we only close after the action has been called at least once
-  // by gating on `pending`.
-  const [hasSubmittedLog, setHasSubmittedLog] = useState(false)
-  useEffect(() => {
-    if (pending) setHasSubmittedLog(true)
-  }, [pending])
-  useEffect(() => {
-    if (!pending && hasSubmittedLog && !state?.error && drawer === 'log_expense') {
-      setDrawer(null)
-      setHasSubmittedLog(false)
-    }
-  }, [pending, hasSubmittedLog, state, drawer])
-
-  // ----------------------------------------------------------------
-  // Spend model (observer phase).
-  //
-  // The four signals on the page (Labor / Inventory / Operating /
-  // Net) are sub-parts of one Spend total, not separate buckets:
-  //
-  //   Labor     = scheduled hours × rate (projection only — bank
-  //               payroll detection is deferred to the action phase).
-  //   Inventory = max(manual logs, bank food/drink-PFC outflows).
-  //               max() de-dups: a bank row that confirms a manual
-  //               log doesn't add on top of it.
-  //   Operating = business expenses outside Labor and Inventory —
-  //               rent, utilities, marketing, subscriptions,
-  //               insurance, repairs, bank fees, professional
-  //               services, loan payments. Headline value is
-  //               max(manual non-inventory expenses, bank non-
-  //               inventory PFC outflows).
-  //   Spend     = Labor + Inventory + Operating.
-  //   Net       = Revenue − Spend.
-  //
-  // Unresolved bank outflows (no PFC) stay surfaced in the Operating
-  // drawer for triage but are NOT in Net — we don't claim spend on
-  // rows we can't classify. A separate Bank Review verification
-  // workflow is planned for later; do not conflate it with the
-  // Operating expense category.
-  //
-  // Internal naming note: the server↔client prop shape still uses
-  // the legacy `externalSpend7d` / `recognizedExternalSpend7d` /
-  // `externalByCategory` / `externalSpendCount7d` field names on
-  // `bank`. These are the wire format owned by page.tsx; renaming
-  // them is out of scope for this naming pass. Only the user-facing
-  // labels and the client-local variable name change here.
-  // ----------------------------------------------------------------
-  const laborSpend = cards.laborEstimate
-  const manualNonInventorySpend = Math.max(0, cards.expenseTotal7d - cards.inventorySpend7d)
-  const inventorySpend = Math.max(cards.inventorySpend7d, bank.bankInventoryConfirmed7d)
-  const operatingSpend = Math.max(manualNonInventorySpend, bank.recognizedExternalSpend7d)
-  const totalSpend7d = laborSpend + inventorySpend + operatingSpend
-  const netActivity = cards.revenue7d - totalSpend7d
-  const netPositive = netActivity >= 0
-  const hasAnyActivity = cards.revenue7d > 0 || totalSpend7d > 0
-
-  // ----------------------------------------------------------------
-  // Bank Review groups — bucket unreviewed transactions by likely
-  // pattern (Costco, Rent & utilities, etc.) so the Bank Review
-  // surface presents one decision per group instead of one per row.
-  // The group-first model is the V2 user model; per-row settle/
-  // ignore are kept as fallbacks for the drilldown view.
-  // ----------------------------------------------------------------
-  const reviewGroups = useMemo<BankReviewGroup[]>(() => {
-    const unreviewed = bank.review.rows
-      .filter((r) => r.reviewState === 'unreviewed')
-      .map((r) => ({
-        id: r.id,
-        direction: r.direction,
-        amount: r.amount,
-        rawCategory: r.rawCategory,
-        merchantName: r.merchantName,
-        description: r.description,
-        postedAt: r.postedAt,
-      }))
-    return groupBankTransactions(unreviewed)
-  }, [bank.review.rows])
-
-  // Convenience for driver cards — share-of-spend for each bucket,
-  // rendered as a small "· N% of spend" suffix so the cards read as
-  // sub-parts of one total instead of four parallel expense buckets.
-  const pctOfSpend = (n: number) =>
-    totalSpend7d > 0 ? Math.round((n / totalSpend7d) * 100) : 0
-
-  // Recent activity is now a single unfiltered log — the Inventory
-  // / Other filter pills were removed in this pass to keep the card
-  // a clean recent-activity view.
-  const activityPageCount = Math.max(1, Math.ceil(recentExpenses.length / ACTIVITY_PAGE_SIZE))
-  const safeActivityPage = Math.min(activityPage, activityPageCount - 1)
-  const pagedExpenses = recentExpenses.slice(
-    safeActivityPage * ACTIVITY_PAGE_SIZE,
-    safeActivityPage * ACTIVITY_PAGE_SIZE + ACTIVITY_PAGE_SIZE
-  )
-
-  const recentInventoryExpenses = useMemo(
-    () => recentExpenses.filter((e) => e.isInventoryRelated).slice(0, 8),
-    [recentExpenses]
-  )
 
   return (
-    <div className="max-w-[1400px]">
-
-      {/* ================================================================ */}
-      {/* 1. HEADER                                                        */}
-      {/* ================================================================ */}
-      <div className="mb-7 flex items-start justify-between gap-4">
+    <PageShell>
+      {/* Page title — small, calm; the balance below is the star. */}
+      <div className="mb-6 flex items-baseline justify-between gap-4">
         <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Finance', 'Finanzas')}</h1>
-          <p className="mt-1.5 text-sm text-gray-500">
-            {t('Money in, money out, and where pressure is building.', 'Dinero que entra, dinero que sale, y dónde se acumula la presión.')}
+          <h1 className="text-[26px] leading-tight font-semibold tracking-tight" style={{ color: INK }}>
+            {t('Finance', 'Finanzas')}
+          </h1>
+          <p className="mt-1 text-[13px]" style={{ color: MUTED }}>
+            {t('The week at a glance.', 'La semana de un vistazo.')}
           </p>
         </div>
-        <DataSourceChip state={bank.state} lang={lang} />
+        <Link
+          href="/finance/details"
+          className="text-[11px] font-mono uppercase tracking-[0.14em] transition-colors"
+          style={{ color: MUTED }}
+        >
+          {t('Detailed workspace →', 'Espacio detallado →')}
+        </Link>
       </div>
 
-      {/* ================================================================ */}
-      {/* 2. TOP SUMMARY — single unified card with internal dividers      */}
-      {/* ================================================================ */}
-      <section className="mb-7">
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-          <div className="grid grid-cols-1 sm:grid-cols-3">
-            <SummaryCell
-              label={t('Revenue', 'Ingresos')}
-              dotClass="bg-green-500"
-              value={fmt(cards.revenue7d)}
-              hint={t('Sales recorded · card and cash settlement handled separately', 'Ventas registradas · liquidación de tarjeta y efectivo gestionada por separado')}
-              empty={cards.revenue7d === 0}
-              truth="Recorded"
-              onOpen={() => setDrawer('revenue')}
-              lang={lang}
-            />
-            <SummaryCell
-              label={t('Spend', 'Gasto')}
-              dotClass="bg-red-400"
-              value={fmt(totalSpend7d)}
-              hint={t('Labor · inventory · operating · verification via Bank Review', 'Mano de obra · inventario · operación · verificación vía Revisión bancaria')}
-              empty={totalSpend7d === 0}
-              truth="Tracked"
-              onOpen={() => setDrawer('spend')}
-              lang={lang}
-            />
-            <NetActivityCell
-              value={netActivity}
-              hasAnyActivity={hasAnyActivity}
-              netPositive={netPositive}
-              revenue={cards.revenue7d}
-              spend={totalSpend7d}
-              recognizedOperatingSpend={bank.recognizedExternalSpend7d}
-              onOpen={() => setDrawer('net')}
-              lang={lang}
-            />
-          </div>
-        </div>
-      </section>
+      {/* 1 · Balance anchor */}
+      <BalanceCard bank={bank} lastWeekNet={week.lastWeekNet} lang={lang} />
 
-      {/* ================================================================ */}
-      {/* 3. OPERATIONAL DRIVERS — three clickable cards                   */}
-      {/* ================================================================ */}
-      <section className="mb-7">
-        <div className="mb-3 flex items-baseline justify-between gap-3">
-          <h2 className="text-sm font-semibold text-gray-900 tracking-tight">
-            {t("What's driving spend", 'Qué está impulsando el gasto')}
-          </h2>
-          <span className="text-[11px] text-gray-400">{t('Last 7 days', 'Últimos 7 días')}</span>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-3 sm:grid-cols-2">
-          <LaborDriverCard
-            cards={cards}
-            laborSpend={laborSpend}
-            sharePct={pctOfSpend(laborSpend)}
-            onOpen={() => setDrawer('labor')}
-            lang={lang}
-          />
-          <InventoryDriverCard
-            value={inventorySpend}
-            sharePct={pctOfSpend(inventorySpend)}
-            hasManual={cards.inventorySpend7d > 0}
-            hasBankConfirm={bank.bankInventoryConfirmed7d > 0}
-            onOpen={() => setDrawer('inventory')}
-            lang={lang}
-          />
-          <OperatingCard
-            bank={bank}
-            operatingSpend={operatingSpend}
-            sharePct={pctOfSpend(operatingSpend)}
-            plaidConfigured={plaidConfigured}
-            onOpen={() => setDrawer('operating')}
-            lang={lang}
-          />
-        </div>
-      </section>
-
-      {/* ================================================================ */}
-      {/* 4. LOWER ROW — Recent activity + Bank Review summary             */}
-      {/* The right-rail used to be "Log expense" (the dominant manual     */}
-      {/* entry card). It now carries the Bank Review summary — a more    */}
-      {/* model-aligned right rail. Manual expense entry still exists     */}
-      {/* but lives in a drawer reached via the small "+ Log manual       */}
-      {/* expense" link on the Recent activity header, or via Dashboard's */}
-      {/* "Add manual expense" quick action which deep-links here with    */}
-      {/* ?log=1.                                                          */}
-      {/* ================================================================ */}
-      <section>
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
-
-          {/* LEFT: Recent activity */}
-          <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[500px]">
-            {/* Header — secondary "+ Log manual expense" affordance on
-                the right keeps the manual capability accessible without
-                making it dominant. */}
-            <div className="border-b border-gray-100 px-6 py-4 flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Recent activity', 'Actividad reciente')}</h2>
-                <p className="mt-0.5 text-[11px] text-gray-500">{t('Latest expenses logged or imported.', 'Últimos gastos registrados o importados.')}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setDrawer('log_expense')}
-                className="flex-shrink-0 text-[11px] font-medium text-blue-700 hover:text-blue-900 hover:underline transition-colors"
-              >
-                {t('+ Log manual expense', '+ Registrar gasto manual')}
-              </button>
-            </div>
-
-            {/* Body — fixed-height activity log, paginated 6 per page so the
-                card never stretches and rows always slot in cleanly. */}
-            <div className="flex-1 flex flex-col">
-              {recentExpenses.length === 0 ? (
-                <EmptyWorkspacePrompt
-                  title={t('No activity yet', 'Sin actividad aún')}
-                  body={t('Log an expense or receive a restock order — entries land here.', 'Registra un gasto o recibe una orden de reposición — las entradas aparecerán aquí.')}
-                />
-              ) : (
-                <>
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-gray-100 text-left">
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Date', 'Fecha')}</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Category', 'Categoría')}</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500">{t('Vendor', 'Proveedor')}</th>
-                        <th className="px-6 py-2.5 text-[11px] font-medium text-gray-500 text-right">{t('Amount', 'Monto')}</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-50">
-                      {pagedExpenses.map((exp) => (
-                        <tr key={exp.id} className="hover:bg-gray-50/70 transition-colors">
-                          <td className="px-6 py-3.5 text-gray-700 whitespace-nowrap text-[13px]">
-                            {new Date(exp.expenseDate + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                          </td>
-                          <td className={`px-6 py-3.5 truncate max-w-[180px] text-[13px] font-medium ${categoryColorClass(exp.category)}`}>
-                            {exp.category}
-                          </td>
-                          <td className="px-6 py-3.5 text-gray-700 truncate max-w-[220px] text-[13px]">
-                            {exp.vendorName || '—'}
-                          </td>
-                          <td className="px-6 py-3.5 text-gray-900 font-mono tabular-nums font-medium text-right text-[13px]">${exp.amount.toFixed(2)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-
-                  {/* Pager — pinned at the bottom so the card height stays
-                      stable regardless of how full the current page is.
-                      Compact arrow style, matching the Inventory family. */}
-                  <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
-                    <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                      {recentExpenses.length === 0
-                        ? t('0 entries', '0 entradas')
-                        : (
-                          <>
-                            {t('Showing', 'Mostrando')}{' '}
-                            <span className="font-semibold text-gray-700">
-                              {safeActivityPage * ACTIVITY_PAGE_SIZE + 1}–
-                              {Math.min(
-                                (safeActivityPage + 1) * ACTIVITY_PAGE_SIZE,
-                                recentExpenses.length,
-                              )}
-                            </span>{' '}
-                            {t('of', 'de')} <span className="font-semibold text-gray-700">{recentExpenses.length}</span>
-                          </>
-                        )}
-                    </p>
-                    <div className="inline-flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setActivityPage((p) => Math.max(0, p - 1))}
-                        disabled={safeActivityPage === 0}
-                        aria-label={t('Previous activity page', 'Página anterior de actividad')}
-                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                      >
-                        ←
-                      </button>
-                      <span className="text-[10px] text-gray-500 px-1.5 font-mono tabular-nums">
-                        {safeActivityPage + 1} / {activityPageCount}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setActivityPage((p) => Math.min(activityPageCount - 1, p + 1))}
-                        disabled={safeActivityPage >= activityPageCount - 1}
-                        aria-label={t('Next activity page', 'Página siguiente de actividad')}
-                        className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                      >
-                        →
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* RIGHT: Money Review summary — exception-first triage card */}
-          <BankReviewSummaryCard
-            counts={bank.review.counts}
-            groupCount={reviewGroups.length}
-            attentionCount={
-              reviewGroups.filter((g) => g.triage !== 'auto').length
-            }
-            autoCount={
-              reviewGroups.filter((g) => g.triage === 'auto').length
-            }
-            bankState={bank.state}
-            onOpen={() => setDrawer('bank_review')}
-            lang={lang}
-          />
-        </div>
-      </section>
-
-      {/* ================================================================ */}
-      {/* DRAWERS                                                          */}
-      {/* ================================================================ */}
-      <Drawer
-        open={drawer === 'revenue'}
-        onClose={() => setDrawer(null)}
-        title={t('Revenue', 'Ingresos')}
-        subtitle={t('How recorded sales become settled money', 'Cómo las ventas registradas se convierten en dinero liquidado')}
-        lang={lang}
-      >
-        <RevenueDrawerContent
-          revenue7d={cards.revenue7d}
-          reviewRows={bank.review.rows}
-          bankState={bank.state}
-          lang={lang}
-        />
-      </Drawer>
-
-      <Drawer
-        open={drawer === 'spend'}
-        onClose={() => setDrawer(null)}
-        title={t('Spend', 'Gasto')}
-        subtitle={t('What is included, and how true is it', 'Qué está incluido y qué tan cierto es')}
-        lang={lang}
-      >
-        <SpendDrawerContent
-          laborSpend={laborSpend}
-          inventorySpend={inventorySpend}
-          operatingSpend={operatingSpend}
-          totalSpend7d={totalSpend7d}
-          reviewCounts={bank.review.counts}
-          bankState={bank.state}
-          lang={lang}
-        />
-      </Drawer>
-
-      <Drawer
-        open={drawer === 'net'}
-        onClose={() => setDrawer(null)}
-        title={t('Net activity', 'Actividad neta')}
-        subtitle={t('Why operating net and bank net differ', 'Por qué el neto operativo y el neto bancario difieren')}
-        lang={lang}
-      >
-        <NetActivityDrawerContent
-          revenue={cards.revenue7d}
-          spend={totalSpend7d}
-          bankInflow={bank.inflow7d}
-          bankOutflow={bank.outflow7d}
-          laborSpend={laborSpend}
-          inventorySpend={inventorySpend}
-          reviewCounts={bank.review.counts}
-          bankState={bank.state}
-          lang={lang}
-        />
-      </Drawer>
-
-      <Drawer
-        open={drawer === 'labor'}
-        onClose={() => setDrawer(null)}
-        title={t('Scheduled labor', 'Mano de obra programada')}
-        subtitle={t('This week · projected from schedule × hourly rate', 'Esta semana · proyectado desde el horario × tarifa por hora')}
-        lang={lang}
-      >
-        <LaborDrawerContent cards={cards} breakdown={laborBreakdown} lang={lang} />
-      </Drawer>
-
-      <Drawer
-        open={drawer === 'inventory'}
-        onClose={() => setDrawer(null)}
-        title={t('Inventory spend', 'Gasto en inventario')}
-        subtitle={t('Last 7 days · inventory purchases', 'Últimos 7 días · compras de inventario')}
-        lang={lang}
-      >
-        <InventoryDrawerContent
-          total={cards.inventorySpend7d}
-          breakdown={inventoryBreakdown}
-          recentItems={recentInventoryExpenses}
-          lang={lang}
-        />
-      </Drawer>
-
-      <Drawer
-        open={drawer === 'operating'}
-        onClose={() => setDrawer(null)}
-        title={t('Operating', 'Operación')}
-        subtitle={
-          bank.state === 'not_connected'
-            ? t('Business expenses outside labor and inventory', 'Gastos del negocio fuera de mano de obra e inventario')
-            : t('Last 7 days · business expenses outside labor and inventory', 'Últimos 7 días · gastos del negocio fuera de mano de obra e inventario')
-        }
-        lang={lang}
-      >
-        <OperatingDrawerContent
-          bank={bank}
-          plaidConfigured={plaidConfigured}
-          plaidSandbox={plaidSandbox}
-          isDev={isDev}
-          lang={lang}
-        />
-      </Drawer>
-
-      {/* Bank Review drawer — settlement workflow. Renders the same
-          reviewRows feed produced by the server in three queues
-          (Suggested / Incoming / Outgoing) plus collapsible tails
-          for Settled / Review later / Ignored. Action buttons call
-          settleBankTransaction / ignoreBankTransaction / etc. */}
-      <Drawer
-        open={drawer === 'bank_review'}
-        onClose={() => setDrawer(null)}
-        title={t('Money Review', 'Revisión de dinero')}
-        subtitle={
-          bank.state === 'not_connected'
-            ? t('Connect a bank to start verifying cash reality', 'Conecta un banco para empezar a verificar la realidad del efectivo')
-            : (() => {
-                const attention = reviewGroups.filter((g) => g.triage !== 'auto').length
-                const auto = reviewGroups.filter((g) => g.triage === 'auto').length
-                return lang === 'es'
-                  ? `${attention} necesita${attention === 1 ? '' : 'n'} atención · ${auto} clasificados automáticamente`
-                  : `${attention} need${attention === 1 ? 's' : ''} attention · ${auto} auto-classified`
-              })()
-        }
-        lang={lang}
-      >
-        <BankReviewDrawerContent
-          groups={reviewGroups}
-          rows={bank.review.rows}
-          counts={bank.review.counts}
-          bankState={bank.state}
-          plaidConfigured={plaidConfigured}
-          lang={lang}
-        />
-      </Drawer>
-
-      {/* Log Expense drawer — manual entry moved out of the main
-          page layout into a focused drawer. Reachable from the
-          "+ Log manual expense" link on Recent activity, or via
-          Dashboard quick action which deep-links here with ?log=1. */}
-      <Drawer
-        open={drawer === 'log_expense'}
-        onClose={() => setDrawer(null)}
-        title={t('Log manual expense', 'Registrar gasto manual')}
-        subtitle={t('Cash, owner-paid, or one-off expenses', 'Efectivo, pagado por el dueño, o gastos puntuales')}
-        lang={lang}
-      >
-        <LogExpenseDrawerContent
-          action={action}
-          pending={pending}
-          error={state?.error}
-          locationId={locationId}
-          lang={lang}
-        />
-      </Drawer>
-    </div>
-  )
-}
-
-// ================================================================
-// Top summary
-// ================================================================
-
-// ----------------------------------------------------------------
-// Truth labels.
-//
-// Finance mixes several kinds of money truth — system records,
-// schedule-derived estimates, bank-detected activity — and the UI
-// should not present them as equally final. Each surfaced number
-// carries one of the labels below so the manager always sees what
-// kind of fact they're looking at.
-//
-//   Recorded     — the system says it happened (sales, manual
-//                  expenses, received restock orders).
-//   Estimated    — the system expects it (e.g. schedule × rate).
-//   Tracked      — bank-detected, not yet reviewed.
-//   Needs review — bank activity that needs human classification.
-//   Verified     — cleared / matched against a settlement. Reserved
-//                  for a later pass; the current data layer can't
-//                  produce verified spend honestly yet.
-//
-// "Operating view" is not a truth state — it's a perspective
-// disclosure used by Net activity ("this is the in-app calculation,
-// a bank-settled view will arrive via Bank Review"). It uses the
-// same chip styling so the family reads as one piece.
-// ----------------------------------------------------------------
-type TruthLabel = 'Recorded' | 'Estimated' | 'Verified' | 'Tracked' | 'Needs review'
-
-function translateTruth(label: TruthLabel, lang: Lang): string {
-  if (lang !== 'es') return label
-  const map: Record<TruthLabel, string> = {
-    'Recorded': 'Registrado',
-    'Estimated': 'Estimado',
-    'Verified': 'Verificado',
-    'Tracked': 'Rastreado',
-    'Needs review': 'Necesita revisión',
-  }
-  return map[label]
-}
-
-function TruthChip({ label, lang }: { label: TruthLabel; lang?: Lang }) {
-  const toneMap: Record<TruthLabel, string> = {
-    'Recorded':     'bg-gray-100 text-gray-600',
-    'Estimated':    'bg-amber-50 text-amber-700',
-    'Verified':     'bg-green-50 text-green-700',
-    'Tracked':      'bg-blue-50 text-blue-700',
-    'Needs review': 'bg-amber-50 text-amber-800',
-  }
-  return (
-    <span
-      className={`inline-flex text-[9px] font-semibold uppercase tracking-[0.12em] px-1.5 py-0.5 rounded ${toneMap[label]}`}
-    >
-      {translateTruth(label, lang ?? 'en')}
-    </span>
-  )
-}
-
-// Inside-the-unified-card cell. Numbers are black; only the
-// identity dot carries color. `truth` adds the small uppercase
-// truth label next to the cell title so each top-level number
-// declares what kind of fact it is. `onOpen` makes the cell
-// clickable — each top card opens a drawer that explains the
-// number in detail (Prompt 4: "Every Finance drawer has a job").
-function SummaryCell({ label, dotClass, value, hint, empty, truth, onOpen, lang }: {
-  label: string; dotClass: string; value: string; hint: string; empty: boolean
-  truth: TruthLabel
-  onOpen?: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const body = (
-    <>
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full ${dotClass} flex-shrink-0`} />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{label}</p>
-          <TruthChip label={truth} lang={lang} />
-        </div>
-        <p className="text-[10px] text-gray-400 whitespace-nowrap flex-shrink-0">{t('Last 7 days', 'Últimos 7 días')}</p>
+      {/* 2 · Weekly progress rings */}
+      <div className="mt-5">
+        <ProgressRings week={week} baselines={baselines} lang={lang} />
       </div>
-      <p className={`mt-5 text-[30px] leading-none font-semibold tracking-tight font-mono tabular-nums ${empty ? 'text-gray-300' : 'text-gray-900'}`}>
-        {value}
-      </p>
-      <p className="mt-3 text-xs text-gray-500">{hint}</p>
-    </>
-  )
-  if (onOpen) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="text-left p-6 group hover:bg-gray-50/60 transition-colors w-full"
-      >
-        {body}
-      </button>
-    )
-  }
-  return <div className="p-6">{body}</div>
-}
 
-// Net activity cell — only metric whose value is colored.
-// Green when positive, red when negative.
-//
-// `spend` here is the full deduction: internal logged expenses +
-// recognized operating spend (bank outflows Plaid categorized).
-// Unresolved bank activity is intentionally excluded — it's not
-// recognized yet, so claiming it as "spend" would mislead.
-//
-// We label this the "operating view": it is the in-app calculation
-// of revenue minus the spend signals Finance is currently aware of.
-// A separate bank-settled view (bank inflows − bank outflows) is
-// computable but intentionally not shown side-by-side here, because
-// bank inflows include card-settlement deposits that represent
-// already-counted sales — putting both nets next to each other
-// without a verification engine would double-count and mislead.
-// The Bank Review workflow planned for a later pass is what will
-// reconcile the two views honestly.
-function NetActivityCell({ value, hasAnyActivity, netPositive, revenue, spend, recognizedOperatingSpend, onOpen, lang }: {
-  value: number; hasAnyActivity: boolean; netPositive: boolean
-  revenue: number; spend: number; recognizedOperatingSpend: number
-  onOpen?: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const valueColor = !hasAnyActivity ? 'text-gray-300' : (netPositive ? 'text-green-700' : 'text-red-600')
-  const dotClass = !hasAnyActivity ? 'bg-gray-300' : (netPositive ? 'bg-green-500' : 'bg-red-500')
-  const hasRecognizedOperating = recognizedOperatingSpend > 0
-  const hint = (() => {
-    if (revenue > 0 && spend > 0) {
-      const pct = Math.round((spend / revenue) * 100)
-      const base = spend > revenue
-        ? t(`Spending exceeds revenue · ${pct}% ratio`, `El gasto excede los ingresos · razón ${pct}%`)
-        : t(`Spending is ${pct}% of revenue`, `El gasto es ${pct}% de los ingresos`)
-      return hasRecognizedOperating ? `${base} · ${t('incl. operating', 'incl. operación')}` : base
-    }
-    if (revenue > 0) return t('No spend recorded yet', 'Sin gasto registrado aún')
-    if (spend > 0) return t('No sales recorded yet', 'Sin ventas registradas aún')
-    return t('Log an expense or connect a bank to begin', 'Registra un gasto o conecta un banco para comenzar')
-  })()
-
-  const body = (
-    <>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotClass}`} />
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-900">{t('Net activity', 'Actividad neta')}</p>
-        </div>
-        {hasAnyActivity && (
-          <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-            netPositive ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {netPositive ? t('Positive', 'Positivo') : t('Negative', 'Negativo')}
-          </span>
-        )}
-      </div>
-      <p className="text-[10px] text-gray-400 mt-1 ml-4">{t('Last 7 days', 'Últimos 7 días')}</p>
-      <div className="mt-3 flex items-baseline gap-2 flex-wrap">
-        <p className={`text-[36px] leading-none font-semibold tracking-tight font-mono tabular-nums ${valueColor}`}>
-          {hasAnyActivity ? `${netPositive ? '' : '−'}${fmt(Math.abs(value))}` : '$0.00'}
-        </p>
-        <span className="text-[11px] font-medium text-gray-500 lowercase">{t('operating view', 'vista operativa')}</span>
-      </div>
-      <p className="mt-3 text-xs text-gray-500">{hint}</p>
-      <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
-        {t('Bank-settled view coming via Bank Review.', 'La vista liquidada por banco llegará vía Revisión bancaria.')}
-      </p>
-    </>
-  )
-  if (onOpen) {
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="text-left p-6 group hover:bg-gray-50/60 transition-colors w-full"
-      >
-        {body}
-      </button>
-    )
-  }
-  return <div className="p-6">{body}</div>
-}
-
-// ================================================================
-// Driver cards (middle row)
-// ================================================================
-
-function LaborDriverCard({ cards, laborSpend, sharePct, onOpen, lang }: {
-  cards: {
-    laborEstimate: number
-    laborRatedShiftCount: number
-    laborUnratedShiftCount: number
-    totalShiftCount: number
-    laborState: LaborState
-  }
-  laborSpend: number
-  sharePct: number
-  onOpen: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const accent = 'bg-purple-500'
-  // Labor is an Estimate — scheduled hours × rate. Once clock-in/out
-  // and payroll detection land, this card moves from Estimated to
-  // Verified (paid hours from bank-confirmed payroll outflow).
-  // Until then the truth chip and the supporting copy both say
-  // estimated so the value can't be misread as a settled payroll
-  // figure.
-  const shareTag = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
-  const laborLabel = t('Scheduled labor', 'Mano de obra programada')
-  const thisWeek = t('This week', 'Esta semana')
-
-  switch (cards.laborState) {
-    case 'ok': {
-      const baseHint =
-        cards.laborUnratedShiftCount > 0
-          ? t(`From scheduled shifts · ${cards.laborRatedShiftCount} of ${cards.totalShiftCount} costed`, `Desde turnos programados · ${cards.laborRatedShiftCount} de ${cards.totalShiftCount} costeados`)
-          : t(`From scheduled shifts · ${cards.laborRatedShiftCount} costed`, `Desde turnos programados · ${cards.laborRatedShiftCount} costeados`)
-      return (
-        <ClickableDriverCard
-          accent={accent}
-          label={laborLabel}
-          period={thisWeek}
-          value={fmt(laborSpend)}
-          valueMuted={false}
-          hint={`${baseHint}${shareTag}`}
-          truth="Estimated"
-          onOpen={onOpen}
-          lang={lang}
+      {/* 3 · Money In / Money Out */}
+      <div className="mt-5 grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FlowCard
+          direction="in"
+          label={t('Money in this week', 'Ingresos esta semana')}
+          amount={week.moneyIn}
+          spark={week.inSpark}
+          chip={week.inChip}
         />
-      )
-    }
-    case 'no_shifts':
-      return (
-        <ClickableDriverCard
-          accent={accent}
-          label={laborLabel}
-          period={thisWeek}
-          value="$0.00"
-          valueMuted={true}
-          hint={t('No shifts scheduled', 'Sin turnos programados')}
-          truth="Estimated"
-          onOpen={onOpen}
-          lang={lang}
+        <FlowCard
+          direction="out"
+          label={t('Money out this week', 'Egresos esta semana')}
+          amount={week.moneyOut}
+          spark={week.outSpark}
+          chip={week.outChip}
         />
-      )
-    case 'no_employees':
-      return (
-        <ClickableUnavailableCard
-          accent={accent}
-          label={laborLabel}
-          period={thisWeek}
-          reason={t('Add hourly rates to staff', 'Añade tarifas por hora al personal')}
-          onOpen={onOpen}
-          lang={lang}
-        />
-      )
-    case 'missing_rates':
-      return (
-        <ClickableUnavailableCard
-          accent={accent}
-          label={laborLabel}
-          period={thisWeek}
-          reason={t(`${cards.totalShiftCount} shift${cards.totalShiftCount !== 1 ? 's' : ''} · employees missing rates`, `${cards.totalShiftCount} turno${cards.totalShiftCount !== 1 ? 's' : ''} · empleados sin tarifas`)}
-          onOpen={onOpen}
-          lang={lang}
-        />
-      )
-  }
-}
-
-function InventoryDriverCard({ value, sharePct, hasManual, hasBankConfirm, onOpen, lang }: {
-  value: number
-  sharePct: number
-  hasManual: boolean
-  hasBankConfirm: boolean
-  onOpen: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  // Inventory is Recorded — received restock orders + manually
-  // logged inventory expenses. Bank PFC overlap exists but is NOT
-  // a true line-level match against specific received orders, so
-  // we don't claim verification yet. Subtext leads with the
-  // settlement gap so the truth chip and the supporting copy align.
-  const baseHint = (() => {
-    if (!hasManual && !hasBankConfirm) return t('Mark expenses as inventory-related', 'Marca los gastos como relacionados con inventario')
-    if (hasManual && hasBankConfirm)   return t('Awaiting bank settlement · bank context available', 'Esperando liquidación bancaria · contexto bancario disponible')
-    if (hasBankConfirm)                return t('Awaiting bank settlement · bank context available', 'Esperando liquidación bancaria · contexto bancario disponible')
-    return t('Awaiting bank settlement', 'Esperando liquidación bancaria')
-  })()
-  const shareTag = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
-  return (
-    <ClickableDriverCard
-      accent="bg-amber-500"
-      label={t('Inventory spend', 'Gasto en inventario')}
-      period={t('Last 7 days', 'Últimos 7 días')}
-      value={fmt(value)}
-      valueMuted={value === 0}
-      hint={`${baseHint}${shareTag}`}
-      truth="Recorded"
-      onOpen={onOpen}
-      lang={lang}
-    />
-  )
-}
-
-// Operating card — third middle-row card. Represents business
-// expenses outside Labor and Inventory (rent, utilities, marketing,
-// subscriptions, insurance, repairs, bank fees, professional
-// services, loan payments). Headline value is the de-duped
-// Operating bucket from the Spend model: max(manual non-inventory
-// expenses, bank non-inventory PFC outflows). The drawer breaks
-// out bank-specific detail (categories, unresolved rows, accounts)
-// for managers who want to dig in.
-//
-// Bank Review is a separate verification workflow, planned later —
-// do not conflate it with the Operating expense category.
-function OperatingCard({ bank, operatingSpend, sharePct, plaidConfigured, onOpen, lang }: {
-  bank: {
-    externalSpend7d: number
-    externalSpendCount7d: number
-    unresolvedCount7d: number
-    state: BankState
-  }
-  operatingSpend: number
-  sharePct: number
-  plaidConfigured: boolean
-  onOpen: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  if (bank.state === 'not_connected') {
-    return (
-      <div className="rounded-xl border border-gray-200/80 bg-gradient-to-br from-white to-teal-50/30 p-6 flex flex-col shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-teal-500" />
-            <p className="text-xs font-semibold text-gray-900">{t('Operating', 'Operación')}</p>
-          </div>
-          <span className="text-[10px] text-gray-400">{t('Optional', 'Opcional')}</span>
-        </div>
-        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
-        <p className="mt-3 text-xs text-gray-500 leading-relaxed mb-4">
-          {t('Connect a bank to surface operating expenses paid through your account — rent, utilities, marketing, subscriptions, fees.', 'Conecta un banco para mostrar los gastos de operación pagados a través de tu cuenta — renta, servicios, marketing, suscripciones, cuotas.')}
-        </p>
-        <div className="mt-auto" onClick={(e) => e.stopPropagation()}>
-          <ConnectBankButton configured={plaidConfigured} />
-        </div>
       </div>
-    )
-  }
 
-  // Identity dot is always teal — that signals "Operating".
-  // The state pill (Live / Awaiting sync) shows operational state
-  // separately so the two readings don't fight each other.
-  const identityDot = 'bg-teal-500'
-  const stateLabel = bank.state === 'connected_synced' ? t('Live', 'En vivo') : t('Awaiting sync', 'Esperando sincronización')
-  const stateLabelTone = bank.state === 'connected_synced' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'
-  const stateDot = bank.state === 'connected_synced' ? 'bg-green-500' : 'bg-amber-500'
-
-  // Truth label for the synced view:
-  //   - Unresolved bank rows present → "Needs review" (amber). Bank
-  //     activity sits uncategorized; manager attention is needed.
-  //   - Otherwise → "Tracked" (blue). Bank rows are categorized
-  //     but not yet verified against system records. A future
-  //     Bank Review workflow promotes these to Verified.
-  // No chip in the awaiting-sync state — there's no value to label.
-  const operatingTruth: TruthLabel = bank.unresolvedCount7d > 0 ? 'Needs review' : 'Tracked'
-
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="text-left group rounded-xl border border-gray-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-gray-300 hover:shadow-[0_8px_20px_-8px_rgba(15,23,42,0.12),0_2px_4px_rgba(15,23,42,0.04)] transition-all"
-    >
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full ${identityDot} flex-shrink-0`} />
-          <p className="text-xs font-semibold text-gray-900">{t('Operating', 'Operación')}</p>
-          {bank.state === 'connected_synced' && <TruthChip label={operatingTruth} lang={lang} />}
-        </div>
-        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${stateLabelTone}`}>
-          <span className={`w-1.5 h-1.5 rounded-full ${stateDot}`} />
-          {stateLabel}
-        </span>
+      {/* 4 · Net + streak context */}
+      <div className="mt-5">
+        <NetLine net={week.net} streak={week.streakWeeks} lang={lang} />
       </div>
-      {bank.state === 'connected_unsynced' ? (
-        <>
-          <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-400 font-mono tabular-nums">—</p>
-          <div className="mt-3 flex items-end justify-between gap-2">
-            <p className="text-xs text-gray-500 leading-relaxed">{t('Bank linked · awaiting first sync', 'Banco vinculado · esperando primera sincronización')}</p>
-            <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-              {t('View →', 'Ver →')}
-            </span>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="text-[10px] uppercase tracking-[0.14em] text-gray-400 font-medium mb-1">{t('Operating spend · 7 days', 'Gasto de operación · 7 días')}</p>
-          <p className={`text-[26px] leading-none font-semibold tracking-tight font-mono tabular-nums ${operatingSpend === 0 ? 'text-gray-400' : 'text-gray-900'}`}>
-            {fmt(operatingSpend)}
-          </p>
-          <div className="mt-3 flex items-end justify-between gap-2">
-            <p className="text-xs text-gray-500 leading-relaxed">
-              {(() => {
-                const sharePart = sharePct > 0 ? ` · ${sharePct}% ${t('of spend', 'del gasto')}` : ''
-                const reviewPart = bank.unresolvedCount7d > 0 ? ` · ${t('bank review needed', 'revisión bancaria necesaria')}` : ''
-                if (bank.externalSpendCount7d === 0 && operatingSpend === 0) {
-                  return t('No operating spend detected', 'Sin gasto de operación detectado')
-                }
-                const txnLabel = lang === 'es'
-                  ? `${bank.externalSpendCount7d} transacci${bank.externalSpendCount7d !== 1 ? 'ones' : 'ón'} bancaria${bank.externalSpendCount7d !== 1 ? 's' : ''}`
-                  : `${bank.externalSpendCount7d} bank txn${bank.externalSpendCount7d !== 1 ? 's' : ''}`
-                const txnPart = bank.externalSpendCount7d === 0
-                  ? null
-                  : bank.unresolvedCount7d > 0
-                    ? `${txnLabel} · ${bank.unresolvedCount7d} ${t('unresolved', 'sin resolver')}`
-                    : `${txnLabel} · ${t('all categorized', 'todas categorizadas')}`
-                return txnPart ? `${txnPart}${sharePart}${reviewPart}` : `${t('Manual entries', 'Entradas manuales')}${sharePart}`
-              })()}
-            </p>
-            <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-              {t('View →', 'Ver →')}
-            </span>
-          </div>
-        </>
+
+      {/* 5 · Sunday recap (only when the server said so) */}
+      {recap && (
+        <div className="mt-5">
+          <RecapCard text={recap} lang={lang} />
+        </div>
       )}
-    </button>
-  )
-}
 
-function ClickableDriverCard({
-  accent, label, period, value, valueMuted, hint, truth, onOpen, lang,
-}: {
-  accent: string; label: string; period: string; value: string
-  valueMuted: boolean; hint: string; truth?: TruthLabel; onOpen: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="text-left group rounded-xl border border-gray-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-gray-300 hover:shadow-[0_8px_20px_-8px_rgba(15,23,42,0.12),0_2px_4px_rgba(15,23,42,0.04)] transition-all"
-    >
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full ${accent} flex-shrink-0`} />
-          <p className="text-xs font-semibold text-gray-900">{label}</p>
-          {truth && <TruthChip label={truth} lang={lang} />}
+      {/* 6 · Smart nudge (server picked at most one line) */}
+      {nudge && (
+        <div className="mt-5">
+          <NudgeLine text={nudge} lang={lang} />
         </div>
-        <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
+      )}
+
+      {/* 7 · Recent activity ledger */}
+      <div className="mt-6">
+        <LedgerSection rows={ledger} lang={lang} />
       </div>
-      <p className={`text-[26px] leading-none font-semibold tracking-tight font-mono tabular-nums ${valueMuted ? 'text-gray-400' : 'text-gray-900'}`}>
-        {value}
-      </p>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <p className="text-xs text-gray-500 leading-relaxed">{hint}</p>
-        <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-          {t('View →', 'Ver →')}
-        </span>
-      </div>
-    </button>
+    </PageShell>
   )
 }
 
-function ClickableUnavailableCard({
-  accent, label, period, reason, truth, onOpen, lang,
-}: {
-  accent: string; label: string; period: string; reason: string
-  truth?: TruthLabel; onOpen: () => void
-  lang: Lang
-}) {
+// ----------------------------------------------------------------
+// BalanceCard — the anchor. Big number counts up on mount. Delta
+// vs last week's net sits underneath. When bank isn't connected,
+// we show a warm nudge in the same slot.
+// ----------------------------------------------------------------
+function BalanceCard({
+  bank, lastWeekNet, lang,
+}: { bank: Props['bank']; lastWeekNet: number; lang: Lang }) {
   const t = makeT(lang)
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="text-left group rounded-xl border border-gray-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:border-gray-300 hover:shadow-[0_8px_20px_-8px_rgba(15,23,42,0.12),0_2px_4px_rgba(15,23,42,0.04)] transition-all"
-    >
-      <div className="flex items-center justify-between mb-3 gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full ${accent} opacity-50 flex-shrink-0`} />
-          <p className="text-xs font-semibold text-gray-900">{label}</p>
-          {truth && <TruthChip label={truth} lang={lang} />}
-        </div>
-        <span className="text-[10px] text-gray-400 flex-shrink-0">{period}</span>
-      </div>
-      <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
-      <div className="mt-3 flex items-end justify-between gap-2">
-        <p className="text-xs text-gray-500 leading-relaxed">{reason}</p>
-        <span className="text-[10px] font-medium text-gray-400 group-hover:text-blue-600 group-hover:translate-x-0.5 transition-all flex-shrink-0">
-          {t('View →', 'Ver →')}
-        </span>
-      </div>
-    </button>
-  )
-}
+  const shown = useCountUp(bank.connected ? bank.balance : 0)
 
-// ================================================================
-// Drawer — right-side slide-over
-// ================================================================
-
-function Drawer({ open, onClose, title, subtitle, children, lang }: {
-  open: boolean; onClose: () => void; title: string; subtitle?: string; children: React.ReactNode; lang: Lang
-}) {
-  const t = makeT(lang)
-  useEffect(() => {
-    if (!open) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = prev
-    }
-  }, [open, onClose])
-
-  return (
-    <>
-      <div
-        onClick={onClose}
-        className={`fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40 transition-opacity duration-200 ${
-          open ? 'opacity-100' : 'opacity-0 pointer-events-none'
-        }`}
-        aria-hidden={!open}
-      />
-      <aside
-        className={`fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col transform transition-transform duration-200 ${
-          open ? 'translate-x-0' : 'translate-x-full'
-        }`}
-        aria-hidden={!open}
+  if (!bank.connected) {
+    return (
+      <section
+        className="rounded-2xl px-6 py-6"
+        style={{ background: SAND, border: `1px solid ${HAIR}` }}
       >
-        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="text-base font-bold text-gray-900">{title}</h2>
-            {subtitle && <p className="mt-0.5 text-xs text-gray-500">{subtitle}</p>}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+          {t('In the bank', 'En el banco')}
+        </p>
+        <p className="mt-3 text-[15px] leading-relaxed" style={{ color: SLATE, maxWidth: 520 }}>
+          {t(
+            'Connect your bank to see your real balance here. Without it, everything below still works — we just fall back to sales for the "money in" number.',
+            'Conecta tu banco para ver tu saldo real aquí. Sin él, todo lo de abajo sigue funcionando — usamos las ventas como referencia para "ingresos".'
+          )}
+        </p>
+        <div className="mt-4">
+          <Link
+            href="/settings"
+            className="inline-flex items-center gap-2 h-10 px-4 rounded-lg text-[13px] font-semibold transition-colors"
+            style={{ background: INK, color: CREAM }}
           >
-            {t('Close', 'Cerrar')}
-          </button>
+            {t('Connect bank', 'Conectar banco')} →
+          </Link>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-5">
-          {children}
-        </div>
-      </aside>
-    </>
-  )
-}
-
-// ----------------------------------------------------------------
-// Labor drawer — interpretive: stats strip + breakdowns + caveat
-// ----------------------------------------------------------------
-function LaborDrawerContent({ cards, breakdown, lang }: {
-  cards: { laborEstimate: number; laborState: LaborState; totalShiftCount: number; laborRatedShiftCount: number; laborUnratedShiftCount: number }
-  breakdown: { byArea: LaborByArea[]; byRole: LaborByRole[]; byEmployee: LaborByEmployee[] }
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const totalHours = breakdown.byEmployee.reduce((s, e) => s + e.hours, 0)
-  const employeeCount = breakdown.byEmployee.length
-  const showByArea = breakdown.byArea.some((a) => a.area === 'foh' || a.area === 'boh')
-
-  // Insight: which area / role drives the most labor cost?
-  const topArea = breakdown.byArea[0]
-  const topAreaShare = cards.laborEstimate > 0 && topArea
-    ? Math.round((topArea.cost / cards.laborEstimate) * 100)
-    : 0
-
-  const shiftLabel = (n: number) => lang === 'es' ? `${n} turno${n !== 1 ? 's' : ''}` : `${n} shift${n !== 1 ? 's' : ''}`
-
-  return (
-    <div className="space-y-6">
-      {/* 3-stat strip — interpretive top line */}
-      <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label={t('Cost', 'Costo')} value={fmt(cards.laborEstimate)} muted={cards.laborEstimate === 0} />
-        <DrawerStat label={t('Hours', 'Horas')} value={fmtHours(totalHours)} muted={totalHours === 0} />
-        <DrawerStat label={t('Employees', 'Empleados')} value={`${employeeCount}`} muted={employeeCount === 0} />
-      </div>
-
-      {/* Honesty caveat */}
-      <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
-        <p className="text-[11px] text-amber-800 leading-relaxed">
-          <strong>{t('Estimated, not paid.', 'Estimado, no pagado.')}</strong> {t("Computed from this week's schedule × hourly rate.", 'Calculado desde el horario de esta semana × tarifa por hora.')}
-          {cards.laborUnratedShiftCount > 0 && ` ${shiftLabel(cards.laborUnratedShiftCount)} ${t('excluded — employees missing hourly rates.', 'excluido(s) — empleados sin tarifa por hora.')}`}
-        </p>
-      </div>
-
-      {/* Insight when there's data */}
-      {showByArea && topArea && topAreaShare >= 50 && (
-        <InsightLine
-          accent="purple"
-          text={t(`${areaLabel(topArea.area, lang)} is ${topAreaShare}% of scheduled labor cost this week.`, `${areaLabel(topArea.area, lang)} es ${topAreaShare}% del costo de mano de obra programada esta semana.`)}
-          lang={lang}
-        />
-      )}
-
-      {/* By house */}
-      {showByArea && (
-        <DrawerSection title={t('By house', 'Por casa')}>
-          <div className="space-y-2">
-            {breakdown.byArea.map((row) => (
-              <BreakdownRow
-                key={row.area}
-                primary={areaLabel(row.area, lang)}
-                secondary={`${shiftLabel(row.shiftCount)} · ${fmtHours(row.hours)}`}
-                value={fmt(row.cost)}
-              />
-            ))}
-          </div>
-        </DrawerSection>
-      )}
-
-      {/* By role */}
-      <DrawerSection title={t('By role', 'Por rol')}>
-        {breakdown.byRole.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No roles scheduled this week.', 'Sin roles programados esta semana.')}</p>
-        ) : (
-          <div className="space-y-2">
-            {breakdown.byRole.map((row) => (
-              <BreakdownRow
-                key={row.role}
-                primary={row.role}
-                secondary={`${shiftLabel(row.shiftCount)} · ${fmtHours(row.hours)}${row.missingRate ? ` · ${t('some rates missing', 'faltan algunas tarifas')}` : ''}`}
-                value={fmt(row.cost)}
-                muted={row.cost === 0}
-              />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
-
-      {/* By employee */}
-      <DrawerSection title={t('By employee', 'Por empleado')}>
-        {breakdown.byEmployee.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No employees on the schedule this week.', 'Sin empleados en el horario esta semana.')}</p>
-        ) : (
-          <div className="space-y-2">
-            {breakdown.byEmployee.map((row) => (
-              <BreakdownRow
-                key={row.name}
-                primary={row.name}
-                secondary={
-                  row.hourlyRate
-                    ? `${fmtHours(row.hours)} · $${row.hourlyRate.toFixed(2)}${t('/hr', '/hr')} · ${shiftLabel(row.shiftCount)}`
-                    : `${fmtHours(row.hours)} · ${t('no rate', 'sin tarifa')} · ${shiftLabel(row.shiftCount)}`
-                }
-                value={row.hourlyRate ? fmt(row.cost) : t('Unrated', 'Sin tarifa')}
-                muted={!row.hourlyRate}
-              />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
-    </div>
-  )
-}
-
-function areaLabel(area: 'foh' | 'boh' | 'unassigned', lang: Lang = 'en'): string {
-  const t = makeT(lang)
-  switch (area) {
-    case 'foh': return t('Front of House', 'Salón')
-    case 'boh': return t('Back of House', 'Cocina')
-    case 'unassigned': return t('Unassigned', 'Sin asignar')
-  }
-}
-
-function fmtHours(h: number): string {
-  return `${h.toFixed(h % 1 === 0 ? 0 : 1)}h`
-}
-
-// ----------------------------------------------------------------
-// Inventory drawer — interpretive: stats strip + concentration +
-// vendor-first + category-second + recent (supporting only)
-// ----------------------------------------------------------------
-function InventoryDrawerContent({ total, breakdown, recentItems, lang }: {
-  total: number
-  breakdown: { byCategory: { label: string; amount: number; count: number }[]; byVendor: { label: string; amount: number; count: number }[] }
-  recentItems: RecentExpense[]
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const entryCount = breakdown.byCategory.reduce((s, c) => s + c.count, 0)
-  // Vendor count excludes the "—" placeholder bucket
-  const vendorCount = breakdown.byVendor.filter((v) => v.label !== '—').length
-  const noData = total === 0 && recentItems.length === 0
-
-  if (noData) {
-    return (
-      <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/60 p-6 text-center">
-        <p className="text-sm font-semibold text-gray-700">{t('No inventory spend yet', 'Sin gasto en inventario aún')}</p>
-        <p className="mx-auto mt-1.5 max-w-xs text-xs text-gray-500 leading-relaxed">
-          {t('Receive a restock order or log an inventory-related expense. Entries appear here grouped by vendor.', 'Recibe una orden de reposición o registra un gasto relacionado con inventario. Las entradas aparecen aquí agrupadas por proveedor.')}
-        </p>
-      </div>
+      </section>
     )
   }
 
-  // Concentration insight: top vendor share
-  const topVendor = breakdown.byVendor.find((v) => v.label !== '—')
-  const topVendorShare = total > 0 && topVendor ? Math.round((topVendor.amount / total) * 100) : 0
-  const topCategory = breakdown.byCategory[0]
-  const topCategoryShare = total > 0 && topCategory ? Math.round((topCategory.amount / total) * 100) : 0
-
   return (
-    <div className="space-y-6">
-      {/* Stats strip */}
-      <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label={t('Spend', 'Gasto')} value={fmt(total)} muted={total === 0} />
-        <DrawerStat label={t('Entries', 'Entradas')} value={`${entryCount}`} muted={entryCount === 0} />
-        <DrawerStat label={t('Vendors', 'Proveedores')} value={`${vendorCount}`} muted={vendorCount === 0} />
+    <section
+      className="rounded-2xl px-6 py-6"
+      style={{ background: SAND, border: `1px solid ${HAIR}` }}
+    >
+      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+        {t('In the bank', 'En el banco')}
+      </p>
+      <p
+        className="mt-2 leading-none tabular-nums"
+        style={{ fontSize: 'clamp(40px, 6vw, 56px)', fontWeight: 700, letterSpacing: '-1.6px', color: INK }}
+      >
+        {fmt(shown, { compact: true })}
+      </p>
+      <div className="mt-3 flex items-baseline gap-2 flex-wrap">
+        <span className="text-[13px]" style={{ color: SLATE }}>
+          {t('Last week net', 'Neto semana pasada')}:
+        </span>
+        <span
+          className="text-[13px] font-semibold tabular-nums"
+          style={{ color: lastWeekNet >= 0 ? UP : DOWN_WARM }}
+        >
+          {fmtDelta(lastWeekNet)}
+        </span>
+        <span className="text-[11px]" style={{ color: MUTED }}>
+          · {bank.accountCount === 1
+              ? t('1 account', '1 cuenta')
+              : `${bank.accountCount} ${t('accounts', 'cuentas')}`}
+        </span>
       </div>
-
-      {/* Concentration insight */}
-      {topVendor && topVendorShare >= 40 && (
-        <InsightLine
-          accent="amber"
-          text={t(`${topVendor.label} is ${topVendorShare}% of inventory spend.`, `${topVendor.label} es ${topVendorShare}% del gasto en inventario.`)}
-          lang={lang}
-        />
-      )}
-      {!topVendor && topCategory && topCategoryShare >= 50 && (
-        <InsightLine
-          accent="amber"
-          text={t(`${topCategory.label} is ${topCategoryShare}% of inventory spend.`, `${topCategory.label} es ${topCategoryShare}% del gasto en inventario.`)}
-          lang={lang}
-        />
-      )}
-
-      {/* By vendor — primary */}
-      <DrawerSection title={t('By vendor', 'Por proveedor')}>
-        {breakdown.byVendor.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No vendor data.', 'Sin datos de proveedor.')}</p>
-        ) : (
-          <div className="space-y-2">
-            {breakdown.byVendor.map((row) => (
-              <BreakdownRow
-                key={row.label}
-                primary={row.label === '—' ? t('Unspecified vendor', 'Proveedor no especificado') : row.label}
-                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'gasto' : 'gastos'}` : `${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
-                value={fmt(row.amount)}
-                muted={row.label === '—'}
-              />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
-
-      {/* By category — secondary */}
-      <DrawerSection title={t('By category', 'Por categoría')}>
-        {breakdown.byCategory.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No category data.', 'Sin datos de categoría.')}</p>
-        ) : (
-          <div className="space-y-2">
-            {breakdown.byCategory.map((row) => (
-              <BreakdownRow
-                key={row.label}
-                primary={row.label}
-                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'gasto' : 'gastos'}` : `${row.count} ${row.count === 1 ? 'expense' : 'expenses'}`}
-                value={fmt(row.amount)}
-              />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
-
-      {/* Recent — supporting */}
-      {recentItems.length > 0 && (
-        <DrawerSection title={t('Recent entries', 'Entradas recientes')}>
-          <ul className="divide-y divide-gray-100">
-            {recentItems.map((item) => (
-              <li key={item.id} className="py-2.5 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-xs font-medium text-gray-900 truncate">
-                    {item.vendorName || item.category}
-                  </p>
-                  <p className="text-[11px] text-gray-500 truncate mt-0.5">
-                    {new Date(item.expenseDate + 'T00:00:00').toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
-                    {' · '}{item.category}
-                  </p>
-                </div>
-                <p className="text-xs font-semibold text-gray-900 font-mono tabular-nums flex-shrink-0">
-                  {fmt(item.amount)}
-                </p>
-              </li>
-            ))}
-          </ul>
-        </DrawerSection>
-      )}
-    </div>
+    </section>
   )
 }
 
 // ----------------------------------------------------------------
-// Operating drawer — explanation/connect when not linked,
-// summary + accounts + caveat when linked.
-//
-// Operating = business expenses outside Labor and Inventory (rent,
-// utilities, marketing, subscriptions, insurance, repairs, bank
-// fees, professional services, loan payments). Bank Review (a
-// later verification workflow) is intentionally NOT built here.
+// ProgressRings — three concentric arcs showing progress vs a
+// median "typical week." Under 4 weeks of history, shows a
+// warm "learning your typical week" state instead of a broken ring.
 // ----------------------------------------------------------------
-function OperatingDrawerContent({ bank, plaidConfigured, plaidSandbox, isDev, lang }: {
-  bank: {
-    accounts: BankAccountSummary[]
-    externalSpend7d: number
-    recognizedExternalSpend7d: number
-    bankInventoryConfirmed7d: number
-    externalSpendCount7d: number
-    unresolvedCount7d: number
-    externalByCategory: { label: string; rawLabel: string; amount: number; count: number }[]
-    recentUnresolved: {
-      id: string; description: string | null; merchantName: string | null
-      amount: number; postedAt: string
-    }[]
-    inflow7d: number
-    outflow7d: number
-    txnCount7d: number
-    state: BankState
-  }
-  plaidConfigured: boolean
-  plaidSandbox: boolean
-  isDev: boolean
-  lang: Lang
-}) {
+function ProgressRings({
+  week, baselines, lang,
+}: { week: Props['week']; baselines: Props['baselines']; lang: Lang }) {
   const t = makeT(lang)
-  if (bank.state === 'not_connected') {
+
+  if (!baselines.enoughHistory) {
     return (
-      <div className="space-y-5">
-        <div className="rounded-xl border border-gray-200/80 bg-gray-50/60 p-5">
-          <p className="text-sm font-semibold text-gray-900">{t('What Operating covers', 'Qué cubre Operación')}</p>
-          <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
-            {t('Operating expenses are business costs outside labor and inventory. Connect a bank to surface them automatically.', 'Los gastos de operación son costos del negocio fuera de mano de obra e inventario. Conecta un banco para mostrarlos automáticamente.')}
-          </p>
-          <ul className="mt-3 space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
-            <PreviewBullet>{t('Rent, utilities, marketing, and subscriptions.', 'Renta, servicios, marketing y suscripciones.')}</PreviewBullet>
-            <PreviewBullet>{t('Insurance, repairs, bank fees, professional services, and loan payments.', 'Seguros, reparaciones, cuotas bancarias, servicios profesionales y pagos de préstamos.')}</PreviewBullet>
-            <PreviewBullet>{t('Unresolved activity — transfers and uncategorized outflows shown separately.', 'Actividad sin resolver — transferencias y salidas sin categorizar mostradas por separado.')}</PreviewBullet>
-          </ul>
-        </div>
-
-        <div className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-          <p className="text-[11px] font-semibold text-gray-900">{t('Connect a bank', 'Conectar un banco')}</p>
-          <p className="mt-1 text-xs text-gray-500 leading-relaxed mb-4">
-            {t('Credentials stay server-side and owner-only. Disconnect anytime.', 'Las credenciales permanecen en el servidor y solo para el dueño. Desconecta en cualquier momento.')}
-          </p>
-          <ConnectBankButton configured={plaidConfigured} />
-        </div>
-
-        <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
-          <p className="text-[11px] text-gray-600 leading-relaxed">
-            {t('Finance interprets bank activity as operating-spend context — never as revenue. Sales stay your source of truth.', 'Finanzas interpreta la actividad bancaria como contexto de gasto operativo — nunca como ingresos. Las ventas siguen siendo tu fuente de verdad.')}
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  const lastSync = bank.accounts.reduce<string | null>((latest, a) => {
-    if (!a.lastSyncedAt) return latest
-    if (!latest || new Date(a.lastSyncedAt) > new Date(latest)) return a.lastSyncedAt
-    return latest
-  }, null)
-
-  // Concentration insights — only fire when there's enough signal.
-  const topCategory = bank.externalByCategory[0]
-  const topCategoryShare = bank.externalSpend7d > 0 && topCategory
-    ? Math.round((topCategory.amount / bank.externalSpend7d) * 100)
-    : 0
-  const unresolvedShare = bank.externalSpendCount7d > 0
-    ? Math.round((bank.unresolvedCount7d / bank.externalSpendCount7d) * 100)
-    : 0
-
-  return (
-    <div className="space-y-6">
-      {/* Stats strip — operating spend, not inflow/outflow */}
-      <div className="grid grid-cols-3 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat
-          label={t('Operating spend', 'Gasto de operación')}
-          value={fmt(bank.externalSpend7d)}
-          muted={bank.externalSpend7d === 0}
-        />
-        <DrawerStat
-          label={t('Transactions', 'Transacciones')}
-          value={`${bank.externalSpendCount7d}`}
-          muted={bank.externalSpendCount7d === 0}
-        />
-        <DrawerStat
-          label={t('Unresolved', 'Sin resolver')}
-          value={`${bank.unresolvedCount7d}`}
-          muted={bank.unresolvedCount7d === 0}
-        />
-      </div>
-
-      {/* Single insight line, prioritized:
-          - awaiting sync state takes precedence
-          - then a high concentration warning
-          - then a high unresolved share warning */}
-      {bank.state === 'connected_unsynced' ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
-          <p className="text-[11px] text-amber-800 leading-relaxed">
-            <strong>{t('Awaiting first sync.', 'Esperando primera sincronización.')}</strong> {t('Bank linked but no transactions have arrived yet.', 'Banco vinculado pero aún no han llegado transacciones.')}
-          </p>
-        </div>
-      ) : topCategory && topCategoryShare >= 40 ? (
-        <InsightLine
-          accent="teal"
-          text={t(`${topCategory.label} is ${topCategoryShare}% of operating spend.`, `${topCategory.label} es ${topCategoryShare}% del gasto de operación.`)}
-          lang={lang}
-        />
-      ) : unresolvedShare >= 30 && bank.unresolvedCount7d > 0 ? (
-        <InsightLine
-          accent="amber"
-          text={t(`${unresolvedShare}% of bank-detected operating spend is uncategorized — likely worth a look.`, `${unresolvedShare}% del gasto operativo detectado por el banco está sin categorizar — probablemente vale la pena revisar.`)}
-          lang={lang}
-        />
-      ) : null}
-
-      {/* Operating expenses — categorized outflows */}
-      <DrawerSection title={t('Operating expenses', 'Gastos de operación')}>
-        {bank.externalByCategory.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No categorized outflows yet.', 'Sin salidas categorizadas aún.')}</p>
-        ) : (
-          <div className="space-y-2">
-            {bank.externalByCategory.map((row) => (
-              <BreakdownRow
-                key={row.rawLabel}
-                primary={row.label}
-                secondary={lang === 'es' ? `${row.count} ${row.count === 1 ? 'transacción' : 'transacciones'}` : `${row.count} ${row.count === 1 ? 'transaction' : 'transactions'}`}
-                value={fmt(row.amount)}
-              />
-            ))}
-          </div>
-        )}
-      </DrawerSection>
-
-      {/* Unresolved activity — outflows the bank could not classify */}
-      <DrawerSection title={t('Unresolved activity', 'Actividad sin resolver')}>
-        {bank.recentUnresolved.length === 0 ? (
-          <p className="text-xs text-gray-500 italic">
-            {t('All recent bank activity is categorized.', 'Toda la actividad bancaria reciente está categorizada.')}
-          </p>
-        ) : (
-          <>
-            <p className="text-[11px] text-gray-500 leading-relaxed mb-2.5">
-              {t("Outflows the system can't confidently match yet.", 'Salidas que el sistema aún no puede emparejar con confianza.')}
+      <section
+        className="rounded-2xl px-6 py-5"
+        style={{ background: CREAM, border: `1px solid ${HAIR}` }}
+      >
+        <div className="flex items-start gap-4">
+          <RingLearningIcon />
+          <div>
+            <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+              {t('Weekly rings', 'Anillos semanales')}
             </p>
-            <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200/80 bg-white overflow-hidden">
-              {bank.recentUnresolved.map((row) => (
-                <li key={row.id} className="px-4 py-2.5 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-gray-900 truncate">
-                      {row.merchantName || row.description || t('Untitled outflow', 'Salida sin título')}
-                    </p>
-                    <p className="text-[11px] text-gray-500 truncate mt-0.5">
-                      {new Date(row.postedAt).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
-                      {' · '}{t('No category', 'Sin categoría')}
-                    </p>
-                  </div>
-                  <p className="text-xs font-semibold text-gray-900 font-mono tabular-nums flex-shrink-0">
-                    {fmt(row.amount)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </DrawerSection>
+            <p className="mt-1.5 text-[15px] font-semibold" style={{ color: INK }}>
+              {t('Learning your typical week', 'Aprendiendo tu semana promedio')}
+            </p>
+            <p className="mt-1 text-[12.5px]" style={{ color: SLATE, maxWidth: 520 }}>
+              {t(
+                'After 4 weeks of activity, this section will show where you are vs. your typical week — revenue, expenses, and net all in one glance.',
+                'Después de 4 semanas de actividad, aquí verás cómo va la semana comparada con tu típica — ingresos, gastos y neto de un vistazo.'
+              )}
+            </p>
+          </div>
+        </div>
+      </section>
+    )
+  }
 
-      {/* Connected accounts — supporting context */}
-      <DrawerSection title={t('Connected accounts', 'Cuentas conectadas')}>
-        <ul className="divide-y divide-gray-100 rounded-xl border border-gray-200/80 bg-white overflow-hidden">
-          {bank.accounts.map((a) => (
-            <li key={a.id} className="px-4 py-3">
-              <p className="text-xs font-semibold text-gray-900 truncate">
-                {a.institutionName ?? a.provider} · {a.accountName}
-                {a.accountMask && <span className="text-gray-400 font-normal ml-1">••{a.accountMask}</span>}
-              </p>
-              <p className="text-[11px] text-gray-500 mt-0.5">
-                {a.lastSyncedAt
-                  ? `${t('Last synced', 'Sincronizado')} ${new Date(a.lastSyncedAt).toLocaleString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-                  : t('Not synced yet', 'Aún no sincronizado')}
-              </p>
+  const inPct = baselines.moneyIn && baselines.moneyIn > 0 ? week.moneyIn / baselines.moneyIn : 0
+  const outPct = baselines.moneyOut && baselines.moneyOut > 0 ? week.moneyOut / baselines.moneyOut : 0
+  // Net rings are a special case: if the baseline is negative or zero,
+  // any positive net is "beat typical". Cap fill at 1.5x for the visual.
+  const netPct = (() => {
+    if (baselines.net === null) return 0
+    if (baselines.net <= 0) return week.net > 0 ? 1 : 0
+    return week.net / baselines.net
+  })()
+
+  return (
+    <section
+      className="rounded-2xl px-6 py-5"
+      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
+    >
+      <div className="flex items-start gap-6 flex-wrap">
+        <RingsSvg inPct={inPct} outPct={outPct} netPct={netPct} />
+        <div className="flex-1 min-w-[200px]">
+          <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+            {t('This week vs typical', 'Esta semana vs promedio')}
+          </p>
+          <div className="mt-2 space-y-1.5">
+            <RingLegend color={RING_IN} label={t('Revenue', 'Ingresos')} value={inPct} baseline={baselines.moneyIn ?? 0} />
+            <RingLegend color={RING_OUT} label={t('Expenses', 'Gastos')} value={outPct} baseline={baselines.moneyOut ?? 0} />
+            <RingLegend color={RING_NET} label={t('Net', 'Neto')} value={netPct} baseline={baselines.net ?? 0} />
+          </div>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function RingLegend({ color, label, value, baseline }: { color: string; label: string; value: number; baseline: number }) {
+  const pct = Math.round(Math.min(1.5, Math.max(0, value)) * 100)
+  return (
+    <div className="flex items-center gap-3 text-[13px]">
+      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+      <span style={{ color: INK, minWidth: 74 }}>{label}</span>
+      <span className="font-mono tabular-nums" style={{ color: SLATE }}>{pct}%</span>
+      <span style={{ color: MUTED, fontSize: 11 }}>
+        · typical {fmt(baseline, { compact: true })}
+      </span>
+    </div>
+  )
+}
+
+// Rings SVG — three concentric arcs. Rendered with a subtle grow-in
+// animation from empty to their target percentages.
+function RingsSvg({ inPct, outPct, netPct }: { inPct: number; outPct: number; netPct: number }) {
+  const [animatedPct, setAnimatedPct] = useState({ i: 0, o: 0, n: 0 })
+  useEffect(() => {
+    let raf: number
+    const start = performance.now()
+    const duration = 900
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setAnimatedPct({ i: inPct * eased, o: outPct * eased, n: netPct * eased })
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [inPct, outPct, netPct])
+
+  const size = 140
+  const cx = size / 2
+  const cy = size / 2
+  const stroke = 10
+  const gap = 4
+  // radii: outer, middle, inner
+  const r1 = cx - stroke / 2 - 2
+  const r2 = r1 - stroke - gap
+  const r3 = r2 - stroke - gap
+
+  const arc = (r: number, frac: number) => {
+    const C = 2 * Math.PI * r
+    const filled = C * Math.min(1, Math.max(0, frac))
+    return { C, filled }
+  }
+  const a1 = arc(r1, animatedPct.i)
+  const a2 = arc(r2, animatedPct.o)
+  const a3 = arc(r3, animatedPct.n)
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
+      {/* Track circles — very light */}
+      {[r1, r2, r3].map((r) => (
+        <circle
+          key={r}
+          cx={cx} cy={cy} r={r}
+          fill="none"
+          stroke={HAIR}
+          strokeWidth={stroke}
+        />
+      ))}
+      {/* Foreground arcs — rotate -90deg so they start at 12 o'clock */}
+      <g transform={`rotate(-90 ${cx} ${cy})`}>
+        <circle
+          cx={cx} cy={cy} r={r1}
+          fill="none"
+          stroke={RING_IN}
+          strokeWidth={stroke}
+          strokeDasharray={`${a1.filled} ${a1.C}`}
+          strokeLinecap="round"
+        />
+        <circle
+          cx={cx} cy={cy} r={r2}
+          fill="none"
+          stroke={RING_OUT}
+          strokeWidth={stroke}
+          strokeDasharray={`${a2.filled} ${a2.C}`}
+          strokeLinecap="round"
+        />
+        <circle
+          cx={cx} cy={cy} r={r3}
+          fill="none"
+          stroke={RING_NET}
+          strokeWidth={stroke}
+          strokeDasharray={`${a3.filled} ${a3.C}`}
+          strokeLinecap="round"
+        />
+      </g>
+    </svg>
+  )
+}
+
+function RingLearningIcon() {
+  return (
+    <svg width={56} height={56} viewBox="0 0 56 56" style={{ flex: '0 0 auto', marginTop: 2 }}>
+      <circle cx="28" cy="28" r="22" fill="none" stroke={HAIR} strokeWidth="6" strokeDasharray="6 8" />
+      <circle cx="28" cy="28" r="14" fill="none" stroke={HAIR} strokeWidth="6" strokeDasharray="4 6" />
+      <circle cx="28" cy="28" r="6" fill={HAIR} />
+    </svg>
+  )
+}
+
+// ----------------------------------------------------------------
+// FlowCard — Money In or Money Out. Big number counting up, thin
+// sparkline underneath, attribution chip on the right.
+// ----------------------------------------------------------------
+function FlowCard({
+  direction, label, amount, spark, chip,
+}: {
+  direction: 'in' | 'out'
+  label: string
+  amount: number
+  spark: number[]
+  chip: string
+}) {
+  const shown = useCountUp(amount)
+  const accent = direction === 'in' ? UP : SPEND
+
+  return (
+    <section
+      className="rounded-2xl px-5 py-5"
+      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+          {label}
+        </p>
+        <span
+          className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md"
+          style={{ background: SAND, color: SLATE }}
+        >
+          {chip}
+        </span>
+      </div>
+      <p
+        className="mt-3 leading-none tabular-nums"
+        style={{ fontSize: 'clamp(28px, 4vw, 36px)', fontWeight: 700, letterSpacing: '-1px', color: accent }}
+      >
+        {direction === 'in' ? '+' : ''}
+        {fmt(shown, { compact: true })}
+      </p>
+      <div className="mt-4">
+        <Sparkline values={spark} color={accent} />
+      </div>
+    </section>
+  )
+}
+
+// Sparkline — 7 daily values, draws left-to-right with a subtle
+// stroke-dasharray reveal. Fills the width of its container.
+function Sparkline({ values, color }: { values: number[]; color: string }) {
+  const [drawn, setDrawn] = useState(0)
+  const w = 240
+  const h = 32
+  const max = Math.max(1, ...values)
+  const pts = values.map((v, i) => {
+    const x = (i / Math.max(1, values.length - 1)) * (w - 4) + 2
+    const y = h - (v / max) * (h - 4) - 2
+    return `${x.toFixed(1)},${y.toFixed(1)}`
+  })
+  const d = `M ${pts.join(' L ')}`
+
+  useEffect(() => {
+    let raf: number
+    const start = performance.now()
+    const duration = 700
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / duration)
+      const eased = 1 - Math.pow(1 - t, 3)
+      setDrawn(eased)
+      if (t < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [values])
+
+  // Approximate the path length for dasharray reveal. SVG path
+  // length varies; overshooting a bit is fine (extra dash trailing
+  // off-screen is invisible).
+  const approxLen = 400
+  return (
+    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <path
+        d={d}
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={approxLen}
+        strokeDashoffset={approxLen * (1 - drawn)}
+      />
+      {/* End dot pulses at the current day */}
+      {pts.length > 0 && drawn > 0.9 && (
+        <circle
+          cx={pts[pts.length - 1].split(',')[0]}
+          cy={pts[pts.length - 1].split(',')[1]}
+          r={3}
+          fill={color}
+        />
+      )}
+    </svg>
+  )
+}
+
+// ----------------------------------------------------------------
+// NetLine — one-liner summary of the week's net. Streak context
+// appears only when it's earned (2+ weeks in a row).
+// ----------------------------------------------------------------
+function NetLine({ net, streak, lang }: { net: number; streak: number; lang: Lang }) {
+  const t = makeT(lang)
+  const positive = net > 0
+  const streakLabel = (() => {
+    if (streak < 2) return null
+    if (streak === 2) return t('Two profitable weeks in a row', 'Dos semanas positivas seguidas')
+    if (streak === 3) return t('3 weeks in a row — nice run', '3 semanas seguidas — buena racha')
+    if (streak >= 4) return t(`${streak} profitable weeks in a row`, `${streak} semanas positivas seguidas`)
+    return null
+  })()
+
+  return (
+    <section
+      className="rounded-2xl px-5 py-4 flex items-baseline flex-wrap gap-x-4 gap-y-1"
+      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
+    >
+      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+        {t('Net this week', 'Neto de esta semana')}
+      </p>
+      <p
+        className="text-[22px] leading-none font-semibold tabular-nums"
+        style={{ color: positive ? UP : DOWN_WARM, letterSpacing: '-0.5px' }}
+      >
+        {fmtDelta(net)}
+      </p>
+      {streakLabel && (
+        <p className="text-[13px]" style={{ color: SLATE }}>
+          <span style={{ marginRight: 6 }}>🎉</span>
+          {streakLabel}
+        </p>
+      )}
+    </section>
+  )
+}
+
+// ----------------------------------------------------------------
+// RecapCard — Sunday-Monday only. Server decides when.
+// ----------------------------------------------------------------
+function RecapCard({ text, lang }: { text: string; lang: Lang }) {
+  const t = makeT(lang)
+  return (
+    <section
+      className="rounded-2xl px-5 py-4"
+      style={{
+        background: `linear-gradient(180deg, ${SAND} 0%, ${CREAM} 100%)`,
+        border: `1px solid ${HAIR}`,
+      }}
+    >
+      <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: DOWN_WARM }}>
+        {t('Last week wrapped', 'Semana pasada')}
+      </p>
+      <p className="mt-2 text-[15px] leading-relaxed" style={{ color: INK }}>
+        {text}
+      </p>
+    </section>
+  )
+}
+
+// ----------------------------------------------------------------
+// NudgeLine — the colleague voice, calm. Server picks at most one.
+// ----------------------------------------------------------------
+function NudgeLine({ text, lang }: { text: string; lang: Lang }) {
+  const t = makeT(lang)
+  return (
+    <p
+      className="text-[13.5px] leading-relaxed px-1"
+      style={{ color: SLATE }}
+    >
+      <span aria-hidden="true" style={{ marginRight: 8 }}>💬</span>
+      <span style={{ color: MUTED, marginRight: 6 }}>{t('Heads up:', 'Aviso:')}</span>
+      {text}
+    </p>
+  )
+}
+
+// ----------------------------------------------------------------
+// LedgerSection — recent activity feed. Expense rows are
+// categorize-on-tap; other kinds show their meta read-only.
+// ----------------------------------------------------------------
+function LedgerSection({ rows, lang }: { rows: LedgerRow[]; lang: Lang }) {
+  const t = makeT(lang)
+
+  return (
+    <section>
+      <div className="flex items-baseline justify-between mb-3">
+        <p className="text-[11px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
+          {t('Recent activity', 'Actividad reciente')}
+        </p>
+        <span className="text-[10.5px] font-mono uppercase tracking-[0.1em]" style={{ color: MUTED }}>
+          {rows.length}
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-[13px] px-1 py-6 text-center" style={{ color: MUTED }}>
+          {t('Nothing yet — quiet start to the week.', 'Nada aún — semana empieza tranquila.')}
+        </p>
+      ) : (
+        <ul className="rounded-2xl overflow-hidden" style={{ background: CREAM, border: `1px solid ${HAIR}` }}>
+          {rows.map((r, idx) => (
+            <li
+              key={r.id}
+              style={{ borderTop: idx === 0 ? 'none' : `1px solid ${HAIR}` }}
+            >
+              <LedgerRow row={r} lang={lang} />
             </li>
           ))}
         </ul>
-        {lastSync && (
-          <p className="mt-2 text-[10px] text-gray-400">
-            {t('Most recent sync', 'Sincronización más reciente')} · {new Date(lastSync).toLocaleString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-          </p>
-        )}
-      </DrawerSection>
+      )}
+    </section>
+  )
+}
 
-      {/* Honesty caveat — operating spend pulled from bank context */}
-      <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
-        <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>{t('Bank-detected, not authoritative.', 'Detectado por banco, no autoritativo.')}</strong> {t("Operating expenses pulled from bank activity reflect what's posted to your account — not your system record. Sales still come from inside the app.", 'Los gastos de operación obtenidos de la actividad bancaria reflejan lo que se ha registrado en tu cuenta — no tu registro del sistema. Las ventas siguen viniendo desde dentro de la app.')}
-        </p>
+// Single ledger row — icon + amount + label + category chip + time.
+function LedgerRow({ row, lang }: { row: LedgerRow; lang: Lang }) {
+  const t = makeT(lang)
+  const isIn = row.kind === 'order' || row.kind === 'bank_credit'
+  const iconColor = isIn ? UP : SPEND
+
+  return (
+    <div
+      className="grid gap-3 px-4 py-3 items-center"
+      style={{ gridTemplateColumns: '24px minmax(0, 1fr) minmax(0, auto) 90px' }}
+    >
+      {/* Icon */}
+      <div
+        className="flex items-center justify-center w-6 h-6 rounded-full text-[13px] font-bold"
+        style={{ background: `${iconColor}15`, color: iconColor }}
+        aria-hidden="true"
+      >
+        {isIn ? '+' : '−'}
       </div>
 
-      {/* Dev-only sandbox affordances — hidden outside sandbox env
-          since /sandbox/* endpoints reject in production.
-          Connect first (deterministic dynamic-transactions Item),
-          then create rent. */}
-      {isDev && plaidSandbox && (
-        <div className="space-y-3">
-          <SandboxConnectTrigger />
-          <SandboxRentTrigger />
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ----------------------------------------------------------------
-// Dev-only: deterministic Plaid Sandbox connect.
-//
-// Plaid Link's interactive sandbox flow is unreliable for the
-// `user_transactions_dynamic` test profile — even when the user
-// types the right username, the resulting Item often does not
-// behave as a dynamic-transactions Item, so /sandbox/transactions/
-// create silently no-ops. This button bypasses Link entirely by
-// calling /sandbox/public_token/create with override_username =
-// user_transactions_dynamic, which guarantees an Item that
-// /sandbox/transactions/create will actually persist rows on.
-//
-// Only visible when isDev && plaidSandbox; the server action also
-// rejects in production as defense in depth.
-// ----------------------------------------------------------------
-function SandboxConnectTrigger() {
-  const [state, action, pending] = useActionState(connectSandboxItem, null)
-  return (
-    <div className="rounded-xl border border-dashed border-blue-300 bg-blue-50/40 p-4">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">Dev</span>
-        <p className="text-[11px] font-semibold text-blue-900">Deterministic sandbox connect</p>
-      </div>
-      <p className="text-[11px] text-blue-800/80 leading-relaxed mb-3">
-        Skips Plaid Link and creates a guaranteed{' '}
-        <code className="text-[10px] bg-white/60 px-1 rounded">user_transactions_dynamic</code>{' '}
-        Item via <code className="text-[10px] bg-white/60 px-1 rounded">/sandbox/public_token/create</code>.
-        Use this before testing rent injection — interactive Link is unreliable for the
-        dynamic-transactions flow.
-      </p>
-      <form action={action}>
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-blue-800 hover:bg-blue-100 disabled:opacity-60 transition-colors"
-        >
-          {pending ? 'Connecting…' : 'Connect sandbox dynamic Item'}
-        </button>
-        {/* Dev-only sandbox affordances kept in English (developer-facing). */}
-      </form>
-      {state && 'error' in state && (
-        <pre className="mt-2 text-[11px] text-red-700 whitespace-pre-wrap font-sans">{state.error}</pre>
-      )}
-      {state && 'ok' in state && (
-        <pre className="mt-2 text-[11px] text-emerald-700 whitespace-pre-wrap font-sans">{state.message}</pre>
-      )}
-    </div>
-  )
-}
-
-// ----------------------------------------------------------------
-// Dev-only: triggers Plaid /sandbox/transactions/create + sync.
-// Only visible to DEV_EMAILS allowlist users so the affordance
-// never appears in normal operator UI.
-// ----------------------------------------------------------------
-function SandboxRentTrigger() {
-  const [state, action, pending] = useActionState(createSandboxRentTransaction, null)
-  return (
-    <div className="rounded-xl border border-dashed border-amber-300 bg-amber-50/40 p-4">
-      <div className="flex items-center gap-2 mb-1.5">
-        <span className="text-[10px] font-bold uppercase tracking-widest text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">Dev</span>
-        <p className="text-[11px] font-semibold text-amber-900">Sandbox tools</p>
-      </div>
-      <p className="text-[11px] text-amber-800/80 leading-relaxed mb-3">
-        Inject a fake $1,500 rent expense into the connected sandbox account and re-sync.
-        Requires the Item to be a <code className="text-[10px] bg-white/60 px-1 rounded">user_transactions_dynamic</code> sandbox user.
-      </p>
-      <form action={action}>
-        <button
-          type="submit"
-          disabled={pending}
-          className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:opacity-60 transition-colors"
-        >
-          {pending ? 'Creating…' : 'Add sandbox rent expense'}
-        </button>
-      </form>
-      {state && 'error' in state && (
-        <pre className="mt-2 text-[11px] text-red-700 whitespace-pre-wrap font-sans">{state.error}</pre>
-      )}
-      {state && 'ok' in state && (
-        <pre className="mt-2 text-[11px] text-emerald-700 whitespace-pre-wrap font-sans">{state.message}</pre>
-      )}
-    </div>
-  )
-}
-
-function PreviewBullet({ children }: { children: React.ReactNode }) {
-  return (
-    <li className="flex items-start gap-2">
-      <span className="mt-1.5 w-1 h-1 rounded-full bg-blue-500 flex-shrink-0" />
-      <span>{children}</span>
-    </li>
-  )
-}
-
-// ================================================================
-// Drawer primitives
-// ================================================================
-
-function DrawerStat({ label, value, tone, muted }: {
-  label: string; value: string; tone?: 'positive' | 'negative'; muted?: boolean
-}) {
-  const valueClass =
-    muted ? 'text-gray-300'
-      : tone === 'positive' ? 'text-green-700'
-        : tone === 'negative' ? 'text-red-600'
-          : 'text-gray-900'
-  return (
-    <div className="px-4 py-3">
-      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{label}</p>
-      <p className={`mt-1 text-base font-bold font-mono tabular-nums truncate ${valueClass}`}>{value}</p>
-    </div>
-  )
-}
-
-function DrawerSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="mb-3 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{title}</p>
-      {children}
-    </div>
-  )
-}
-
-function BreakdownRow({ primary, secondary, value, muted = false }: {
-  primary: string; secondary: string; value: string; muted?: boolean
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border border-gray-100 bg-white px-3 py-2.5 hover:border-gray-200 transition-colors">
+      {/* Label + sub */}
       <div className="min-w-0">
-        <p className="text-xs font-medium text-gray-900 truncate">{primary}</p>
-        <p className="text-[11px] text-gray-500 truncate mt-0.5">{secondary}</p>
-      </div>
-      <p className={`text-sm font-semibold font-mono tabular-nums flex-shrink-0 ${muted ? 'text-gray-400' : 'text-gray-900'}`}>
-        {value}
-      </p>
-    </div>
-  )
-}
-
-function InsightLine({ text, accent, lang }: { text: string; accent: 'amber' | 'purple' | 'teal'; lang?: Lang }) {
-  const t = makeT(lang ?? 'en')
-  const tones: Record<typeof accent, string> = {
-    amber: 'border-amber-200 bg-amber-50/60 text-amber-800',
-    purple: 'border-purple-200 bg-purple-50/60 text-purple-800',
-    teal: 'border-teal-200 bg-teal-50/60 text-teal-800',
-  }
-  return (
-    <div className={`rounded-lg border ${tones[accent]} px-3 py-2.5`}>
-      <p className="text-[11px] leading-relaxed">
-        <span className="font-semibold">{t('Notice:', 'Aviso:')}</span> {text}
-      </p>
-    </div>
-  )
-}
-
-// ================================================================
-// QuickExpenseCard
-//
-// The lower-row right card. Visual goals: cleaner field rhythm,
-// consistent input heights, lighter labels, calmer button. The
-// form's behavior is unchanged — every name= attribute, validation
-// rule, default value, and id is preserved so createExpense reads
-// the form exactly as before.
-// ================================================================
-function QuickExpenseCard({
-  action, pending, error, locationId,
-}: {
-  action: (fd: FormData) => void
-  pending: boolean
-  error?: string
-  locationId: string
-}) {
-  return (
-    <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[500px]">
-      <div className="border-b border-gray-100 px-6 py-5">
-        <h2 className="text-base font-semibold tracking-tight text-gray-900">Log an expense</h2>
-        <p className="mt-1 text-xs text-gray-500">Manual entry — adds to recorded spend.</p>
+        <p className="text-[14px] font-semibold truncate" style={{ color: INK }}>
+          {row.label}
+        </p>
+        {row.sub && (
+          <p className="text-[11.5px] mt-0.5 truncate" style={{ color: MUTED }}>
+            {row.sub}
+          </p>
+        )}
       </div>
 
-      <form action={action} className="p-6 flex-1 flex flex-col gap-5">
-        <input type="hidden" name="location_id" value={locationId} />
-
-        <FormField label="Category" htmlFor="qa-category">
-          <select
-            id="qa-category"
-            name="category"
-            required
-            defaultValue=""
-            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900
-                       focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          >
-            <option value="" disabled>Select a category…</option>
-            {EXPENSE_CATEGORIES.map((cat) => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
-        </FormField>
-
-        <FormField label="Amount" htmlFor="qa-amount">
-          <div className="relative">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
-            <input
-              id="qa-amount"
-              name="amount"
-              type="number"
-              required
-              min="0.01"
-              step="0.01"
-              placeholder="0.00"
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-7 pr-3 text-sm font-mono tabular-nums placeholder:text-gray-300
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
-          </div>
-        </FormField>
-
-        <div className="grid grid-cols-2 gap-3">
-          <FormField label="Date" htmlFor="qa-date">
-            <input
-              id="qa-date"
-              name="expense_date"
-              type="date"
-              required
-              defaultValue={new Date().toISOString().split('T')[0]}
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
-          </FormField>
-          <FormField label="Vendor" htmlFor="qa-vendor" optional>
-            <input
-              id="qa-vendor"
-              name="vendor_name"
-              type="text"
-              placeholder="US Foods"
-              className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400
-                         focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-            />
-          </FormField>
-        </div>
-
-        <label
-          htmlFor="qa-inventory"
-          className="flex items-center gap-2.5 cursor-pointer select-none"
-        >
-          <input
-            id="qa-inventory"
-            name="is_inventory_related"
-            type="checkbox"
-            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40"
+      {/* Category chip (editable for expenses) */}
+      <div className="min-w-0">
+        {row.categoryEditable && row.category ? (
+          <CategoryChip
+            expenseId={row.id.replace(/^e:/, '')}
+            initial={row.category}
+            lang={lang}
           />
-          <span className="text-xs text-gray-700">
-            Inventory-related
-            <span className="text-gray-400 ml-1">— food, beverage, supplies</span>
+        ) : row.category ? (
+          <span
+            className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md"
+            style={{ background: SAND, color: SLATE }}
+          >
+            {row.category}
           </span>
-        </label>
-
-        {error && (
-          <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-            <p className="text-xs text-red-700">{error}</p>
-          </div>
-        )}
-
-        {/* Submit pinned to the bottom of the form so the card height
-            stays consistent with the Recent activity card next to it. */}
-        <div className="mt-auto">
-          <button
-            type="submit"
-            disabled={pending}
-            className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {pending ? 'Saving…' : 'Record expense'}
-          </button>
-        </div>
-      </form>
-    </aside>
-  )
-}
-
-function FormField({ label, htmlFor, children, optional = false, lang }: {
-  label: string; htmlFor: string; children: React.ReactNode; optional?: boolean; lang?: Lang
-}) {
-  const t = makeT(lang ?? 'en')
-  return (
-    <div>
-      <label htmlFor={htmlFor} className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-gray-700">
-        {label}
-        {optional && <span className="text-gray-400 font-normal">{t('· optional', '· opcional')}</span>}
-      </label>
-      {children}
-    </div>
-  )
-}
-
-// ================================================================
-// Header chip + workspace empty
-// ================================================================
-function DataSourceChip({ state, lang }: { state: BankState; lang: Lang }) {
-  const t = makeT(lang)
-  const variants: Record<BankState, { label: string; tone: string; dot: string }> = {
-    not_connected: {
-      label: t('System data only', 'Solo datos del sistema'),
-      tone: 'text-gray-600',
-      dot: 'bg-gray-400',
-    },
-    connected_unsynced: {
-      label: t('Bank linked · awaiting sync', 'Banco vinculado · esperando sincronización'),
-      tone: 'text-amber-700',
-      dot: 'bg-amber-500',
-    },
-    connected_synced: {
-      label: t('Live with bank context', 'En vivo con contexto bancario'),
-      tone: 'text-green-700',
-      dot: 'bg-green-500',
-    },
-  }
-  const v = variants[state]
-  return (
-    <div className="hidden sm:inline-flex items-center gap-2 self-start text-[11px] font-medium px-3 py-1.5 rounded-full border border-gray-200/80 bg-white/80 backdrop-blur-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-      <span className={`w-1.5 h-1.5 rounded-full ${v.dot}`} />
-      <span className={v.tone}>{v.label}</span>
-    </div>
-  )
-}
-
-function EmptyWorkspacePrompt({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="px-6 py-14 text-center">
-      <p className="text-sm font-semibold text-gray-700">{title}</p>
-      <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">{body}</p>
-    </div>
-  )
-}
-
-function fmt(amount: number): string {
-  return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-}
-
-// Soft text tints for the Recent activity Category column. Same
-// hue mapping the old chip used, rendered as plain colored text so
-// the row stays scannable without reintroducing pill chrome. The
-// 700 tones land readable on white but stay quieter than the
-// previous 800-tone chips.
-function categoryColorClass(category: string): string {
-  const map: Record<string, string> = {
-    'Inventory Purchase': 'text-amber-700',
-    'Beverage Purchase':  'text-teal-700',
-    'Labor':              'text-purple-700',
-    'Rent':               'text-rose-700',
-    'Utilities':          'text-blue-700',
-    'Maintenance':        'text-slate-700',
-    'Marketing':          'text-purple-700',
-    'Supplies':           'text-emerald-700',
-    'Miscellaneous':      'text-gray-600',
-  }
-  return map[category] ?? 'text-gray-700'
-}
-
-// ================================================================
-// TOP-CARD DRAWERS (Prompt 4: each drawer answers a question)
-//
-// The three drawers below back the clickable top summary cells.
-// They are deliberately compact — each one answers one question:
-//
-//   Revenue   → "How do recorded sales become settled money?"
-//   Spend     → "What is in spend, and how true is it?"
-//   Net       → "Why are operating net and bank net different?"
-//
-// They do NOT duplicate the Sales or Bank Review surfaces — they
-// frame what the top number means and link out for detail.
-// ================================================================
-
-function RevenueDrawerContent({
-  revenue7d,
-  reviewRows,
-  bankState,
-  lang,
-}: {
-  revenue7d: number
-  reviewRows: BankReviewRow[]
-  bankState: BankState
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  // Settled-as-revenue bank inflows give us the "verified deposits"
-  // number. The rest of recorded sales are still pending settlement.
-  const settledRevenueRows = reviewRows.filter(
-    (r) => r.reviewState === 'settled' && r.settledKind === 'revenue',
-  )
-  const settledRevenueTotal = settledRevenueRows.reduce((s, r) => s + r.amount, 0)
-  const settledRevenueCount = settledRevenueRows.length
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label={t('Recorded sales', 'Ventas registradas')} value={fmt(revenue7d)} muted={revenue7d === 0} />
-        <DrawerStat
-          label={t('Verified deposits', 'Depósitos verificados')}
-          value={bankState === 'not_connected' ? '—' : fmt(settledRevenueTotal)}
-          muted={settledRevenueTotal === 0}
-        />
-      </div>
-
-      <DrawerSection title={t('How the number is built', 'Cómo se construye el número')}>
-        <ul className="space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
-          <PreviewBullet>
-            <strong>{t('Recorded sales.', 'Ventas registradas.')}</strong> {t('Every order rung up in the system. This is the headline number on the card.', 'Cada pedido registrado en el sistema. Este es el número principal en la tarjeta.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Card and cash settlement happen separately.', 'La liquidación de tarjeta y efectivo ocurre por separado.')}</strong> {t('Card sales become bank deposits when the processor batches them out — usually 1–2 business days later. Cash sales become deposits when someone walks them to the bank.', 'Las ventas con tarjeta se convierten en depósitos bancarios cuando el procesador las agrupa — usualmente 1–2 días hábiles después. Las ventas en efectivo se convierten en depósitos cuando alguien las lleva al banco.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Verified deposits', 'Depósitos verificados')}</strong> {t("are bank inflows you've confirmed in Bank Review as \"Settle as revenue.\"", 'son entradas bancarias que has confirmado en Revisión bancaria como "Liquidar como ingresos."')} {lang === 'es'
-              ? `Cuentan ${settledRevenueCount}${settledRevenueCount === 1 ? ' fila' : ' filas'} en esta ventana.`
-              : `They count ${settledRevenueCount}${settledRevenueCount === 1 ? ' row' : ' rows'} this window.`}
-          </PreviewBullet>
-        </ul>
-      </DrawerSection>
-
-      <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
-        <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>{t('Recorded ≠ settled.', 'Registrado ≠ liquidado.')}</strong> {t("Recorded sales are the system's record of what was rung up. They become settled cash when the bank deposit clears — and you confirm the match in Bank Review.", 'Las ventas registradas son el registro del sistema de lo que se cobró. Se convierten en efectivo liquidado cuando el depósito bancario se acredita — y tú confirmas el emparejamiento en Revisión bancaria.')}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function SpendDrawerContent({
-  laborSpend,
-  inventorySpend,
-  operatingSpend,
-  totalSpend7d,
-  reviewCounts,
-  bankState,
-  lang,
-}: {
-  laborSpend: number
-  inventorySpend: number
-  operatingSpend: number
-  totalSpend7d: number
-  reviewCounts: Props['bank']['review']['counts']
-  bankState: BankState
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label={t('Tracked spend', 'Gasto rastreado')} value={fmt(totalSpend7d)} muted={totalSpend7d === 0} />
-        <DrawerStat
-          label={t('Needs review', 'Necesita revisión')}
-          value={bankState === 'not_connected' ? '—' : `${reviewCounts.unreviewed}`}
-          muted={reviewCounts.unreviewed === 0}
-        />
-      </div>
-
-      <DrawerSection title={t('Breakdown', 'Desglose')}>
-        <div className="space-y-2">
-          <BreakdownRow
-            primary={t('Labor', 'Mano de obra')}
-            secondary={t('Estimated · scheduled hours × rate', 'Estimado · horas programadas × tarifa')}
-            value={fmt(laborSpend)}
-            muted={laborSpend === 0}
-          />
-          <BreakdownRow
-            primary={t('Inventory', 'Inventario')}
-            secondary={t('Recorded · awaiting bank settlement', 'Registrado · esperando liquidación bancaria')}
-            value={fmt(inventorySpend)}
-            muted={inventorySpend === 0}
-          />
-          <BreakdownRow
-            primary={t('Operating', 'Operación')}
-            secondary={
-              reviewCounts.unreviewed > 0
-                ? t('Tracked · bank review needed', 'Rastreado · revisión bancaria necesaria')
-                : t('Tracked · bank context categorized', 'Rastreado · contexto bancario categorizado')
-            }
-            value={fmt(operatingSpend)}
-            muted={operatingSpend === 0}
-          />
-        </div>
-      </DrawerSection>
-
-      <div className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2.5">
-        <p className="text-[11px] text-amber-800 leading-relaxed">
-          <strong>{t('Tracked, not verified.', 'Rastreado, no verificado.')}</strong> {t('The spend number combines an estimate (Labor), recorded expenses (Inventory), and bank-categorized rows (Operating). Unreviewed bank activity does', 'El número de gasto combina una estimación (Mano de obra), gastos registrados (Inventario) y filas categorizadas por banco (Operación). La actividad bancaria sin revisar')} <em>{t('not', 'no')}</em> {t('count as verified business spend — settle it in Bank Review to lock it in.', 'cuenta como gasto del negocio verificado — liquídala en Revisión bancaria para fijarla.')}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-function NetActivityDrawerContent({
-  revenue,
-  spend,
-  bankInflow,
-  bankOutflow,
-  laborSpend,
-  inventorySpend,
-  reviewCounts,
-  bankState,
-  lang,
-}: {
-  revenue: number
-  spend: number
-  bankInflow: number
-  bankOutflow: number
-  laborSpend: number
-  inventorySpend: number
-  reviewCounts: Props['bank']['review']['counts']
-  bankState: BankState
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const operatingNet = revenue - spend
-  const bankNet = bankInflow - bankOutflow
-  const difference = operatingNet - bankNet
-  const bankConnected = bankState !== 'not_connected'
-
-  const opTone = operatingNet >= 0 ? 'text-green-700' : 'text-red-600'
-  const bankTone = bankNet >= 0 ? 'text-green-700' : 'text-red-600'
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{t('Operating view', 'Vista operativa')}</p>
-          <p className={`mt-1 text-base font-bold font-mono tabular-nums ${opTone}`}>
-            {operatingNet >= 0 ? '' : '−'}{fmt(Math.abs(operatingNet))}
-          </p>
-          <p className="text-[10px] text-gray-500 mt-0.5">{t('Revenue − tracked spend', 'Ingresos − gasto rastreado')}</p>
-        </div>
-        <div className="px-4 py-3">
-          <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{t('Bank view', 'Vista bancaria')}</p>
-          <p className={`mt-1 text-base font-bold font-mono tabular-nums ${bankConnected ? bankTone : 'text-gray-300'}`}>
-            {bankConnected ? `${bankNet >= 0 ? '' : '−'}${fmt(Math.abs(bankNet))}` : '—'}
-          </p>
-          <p className="text-[10px] text-gray-500 mt-0.5">{t('Bank inflows − outflows', 'Entradas − salidas bancarias')}</p>
-        </div>
-      </div>
-
-      {bankConnected && (
-        <div className="rounded-lg border border-blue-200 bg-blue-50/40 px-3 py-2.5">
-          <p className="text-[11px] text-blue-900 leading-relaxed">
-            <strong>{t('Difference:', 'Diferencia:')} {difference >= 0 ? '' : '−'}{fmt(Math.abs(difference))}.</strong>{' '}
-            {t('Operating and bank views look at the same week from two angles. They rarely match exactly — settlement timing, estimates, and unreviewed rows create the gap.', 'Las vistas operativa y bancaria miran la misma semana desde dos ángulos. Rara vez coinciden exactamente — los tiempos de liquidación, las estimaciones y las filas sin revisar crean la brecha.')}
-          </p>
-        </div>
-      )}
-
-      <DrawerSection title={t('What drives the difference', 'Qué impulsa la diferencia')}>
-        <ul className="space-y-2.5 text-[12px] text-gray-600 leading-relaxed">
-          <PreviewBullet>
-            <strong>{t('Pending payouts.', 'Pagos pendientes.')}</strong> {t('Recorded sales not yet deposited by the card processor. Show up in revenue, not yet in bank inflows.', 'Ventas registradas que aún no han sido depositadas por el procesador de tarjetas. Aparecen en ingresos, aún no en entradas bancarias.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Estimated labor.', 'Mano de obra estimada.')}</strong> {t('Scheduled hours × rate is', 'Horas programadas × tarifa es')} {fmt(laborSpend)} {t('this week, but payroll has its own cadence. Not in bank outflows yet.', 'esta semana, pero la nómina tiene su propia cadencia. Aún no en salidas bancarias.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Inventory awaiting settlement.', 'Inventario esperando liquidación.')}</strong> {t('Recorded restock orders sit at', 'Las órdenes de reposición registradas están en')}{' '}
-            {fmt(inventorySpend)}. {t('Bank-confirmed deductions are not line-matched yet.', 'Las deducciones confirmadas por banco aún no están emparejadas por línea.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Unreviewed bank activity.', 'Actividad bancaria sin revisar.')}</strong> {reviewCounts.unreviewed}{' '}
-            {lang === 'es' ? (reviewCounts.unreviewed === 1 ? 'fila' : 'filas') : (reviewCounts.unreviewed === 1 ? 'row' : 'rows')} {t('pending review — count toward bank net but not toward verified spend.', 'pendiente(s) de revisión — cuentan hacia el neto bancario pero no hacia el gasto verificado.')}
-          </PreviewBullet>
-          <PreviewBullet>
-            <strong>{t('Register cash.', 'Efectivo de caja.')}</strong> {t('Cash drawer counts and walked-deposit timing are out of scope for V1 — they show up later in the bank view.', 'Los conteos del cajón de efectivo y los tiempos de depósito a pie están fuera del alcance para V1 — aparecen después en la vista bancaria.')}
-          </PreviewBullet>
-        </ul>
-      </DrawerSection>
-    </div>
-  )
-}
-
-// ================================================================
-// BANK REVIEW V1 — summary card + drawer + settlement actions
-//
-// The summary card replaces the old "Log expense" right-rail. It
-// reads the review counts the server computed and offers a single
-// CTA to open the full drawer. The drawer is where actual settle/
-// ignore/not-a-match decisions happen, organized into Suggested
-// matches (likely_match confidence), Incoming, and Outgoing queues
-// for unreviewed rows, plus collapsible tails for the already-
-// reviewed rows so the manager can undo.
-// ================================================================
-function BankReviewSummaryCard({
-  counts,
-  groupCount,
-  attentionCount,
-  autoCount,
-  bankState,
-  onOpen,
-  lang,
-}: {
-  counts: Props['bank']['review']['counts']
-  groupCount: number
-  attentionCount: number
-  autoCount: number
-  bankState: BankState
-  onOpen: () => void
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  if (bankState === 'not_connected') {
-    return (
-      <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 flex flex-col min-h-[500px]">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-gray-300" />
-            <p className="text-xs font-semibold text-gray-900">{t('Money Review', 'Revisión de dinero')}</p>
-          </div>
-          <span className="text-[10px] text-gray-400">{t('Not connected', 'No conectado')}</span>
-        </div>
-        <p className="text-[26px] leading-none font-semibold tracking-tight text-gray-300 font-mono tabular-nums">—</p>
-        <p className="mt-3 text-xs text-gray-500 leading-relaxed">
-          {t('Connect a bank to start verifying cash reality. Money Review surfaces deposits to confirm and exceptions — not every transaction.', 'Conecta un banco para empezar a verificar la realidad del efectivo. Revisión de dinero muestra depósitos por confirmar y excepciones — no cada transacción.')}
-        </p>
-        <div className="mt-auto">
-          <p className="text-[11px] text-gray-400">{t('Exception triage · activates after bank sync', 'Triaje de excepciones · se activa tras la sincronización bancaria')}</p>
-        </div>
-      </aside>
-    )
-  }
-
-  const noWork = attentionCount === 0
-  const dotTone =
-    attentionCount >= 5
-      ? 'bg-amber-500'
-      : attentionCount > 0
-        ? 'bg-blue-500'
-        : 'bg-green-500'
-  const statusChip =
-    noWork
-      ? { label: t('Caught up', 'Al día'), tone: 'bg-green-50 text-green-700' }
-      : { label: t('Needs attention', 'Necesita atención'), tone: 'bg-amber-50 text-amber-700' }
-
-  return (
-    <aside className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-6 flex flex-col min-h-[500px]">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${dotTone}`} />
-          <p className="text-xs font-semibold text-gray-900">{t('Money Review', 'Revisión de dinero')}</p>
-        </div>
-        <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${statusChip.tone}`}>
-          {statusChip.label}
-        </span>
-      </div>
-
-      {/* Hero — TRUE attention required (deposits to confirm,
-          exceptions, suggested personal). Auto-classified activity
-          stays out of this number so the manager sees the real
-          workload, not "236 things to review." */}
-      <p className={`text-[34px] leading-none font-semibold tracking-tight font-mono tabular-nums ${noWork ? 'text-gray-300' : 'text-gray-900'}`}>
-        {attentionCount}
-      </p>
-      <p className="mt-2 text-xs text-gray-500">
-        {noWork
-          ? t('All money movement is classified.', 'Todo el movimiento de dinero está clasificado.')
-          : lang === 'es' ? `necesita${attentionCount === 1 ? '' : 'n'} atención` : `need${attentionCount === 1 ? 's' : ''} attention`}
-      </p>
-      <p className="mt-1 text-[11px] text-gray-500 font-mono tabular-nums">
-        {autoCount} {t('auto-classified', 'clasificadas automáticamente')}
-        <span className="text-gray-300 px-1">·</span>
-        {counts.unreviewed} {lang === 'es' ? `transacci${counts.unreviewed === 1 ? 'ón' : 'ones'}` : `transaction${counts.unreviewed === 1 ? '' : 's'}`} {t('scanned', 'escaneadas')}
-      </p>
-
-      {!noWork && (
-        <div className="mt-5 space-y-2 text-[11px] text-gray-500">
-          <div className="flex items-center justify-between">
-            <span>{t('Deposits to confirm', 'Depósitos por confirmar')}</span>
-            <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedInflow}</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span>{t('Outgoing exceptions', 'Excepciones salientes')}</span>
-            <span className="font-semibold font-mono tabular-nums text-gray-700">{counts.unreviewedOutflow}</span>
-          </div>
-        </div>
-      )}
-
-      <div className="mt-5 pt-4 border-t border-gray-100 space-y-1 text-[10px] text-gray-400">
-        <div className="flex items-center justify-between">
-          <span>{t('Confirmed', 'Confirmadas')}</span>
-          <span className="font-medium font-mono tabular-nums">{counts.settled}</span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span>{t('Marked personal', 'Marcadas como personales')}</span>
-          <span className="font-medium font-mono tabular-nums">{counts.ignored}</span>
-        </div>
-        {counts.notAMatch > 0 && (
-          <div className="flex items-center justify-between">
-            <span>{t('Review later', 'Revisar después')}</span>
-            <span className="font-medium font-mono tabular-nums">{counts.notAMatch}</span>
-          </div>
-        )}
-        {groupCount > 0 && (
-          <div className="flex items-center justify-between pt-1 mt-1 border-t border-gray-100">
-            <span>{t('Total groups', 'Grupos totales')}</span>
-            <span className="font-medium font-mono tabular-nums">{groupCount}</span>
-          </div>
-        )}
-      </div>
-
-      <div className="mt-auto pt-5">
-        <button
-          type="button"
-          onClick={onOpen}
-          className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-gray-800 transition-colors"
-        >
-          {noWork ? t('Open Money Review', 'Abrir Revisión de dinero') : t('Review now →', 'Revisar ahora →')}
-        </button>
-      </div>
-    </aside>
-  )
-}
-
-// ----------------------------------------------------------------
-// BankReviewDrawerContent — priority-based Money Review workspace.
-//
-// Sections (in order):
-//   1. Top stats strip            — need attention / auto-classified / confirmed / personal
-//   2. Deposits to confirm        — every inflow group, attention tier
-//   3. Exceptions                 — outflow attention groups (unclear / unknown / transfers / large)
-//   4. Suggested personal         — personal attention tier
-//   5. Auto-classified (collapsed)— outflow attention=auto, expanded on demand
-//   6. Review later (rows)        — per-row, collapsible
-//   7. Confirmed tail (rows)      — per-row, collapsible
-//   8. Personal tail (rows)       — per-row, collapsible
-//
-// Triage tier is computed by groupBankTransactions() in matching.ts:
-//   • inflow → always attention (deposits/income always matter)
-//   • outflow + personal → personal
-//   • outflow + suggestedKind + confidence + amount in tolerance → auto
-//   • outflow + no suggestion / transfers / unknown / large unclear → attention
-//
-// Auto-classified is shown but NOT counted as required work; the
-// hero "X need attention" excludes it. Manager can confirm in bulk
-// from the collapsed section if they want extra audit pressure.
-// ----------------------------------------------------------------
-function BankReviewDrawerContent({
-  groups,
-  rows,
-  counts,
-  bankState,
-  plaidConfigured,
-  lang,
-}: {
-  groups: BankReviewGroup[]
-  rows: BankReviewRow[]
-  counts: Props['bank']['review']['counts']
-  bankState: BankState
-  plaidConfigured: boolean
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  const [showSettled, setShowSettled] = useState(false)
-  const [showIgnored, setShowIgnored] = useState(false)
-  const [showReviewLater, setShowReviewLater] = useState(false)
-  const [showAuto, setShowAuto] = useState(false)
-
-  if (bankState === 'not_connected') {
-    return (
-      <div className="space-y-5">
-        <div className="rounded-xl border border-gray-200/80 bg-gray-50/60 p-5">
-          <p className="text-sm font-semibold text-gray-900">{t('No bank connected', 'Sin banco conectado')}</p>
-          <p className="mt-1.5 text-[12px] text-gray-500 leading-relaxed">
-            {t('Connect a bank to see incoming deposits and outgoing exceptions. Money Review focuses on what needs your attention — not every transaction.', 'Conecta un banco para ver depósitos entrantes y excepciones salientes. Revisión de dinero se enfoca en lo que necesita tu atención — no cada transacción.')}
-          </p>
-        </div>
-        <div className="rounded-xl border border-gray-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-          <ConnectBankButton configured={plaidConfigured} />
-        </div>
-      </div>
-    )
-  }
-
-  const settled = rows.filter((r) => r.reviewState === 'settled')
-  const ignored = rows.filter((r) => r.reviewState === 'ignored')
-  const reviewLater = rows.filter((r) => r.reviewState === 'not_a_match')
-
-  // Triage partition — drives section order. Inflow + outflow are
-  // separated because their copy + primary actions differ.
-  const depositsToConfirm = groups.filter((g) => g.direction === 'inflow' && g.triage === 'attention')
-  const exceptions = groups.filter((g) => g.direction === 'outflow' && g.triage === 'attention')
-  const suggestedPersonal = groups.filter((g) => g.triage === 'personal')
-  const autoClassified = groups.filter((g) => g.triage === 'auto')
-
-  const attentionTotal = depositsToConfirm.length + exceptions.length + suggestedPersonal.length
-
-  return (
-    <div className="space-y-6">
-      {/* Top stats strip — Need attention is the headline; auto-
-          classified counts as visibility, not work. */}
-      <div className="grid grid-cols-4 rounded-xl border border-gray-200/80 divide-x divide-gray-100 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-        <DrawerStat label={t('Need attention', 'Necesitan atención')} value={`${attentionTotal}`} muted={attentionTotal === 0} />
-        <DrawerStat label={t('Auto-classified', 'Auto-clasificadas')} value={`${autoClassified.length}`} muted={autoClassified.length === 0} />
-        <DrawerStat label={t('Confirmed', 'Confirmadas')} value={`${counts.settled}`} muted={counts.settled === 0} />
-        <DrawerStat label={t('Personal', 'Personales')} value={`${counts.ignored}`} muted={counts.ignored === 0} />
-      </div>
-
-      {/* Opening orientation */}
-      <p className="text-[11px] text-gray-500 leading-relaxed">
-        {t('Money Review — confirm deposits, resolve exceptions, and verify cash reality. Normal recurring activity is auto-classified below.', 'Revisión de dinero — confirma depósitos, resuelve excepciones y verifica la realidad del efectivo. La actividad recurrente normal se auto-clasifica abajo.')}
-      </p>
-
-      {/* 1. Deposits to confirm */}
-      <DrawerSection title={`${t('Deposits to confirm', 'Depósitos por confirmar')}${depositsToConfirm.length > 0 ? ` · ${depositsToConfirm.length}` : ''}`}>
-        {depositsToConfirm.length === 0 ? (
-          <p className="text-xs text-gray-400 italic">{t('No incoming deposits waiting on a match.', 'Sin depósitos entrantes esperando emparejamiento.')}</p>
         ) : (
-          <div className="space-y-2">
-            {depositsToConfirm.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} lang={lang} />
-            ))}
-          </div>
+          <span className="text-[10.5px] font-mono uppercase tracking-[0.1em]" style={{ color: MUTED }}>
+            {row.kind === 'order' ? t('Sale', 'Venta') : t('Bank', 'Banco')}
+          </span>
         )}
-      </DrawerSection>
+      </div>
 
-      {/* 2. Exceptions */}
-      {exceptions.length > 0 && (
-        <DrawerSection title={`${t('Exceptions', 'Excepciones')} · ${exceptions.length}`}>
-          <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
-            {t("Outflows that didn't auto-classify — unknown vendors, transfers, or amounts large enough to want eyes on.", 'Salidas que no se auto-clasificaron — proveedores desconocidos, transferencias o montos lo suficientemente grandes para querer revisarlos.')}
-          </p>
-          <div className="space-y-2">
-            {exceptions.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} lang={lang} />
-            ))}
-          </div>
-        </DrawerSection>
-      )}
-
-      {/* 3. Suggested personal */}
-      {suggestedPersonal.length > 0 && (
-        <DrawerSection title={`${t('Suggested personal', 'Sugeridas como personales')} · ${suggestedPersonal.length}`}>
-          <p className="mb-2 text-[11px] text-gray-500 leading-relaxed">
-            {t('Looks like personal spend — mark it so it stops counting against business totals.', 'Parece gasto personal — márcalo para que deje de contar contra los totales del negocio.')}
-          </p>
-          <div className="space-y-2">
-            {suggestedPersonal.map((group) => (
-              <ReviewGroupCard key={group.key} group={group} lang={lang} />
-            ))}
-          </div>
-        </DrawerSection>
-      )}
-
-      {/* 4. Auto-classified — collapsed by default. Visible for
-          audit / override, not required work. */}
-      {autoClassified.length > 0 && (
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowAuto((v) => !v)}
-            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
-          >
-            <span>{showAuto ? '▾' : '▸'}</span>
-            {t('Auto-classified', 'Auto-clasificadas')} · {autoClassified.length}
-          </button>
-          {!showAuto && (
-            <p className="mt-1.5 text-[11px] text-gray-400 leading-relaxed">
-              {t('Normal recurring activity, already categorized. Open to confirm in bulk or override.', 'Actividad recurrente normal, ya categorizada. Abre para confirmar en bloque o sobrescribir.')}
-            </p>
-          )}
-          {showAuto && (
-            <div className="mt-3 space-y-2">
-              {autoClassified.map((group) => (
-                <ReviewGroupCard key={group.key} group={group} lang={lang} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 5. Review later (not_a_match) — per-row */}
-      {reviewLater.length > 0 && (
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowReviewLater((v) => !v)}
-            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
-          >
-            <span>{showReviewLater ? '▾' : '▸'}</span>
-            {t('Review later', 'Revisar después')} · {reviewLater.length}
-          </button>
-          {showReviewLater && (
-            <div className="mt-3 space-y-2">
-              {reviewLater.map((row) => (
-                <ReviewRow key={row.id} row={row} lang={lang} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 6. Confirmed tail */}
-      {settled.length > 0 && (
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowSettled((v) => !v)}
-            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
-          >
-            <span>{showSettled ? '▾' : '▸'}</span>
-            {t('Confirmed', 'Confirmadas')} · {settled.length}
-          </button>
-          {showSettled && (
-            <div className="mt-3 space-y-2">
-              {settled.map((row) => (
-                <ReviewRow key={row.id} row={row} lang={lang} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* 7. Personal tail */}
-      {ignored.length > 0 && (
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowIgnored((v) => !v)}
-            className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate hover:text-gray-700 transition-colors flex items-center gap-1.5"
-          >
-            <span>{showIgnored ? '▾' : '▸'}</span>
-            {t('Personal', 'Personales')} · {ignored.length}
-          </button>
-          {showIgnored && (
-            <div className="mt-3 space-y-2">
-              {ignored.map((row) => (
-                <ReviewRow key={row.id} row={row} lang={lang} />
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Honesty caveat */}
-      <div className="rounded-lg border border-gray-200/80 bg-gray-50/60 px-3 py-2.5">
-        <p className="text-[11px] text-gray-600 leading-relaxed">
-          <strong>{t('Truth model.', 'Modelo de verdad.')}</strong> {t('Confirming an outflow records the bank amount as the settled value for that category. Operational records (inventory orders, scheduled labor, recorded sales) are never overwritten — both sides stay visible and auditable. Per-ticket expected-vs-settled display requires a follow-up schema pass and is intentionally deferred.', 'Confirmar una salida registra el monto bancario como el valor liquidado para esa categoría. Los registros operativos (órdenes de inventario, mano de obra programada, ventas registradas) nunca se sobrescriben — ambos lados permanecen visibles y auditables. La visualización por ticket esperado-vs-liquidado requiere una pasada de esquema posterior y se difiere intencionalmente.')}
+      {/* Amount + time */}
+      <div className="text-right min-w-0">
+        <p
+          className="text-[14px] font-semibold font-mono tabular-nums"
+          style={{ color: isIn ? UP : SPEND }}
+        >
+          {isIn ? '+' : '−'}{fmt(row.amount)}
+        </p>
+        <p className="text-[11px] mt-0.5" style={{ color: MUTED }}>
+          {formatTime(row.timestamp)}
         </p>
       </div>
     </div>
   )
 }
 
-// ----------------------------------------------------------------
-// ReviewGroupCard — one card per bucketed pattern (Costco, HEB,
-// Rent & utilities, etc.). Renders the group's suggested decision
-// + one primary action, with secondary controls tucked behind a
-// Change-category dropdown, an Ignore action, and a Review details
-// drilldown that expands into the underlying transactions.
-//
-// Primary CTA logic:
-//   • personal group               → primary action = Ignore
-//   • inflow + revenue suggestion  → "Match to Sales"
-//   • outflow + suggestion present → "Settle as {kind}"
-//   • no suggestion                → "Review details" (no settle)
-//
-// Override path: the Change-category dropdown lets the manager
-// pick any of the standard kinds (or mark for later) without hunting
-// through five equal buttons.
-// ----------------------------------------------------------------
-function ReviewGroupCard({ group, lang }: { group: BankReviewGroup; lang: Lang }) {
+// CategoryChip — tap opens an inline select of EXPENSE_CATEGORIES.
+// Optimistic update: chip flips immediately; server error rolls
+// back with a soft red flash.
+function CategoryChip({ expenseId, initial, lang }: { expenseId: string; initial: string; lang: Lang }) {
   const t = makeT(lang)
-  const [isPending, startTransition] = useTransition()
-  const [showDetails, setShowDetails] = useState(false)
-  const [overrideKind, setOverrideKind] = useState<string>('')
+  const [open, setOpen] = useState(false)
+  const [current, setCurrent] = useState(initial)
+  const [pending, startTransition] = useTransition()
+  const [errored, setErrored] = useState(false)
 
-  const sign = group.direction === 'outflow' ? '−' : '+'
-  const amountTone = group.direction === 'outflow' ? 'text-red-700' : 'text-green-700'
-  const txnIdsCsv = group.txnIds.join(',')
-
-  function callGroupAction(
-    action:
-      | typeof settleBankTransactionGroup
-      | typeof ignoreBankTransactionGroup
-      | typeof markBankTransactionGroupNotAMatch,
-    kind?: SuggestedKind,
-  ) {
+  const commit = (next: string) => {
+    setOpen(false)
+    if (next === current) return
+    const prev = current
+    setCurrent(next) // optimistic
     startTransition(async () => {
-      const fd = new FormData()
-      fd.append('txn_ids', txnIdsCsv)
-      if (kind) fd.append('kind', kind)
-      await action(null, fd)
+      const res = await updateExpenseCategory(expenseId, next)
+      if (res?.error) {
+        setCurrent(prev)
+        setErrored(true)
+        setTimeout(() => setErrored(false), 1200)
+      }
     })
   }
 
-  function onPrimaryClick() {
-    if (group.personal) return callGroupAction(ignoreBankTransactionGroup)
-    if (!group.suggestedKind) return setShowDetails(true)
-    return callGroupAction(settleBankTransactionGroup, group.suggestedKind)
-  }
-
-  function onOverrideChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    const value = e.target.value
-    setOverrideKind(value)
-    if (!value) return
-    if (value === 'ignore') {
-      callGroupAction(ignoreBankTransactionGroup)
-    } else if (value === 'review_later') {
-      callGroupAction(markBankTransactionGroupNotAMatch)
-    } else if (
-      value === 'revenue' || value === 'inventory' || value === 'labor' || value === 'operating'
-    ) {
-      callGroupAction(settleBankTransactionGroup, value)
-    }
-    // Reset so a re-pick of the same override fires again next time.
-    setOverrideKind('')
-  }
-
-  const primaryLabel = (() => {
-    if (group.personal) return t('Mark personal', 'Marcar como personal')
-    if (!group.suggestedKind) return t('Review details', 'Revisar detalles')
-    if (group.direction === 'inflow' && group.suggestedKind === 'revenue') return t('Match to Sales Deposit', 'Emparejar con depósito de ventas')
-    return t(`Confirm as ${prettyKind(group.suggestedKind, 'en')}`, `Confirmar como ${prettyKind(group.suggestedKind, 'es')}`)
-  })()
-
-  const suggestedLabel = group.personal
-    ? t('Suggested as personal', 'Sugerido como personal')
-    : group.suggestedKind
-      ? t(`Suggested: ${prettyKind(group.suggestedKind, 'en')}`, `Sugerido: ${prettyKind(group.suggestedKind, 'es')}`)
-      : t('Suggested: review details', 'Sugerido: revisar detalles')
-
-  return (
-    <div className="rounded-lg border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-      {/* Header — name, amount */}
-      <div className="px-3.5 py-3 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold text-gray-900 truncate">{group.label}</p>
-          <p className="text-[11px] text-gray-500 mt-0.5 font-mono tabular-nums">
-            {group.txnCount} {lang === 'es' ? `transacci${group.txnCount === 1 ? 'ón' : 'ones'}` : `transaction${group.txnCount === 1 ? '' : 's'}`}
-          </p>
-          <p className="text-[11px] text-gray-500 mt-1.5">
-            <span className="font-medium text-gray-700">{suggestedLabel}</span>
-            <span className="text-gray-300 px-1">·</span>
-            <span>{group.reason}</span>
-          </p>
-        </div>
-        <p className={`text-sm font-bold font-mono tabular-nums flex-shrink-0 ${amountTone}`}>
-          {sign}${group.totalAmount.toFixed(2)}
-        </p>
-      </div>
-
-      {/* Action row — one primary CTA + Change-category + drilldown */}
-      <div className="px-3.5 pb-3 pt-1 flex flex-wrap items-center gap-1.5">
-        <button
-          type="button"
-          disabled={isPending}
-          onClick={onPrimaryClick}
-          className="text-[10px] font-semibold uppercase tracking-[0.06em] px-2.5 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed bg-gray-900 text-white hover:bg-gray-800"
-        >
-          {primaryLabel}
-        </button>
-
-        {/* Change-category dropdown — single override surface
-            instead of a row of equal buttons. Empty option keeps
-            the suggested decision; picking any concrete kind fires
-            the corresponding action immediately. */}
-        <label className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 inline-flex items-center gap-1 border border-gray-200 rounded-md px-2 py-1 hover:bg-gray-50 transition-colors cursor-pointer">
-          <span>{t('Change', 'Cambiar')}</span>
-          <select
-            value={overrideKind}
-            onChange={onOverrideChange}
-            disabled={isPending}
-            className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 bg-transparent border-0 outline-none cursor-pointer disabled:cursor-not-allowed"
-          >
-            <option value="">…</option>
-            {group.direction === 'inflow' ? (
-              <option value="revenue">{t('Sales Deposit', 'Depósito de ventas')}</option>
-            ) : (
-              <>
-                <option value="inventory">{t('Inventory', 'Inventario')}</option>
-                <option value="labor">{t('Labor', 'Mano de obra')}</option>
-                <option value="operating">{t('Operating', 'Operación')}</option>
-              </>
-            )}
-            <option value="ignore">{t('Mark personal', 'Marcar como personal')}</option>
-            <option value="review_later">{t('Review later', 'Revisar después')}</option>
-          </select>
-        </label>
-
-        {/* Mark-personal secondary — suppressed when the primary
-            CTA is already Mark personal, so two equivalents never
-            appear at once. */}
-        {!group.personal && (
-          <button
-            type="button"
-            disabled={isPending}
-            onClick={() => callGroupAction(ignoreBankTransactionGroup)}
-            className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-600 hover:bg-gray-100 border border-gray-200 px-2 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {t('Mark personal', 'Marcar como personal')}
-          </button>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setShowDetails((v) => !v)}
-          className="text-[10px] font-semibold uppercase tracking-[0.06em] text-gray-500 hover:text-gray-700 ml-auto px-2 py-1 rounded-md transition-colors"
-        >
-          {showDetails ? t('Hide details', 'Ocultar detalles') : t('Details', 'Detalles')}
-        </button>
-      </div>
-
-      {/* Drilldown — underlying transactions for this group. Each
-          row is the same ReviewRow used by the Settled / Ignored
-          tails, so the manager has per-row override available
-          without leaving the group context. */}
-      {showDetails && (
-        <div className="border-t border-gray-100 px-3 py-3 bg-gray-50/40">
-          <div className="space-y-2">
-            {group.txns.map((txn) => {
-              const fullRow: BankReviewRow = {
-                id: txn.id,
-                direction: txn.direction,
-                amount: txn.amount,
-                rawCategory: txn.rawCategory,
-                merchantName: txn.merchantName,
-                description: txn.description,
-                postedAt: txn.postedAt,
-                reviewState: 'unreviewed',
-                settledKind: null,
-              }
-              return <ReviewRow key={txn.id} row={fullRow} lang={lang} />
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function prettyKind(kind: SuggestedKind, lang: Lang = 'en'): string {
-  const t = makeT(lang)
-  if (kind === 'revenue') return t('Sales', 'Ventas')
-  if (kind === 'inventory') return t('Inventory', 'Inventario')
-  if (kind === 'labor') return t('Labor', 'Mano de obra')
-  if (kind === 'operating') return t('Operating', 'Operación')
-  return ''
-}
-
-// ----------------------------------------------------------------
-// ReviewRow — a single bank row in the Bank Review drawer.
-//
-// Renders date, merchant/description, amount with direction tone,
-// suggested-kind tag, and action buttons appropriate for the row's
-// direction and current state. Actions go through useTransition so
-// the route revalidates and the row migrates between queues on
-// success without a hard reload.
-// ----------------------------------------------------------------
-function ReviewRow({ row, lang }: { row: BankReviewRow; lang: Lang }) {
-  const t = makeT(lang)
-  const [isPending, startTransition] = useTransition()
-  const isOutflow = row.direction === 'outflow'
-  const amountTone = isOutflow ? 'text-red-700' : 'text-green-700'
-  const arrow = isOutflow ? '−' : '+'
-
-  const suggested = suggestSettlementKind({
-    direction: row.direction,
-    amount: row.amount,
-    rawCategory: row.rawCategory,
-    merchantName: row.merchantName,
-    description: row.description,
-  })
-  const personal = looksPersonal({
-    direction: row.direction,
-    amount: row.amount,
-    rawCategory: row.rawCategory,
-    merchantName: row.merchantName,
-    description: row.description,
-  })
-
-  function call(action: typeof settleBankTransaction, kind?: SuggestedKind) {
-    startTransition(async () => {
-      const fd = new FormData()
-      fd.append('txn_id', row.id)
-      if (kind) fd.append('kind', kind)
-      await action(null, fd)
-    })
+  if (open) {
+    return (
+      <select
+        autoFocus
+        value={current}
+        onChange={(e) => commit(e.target.value)}
+        onBlur={() => setOpen(false)}
+        className="text-[11px] font-mono uppercase tracking-[0.08em] px-2 py-1 rounded-md focus:outline-none"
+        style={{
+          background: CREAM,
+          color: INK,
+          border: `1px solid ${INK}`,
+        }}
+      >
+        {EXPENSE_CATEGORIES.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    )
   }
 
   return (
-    <div className="rounded-lg border border-gray-200/80 bg-white px-3 py-2.5">
-      {/* Top line: merchant / amount */}
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <p className="text-[13px] font-semibold text-gray-900 truncate">
-            {row.merchantName || row.description || t('Untitled transaction', 'Transacción sin título')}
-          </p>
-          <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-            {new Date(row.postedAt).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })}
-            {row.rawCategory && <> · {prettyCategory(row.rawCategory, lang)}</>}
-            {suggested && row.reviewState === 'unreviewed' && <> · {t('suggests', 'sugiere')} {prettyKind(suggested, lang)}</>}
-            {personal && row.reviewState === 'unreviewed' && <> · {t('looks personal', 'parece personal')}</>}
-            {row.reviewState === 'settled' && row.settledKind && (
-              <> · {t('settled as', 'liquidado como')} {prettyKind(row.settledKind, lang)}</>
-            )}
-          </p>
-        </div>
-        <p className={`text-sm font-bold font-mono tabular-nums flex-shrink-0 ${amountTone}`}>
-          {arrow}${row.amount.toFixed(2)}
-        </p>
-      </div>
-
-      {/* Action row */}
-      <div className="mt-2.5 pt-2.5 border-t border-gray-100 flex flex-wrap gap-1.5">
-        {row.reviewState === 'unreviewed' && (
-          <>
-            {isOutflow ? (
-              <>
-                <ActionButton
-                  primary={suggested === 'inventory'}
-                  disabled={isPending}
-                  onClick={() => call(settleBankTransaction, 'inventory')}
-                >
-                  {t('Confirm as inventory', 'Confirmar como inventario')}
-                </ActionButton>
-                <ActionButton
-                  primary={suggested === 'labor'}
-                  disabled={isPending}
-                  onClick={() => call(settleBankTransaction, 'labor')}
-                >
-                  {t('Confirm as labor', 'Confirmar como mano de obra')}
-                </ActionButton>
-                <ActionButton
-                  primary={suggested === 'operating'}
-                  disabled={isPending}
-                  onClick={() => call(settleBankTransaction, 'operating')}
-                >
-                  {t('Confirm as operating', 'Confirmar como operación')}
-                </ActionButton>
-              </>
-            ) : (
-              <ActionButton
-                primary={suggested === 'revenue'}
-                disabled={isPending}
-                onClick={() => call(settleBankTransaction, 'revenue')}
-              >
-                {t('Match to Sales Deposit', 'Emparejar con depósito de ventas')}
-              </ActionButton>
-            )}
-            <ActionButton
-              primary={false}
-              tone="ignore"
-              disabled={isPending}
-              onClick={() => call(ignoreBankTransaction)}
-            >
-              {t('Mark personal', 'Marcar como personal')}
-            </ActionButton>
-            <ActionButton
-              primary={false}
-              tone="muted"
-              disabled={isPending}
-              onClick={() => call(markBankTransactionNotAMatch)}
-            >
-              {t('Review later', 'Revisar después')}
-            </ActionButton>
-          </>
-        )}
-        {row.reviewState !== 'unreviewed' && (
-          <ActionButton
-            primary={false}
-            tone="muted"
-            disabled={isPending}
-            onClick={() => call(reopenBankTransaction)}
-          >
-            {t('Reopen', 'Reabrir')}
-          </ActionButton>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function ActionButton({
-  children,
-  onClick,
-  primary,
-  disabled,
-  tone,
-}: {
-  children: React.ReactNode
-  onClick: () => void
-  primary: boolean
-  disabled: boolean
-  tone?: 'ignore' | 'muted'
-}) {
-  const base =
-    'text-[10px] font-semibold uppercase tracking-[0.06em] px-2 py-1 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed'
-  const palette = primary
-    ? 'bg-gray-900 text-white hover:bg-gray-800'
-    : tone === 'ignore'
-      ? 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
-      : tone === 'muted'
-        ? 'text-gray-600 hover:bg-gray-100 border border-gray-200'
-        : 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50'
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} className={`${base} ${palette}`}>
-      {children}
+    <button
+      type="button"
+      onClick={() => setOpen(true)}
+      title={t('Change category', 'Cambiar categoría')}
+      className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md transition-all cursor-pointer"
+      style={{
+        background: errored ? '#FDE4E1' : SAND,
+        color: errored ? '#B91C1C' : SLATE,
+        border: `1px dashed ${errored ? '#F5B7B1' : HAIR}`,
+        opacity: pending ? 0.6 : 1,
+      }}
+    >
+      {current}
     </button>
   )
 }
 
-// Pretty-print a Plaid PFC primary into a short human label for the
-// row meta line. Reuses the same mapping spirit as page.tsx's
-// friendlyOperatingCategory but kept inline here so the drawer
-// doesn't need a server round-trip for the labels.
-function prettyCategory(raw: string, lang: Lang = 'en'): string {
-  const t = makeT(lang)
-  const map: Record<string, string> = {
-    INCOME: t('income', 'ingresos'),
-    TRANSFER_IN: t('transfer in', 'transferencia entrante'),
-    TRANSFER_OUT: t('transfer out', 'transferencia saliente'),
-    FOOD_AND_DRINK: t('food & drink', 'comida y bebida'),
-    GENERAL_MERCHANDISE: t('merchandise', 'mercancía'),
-    RENT_AND_UTILITIES: t('rent & utilities', 'renta y servicios'),
-    GENERAL_SERVICES: t('services', 'servicios'),
-    ENTERTAINMENT: t('entertainment', 'entretenimiento'),
-    BANK_FEES: t('bank fees', 'cuotas bancarias'),
-    LOAN_PAYMENTS: t('loan payment', 'pago de préstamo'),
-    TRANSPORTATION: t('transportation', 'transporte'),
-    TRAVEL: t('travel', 'viajes'),
-    HOME_IMPROVEMENT: t('maintenance', 'mantenimiento'),
-    MEDICAL: t('medical', 'médico'),
-    PERSONAL_CARE: t('personal care', 'cuidado personal'),
-    GOVERNMENT_AND_NON_PROFIT: t('government', 'gobierno'),
-  }
-  return map[raw] ?? raw.toLowerCase().replace(/_/g, ' ')
+// ----------------------------------------------------------------
+// Small helpers
+// ----------------------------------------------------------------
+function formatTime(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const diffMs = now.getTime() - d.getTime()
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h ago`
+  const diffDay = Math.floor(diffHr / 24)
+  if (diffDay < 7) return `${diffDay}d ago`
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
-// ----------------------------------------------------------------
-// LogExpenseDrawerContent — manual expense form inside a drawer.
-// Same form as the prior right-rail QuickExpenseCard, just wrapped
-// in drawer chrome. createExpense action unchanged.
-// ----------------------------------------------------------------
-function LogExpenseDrawerContent({
-  action, pending, error, locationId, lang,
-}: {
-  action: (fd: FormData) => void
-  pending: boolean
-  error?: string
-  locationId: string
-  lang: Lang
-}) {
-  const t = makeT(lang)
-  return (
-    <form action={action} className="flex flex-col gap-5">
-      <input type="hidden" name="location_id" value={locationId} />
-
-      <FormField label={t('Category', 'Categoría')} htmlFor="qa-category" lang={lang}>
-        <select
-          id="qa-category"
-          name="category"
-          required
-          defaultValue=""
-          className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-        >
-          <option value="" disabled>{t('Select a category…', 'Selecciona una categoría…')}</option>
-          {EXPENSE_CATEGORIES.map((cat) => (
-            <option key={cat} value={cat}>{cat}</option>
-          ))}
-        </select>
-      </FormField>
-
-      <FormField label={t('Amount', 'Monto')} htmlFor="qa-amount" lang={lang}>
-        <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
-          <input
-            id="qa-amount"
-            name="amount"
-            type="number"
-            required
-            min="0.01"
-            step="0.01"
-            placeholder="0.00"
-            className="h-10 w-full rounded-lg border border-gray-200 bg-white pl-7 pr-3 text-sm font-mono tabular-nums placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          />
-        </div>
-      </FormField>
-
-      <div className="grid grid-cols-2 gap-3">
-        <FormField label={t('Date', 'Fecha')} htmlFor="qa-date" lang={lang}>
-          <input
-            id="qa-date"
-            name="expense_date"
-            type="date"
-            required
-            defaultValue={new Date().toISOString().split('T')[0]}
-            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          />
-        </FormField>
-        <FormField label={t('Vendor', 'Proveedor')} htmlFor="qa-vendor" optional lang={lang}>
-          <input
-            id="qa-vendor"
-            name="vendor_name"
-            type="text"
-            placeholder="US Foods"
-            className="h-10 w-full rounded-lg border border-gray-200 bg-white px-3 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          />
-        </FormField>
-      </div>
-
-      <label
-        htmlFor="qa-inventory"
-        className="flex items-center gap-2.5 cursor-pointer select-none"
-      >
-        <input
-          id="qa-inventory"
-          name="is_inventory_related"
-          type="checkbox"
-          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500/40"
-        />
-        <span className="text-xs text-gray-700">
-          {t('Inventory-related', 'Relacionado con inventario')}
-          <span className="text-gray-400 ml-1">{t('— food, beverage, supplies', '— comida, bebida, suministros')}</span>
-        </span>
-      </label>
-
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-          <p className="text-xs text-red-700">{error}</p>
-        </div>
-      )}
-
-      <button
-        type="submit"
-        disabled={pending}
-        className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-      >
-        {pending ? t('Saving…', 'Guardando…') : t('Record expense', 'Registrar gasto')}
-      </button>
-    </form>
-  )
-}
+// The `mono` helper is referenced from the shared style block; keep it
+// alive here to satisfy the linter even if unused directly today.
+export const _mono = mono

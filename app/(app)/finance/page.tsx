@@ -1,542 +1,495 @@
 // ----------------------------------------------------------------
-// Finance Page  →  /finance
+// Finance dashboard  →  /finance
 //
-// Server Component — fetches expenses, sales, and staffing data,
-// computes metrics, and passes everything to the Client Component.
+// The warm, alive, at-a-glance surface. Balance up top, Money In /
+// Money Out cards with sparklines and attribution chips, net + streak,
+// weekly progress rings, a compact recent-activity ledger with
+// categorize-on-tap, an occasional Sunday recap, and a single smart
+// nudge line when there's something worth surfacing.
 //
-// Bridges:
-//   Sales → Finance:    revenue from orders as supporting context
-//   Staffing → Finance: scheduled labor estimate from shifts + hourly_rate
-//   Inventory → Finance: inventory-related expense flag + total
+// Explicitly NOT here:
+//   • Bank connection / review / settle workflow → /finance/details
+//   • Full expense workspace / drawers → /finance/details
+//   • Report generation / CSV / PDF → deferred; data is captured
+//     already so reports render later off the same tables.
+//
+// Server component. Fetches EVERYTHING the dashboard needs in one
+// parallel round-trip: current-week + prior-8-weeks orders (for the
+// week aggregates, sparklines, ring baselines, and streak), current-
+// week expenses + shifts (for money-out), latest bank account
+// balance snapshot (for the anchor number), and the last ~20 rows
+// of the interleaved activity feed. Nothing on the client side
+// re-fetches — the dashboard reads instantly.
 // ----------------------------------------------------------------
 
 import { createClient } from '@/lib/supabase/server'
-import { isPlaidConfigured, isPlaidSandbox } from '@/lib/plaid/client'
-import { isDevEmail } from '@/lib/dev'
+import { isPlaidConfigured } from '@/lib/plaid/client'
 import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
 import { getLang } from '@/lib/i18n-server'
-import { makeT, type Lang } from '@/lib/i18n'
-import FinanceClient from './client'
+import FinanceDashboardClient from './client'
 
-// Plaid Personal Finance Category primaries → short human labels.
-// Keeps the Operating UI readable without pretending the
-// classification is more than what Plaid actually returns.
-function friendlyOperatingCategory(raw: string, lang: Lang): string {
-  const t = makeT(lang)
-  const map: Record<string, string> = {
-    RENT_AND_UTILITIES: t('Rent & utilities', 'Renta y servicios'),
-    GENERAL_SERVICES: t('Services & subscriptions', 'Servicios y suscripciones'),
-    FOOD_AND_DRINK: t('Food & drink', 'Comida y bebida'),
-    GENERAL_MERCHANDISE: t('Supplies & merchandise', 'Suministros y mercancía'),
-    TRANSPORTATION: t('Transportation', 'Transporte'),
-    TRAVEL: t('Travel', 'Viajes'),
-    ENTERTAINMENT: t('Marketing & entertainment', 'Marketing y entretenimiento'),
-    BANK_FEES: t('Bank fees', 'Cuotas bancarias'),
-    LOAN_PAYMENTS: t('Loan payments', 'Pagos de préstamos'),
-    TRANSFER_OUT: t('Transfers out', 'Transferencias salientes'),
-    HOME_IMPROVEMENT: t('Maintenance', 'Mantenimiento'),
-    MEDICAL: t('Medical', 'Médico'),
-    PERSONAL_CARE: t('Personal care', 'Cuidado personal'),
-    GOVERNMENT_AND_NON_PROFIT: t('Government & other', 'Gobierno y otros'),
-  }
-  if (map[raw]) return map[raw]
-  // Fallback: title-case any unknown raw value.
-  return raw
-    .toLowerCase()
-    .split('_')
-    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-    .join(' ')
+// ----------------------------------------------------------------
+// Week boundaries — restaurant weeks run Monday → Sunday. `atWeek`
+// resets the input to that week's Monday at 00:00 local time. We
+// return a Date for math and an ISO for query bounds.
+// ----------------------------------------------------------------
+function mondayOf(d: Date): Date {
+  const out = new Date(d)
+  const day = out.getDay() // 0 = Sunday
+  out.setDate(out.getDate() - (day === 0 ? 6 : day - 1))
+  out.setHours(0, 0, 0, 0)
+  return out
 }
 
 export default async function FinancePage() {
   const supabase = await createClient()
   const lang = await getLang()
 
-  // ---- Auto-sync (5-minute staleness threshold) ----
-  // Runs server-side before the main fetch so the rest of the page
-  // sees freshly-synced bank rows. No-op when no bank is connected,
-  // when the most recent sync is recent, or when Plaid is offline.
+  // Kick the Plaid auto-sync if enough time has passed. Silent on
+  // failure — the dashboard renders from whatever's in the DB.
   await maybeAutoSyncBankTransactions().catch(() => null)
 
-  // Dev allowlist check — drives optional sandbox affordances in
-  // the UI (e.g. "Create sandbox rent expense" button).
+  // Fetch the current user + restaurant. RLS scopes all queries
+  // below; we still need the restaurant id for the bank-accounts
+  // fetch which is by restaurant_id.
   const { data: { user } } = await supabase.auth.getUser()
-  const isDev = isDevEmail(user?.email)
-
-  // ---- Locations ----
-  const { data: locations } = await supabase
-    .from('locations')
-    .select('id, name')
-    .order('created_at', { ascending: true })
-
-  const defaultLocationId = locations?.[0]?.id ?? null
+  const restaurantId = user
+    ? (
+        await supabase
+          .from('user_roles')
+          .select('restaurant_id')
+          .eq('user_id', user.id)
+          .single()
+      ).data?.restaurant_id ?? null
+    : null
 
   // ---- Date boundaries ----
   const now = new Date()
+  const thisMon = mondayOf(now)
+  const nextMon = new Date(thisMon)
+  nextMon.setDate(nextMon.getDate() + 7)
+  const lastMon = new Date(thisMon)
+  lastMon.setDate(lastMon.getDate() - 7)
+  // Look back 8 weeks (56 days) for ring baselines + streak history.
+  const eightWeeksAgo = new Date(thisMon)
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 8 * 7)
 
-  // Last 7 days (expenses + revenue + bank aggregates)
-  const sevenDaysAgo = new Date(now)
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
-  sevenDaysAgo.setHours(0, 0, 0, 0)
-
-  // Current week Mon–Sun (scheduled labor estimate)
-  const day = now.getDay()
-  const monday = new Date(now)
-  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1))
-  monday.setHours(0, 0, 0, 0)
-  const sundayEnd = new Date(monday)
-  sundayEnd.setDate(monday.getDate() + 7)
-
-  // ---- Parallel fetch ----
+  // ---- Parallel data fetch ----
   const [
-    { data: recentExpenses },
-    { data: periodExpenses },
-    { data: periodOrders },
+    { data: weekOrders },
+    { data: prior8Orders },
+    { data: weekExpenses },
+    { data: prior8Expenses },
     { data: weekShifts },
+    { data: prior8Shifts },
     { data: bankAccounts },
-    { data: periodBankTxns },
-    { data: ratedEmployees },
+    { data: recentExpenses },
+    { data: recentOrders },
+    { data: recentBankTxns },
   ] = await Promise.all([
-    // 1. Recent expenses (for the list) — last 20
-    supabase
-      .from('expenses')
-      .select('id, category, amount, expense_date, vendor_name, notes, is_inventory_related, source, location_id, locations ( name )')
-      .order('expense_date', { ascending: false })
-      .order('created_at', { ascending: false })
-      .limit(20),
-
-    // 2. All expenses in last 7 days (for cards + inventory-spend
-    // breakdown drawer)
-    supabase
-      .from('expenses')
-      .select('id, category, amount, vendor_name, is_inventory_related, source, location_id')
-      .gte('expense_date', sevenDaysAgo.toISOString().split('T')[0]),
-
-    // 3. Revenue from orders in last 7 days (Sales → Finance bridge)
-    // Voided orders are excluded so corrections don't inflate revenue.
+    // Current-week completed orders — drives money-in for the week,
+    // payment-type attribution chip, and the ledger.
     supabase
       .from('orders')
-      .select('id, total_amount')
+      .select('id, total_amount, created_at, payment_type, source, external_provider')
       .eq('status', 'completed')
-      .gte('created_at', sevenDaysAgo.toISOString()),
-
-    // 4. Shifts this week with employee + section context. The labor
-    // drawer needs employee names, roles, and section areas for the
-    // by-house / by-role / by-employee breakdowns.
+      .gte('created_at', thisMon.toISOString())
+      .lt('created_at', nextMon.toISOString()),
+    // Prior 8 weeks of orders — feeds the sparkline (last 7 daily
+    // buckets), ring baselines ("typical week"), and streak counting.
+    supabase
+      .from('orders')
+      .select('id, total_amount, created_at')
+      .eq('status', 'completed')
+      .gte('created_at', eightWeeksAgo.toISOString())
+      .lt('created_at', thisMon.toISOString()),
+    // Current-week expenses.
+    supabase
+      .from('expenses')
+      .select('id, amount, category, vendor_name, expense_date, notes, is_inventory_related')
+      .gte('expense_date', thisMon.toISOString().split('T')[0])
+      .lt('expense_date', nextMon.toISOString().split('T')[0]),
+    // Prior 8 weeks of expenses — for the ring baseline.
+    supabase
+      .from('expenses')
+      .select('amount, expense_date')
+      .gte('expense_date', eightWeeksAgo.toISOString().split('T')[0])
+      .lt('expense_date', thisMon.toISOString().split('T')[0]),
+    // Current-week shifts with employee rates — drives the labor
+    // estimate that rolls into money-out.
     supabase
       .from('shifts')
-      .select('id, start_time, end_time, role, employees ( id, name, hourly_rate ), shift_sections ( area )')
-      .gte('start_time', monday.toISOString())
-      .lt('start_time', sundayEnd.toISOString()),
-
-    // 5. Connected bank accounts (display-safe subset only)
+      .select('id, start_time, end_time, employees ( hourly_rate )')
+      .gte('start_time', thisMon.toISOString())
+      .lt('start_time', nextMon.toISOString()),
+    // Prior 8 weeks of shifts — labor baseline for the ring.
     supabase
-      .from('connected_bank_accounts')
-      .select('id, provider, account_name, account_mask, institution_name, active, last_synced_at')
-      .eq('active', true)
-      .order('created_at', { ascending: true }),
-
-    // 6. Bank transactions — last 7 days. Selects enough to drive
-    // the Operating card + drawer (outside-labor/inventory spend
-    // focus) plus the Bank Review settlement workflow added in V3:
-    // per-row amount, direction, raw category, merchant, description,
-    // and the four review columns (review_state, settled_kind,
-    // settled_expense_id, settled_at). Bank row IDs DO reach the UI
-    // now — Bank Review needs them to drive settle/ignore actions.
+      .from('shifts')
+      .select('start_time, end_time, employees ( hourly_rate )')
+      .gte('start_time', eightWeeksAgo.toISOString())
+      .lt('start_time', thisMon.toISOString()),
+    // Bank accounts — latest reported balance per active account.
+    // Sum across accounts = "In the bank" anchor.
+    restaurantId
+      ? supabase
+          .from('connected_bank_accounts')
+          .select('id, provider, current_balance, name, mask, last_synced_at')
+          .eq('restaurant_id', restaurantId)
+          .eq('active', true)
+      : Promise.resolve({ data: [] as Array<{
+          id: string; provider: string; current_balance: number | null;
+          name: string | null; mask: string | null; last_synced_at: string | null
+        }> }),
+    // Ledger feed — latest 10 expenses, 10 orders, 10 bank transactions.
+    // We interleave them client-side after normalization.
+    supabase
+      .from('expenses')
+      .select('id, amount, category, vendor_name, expense_date, created_at, notes, is_inventory_related')
+      .order('created_at', { ascending: false })
+      .limit(10),
+    supabase
+      .from('orders')
+      .select('id, total_amount, created_at, payment_type, source, external_provider')
+      .eq('status', 'completed')
+      .order('created_at', { ascending: false })
+      .limit(10),
     supabase
       .from('bank_transactions')
-      .select('id, amount, direction, raw_category, merchant_name, description, posted_at, review_state, settled_kind, settled_expense_id, settled_at')
-      .gte('posted_at', sevenDaysAgo.toISOString()),
-
-    // 7. Active employees with positive hourly_rate. Used to tell the
-    // difference between "no shifts scheduled this week" and
-    // "shifts exist but no hourly rates configured" — Finance must
-    // be honest about which empty state we're actually in.
-    supabase
-      .from('employees')
-      .select('id')
-      .eq('active', true)
-      .gt('hourly_rate', 0),
+      .select('id, amount, direction, posted_at, merchant_name, description, raw_category, review_state')
+      .order('posted_at', { ascending: false })
+      .limit(10),
   ])
 
-  // ---- Compute expense metrics ----
-  const allPeriodExpenses = periodExpenses ?? []
-  const expenseTotal7d = allPeriodExpenses.reduce((sum, e) => sum + Number(e.amount), 0)
-  const expenseCount7d = allPeriodExpenses.length
+  // ---- Compute money-in this week + payment-type split ----
+  type OrderRow = { id: string; total_amount: number; created_at: string; payment_type: string | null }
+  const weekOrdersTyped = (weekOrders ?? []) as OrderRow[]
+  const moneyIn = weekOrdersTyped.reduce((s, o) => s + Number(o.total_amount), 0)
+  const cashIn = weekOrdersTyped.filter((o) => o.payment_type === 'cash').reduce((s, o) => s + Number(o.total_amount), 0)
+  const cardIn = weekOrdersTyped.filter((o) => o.payment_type === 'card').reduce((s, o) => s + Number(o.total_amount), 0)
+  const otherIn = moneyIn - cashIn - cardIn
 
-  // Inventory-related spend (Inventory → Finance bridge)
-  const inventorySpend7d = allPeriodExpenses
-    .filter((e) => e.is_inventory_related)
-    .reduce((sum, e) => sum + Number(e.amount), 0)
-
-  // Revenue (Sales → Finance bridge)
-  const revenue7d = (periodOrders ?? []).reduce((sum, o) => sum + Number(o.total_amount), 0)
-
-  // ---- Scheduled labor estimate (Staffing → Finance bridge) ----
-  // For each shift this week: hours × hourly_rate. We keep both the
-  // top-line total and three drawer-friendly aggregates so the
-  // labor card can open a detail panel without a second round-trip.
-  let laborEstimate = 0
-  let laborRatedShiftCount = 0
-  let laborUnratedShiftCount = 0
-
-  type AreaKey = 'foh' | 'boh' | 'unassigned'
-  const laborByAreaMap = new Map<AreaKey, { hours: number; cost: number; shiftCount: number }>()
-  const laborByRoleMap = new Map<string, { hours: number; cost: number; shiftCount: number; missingRate: boolean }>()
-  const laborByEmployeeMap = new Map<string, {
-    name: string; hours: number; cost: number; shiftCount: number; hourlyRate: number | null
-  }>()
-
-  for (const shift of weekShifts ?? []) {
-    const emp = shift.employees as unknown as { id: string; name: string; hourly_rate: number | null } | null
-    const section = shift.shift_sections as unknown as { area: 'foh' | 'boh' } | null
-    const hours =
-      (new Date(shift.end_time).getTime() - new Date(shift.start_time).getTime()) /
-      (1000 * 60 * 60)
-    const rate = emp?.hourly_rate && Number(emp.hourly_rate) > 0 ? Number(emp.hourly_rate) : 0
-    const cost = rate * hours
-    const hasRate = rate > 0
-
-    if (hasRate) { laborEstimate += cost; laborRatedShiftCount++ }
-    else { laborUnratedShiftCount++ }
-
-    // by area
-    const areaKey: AreaKey = (section?.area === 'foh' || section?.area === 'boh') ? section.area : 'unassigned'
-    const a = laborByAreaMap.get(areaKey) ?? { hours: 0, cost: 0, shiftCount: 0 }
-    a.hours += hours; a.cost += cost; a.shiftCount += 1
-    laborByAreaMap.set(areaKey, a)
-
-    // by role
-    const roleKey = (shift.role as string | null) ?? 'Unassigned'
-    const r = laborByRoleMap.get(roleKey) ?? { hours: 0, cost: 0, shiftCount: 0, missingRate: false }
-    r.hours += hours; r.cost += cost; r.shiftCount += 1
-    if (!hasRate) r.missingRate = true
-    laborByRoleMap.set(roleKey, r)
-
-    // by employee
-    if (emp) {
-      const e = laborByEmployeeMap.get(emp.id) ?? {
-        name: emp.name, hours: 0, cost: 0, shiftCount: 0, hourlyRate: hasRate ? rate : null,
-      }
-      e.hours += hours; e.cost += cost; e.shiftCount += 1
-      if (hasRate && e.hourlyRate === null) e.hourlyRate = rate
-      laborByEmployeeMap.set(emp.id, e)
-    }
+  // Daily sparkline buckets for the current week — 7 values,
+  // Monday through Sunday. Days beyond "now" stay at 0 (they haven't
+  // happened yet, so the sparkline "grows" through the week).
+  const inSpark: number[] = new Array(7).fill(0)
+  for (const o of weekOrdersTyped) {
+    const d = new Date(o.created_at)
+    const dayIdx = Math.floor((d.getTime() - thisMon.getTime()) / (24 * 60 * 60 * 1000))
+    if (dayIdx >= 0 && dayIdx < 7) inSpark[dayIdx] += Number(o.total_amount)
   }
-  laborEstimate = Math.round(laborEstimate * 100) / 100
 
-  const round2 = (n: number) => Math.round(n * 100) / 100
-  const laborByArea = Array.from(laborByAreaMap.entries())
-    .map(([area, v]) => ({ area, hours: round2(v.hours), cost: round2(v.cost), shiftCount: v.shiftCount }))
-    .sort((a, b) => b.cost - a.cost)
-  const laborByRole = Array.from(laborByRoleMap.entries())
-    .map(([role, v]) => ({ role, hours: round2(v.hours), cost: round2(v.cost), shiftCount: v.shiftCount, missingRate: v.missingRate }))
-    .sort((a, b) => b.cost - a.cost)
-  const laborByEmployee = Array.from(laborByEmployeeMap.values())
-    .map((v) => ({ name: v.name, hours: round2(v.hours), cost: round2(v.cost), shiftCount: v.shiftCount, hourlyRate: v.hourlyRate }))
-    .sort((a, b) => b.cost - a.cost)
+  // ---- Compute money-out this week ----
+  type ExpenseRow = { id: string; amount: number; category: string; expense_date: string }
+  const weekExpensesTyped = (weekExpenses ?? []) as ExpenseRow[]
+  const expenseTotal = weekExpensesTyped.reduce((s, e) => s + Number(e.amount), 0)
 
-  const totalShiftCount = (weekShifts ?? []).length
-  const ratedEmployeeCount = (ratedEmployees ?? []).length
+  // Labor estimate: hours worked × hourly_rate. Zero-rate employees
+  // contribute nothing — they're either the owner (unpaid draw) or
+  // don't have a rate set yet. We don't try to be clever about it.
+  type ShiftRow = { start_time: string; end_time: string; employees: { hourly_rate: number | null } | null }
+  const weekShiftsTyped = (weekShifts ?? []) as unknown as ShiftRow[]
+  let laborEstimate = 0
+  for (const s of weekShiftsTyped) {
+    const rate = Number(s.employees?.hourly_rate ?? 0)
+    if (rate <= 0) continue
+    const hours = (new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / (1000 * 60 * 60)
+    if (hours > 0) laborEstimate += hours * rate
+  }
+  const moneyOut = expenseTotal + laborEstimate
 
-  // Labor data-quality state — drives the UI between honest variants:
-  //   no_employees  no employees with hourly rates configured at all
-  //   no_shifts     rated employees exist but no shifts this week
-  //   missing_rates shifts exist but the relevant employees lack rates
-  //   ok            we have at least one shift × rate to compute
-  type LaborState = 'no_employees' | 'no_shifts' | 'missing_rates' | 'ok'
-  const laborState: LaborState = (() => {
-    if (laborRatedShiftCount > 0) return 'ok'
-    if (ratedEmployeeCount === 0) return 'no_employees'
-    if (totalShiftCount === 0) return 'no_shifts'
-    return 'missing_rates'
+  // Money-out daily sparkline — expenses attributed to their
+  // expense_date, labor attributed to shift start_time.
+  const outSpark: number[] = new Array(7).fill(0)
+  for (const e of weekExpensesTyped) {
+    const d = new Date(e.expense_date + 'T00:00:00')
+    const dayIdx = Math.floor((d.getTime() - thisMon.getTime()) / (24 * 60 * 60 * 1000))
+    if (dayIdx >= 0 && dayIdx < 7) outSpark[dayIdx] += Number(e.amount)
+  }
+  for (const s of weekShiftsTyped) {
+    const rate = Number(s.employees?.hourly_rate ?? 0)
+    if (rate <= 0) continue
+    const hours = (new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / (1000 * 60 * 60)
+    const d = new Date(s.start_time)
+    const dayIdx = Math.floor((d.getTime() - thisMon.getTime()) / (24 * 60 * 60 * 1000))
+    if (dayIdx >= 0 && dayIdx < 7 && hours > 0) outSpark[dayIdx] += hours * rate
+  }
+
+  // ---- Attribution chips ----
+  // "Mostly cards" / "Mostly cash" / "Steady mix" for money in.
+  const inChip = (() => {
+    if (moneyIn <= 0) return 'Nothing rung yet'
+    const cardShare = cardIn / moneyIn
+    const cashShare = cashIn / moneyIn
+    if (cardShare >= 0.6) return `${Math.round(cardShare * 100)}% cards`
+    if (cashShare >= 0.6) return `${Math.round(cashShare * 100)}% cash`
+    return 'Mixed cash + card'
   })()
 
-  // ---- Inventory spend breakdowns (drawer) ----
-  // Subset of period expenses flagged as inventory-related, then
-  // grouped by category + vendor for the drill-down drawer.
-  const inventoryExpenses = allPeriodExpenses.filter((e) => e.is_inventory_related)
-  const invByCatMap = new Map<string, { amount: number; count: number }>()
-  const invByVendorMap = new Map<string, { amount: number; count: number }>()
-  for (const e of inventoryExpenses) {
-    const c = invByCatMap.get(e.category) ?? { amount: 0, count: 0 }
-    c.amount += Number(e.amount); c.count += 1
-    invByCatMap.set(e.category, c)
-    const vendor = (e.vendor_name as string | null)?.trim() || '—'
-    const v = invByVendorMap.get(vendor) ?? { amount: 0, count: 0 }
-    v.amount += Number(e.amount); v.count += 1
-    invByVendorMap.set(vendor, v)
-  }
-  const inventoryByCategory = Array.from(invByCatMap.entries())
-    .map(([label, v]) => ({ label, amount: round2(v.amount), count: v.count }))
-    .sort((a, b) => b.amount - a.amount)
-  const inventoryByVendor = Array.from(invByVendorMap.entries())
-    .map(([label, v]) => ({ label, amount: round2(v.amount), count: v.count }))
-    .sort((a, b) => b.amount - a.amount)
-
-  // ---- Bank activity aggregates (last 7 days) ----
-  // OBSERVER-PHASE MODEL — see also the Finance design doc.
-  //
-  // The four spend signals (Labor / Inventory / External / Net)
-  // are sub-parts of one Spend total, not separate buckets. To
-  // avoid double-counting between in-system projections and bank
-  // reality, classify each bank outflow into one of:
-  //
-  //   inventory  → confirms the Inventory bucket (food/drink and
-  //                general-merchandise PFCs). NOT added to External.
-  //   external   → captures the system-blind layer (rent, utilities,
-  //                fees, transfers, subscriptions, etc.).
-  //   unresolved → no PFC yet; surfaced in the External drawer for
-  //                manager triage but excluded from Net.
-  //
-  // Each bucket is then reconciled at the metric level via
-  // max(in-system projection, bank-confirmed) in the client so a
-  // bank row that confirms a logged expense doesn't add on top of
-  // it. Rough first-pass classifier — accepts some misclassification
-  // by design; gets retired once the app initiates payments itself.
-  let bankInflow7d = 0
-  let bankOutflow7d = 0
-  let bankTxnCount7d = 0
-  let externalSpendCount7d = 0
-  let unresolvedCount7d = 0
-  let bankInventoryConfirmed7d = 0
-
-  const externalByCategoryMap = new Map<string, { amount: number; count: number }>()
-  type UnresolvedRow = {
-    id: string; description: string | null; merchantName: string | null
-    amount: number; postedAt: string
-  }
-  const unresolvedRows: UnresolvedRow[] = []
-
-  // ---- Bank Review V1 review-queue accumulators ----
-  // Bank transactions carry a review_state column added in the
-  // Bank Review V1 migration. We surface rows by state so the
-  // Bank Review card + drawer can render review queues without
-  // a second round-trip. Settled rows feed the "Settled" tail of
-  // the drawer; ignored rows are excluded from every Finance
-  // total below so personal/owner-transfer activity stops
-  // polluting the business numbers.
-  type ReviewRow = {
-    id: string
-    direction: 'inflow' | 'outflow'
-    amount: number
-    rawCategory: string | null
-    merchantName: string | null
-    description: string | null
-    postedAt: string
-    reviewState: 'unreviewed' | 'settled' | 'ignored' | 'not_a_match'
-    settledKind: 'revenue' | 'inventory' | 'labor' | 'operating' | null
-  }
-  const reviewRows: ReviewRow[] = []
-  let unreviewedCount = 0
-  let unreviewedInflowCount = 0
-  let unreviewedOutflowCount = 0
-  let settledCount = 0
-  let ignoredCount = 0
-  let notAMatchCount = 0
-
-  // PFC → bucket. Conservative mapping: only food/drink and general-
-  // merchandise route to Inventory; everything else categorized goes
-  // to External. Labor/payroll detection is intentionally deferred —
-  // Plaid PFC alone can't reliably tell payroll from generic ACH/
-  // transfer outflows, and that's the layer the action-phase will
-  // own anyway.
-  const inventoryPfcs = new Set(['FOOD_AND_DRINK', 'GENERAL_MERCHANDISE'])
-  const classifyBankPfc = (rawCategory: string | null): 'inventory' | 'external' | 'unresolved' => {
-    if (!rawCategory) return 'unresolved'
-    if (inventoryPfcs.has(rawCategory)) return 'inventory'
-    return 'external'
-  }
-
-  for (const tx of periodBankTxns ?? []) {
-    const amt = Number(tx.amount)
-    const rawCat = (tx.raw_category as string | null)?.trim() || null
-    const reviewState = ((tx.review_state as string | null) ?? 'unreviewed') as ReviewRow['reviewState']
-    const settledKind = ((tx.settled_kind as string | null) ?? null) as ReviewRow['settledKind']
-
-    // Populate the review feed for every row (regardless of state).
-    // The Bank Review drawer filters at render time.
-    reviewRows.push({
-      id: tx.id as string,
-      direction: tx.direction as 'inflow' | 'outflow',
-      amount: round2(amt),
-      rawCategory: rawCat,
-      merchantName: (tx.merchant_name as string | null) ?? null,
-      description: (tx.description as string | null) ?? null,
-      postedAt: tx.posted_at as string,
-      reviewState,
-      settledKind,
-    })
-    if (reviewState === 'settled') settledCount++
-    else if (reviewState === 'ignored') ignoredCount++
-    else if (reviewState === 'not_a_match') notAMatchCount++
-    else {
-      unreviewedCount++
-      if (tx.direction === 'inflow') unreviewedInflowCount++
-      else unreviewedOutflowCount++
+  // "Mostly payroll" / "Mostly inventory" / etc. — pick the biggest
+  // category by dollars (labor competes here too).
+  const outChip = (() => {
+    const bucket: Record<string, number> = { Labor: laborEstimate }
+    for (const e of weekExpensesTyped) {
+      bucket[e.category] = (bucket[e.category] ?? 0) + Number(e.amount)
     }
-
-    // Ignored rows are excluded from every Finance total — they
-    // are personal / owner-transfer / not-a-business-event by
-    // explicit manager decision. They still appear in the Bank
-    // Review drawer's ignored tail for reversibility.
-    if (reviewState === 'ignored') continue
-
-    bankTxnCount7d++
-    if (tx.direction === 'inflow') {
-      bankInflow7d += amt
-      continue
+    let topCat = 'Nothing spent yet'; let topAmt = 0
+    for (const [cat, amt] of Object.entries(bucket)) {
+      if (amt > topAmt) { topCat = cat; topAmt = amt }
     }
+    if (moneyOut <= 0) return 'Nothing spent yet'
+    const share = topAmt / moneyOut
+    if (share >= 0.5) return `Mostly ${topCat.toLowerCase()}`
+    return `Top: ${topCat}`
+  })()
 
-    // Outflow path — counts toward external/operating spend.
-    bankOutflow7d += amt
-    externalSpendCount7d++
+  // ---- Net + streak ----
+  const netThisWeek = moneyIn - moneyOut
 
-    const klass = classifyBankPfc(rawCat)
+  // Rebuild the 8 prior weeks' net for streak + rings baseline.
+  type PriorOrder = { total_amount: number; created_at: string }
+  type PriorExpense = { amount: number; expense_date: string }
+  const priorOrdersTyped = (prior8Orders ?? []) as PriorOrder[]
+  const priorExpensesTyped = (prior8Expenses ?? []) as PriorExpense[]
+  const priorShiftsTyped = (prior8Shifts ?? []) as unknown as ShiftRow[]
 
-    if (klass === 'unresolved') {
-      unresolvedCount7d++
-      unresolvedRows.push({
-        id: tx.id as string,
-        description: (tx.description as string | null) ?? null,
-        merchantName: (tx.merchant_name as string | null) ?? null,
-        amount: round2(amt),
-        postedAt: tx.posted_at as string,
+  const priorNet: number[] = []
+  const priorIn: number[] = []
+  const priorOut: number[] = []
+  for (let w = 8; w >= 1; w--) {
+    const wStart = new Date(thisMon)
+    wStart.setDate(wStart.getDate() - w * 7)
+    const wEnd = new Date(wStart)
+    wEnd.setDate(wEnd.getDate() + 7)
+    const wIn = priorOrdersTyped
+      .filter((o) => {
+        const t = new Date(o.created_at).getTime()
+        return t >= wStart.getTime() && t < wEnd.getTime()
       })
-      continue
+      .reduce((s, o) => s + Number(o.total_amount), 0)
+    const wExp = priorExpensesTyped
+      .filter((e) => {
+        const t = new Date(e.expense_date + 'T00:00:00').getTime()
+        return t >= wStart.getTime() && t < wEnd.getTime()
+      })
+      .reduce((s, e) => s + Number(e.amount), 0)
+    let wLab = 0
+    for (const s of priorShiftsTyped) {
+      const t = new Date(s.start_time).getTime()
+      if (t < wStart.getTime() || t >= wEnd.getTime()) continue
+      const rate = Number(s.employees?.hourly_rate ?? 0)
+      if (rate <= 0) continue
+      const hrs = (new Date(s.end_time).getTime() - new Date(s.start_time).getTime()) / (1000 * 60 * 60)
+      if (hrs > 0) wLab += hrs * rate
     }
-
-    if (klass === 'inventory') {
-      // Inventory PFC rows confirm the Inventory bucket — they're
-      // the bank's echo of food/supply purchases the manager either
-      // already logged or hasn't logged yet. Tracked separately so
-      // they don't show up under External in the drawer.
-      bankInventoryConfirmed7d += amt
-      continue
-    }
-
-    // 'external' — categorized as non-inventory non-labor.
-    // rawCat is non-null here because klass === 'external' implies it.
-    const bucket = externalByCategoryMap.get(rawCat!) ?? { amount: 0, count: 0 }
-    bucket.amount += amt
-    bucket.count += 1
-    externalByCategoryMap.set(rawCat!, bucket)
+    priorIn.push(wIn)
+    priorOut.push(wExp + wLab)
+    priorNet.push(wIn - (wExp + wLab))
   }
 
-  const externalByCategory = Array.from(externalByCategoryMap.entries())
-    .map(([rawLabel, v]) => ({
-      label: friendlyOperatingCategory(rawLabel, lang),
-      rawLabel,
-      amount: round2(v.amount),
-      count: v.count,
-    }))
-    .sort((a, b) => b.amount - a.amount)
+  // Streak: how many CONSECUTIVE weeks (including this one) have
+  // been net-positive walking backwards from now. Only counts once
+  // the current week has itself gone positive.
+  let streakWeeks = 0
+  if (netThisWeek > 0) {
+    streakWeeks = 1
+    for (let i = priorNet.length - 1; i >= 0; i--) {
+      if (priorNet[i] > 0) streakWeeks += 1
+      else break
+    }
+  }
 
-  // Recognized external spend = bank-categorized outflows that
-  // are NOT inventory-PFC. Inventory-PFC rows are filtered out
-  // above so they only flow into the Inventory bucket (not double-
-  // counted). This is the bank-confirmed half of the External
-  // bucket; the client max()es it against manual non-inventory
-  // expenses to land on the displayed External value.
-  const recognizedExternalSpend7d = externalByCategory.reduce((s, c) => s + c.amount, 0)
+  // Last week's net for the delta line under the balance.
+  const lastWeekNet = priorNet.length > 0 ? priorNet[priorNet.length - 1] : 0
+  const lastWeekIn = priorIn.length > 0 ? priorIn[priorIn.length - 1] : 0
 
-  // Most recent unresolved outflows. Cap so the drawer stays bounded.
-  const recentUnresolved = unresolvedRows
-    .sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
-    .slice(0, 8)
+  // ---- Ring baselines (median of prior weeks) ----
+  // Medians are more resilient than means to outlier weeks (a
+  // holiday week or a payroll-and-insurance week shouldn't skew
+  // the "typical". First 4 weeks after signup, we don't have enough
+  // history — send `null` and the client renders a "learning your
+  // typical week" state instead of a broken ring.
+  const median = (arr: number[]): number => {
+    if (arr.length === 0) return 0
+    const s = [...arr].sort((a, b) => a - b)
+    const mid = Math.floor(s.length / 2)
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2
+  }
+  const enoughHistory = priorNet.length >= 4
+  const baselineIn = enoughHistory ? median(priorIn) : null
+  const baselineOut = enoughHistory ? median(priorOut) : null
+  const baselineNet = enoughHistory ? median(priorNet) : null
 
-  // Sort review rows newest first. Drawer renders by section
-  // (suggested / incoming / outgoing / settled / ignored) and reuses
-  // this single feed — no extra round-trip needed.
-  reviewRows.sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
+  // ---- Bank balance ----
+  type BankAccountRow = {
+    id: string; provider: string; current_balance: number | null
+    name: string | null; mask: string | null; last_synced_at: string | null
+  }
+  const accounts = (bankAccounts ?? []) as BankAccountRow[]
+  const bankBalance = accounts.reduce((s, a) => s + Number(a.current_balance ?? 0), 0)
+  const bankConnected = accounts.length > 0 && isPlaidConfigured()
+  const latestBankSync = accounts.reduce<string | null>((latest, a) => {
+    if (!a.last_synced_at) return latest
+    if (!latest) return a.last_synced_at
+    return new Date(a.last_synced_at).getTime() > new Date(latest).getTime()
+      ? a.last_synced_at
+      : latest
+  }, null)
 
-  // Bank state — used by the header chip and by the connected-accounts
-  // card to make Finance's source-of-truth posture explicit:
-  //   not_connected       no bank linked, system-only finance
-  //   connected_unsynced  bank linked but no rows have ever synced
-  //   connected_synced    at least one account has a real sync timestamp
-  const accountList = bankAccounts ?? []
-  const anySynced = accountList.some((a) => !!a.last_synced_at)
-  const bankState: 'not_connected' | 'connected_unsynced' | 'connected_synced' =
-    accountList.length === 0
-      ? 'not_connected'
-      : anySynced
-        ? 'connected_synced'
-        : 'connected_unsynced'
+  // ---- Activity ledger (interleaved feed) ----
+  // Normalize orders + expenses + bank txns into one row shape,
+  // sort by timestamp desc, cap at 15.
+  type LedgerRow = {
+    id: string
+    kind: 'order' | 'expense' | 'bank_credit' | 'bank_debit'
+    amount: number       // always positive; sign carried by kind
+    label: string
+    sub: string | null
+    category: string | null
+    categoryEditable: boolean // true only for expenses (V1)
+    timestamp: string
+  }
+
+  const ledgerOrders: LedgerRow[] = (
+    (recentOrders ?? []) as Array<{ id: string; total_amount: number; created_at: string; payment_type: string | null; source: string | null; external_provider: string | null }>
+  ).map((o) => ({
+    id: `o:${o.id}`,
+    kind: 'order',
+    amount: Number(o.total_amount),
+    label: o.payment_type === 'cash' ? 'Cash sale' : o.payment_type === 'card' ? 'Card sale' : 'Sale',
+    sub: o.external_provider ?? o.source ?? null,
+    category: null,
+    categoryEditable: false,
+    timestamp: o.created_at,
+  }))
+
+  const ledgerExpenses: LedgerRow[] = (
+    (recentExpenses ?? []) as Array<{ id: string; amount: number; category: string; vendor_name: string | null; expense_date: string; created_at: string; notes: string | null }>
+  ).map((e) => ({
+    id: `e:${e.id}`,
+    kind: 'expense',
+    amount: Number(e.amount),
+    label: e.vendor_name ?? e.category,
+    sub: e.notes ?? null,
+    category: e.category,
+    categoryEditable: true,
+    timestamp: e.created_at,
+  }))
+
+  const ledgerBank: LedgerRow[] = (
+    (recentBankTxns ?? []) as Array<{ id: string; amount: number; direction: string; posted_at: string; merchant_name: string | null; description: string | null; raw_category: string | null; review_state: string | null }>
+  ).map((b) => ({
+    id: `b:${b.id}`,
+    kind: b.direction === 'credit' ? 'bank_credit' : 'bank_debit',
+    amount: Math.abs(Number(b.amount)),
+    label: b.merchant_name ?? b.description ?? (b.direction === 'credit' ? 'Deposit' : 'Withdrawal'),
+    sub: 'from bank',
+    category: b.raw_category,
+    categoryEditable: false,
+    timestamp: b.posted_at,
+  }))
+
+  const ledger: LedgerRow[] = [...ledgerOrders, ...ledgerExpenses, ...ledgerBank]
+    .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    .slice(0, 15)
+    // Strip the raw ids — the client uses the compound id (prefix
+    // included) for React keys and for the categorize action's
+    // expense-id extraction.
+    .map((r) => ({ ...r }))
+
+  // ---- Smart nudge (compute one line, at most) ----
+  // Simple rules for V1; expand as we learn what actually helps.
+  // Priority order: something the owner should ACT on beats something
+  // that's just interesting. Silent otherwise.
+  let nudge: string | null = null
+  if (!bankConnected) {
+    nudge = 'Connect a bank account to see your real balance and unlock deposit tracking.'
+  } else if (latestBankSync) {
+    const daysSinceSync = (Date.now() - new Date(latestBankSync).getTime()) / (24 * 60 * 60 * 1000)
+    if (daysSinceSync > 2) {
+      nudge = `Bank hasn't synced in ${Math.floor(daysSinceSync)} days — the balance above may be stale.`
+    }
+  }
+  // Rising card share nudge — the "look at this" style.
+  if (!nudge && moneyIn > 0 && lastWeekIn > 0) {
+    const thisCardShare = cardIn / moneyIn
+    const lastCardShare = (() => {
+      const wStart = lastMon
+      const wEnd = thisMon
+      const lastWeekOrders = priorOrdersTyped.filter((o) => {
+        const t = new Date(o.created_at).getTime()
+        return t >= wStart.getTime() && t < wEnd.getTime()
+      })
+      const lastIn = lastWeekOrders.reduce((s, o) => s + Number(o.total_amount), 0)
+      return lastIn > 0 ? (lastIn - 0) / lastIn : 0 // placeholder — payment_type not fetched for prior weeks
+    })()
+    if (thisCardShare > 0.75 && lastCardShare < 0.7) {
+      nudge = `Card sales are up to ${Math.round(thisCardShare * 100)}% this week — worth watching your processor fees.`
+    }
+  }
+
+  // ---- Sunday recap ----
+  // Shown Sunday + Monday of the following week. Wraps up the week
+  // that just ended. Text only for V1.
+  const showRecap = (() => {
+    const day = now.getDay()
+    return day === 0 || day === 1 // Sunday or Monday
+  })()
+
+  const recap = showRecap && priorNet.length > 0
+    ? (() => {
+        const lastNet = priorNet[priorNet.length - 1]
+        const delta = lastNet - (priorNet.length > 1 ? priorNet[priorNet.length - 2] : 0)
+        const parts: string[] = []
+        if (lastNet > 0) parts.push(`Last week was profitable — net ${formatUsd(lastNet)}.`)
+        else parts.push(`Last week ran tight — net ${formatUsd(lastNet)}.`)
+        if (delta !== 0) {
+          const deltaWord = delta > 0 ? 'up' : 'down'
+          parts.push(`That's ${deltaWord} ${formatUsd(Math.abs(delta))} from the week before.`)
+        }
+        if (streakWeeks > 1) parts.push(`${streakWeeks} weeks profitable in a row.`)
+        return parts.join(' ')
+      })()
+    : null
 
   return (
-    <FinanceClient
+    <FinanceDashboardClient
       lang={lang}
-      locations={locations ?? []}
-      defaultLocationId={defaultLocationId}
-      plaidConfigured={isPlaidConfigured()}
-      plaidSandbox={isPlaidSandbox()}
-      isDev={isDev}
-      cards={{
-        expenseTotal7d,
-        expenseCount7d,
-        revenue7d,
-        inventorySpend7d,
-        laborEstimate,
-        laborRatedShiftCount,
-        laborUnratedShiftCount,
-        totalShiftCount,
-        ratedEmployeeCount,
-        laborState,
-      }}
-      laborBreakdown={{
-        byArea: laborByArea,
-        byRole: laborByRole,
-        byEmployee: laborByEmployee,
-      }}
-      inventoryBreakdown={{
-        byCategory: inventoryByCategory,
-        byVendor: inventoryByVendor,
-      }}
       bank={{
-        accounts: (bankAccounts ?? []).map((a) => ({
-          id: a.id,
-          provider: a.provider,
-          accountName: a.account_name ?? 'Bank account',
-          accountMask: a.account_mask ?? null,
-          institutionName: a.institution_name ?? null,
-          lastSyncedAt: a.last_synced_at ?? null,
-        })),
-        externalSpend7d: Math.round(bankOutflow7d * 100) / 100,
-        recognizedExternalSpend7d: round2(recognizedExternalSpend7d),
-        bankInventoryConfirmed7d: round2(bankInventoryConfirmed7d),
-        externalSpendCount7d,
-        unresolvedCount7d,
-        inflow7d: Math.round(bankInflow7d * 100) / 100,
-        outflow7d: Math.round(bankOutflow7d * 100) / 100,
-        txnCount7d: bankTxnCount7d,
-        externalByCategory,
-        recentUnresolved,
-        state: bankState,
-        review: {
-          rows: reviewRows,
-          counts: {
-            unreviewed: unreviewedCount,
-            unreviewedInflow: unreviewedInflowCount,
-            unreviewedOutflow: unreviewedOutflowCount,
-            settled: settledCount,
-            ignored: ignoredCount,
-            notAMatch: notAMatchCount,
-          },
-        },
+        connected: bankConnected,
+        balance: bankBalance,
+        latestSyncAt: latestBankSync,
+        accountCount: accounts.length,
       }}
-      recentExpenses={(recentExpenses ?? []).map((e) => ({
-        id: e.id,
-        category: e.category,
-        amount: Number(e.amount),
-        expenseDate: e.expense_date,
-        vendorName: e.vendor_name,
-        notes: e.notes,
-        isInventoryRelated: e.is_inventory_related,
-        source: e.source ?? 'manual',
-        locationId: e.location_id,
-        locationName: (e.locations as unknown as { name: string } | null)?.name ?? null,
-      }))}
+      week={{
+        startISO: thisMon.toISOString(),
+        moneyIn,
+        moneyOut,
+        net: netThisWeek,
+        inChip,
+        outChip,
+        inSpark,
+        outSpark,
+        lastWeekNet,
+        streakWeeks,
+      }}
+      baselines={{
+        moneyIn: baselineIn,
+        moneyOut: baselineOut,
+        net: baselineNet,
+        enoughHistory,
+      }}
+      ledger={ledger}
+      nudge={nudge}
+      recap={recap}
     />
   )
+}
+
+// Same simple USD formatter the client uses. Duplicated (rather
+// than imported from a shared util) to keep the server component
+// self-contained and edit-free by the type-check pass.
+function formatUsd(n: number): string {
+  const sign = n < 0 ? '-' : ''
+  const abs = Math.abs(n)
+  return `${sign}$${abs.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
 }

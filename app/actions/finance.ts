@@ -74,3 +74,50 @@ export async function createExpense(
   revalidatePath('/web/finance')
   return null
 }
+
+// ----------------------------------------------------------------
+// updateExpenseCategory — inline categorize-on-tap for the Finance
+// dashboard ledger. Takes an expense id + a new category name;
+// verifies the caller has access to the expense's location; writes
+// the change; revalidates. Deliberately narrow so the "one tap to
+// recategorize" affordance can't be turned into a full edit surface
+// by accident — amount, vendor, date, notes are untouched.
+// ----------------------------------------------------------------
+export async function updateExpenseCategory(
+  expenseId: string,
+  category: string
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  if (!EXPENSE_CATEGORIES.includes(category as typeof EXPENSE_CATEGORIES[number])) {
+    return { error: 'Please select a valid category.' }
+  }
+
+  // Ensure the expense belongs to the caller's restaurant, and pull
+  // the location id so we can verify location access. RLS also gates
+  // this; the check here is defense-in-depth + friendly error.
+  const { data: existing } = await ctx.supabase
+    .from('expenses')
+    .select('id, location_id')
+    .eq('id', expenseId)
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!existing) return { error: 'Expense not found.' }
+
+  const locAuthErr = await requireLocResult(ctx.restaurantId, existing.location_id as string)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase
+    .from('expenses')
+    .update({ category })
+    .eq('id', expenseId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('expense', error) }
+
+  await logAudit(ctx, existing.location_id as string, 'update_expense_category', 'expenses', expenseId, { category })
+  revalidatePath('/finance')
+  revalidatePath('/web/finance')
+  return null
+}

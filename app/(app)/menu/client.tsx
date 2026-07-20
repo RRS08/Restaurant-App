@@ -719,13 +719,13 @@ function AwaitingSectionBand({
   }
 
   return (
-    <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
-      <div className="mb-3 flex items-center gap-3">
-        <h2 className="text-sm font-semibold tracking-tight text-amber-900">
+    <section className="rounded-[14px] border border-dashed border-[#E7E6E2] bg-[#F4F1EA] p-5">
+      <div className="mb-4 flex items-center gap-4">
+        <h2 className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-[#6B6B70]">
           {t('Awaiting a section', 'Sin sección asignada')}
         </h2>
-        <span className="flex-1 h-px bg-amber-200/60" />
-        <p className="text-[11px] text-amber-700 font-mono tabular-nums">
+        <span className="flex-1 h-px bg-[#E2E0DA]" />
+        <p className="font-mono text-[11px] tabular-nums text-[#A1A1A6]">
           {items.length} {items.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
         </p>
       </div>
@@ -734,31 +734,31 @@ function AwaitingSectionBand({
           long awaiting list. Two states:
             • idle       → helper text + "Select all" affordance
             • selection  → count + "Move all to [section]" + Clear
-          The whole bar sits inside the amber band so it reads as
-          part of this workflow, not global chrome. */}
-      <div className="sticky top-2 z-10 mb-3 rounded-lg border border-amber-200 bg-white/95 backdrop-blur px-3 py-2 shadow-sm">
+          Styled to match the marketing/finance aesthetic: warm
+          neutrals, ink-black primary CTA, mono eyebrows. */}
+      <div className="sticky top-2 z-10 mb-4 rounded-[10px] border border-[#E7E6E2] bg-white px-4 py-2.5 shadow-[0_1px_2px_rgba(24,24,27,0.04)]">
         {hasSelection ? (
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-[12px] font-semibold text-amber-900 tabular-nums">
-              {selectionCount} {selectionCount === 1 ? t('selected', 'seleccionado') : t('selected', 'seleccionados')}
+          <div className="flex items-center gap-3.5 flex-wrap">
+            <span className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-[#18181B] tabular-nums">
+              {selectionCount} {t('selected', 'seleccionados')}
             </span>
-            <span className="h-3.5 w-px bg-amber-200" aria-hidden="true" />
+            <span className="h-3.5 w-px bg-[#E7E6E2]" aria-hidden="true" />
             <div className="relative">
               <button
                 type="button"
                 onClick={() => setMovePickerOpen((v) => !v)}
                 disabled={categories.length === 0}
-                className="text-[12px] font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 disabled:cursor-not-allowed transition-colors rounded-md px-3 py-1.5 inline-flex items-center gap-1.5"
+                className="text-[12px] font-semibold text-[#FAF9F6] bg-[#18181B] hover:bg-black disabled:bg-[#A1A1A6] disabled:cursor-not-allowed transition-colors rounded-[9px] px-3.5 py-1.5 inline-flex items-center gap-1.5"
               >
-                {t('Move all to', 'Mover todo a')} <span aria-hidden="true">▾</span>
+                {t('Move all to', 'Mover todo a')} <span aria-hidden="true" className="opacity-70">▾</span>
               </button>
               {movePickerOpen && (
                 <Popover
                   onClose={() => setMovePickerOpen(false)}
-                  className="left-0 top-full mt-1.5 w-60"
+                  className="left-0 top-full mt-2 w-60"
                 >
                   <div className="p-1">
-                    <p className="text-[10px] uppercase tracking-wider text-gray-400 px-2 pt-1.5 pb-1">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#A1A1A6] px-2.5 pt-2 pb-1.5">
                       {t('Move to section', 'Mover a sección')}
                     </p>
                     <ul>
@@ -770,7 +770,7 @@ function AwaitingSectionBand({
                               onBulkAssign(cat.id)
                               setMovePickerOpen(false)
                             }}
-                            className="w-full text-left px-3 py-2 text-[12.5px] text-gray-700 hover:bg-blue-50 hover:text-blue-800 rounded-md transition-colors"
+                            className="w-full text-left px-2.5 py-2 text-[13px] text-[#52525B] hover:bg-[#F4F1EA] hover:text-[#18181B] rounded-md transition-colors"
                           >
                             {cat.name}
                           </button>
@@ -782,7 +782,7 @@ function AwaitingSectionBand({
               )}
             </div>
             {categories.length === 0 && (
-              <span className="text-[11px] text-gray-500">
+              <span className="text-[11.5px] text-[#6B6B70]">
                 {t('Add a section first.', 'Agrega una sección primero.')}
               </span>
             )}
@@ -790,14 +790,14 @@ function AwaitingSectionBand({
             <button
               type="button"
               onClick={onClearSelection}
-              className="text-[11px] font-medium text-gray-500 hover:text-gray-800 transition-colors"
+              className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#A1A1A6] hover:text-[#18181B] transition-colors"
             >
               {t('Clear', 'Limpiar')}
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-3 flex-wrap">
-            <p className="text-[11.5px] text-amber-800/90 leading-relaxed flex-1 min-w-0">
+          <div className="flex items-center gap-4 flex-wrap">
+            <p className="text-[12.5px] text-[#6B6B70] leading-relaxed flex-1 min-w-0">
               {t(
                 'Tap items to select them, then move them all together.',
                 'Toca los artículos para seleccionarlos, luego muévelos todos juntos.'
@@ -807,7 +807,7 @@ function AwaitingSectionBand({
               <button
                 type="button"
                 onClick={toggleAll}
-                className="text-[11px] font-semibold text-amber-800 hover:text-amber-900 transition-colors"
+                className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#6B6B70] hover:text-[#18181B] transition-colors"
               >
                 {t('Select all', 'Seleccionar todo')}
               </button>
@@ -857,9 +857,13 @@ function AwaitingItemCard({
   onDragEnd: () => void
   t: T
 }) {
+  // Selected: ink-black border + subtle inner tint. Unselected:
+  // warm hairline border on white. Matches the marketing/finance
+  // aesthetic — no primary colors, everything sits in the warm-
+  // neutral + ink-black system.
   const ringClass = selected
-    ? 'border-amber-500 bg-amber-50 shadow-[0_0_0_2px_rgba(217,119,6,0.18)]'
-    : 'border-amber-200 bg-white hover:border-amber-300'
+    ? 'border-[#18181B] bg-white shadow-[0_0_0_1px_#18181B,0_1px_2px_rgba(24,24,27,0.05)]'
+    : 'border-[#E7E6E2] bg-white hover:border-[#C9C7C0] shadow-[0_1px_2px_rgba(24,24,27,0.03)]'
 
   return (
     <div
@@ -881,29 +885,31 @@ function AwaitingItemCard({
           onToggle()
         }
       }}
-      className={`relative rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md cursor-pointer select-none ${ringClass}`}
+      className={`relative rounded-[12px] border px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md cursor-pointer select-none ${ringClass}`}
     >
-      {/* Selection checkmark — top-left corner, only when selected. */}
+      {/* Selection checkmark — top-left corner, only when selected.
+          Ink-black disc with cream ✓, mirroring the "One screen" pill
+          on the marketing page. */}
       {selected && (
         <span
           aria-hidden="true"
-          className="absolute -top-1.5 -left-1.5 h-5 w-5 rounded-full bg-amber-600 text-white flex items-center justify-center text-[11px] font-bold shadow-sm"
+          className="absolute -top-1.5 -left-1.5 h-5 w-5 rounded-full bg-[#18181B] text-[#FAF9F6] flex items-center justify-center text-[11px] font-bold shadow-sm"
         >
           ✓
         </span>
       )}
 
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-sm font-semibold tracking-tight truncate text-gray-900 flex-1 min-w-0">
+        <span className="text-[14px] font-semibold tracking-tight truncate text-[#18181B] flex-1 min-w-0">
           {item.name}
         </span>
-        <span className="text-sm font-mono tabular-nums text-gray-500 flex-shrink-0">
+        <span className="font-mono text-[13px] tabular-nums text-[#52525B] flex-shrink-0">
           ${item.currentPrice.toFixed(2)}
         </span>
       </div>
 
-      <div className="mt-2 flex items-center justify-between">
-        <span className="text-[10.5px] uppercase tracking-wider text-amber-700/80 font-semibold">
+      <div className="mt-2.5 flex items-center justify-between">
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#A1A1A6]">
           {selected ? t('Selected', 'Seleccionado') : t('Tap to select', 'Toca para seleccionar')}
         </span>
         <button
@@ -912,7 +918,7 @@ function AwaitingItemCard({
             e.stopPropagation()
             onOpen()
           }}
-          className="text-[11px] font-medium text-gray-500 hover:text-blue-700 transition-colors"
+          className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#A1A1A6] hover:text-[#18181B] transition-colors"
         >
           {t('Open', 'Abrir')}
         </button>

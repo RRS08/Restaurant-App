@@ -30,6 +30,8 @@ import CloverCard from '../settings/clover-card'
 import BankCard from '../settings/bank-card'
 import FinanceSandboxCard from './finance-sandbox-card'
 import FinanceBankResetCard from './finance-bank-reset-card'
+import MenuImportPanel from '../menu/import-panel'
+import { getLang } from '@/lib/i18n-server'
 import SeedSwitcherCard, { type ConceptRow } from './seed-switcher-card'
 import { SEED_CONCEPTS, PLANNED_CONCEPTS } from '@/lib/seed-concepts'
 import InviteCodesCard from './invite-codes-card'
@@ -84,6 +86,22 @@ export default async function DevToolboxPage() {
   ])
   const locations = locs ?? []
   const posConnections = conns ?? []
+
+  // Reshape POS connections for MenuImportPanel — same camelCase
+  // mapping the menu page used to use. Kept co-located with the
+  // reshape rather than exported so the panel's prop shape stays a
+  // hidden implementation detail of its callers.
+  const externalConnectionsForPanel = (posConnections ?? []).map((c) => ({
+    id: c.id as string,
+    locationId: c.location_id as string,
+    provider: c.provider as string,
+    active: c.active as boolean,
+    externalStoreId: (c.external_store_id as string | null) ?? null,
+    lastMenuSyncAt: (c.last_menu_sync_at as string | null) ?? null,
+    lastError: (c.last_error as string | null) ?? null,
+  }))
+
+  const lang = await getLang()
 
   // ---- Seed switcher data ----
   // Read the active seed + per-concept install counts so the card
@@ -226,6 +244,28 @@ export default async function DevToolboxPage() {
           body="Connect, sync, test the connection, reset imported data, create a test order, or diagnose orders fetch."
         >
           <CloverCard restaurantId={restaurantId} isDev={true} />
+        </DevSection>
+      )}
+
+      {/* 2.5 EXTERNAL POS MENU IMPORT PANEL -----------------------
+          The customer-facing "connect / sync / disconnect" panel
+          used to live at the top of /menu. Hidden from there while
+          we finalize the pilot pitch — parked here so dev testing
+          of the connect + sync flow still has a UI to reach. Will
+          return to /menu when the integration is ready to sell as a
+          first-class feature. */}
+      {isOwner && (
+        <DevSection
+          eyebrow="External POS · Menu Import Panel"
+          title="Customer-facing connect / sync / disconnect UI"
+          body="The panel that used to greet external-POS customers on their Menu page. Still functional, just parked in Dev Toolbox for now."
+        >
+          <MenuImportPanel
+            locations={locations}
+            connections={externalConnectionsForPanel}
+            isDev={true}
+            lang={lang}
+          />
         </DevSection>
       )}
 

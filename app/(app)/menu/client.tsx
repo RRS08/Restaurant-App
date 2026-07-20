@@ -57,7 +57,6 @@ import {
   type ProjectionState,
 } from '@/lib/menu/availability'
 import { makeT, type Lang } from '@/lib/i18n'
-import MenuImportPanel from './import-panel'
 
 type T = (en: string, es?: string) => string
 
@@ -290,15 +289,9 @@ export default function MenuClient({
         <SourceChip operatingMode={operatingMode} t={t} />
       </div>
 
-      {/* External-branch import panel (unchanged behavior). */}
-      {isExternal && (
-        <MenuImportPanel
-          locations={locations}
-          connections={externalConnections}
-          isDev={isDev}
-          lang={lang}
-        />
-      )}
+      {/* External-branch import panel — moved to Dev Toolbox for
+          now. This surface will come back once we're ready to sell
+          the external-POS integration as a first-class feature. */}
 
       {/* ================================================================ */}
       {/* 2. SECTIONS                                                      */}
@@ -406,9 +399,11 @@ export default function MenuClient({
       {liveItem && (
         <ItemDrawer
           item={liveItem}
-          sectionName={categories.find((c) => c.id === liveItem.categoryId)?.name ?? null}
+          sectionName={categories.find((c) => c.id === effectiveCategoryId(liveItem))?.name ?? null}
+          categories={categories}
           inventoryItems={inventoryItems}
           inventoryActive={inventoryActive}
+          onAssign={assignTo}
           onClose={() => setSelectedItemId(null)}
           t={t}
         />
@@ -1245,15 +1240,24 @@ function AddItemForm({ categoryId, onClose, t }: { categoryId: string; onClose: 
 function ItemDrawer({
   item,
   sectionName,
+  categories,
   inventoryItems,
   inventoryActive,
+  onAssign,
   onClose,
   t,
 }: {
   item: MenuItem
   sectionName: string | null
+  /** Every category the restaurant has, so the "pick a section"
+   *  surface can list them when the current item is uncategorized. */
+  categories: Category[]
   inventoryItems: InventoryItem[]
   inventoryActive: boolean
+  /** Same optimistic-move handler the page uses for drag-drop and
+   *  the awaiting-band popover. Wired here so the drawer can share
+   *  the same assign path — no parallel logic. */
+  onAssign: (itemId: string, categoryId: string | null) => void
   onClose: () => void
   t: T
 }) {
@@ -1566,17 +1570,21 @@ function ItemDrawer({
         )}
 
         {/* BODY
-            Three stacked cards with subtle hue separation so each
-            band reads as its own self-contained surface (modeled on
-            the Inventory drawer's section grouping):
-              1. Recipe — cool neutral tint, primary workspace
-              2. POS override — subtle blue tint, secondary control
-              3. Item controls — neutral tint, compact destructive
-            The pinned footer that previously held Item controls was
-            removed; that band is now a tight in-body card so the
-            drawer reads as a stack of related cards rather than a
-            heavy bottom-pinned panel. */}
+            Uncategorized items get an assignment-first gate — no
+            recipe, no availability, no controls until the item lives
+            in a section. Once assigned, the full stack renders. */}
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+
+          {item.categoryId === null && (
+            <AssignSectionBody
+              itemId={item.id}
+              categories={categories}
+              onAssign={onAssign}
+              t={t}
+            />
+          )}
+
+          {item.categoryId !== null && (<>
 
           {/* Recipe card — self-contained with the eyebrow inside
               the card chrome (not above it). Subtle cool/neutral
@@ -1890,10 +1898,87 @@ function ItemDrawer({
               )}
             </div>
           </section>
+
+          </>)}
         </div>
 
       </aside>
     </>
+  )
+}
+
+// ================================================================
+// AssignSectionBody — the "pick a section first" surface that
+// replaces the recipe / availability / controls stack in the drawer
+// when the current item has no category assigned yet.
+//
+// Rationale: an imported item with no section can't have a POS
+// override (there's no POS button for it), can't have a stock
+// projection (unclear where it lives operationally), and its recipe
+// is technically editable but pointless before the item has a
+// place in the menu structure. So the drawer collapses everything
+// down to one question: which section does this belong to?
+//
+// After the manager taps a category, the assign action fires
+// through the same optimistic path the awaiting band uses. On
+// success the item's categoryId changes, this component's parent
+// re-renders, and the full drawer stack (recipe / availability /
+// controls) shows in its place — no navigation required.
+//
+// The card matches the amber tone of the awaiting band on the
+// main page so the "this item needs your attention" language stays
+// consistent across surfaces.
+// ================================================================
+function AssignSectionBody({
+  itemId,
+  categories,
+  onAssign,
+  t,
+}: {
+  itemId: string
+  categories: Category[]
+  onAssign: (itemId: string, categoryId: string | null) => void
+  t: T
+}) {
+  return (
+    <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-amber-800">
+        {t('Assign a section', 'Asignar una sección')}
+      </p>
+      <p className="mt-1.5 text-[13px] leading-relaxed text-amber-900">
+        {t(
+          'This item has no section yet. Pick one to unlock the recipe, availability, and other controls.',
+          'Este artículo aún no tiene sección. Elige una para desbloquear la receta, la disponibilidad y demás controles.'
+        )}
+      </p>
+
+      {categories.length === 0 ? (
+        <p className="mt-4 text-[12px] text-gray-600 leading-relaxed">
+          {t(
+            'No sections exist yet. Add one from the menu page first, then come back here.',
+            'Aún no hay secciones. Agrega una desde la página del menú primero, y regresa aquí.'
+          )}
+        </p>
+      ) : (
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {categories.map((cat) => (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => onAssign(itemId, cat.id)}
+              className="text-left px-3 py-2.5 rounded-lg border border-amber-200 bg-white hover:border-amber-400 hover:bg-amber-50 transition-colors group"
+            >
+              <span className="text-[13px] font-semibold text-gray-900 group-hover:text-amber-900 transition-colors">
+                {cat.name}
+              </span>
+              <span className="ml-2 text-[11px] text-amber-700 opacity-0 group-hover:opacity-100 transition-opacity">
+                {t('Move here', 'Mover aquí')} →
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </section>
   )
 }
 

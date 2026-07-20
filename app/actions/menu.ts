@@ -331,6 +331,72 @@ export async function updateMenuItemPrice(
   return null
 }
 
+// ----------------------------------------------------------------
+// assignMenuItemCategory — move a menu item into a category (or
+// clear its assignment). Powers both the click-to-assign popover on
+// the "Awaiting a section" band and the drag-and-drop reorganize
+// pattern on section cards. Owner-only, same as every other
+// menu-editing action.
+//
+// Args intentionally take the raw ids (not a FormData) so the client
+// can call it optimistically from a startTransition without building
+// a form-shaped payload for a one-field mutation.
+//   - categoryId: string  → assign to that section
+//   - categoryId: null    → clear (send item back to Awaiting)
+//
+// The target category is verified to belong to the caller's
+// restaurant before we write. RLS also gates this; the explicit
+// check is defense-in-depth + a friendlier error than a silent
+// no-op update.
+// ----------------------------------------------------------------
+export async function assignMenuItemCategory(
+  menuItemId: string,
+  categoryId: string | null,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can reorganize the menu.' }
+  }
+
+  if (!menuItemId) return { error: 'No item specified.' }
+
+  // Confirm the target category belongs to the caller's restaurant.
+  // Skip when clearing (categoryId === null) — that's always safe.
+  if (categoryId) {
+    const { data: cat } = await ctx.supabase
+      .from('menu_categories')
+      .select('id')
+      .eq('id', categoryId)
+      .eq('restaurant_id', ctx.restaurantId)
+      .maybeSingle()
+    if (!cat) return { error: 'That section does not exist.' }
+  }
+
+  const { error } = await ctx.supabase
+    .from('menu_items')
+    .update({ category_id: categoryId })
+    .eq('id', menuItemId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('menu item', error) }
+
+  await logAudit(
+    ctx,
+    null,
+    'assign_menu_item_category',
+    'menu_items',
+    menuItemId,
+    { categoryId },
+  )
+
+  revalidatePath('/menu')
+  revalidatePath('/web/menu')
+  revalidatePath('/pos')
+  return null
+}
+
 export async function setMenuItemActive(
   prevState: { error: string } | null,
   formData: FormData,

@@ -42,6 +42,7 @@ import {
   deleteCategory,
   setMenuItemAvailabilityOverride,
   updateMenuItemPrice,
+  assignMenuItemCategory,
 } from '@/app/actions/menu'
 import {
   addRecipeComponent,
@@ -175,12 +176,63 @@ export default function MenuClient({
   const [addItemTo, setAddItemTo] = useState<string | null>(null)
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
 
+  // Filter — 'all' shows every section stacked; a category id
+  // shows just that section; 'awaiting' shows only the unassigned
+  // items filling the page for quick bulk categorization.
+  const [filter, setFilter] = useState<'all' | 'awaiting' | string>('all')
+
+  // Drag state: which item is being dragged (so we can dim it) and
+  // which drop target is being hovered (so we can highlight it).
+  const [draggingItemId, setDraggingItemId] = useState<string | null>(null)
+  const [hoverTargetId, setHoverTargetId] = useState<string | null>(null)
+
+  // Pending optimistic move — used to hide the item from its source
+  // bucket immediately on drop without waiting for revalidation.
+  const [pendingMoves, setPendingMoves] = useState<Record<string, string | null>>({})
+  const [, startAssignTransition] = useTransition()
+
+  const assignTo = (itemId: string, categoryId: string | null) => {
+    setPendingMoves((prev) => ({ ...prev, [itemId]: categoryId }))
+    startAssignTransition(async () => {
+      const res = await assignMenuItemCategory(itemId, categoryId)
+      if (res?.error) {
+        // Rollback — remove the pending record so the item reappears
+        // in its original bucket.
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          delete next[itemId]
+          return next
+        })
+      }
+      // On success, revalidation will bring in fresh data. Clear the
+      // pending record on the next tick so we don't fight the server.
+      setTimeout(() => {
+        setPendingMoves((prev) => {
+          if (prev[itemId] === undefined) return prev
+          const next = { ...prev }
+          delete next[itemId]
+          return next
+        })
+      }, 400)
+    })
+  }
+
+  // Apply pending optimistic moves to each item's effective category
+  // before bucketing. If the server has already returned the updated
+  // row, prev[itemId] === item.categoryId and the effective category
+  // is unchanged; otherwise the pending record wins.
+  const effectiveCategoryId = (item: MenuItem): string | null =>
+    Object.prototype.hasOwnProperty.call(pendingMoves, item.id)
+      ? pendingMoves[item.id]
+      : item.categoryId
+
   const itemsByCategory = new Map<string, MenuItem[]>()
   for (const item of items) {
-    const key = item.categoryId ?? '__none__'
+    const key = effectiveCategoryId(item) ?? '__none__'
     if (!itemsByCategory.has(key)) itemsByCategory.set(key, [])
     itemsByCategory.get(key)!.push(item)
   }
+  const awaitingItems = itemsByCategory.get('__none__') ?? []
 
   const liveItem = selectedItemId ? items.find((i) => i.id === selectedItemId) ?? null : null
 
@@ -257,20 +309,63 @@ export default function MenuClient({
       {/* the section list to anchor "+ Add section" to the actual         */}
       {/* menu-building surface.                                            */}
       {/* ================================================================ */}
-      {categories.length === 0 ? (
+      {categories.length === 0 && awaitingItems.length === 0 ? (
         <EmptyMenuState t={t} />
       ) : (
         <>
-          <div className="mb-4 flex items-center justify-end">
-            <AddSectionButton popoverClassName="right-0 top-full mt-1.5 w-72" t={t} />
-          </div>
+          {/* Filter chip row. Every chip is both a filter (click →
+              show that bucket) and a drop target (drag an item onto
+              it → assign it to that category). "Awaiting" chip only
+              shows when there are unassigned items so it doesn't
+              nag on a clean menu. */}
+          <FilterChipsBar
+            categories={categories}
+            itemsByCategory={itemsByCategory}
+            awaitingCount={awaitingItems.length}
+            totalCount={items.length}
+            filter={filter}
+            onFilter={setFilter}
+            onDropItem={assignTo}
+            draggingItemId={draggingItemId}
+            hoverTargetId={hoverTargetId}
+            setHoverTargetId={setHoverTargetId}
+            t={t}
+          />
 
-          <div className="space-y-10">
-            {categories.map((cat) => {
+          {/* Main content — the current filter's items. */}
+          {filter === 'all' ? (
+            <div className="space-y-10">
+              {categories.map((cat) => {
+                const sectionItems = itemsByCategory.get(cat.id) ?? []
+                return (
+                  <SectionBlock
+                    key={cat.id}
+                    category={cat}
+                    items={sectionItems}
+                    selectedItemId={selectedItemId}
+                    onOpenItem={setSelectedItemId}
+                    addItemOpen={addItemTo === cat.id}
+                    onToggleAddItem={() => setAddItemTo((tt) => (tt === cat.id ? null : cat.id))}
+                    onCloseAddItem={() => setAddItemTo(null)}
+                    onDragStartItem={setDraggingItemId}
+                    onDragEndItem={() => setDraggingItemId(null)}
+                    t={t}
+                  />
+                )
+              })}
+            </div>
+          ) : filter === 'awaiting' ? (
+            // Awaiting-only view — the "sit at the bottom" bucket
+            // rendered as the main surface so the manager can focus
+            // on assigning without other sections in the way.
+            <div className="space-y-6" />
+          ) : (
+            (() => {
+              const cat = categories.find((c) => c.id === filter)
+              if (!cat) return null
               const sectionItems = itemsByCategory.get(cat.id) ?? []
               return (
                 <SectionBlock
-                  key={cat.id}
                   category={cat}
                   items={sectionItems}
                   selectedItemId={selectedItemId}
@@ -278,11 +373,32 @@ export default function MenuClient({
                   addItemOpen={addItemTo === cat.id}
                   onToggleAddItem={() => setAddItemTo((tt) => (tt === cat.id ? null : cat.id))}
                   onCloseAddItem={() => setAddItemTo(null)}
+                  onDragStartItem={setDraggingItemId}
+                  onDragEndItem={() => setDraggingItemId(null)}
                   t={t}
                 />
               )
-            })}
-          </div>
+            })()
+          )}
+
+          {/* Awaiting a section — always pinned to the bottom
+              (regardless of the current filter) so the manager can
+              drag from here up to any category chip at the top. On
+              the 'awaiting' filter it fills the page. */}
+          {awaitingItems.length > 0 && (
+            <div className="mt-10">
+              <AwaitingSectionBand
+                items={awaitingItems}
+                categories={categories}
+                selectedItemId={selectedItemId}
+                onOpenItem={setSelectedItemId}
+                onAssign={assignTo}
+                onDragStartItem={setDraggingItemId}
+                onDragEndItem={() => setDraggingItemId(null)}
+                t={t}
+              />
+            </div>
+          )}
         </>
       )}
 
@@ -337,6 +453,293 @@ function EmptyMenuState({ t }: { t: T }) {
 }
 
 // ================================================================
+// FilterChipsBar — the row of category filter chips at the top.
+//
+// Two jobs from one bar:
+//   1. FILTER — click a chip to narrow the main content area to
+//      that category (or "All", or "Awaiting").
+//   2. DROP TARGET — while an item is being dragged, each chip
+//      accepts drops. Dropping on a category chip assigns the
+//      item to that category. Dropping on "Awaiting" clears the
+//      assignment.
+//
+// Chip counts are computed from the live itemsByCategory map so
+// they reflect optimistic moves the instant a drop lands.
+// ================================================================
+function FilterChipsBar({
+  categories,
+  itemsByCategory,
+  awaitingCount,
+  totalCount,
+  filter,
+  onFilter,
+  onDropItem,
+  draggingItemId,
+  hoverTargetId,
+  setHoverTargetId,
+  t,
+}: {
+  categories: Category[]
+  itemsByCategory: Map<string, MenuItem[]>
+  awaitingCount: number
+  totalCount: number
+  filter: 'all' | 'awaiting' | string
+  onFilter: (f: 'all' | 'awaiting' | string) => void
+  onDropItem: (itemId: string, categoryId: string | null) => void
+  draggingItemId: string | null
+  hoverTargetId: string | null
+  setHoverTargetId: (id: string | null) => void
+  t: T
+}) {
+  // Native drag-drop handlers, applied to every chip identically.
+  // The chip's key (categoryId or 'awaiting') drives both the
+  // visual highlight and the assignment on drop.
+  const chipDragProps = (targetId: string, categoryIdOnDrop: string | null) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!draggingItemId) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      if (hoverTargetId !== targetId) setHoverTargetId(targetId)
+    },
+    onDragLeave: () => {
+      if (hoverTargetId === targetId) setHoverTargetId(null)
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault()
+      const itemId = e.dataTransfer.getData('text/plain')
+      setHoverTargetId(null)
+      if (itemId) onDropItem(itemId, categoryIdOnDrop)
+    },
+  })
+
+  const chipClass = (id: string, active: boolean, hover: boolean, tone: 'default' | 'amber' = 'default') => {
+    if (hover) {
+      return tone === 'amber'
+        ? 'border-amber-500 bg-amber-100 text-amber-900 shadow-[0_0_0_3px_rgba(245,158,11,0.18)]'
+        : 'border-blue-500 bg-blue-50 text-blue-800 shadow-[0_0_0_3px_rgba(59,130,246,0.18)]'
+    }
+    if (active) {
+      return tone === 'amber'
+        ? 'border-amber-400 bg-amber-50 text-amber-800'
+        : 'border-gray-900 bg-gray-900 text-white'
+    }
+    return tone === 'amber'
+      ? 'border-amber-200 bg-white text-amber-700 hover:bg-amber-50'
+      : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+  }
+
+  return (
+    <div className="mb-6 flex items-center gap-2 flex-wrap">
+      {/* "All" chip — special: not a drop target since dropping on
+          "All" doesn't identify a target category. Filter-only. */}
+      <button
+        type="button"
+        onClick={() => onFilter('all')}
+        className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border transition-all ${chipClass('all', filter === 'all', false)}`}
+      >
+        {t('All', 'Todo')} · {totalCount}
+      </button>
+
+      {categories.map((cat) => {
+        const count = (itemsByCategory.get(cat.id) ?? []).length
+        const active = filter === cat.id
+        const hover = hoverTargetId === cat.id
+        return (
+          <button
+            key={cat.id}
+            type="button"
+            onClick={() => onFilter(cat.id)}
+            {...chipDragProps(cat.id, cat.id)}
+            className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border transition-all ${chipClass(cat.id, active, hover)}`}
+          >
+            {cat.name} · {count}
+          </button>
+        )
+      })}
+
+      {awaitingCount > 0 && (
+        <button
+          type="button"
+          onClick={() => onFilter('awaiting')}
+          {...chipDragProps('awaiting', null)}
+          className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border transition-all ${chipClass('awaiting', filter === 'awaiting', hoverTargetId === 'awaiting', 'amber')}`}
+          title={t('Items without a section — drag onto any category to assign', 'Artículos sin sección — arrastra a cualquier categoría para asignar')}
+        >
+          {t('Awaiting', 'Sin sección')} · {awaitingCount}
+        </button>
+      )}
+
+      <div className="flex-1" />
+
+      <AddSectionButton popoverClassName="right-0 top-full mt-1.5 w-72" t={t} />
+    </div>
+  )
+}
+
+// ================================================================
+// AwaitingSectionBand — the pinned-to-the-bottom bucket for items
+// that don't yet belong to a section (imported without a category,
+// mostly). Each row shows the item + a "Move to" popover for
+// keyboard/click users, AND is draggable for the drag-drop path.
+//
+// Rendered as an amber-tinted band so it reads as "needs your
+// attention" without alarming. Empty state simply doesn't render
+// (the parent guards on awaitingItems.length > 0).
+// ================================================================
+function AwaitingSectionBand({
+  items,
+  categories,
+  selectedItemId,
+  onOpenItem,
+  onAssign,
+  onDragStartItem,
+  onDragEndItem,
+  t,
+}: {
+  items: MenuItem[]
+  categories: Category[]
+  selectedItemId: string | null
+  onOpenItem: (id: string) => void
+  onAssign: (itemId: string, categoryId: string | null) => void
+  onDragStartItem: (id: string) => void
+  onDragEndItem: () => void
+  t: T
+}) {
+  return (
+    <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
+      <div className="mb-3 flex items-center gap-3">
+        <h2 className="text-sm font-semibold tracking-tight text-amber-900">
+          {t('Awaiting a section', 'Sin sección asignada')}
+        </h2>
+        <span className="flex-1 h-px bg-amber-200/60" />
+        <p className="text-[11px] text-amber-700 font-mono tabular-nums">
+          {items.length} {items.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+        </p>
+      </div>
+
+      <p className="text-[11px] text-amber-800/80 mb-3 leading-relaxed">
+        {t(
+          'Drag any card onto a category chip above, or click "Move to" to pick a section.',
+          'Arrastra cualquier tarjeta a un chip de categoría arriba, o haz clic en "Mover a" para elegir una sección.'
+        )}
+      </p>
+
+      <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map((item) => (
+          <AwaitingItemCard
+            key={item.id}
+            item={item}
+            selected={selectedItemId === item.id}
+            categories={categories}
+            onClick={() => onOpenItem(item.id)}
+            onAssign={(catId) => onAssign(item.id, catId)}
+            onDragStart={() => onDragStartItem(item.id)}
+            onDragEnd={onDragEndItem}
+            t={t}
+          />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// AwaitingItemCard — like ItemCard but stripped down (no
+// availability projection, no source badge) with an explicit
+// "Move to" popover as the primary affordance.
+function AwaitingItemCard({
+  item,
+  selected,
+  categories,
+  onClick,
+  onAssign,
+  onDragStart,
+  onDragEnd,
+  t,
+}: {
+  item: MenuItem
+  selected: boolean
+  categories: Category[]
+  onClick: () => void
+  onAssign: (categoryId: string) => void
+  onDragStart: () => void
+  onDragEnd: () => void
+  t: T
+}) {
+  const [popoverOpen, setPopoverOpen] = useState(false)
+  const ringClass = selected
+    ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.12)]'
+    : 'border-amber-200 hover:border-amber-300'
+
+  return (
+    <div
+      id={`menu-item-${item.id}`}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', item.id)
+        onDragStart()
+      }}
+      onDragEnd={onDragEnd}
+      className={`relative rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md cursor-grab active:cursor-grabbing ${ringClass}`}
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <button
+          type="button"
+          onClick={onClick}
+          className="text-sm font-semibold tracking-tight truncate text-gray-900 hover:text-blue-700 transition-colors text-left flex-1 min-w-0"
+        >
+          {item.name}
+        </button>
+        <span className="text-sm font-mono tabular-nums text-gray-500 flex-shrink-0">
+          ${item.currentPrice.toFixed(2)}
+        </span>
+      </div>
+
+      <div className="mt-2 relative">
+        <button
+          type="button"
+          onClick={() => setPopoverOpen((v) => !v)}
+          className="text-[11px] font-semibold text-amber-800 hover:text-amber-900 transition-colors inline-flex items-center gap-1"
+        >
+          {t('Move to', 'Mover a')} <span aria-hidden="true">→</span>
+        </button>
+        {popoverOpen && (
+          <Popover
+            onClose={() => setPopoverOpen(false)}
+            className="left-0 top-full mt-1.5 w-56"
+          >
+            <div className="p-1">
+              {categories.length === 0 ? (
+                <p className="text-[11px] text-gray-500 px-2 py-3">
+                  {t('Add a section first.', 'Agrega una sección primero.')}
+                </p>
+              ) : (
+                <ul>
+                  {categories.map((cat) => (
+                    <li key={cat.id}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onAssign(cat.id)
+                          setPopoverOpen(false)
+                        }}
+                        className="w-full text-left px-3 py-2 text-[12.5px] text-gray-700 hover:bg-blue-50 hover:text-blue-800 rounded-md transition-colors"
+                      >
+                        {cat.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </Popover>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
 // AddSectionButton — the "+ Add section" trigger and its popover,
 // kept together in one component.
 //
@@ -377,6 +780,8 @@ function SectionBlock({
   addItemOpen,
   onToggleAddItem,
   onCloseAddItem,
+  onDragStartItem,
+  onDragEndItem,
   t,
 }: {
   category: Category
@@ -386,6 +791,11 @@ function SectionBlock({
   addItemOpen: boolean
   onToggleAddItem: () => void
   onCloseAddItem: () => void
+  /** Fires when the manager begins dragging an item card. Parent
+   *  uses it to track which item is in flight so drop targets can
+   *  highlight and the card can dim. */
+  onDragStartItem?: (id: string) => void
+  onDragEndItem?: () => void
   t: T
 }) {
   // deleteCategory is a direct (formData) -> void server action — not
@@ -469,6 +879,8 @@ function SectionBlock({
                 item={item}
                 selected={selectedItemId === item.id}
                 onClick={() => onOpenItem(item.id)}
+                onDragStart={() => onDragStartItem?.(item.id)}
+                onDragEnd={() => onDragEndItem?.()}
                 t={t}
               />
             ))}
@@ -504,11 +916,18 @@ function ItemCard({
   item,
   selected,
   onClick,
+  onDragStart,
+  onDragEnd,
   t,
 }: {
   item: MenuItem
   selected: boolean
   onClick: () => void
+  /** Native HTML5 drag hooks — parent tracks the currently-dragging
+   *  item id so drop targets highlight and the source card dims.
+   *  When omitted (older call sites), the card isn't draggable. */
+  onDragStart?: () => void
+  onDragEnd?: () => void
   t: T
 }) {
   const isInactive = !item.active
@@ -609,7 +1028,18 @@ function ItemCard({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''}`}
+      // Native HTML5 drag: only enabled when the parent passed
+      // onDragStart, so older mount points (drawer, POS side) stay
+      // click-only. dataTransfer carries the item id so a drop
+      // target can read it out cheaply.
+      draggable={!!onDragStart}
+      onDragStart={onDragStart ? (e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', item.id)
+        onDragStart()
+      } : undefined}
+      onDragEnd={onDragEnd}
+      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''} ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''}`}
     >
       {/* Identity row — name + price baseline-aligned so the eye reads
           them as one operational pair. */}

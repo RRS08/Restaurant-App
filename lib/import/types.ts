@@ -35,8 +35,9 @@ export interface NormalizedMenuItem {
   price: number
   /** Foreign key to NormalizedCategory.externalId, or null when the
    *  source doesn't know the category. Items with a null or unknown
-   *  category get attached to the "Imported · Uncategorized" bucket
-   *  by the shared ingest pipeline. */
+   *  category get inserted with `category_id = null` — they surface
+   *  in the "Awaiting a section" band on /menu so the manager can
+   *  drag them into the right chip or assign one via the drawer. */
   categoryExternalId: string | null
   active: boolean
 }

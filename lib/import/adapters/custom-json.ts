@@ -24,8 +24,9 @@
 //
 //   • Top level MUST be an object with an `items` array.
 //   • `categories` is optional; items can omit `categoryId` or
-//     reference a category that wasn't declared — the shared ingest
-//     pipeline routes them to the "Imported · Uncategorized" bucket.
+//     reference a category that wasn't declared — they land with
+//     `category_id = null` and surface in the "Awaiting a section"
+//     band on /menu.
 //   • Each item requires `id`, `name`, `price`. `categoryId` and
 //     `active` are optional. `active` defaults to true.
 //   • Each category requires `id`, `name`. `sortOrder` is optional.

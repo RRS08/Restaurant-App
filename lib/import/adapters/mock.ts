@@ -6,8 +6,9 @@
 // or a file upload.
 //
 // Data is intentionally imperfect to exercise the safety rules:
-//   • `itm_special` has no category         → tests the
-//                                              Uncategorized fallback
+//   • `itm_special` has no category         → tests the null
+//                                              category_id path
+//                                              ("Awaiting a section")
 //   • `ord_0002` references `itm_ghost`     → tests the
 //                                              placeholder-item creation
 // ----------------------------------------------------------------
@@ -29,7 +30,7 @@ const MOCK_ITEMS = [
   { externalId: 'itm_pasta',   name: 'Pasta Primavera', price: 16.00, categoryExternalId: 'cat_mains',  active: true },
   { externalId: 'itm_cola',    name: 'Cola',            price: 3.50,  categoryExternalId: 'cat_drinks', active: true },
   { externalId: 'itm_beer',    name: 'Draft Beer',      price: 6.00,  categoryExternalId: 'cat_drinks', active: true },
-  // Intentional: no categoryExternalId → tests the "Imported · Uncategorized" fallback.
+  // Intentional: no categoryExternalId → item lands with category_id = null (Awaiting a section).
   { externalId: 'itm_special', name: 'Daily Special',   price: 18.00, categoryExternalId: null,         active: true },
 ]
 

@@ -636,8 +636,8 @@ function normalizeProducts(products: GodaddyProduct[]): NormalizedMenu {
     const name = (p.name ?? '').trim()
     if (!externalId || !name) continue
 
-    // Category is optional — unknown/absent falls into the shared
-    // "Imported · Uncategorized" bucket via the ingest pipeline.
+    // Category is optional — unknown/absent lands with `category_id
+    // = null` (surfaces in the "Awaiting a section" band on /menu).
     const catId = (p.category?.id ?? p.categoryId ?? '').trim()
     const catName = (p.category?.name ?? p.categoryName ?? '').trim()
     let categoryExternalId: string | null = null

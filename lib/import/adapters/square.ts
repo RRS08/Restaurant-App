@@ -324,9 +324,9 @@ function normalizeSquareCatalog(
     const itemName = (data.name ?? '').trim()
     if (!itemName) continue
 
-    // Category id is optional; items with no category fall through
-    // to the shared "Imported · Uncategorized" bucket via the ingest
-    // pipeline.
+    // Category id is optional; items with no category surface with
+    // `category_id = null` (the "Awaiting a section" band on /menu)
+    // so the manager can drop them into the right chip.
     //
     // Resolution order matches the way Square's API has evolved:
     //   1. `categories[0].id` — the current field; items created in
@@ -336,7 +336,7 @@ function normalizeSquareCatalog(
     //      populated on older catalogs that haven't been migrated.
     //   3. `reporting_category.id` — last-resort fallback for items
     //      that only carry a tax/reporting category. Better than
-    //      dumping them in Uncategorized when at least one category
+    //      leaving them uncategorized when at least one category
     //      hint exists.
     //
     // Each candidate is gated on `categoriesById.has(...)` so we

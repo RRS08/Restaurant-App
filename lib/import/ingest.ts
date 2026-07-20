@@ -17,7 +17,10 @@
 //                        silently corrupt stock.
 //
 // Safety rules encoded here (apply to every source):
-//   • External item with no category          → fallback bucket
+//   • External item with no category          → category_id = null
+//                                                (surfaces in the
+//                                                "Awaiting a section"
+//                                                band on /menu)
 //   • Order references an unknown item         → create placeholder
 //   • Duplicate external_id (same location)    → upsert, not insert
 //   • Imported menu item name/price change     → update in place,
@@ -43,8 +46,30 @@ import { businessDateInTimezone } from '@/lib/sales/business-date'
 // strings short while still making partial failure honest.
 const MAX_INGEST_NOTES = 5
 
-const UNCATEGORIZED_NAME = 'Imported · Uncategorized'
+// Marker used by older ingest revisions to identify the auto-created
+// "Imported · Uncategorized" bucket. We no longer create that
+// category — items without an upstream category get `category_id =
+// null` and surface in the menu page's "Awaiting a section" band
+// instead. This constant stays around solely as the query key for
+// the cleanup pass at the top of ingestMenu / ingestOrders, which
+// deletes any stale bucket rows the old code path left behind. The
+// `on delete set null` FK on menu_items.category_id nulls affected
+// items automatically, so they land in the awaiting band without
+// any manager action required.
 const UNCATEGORIZED_EXTERNAL_ID = '__uncategorized__'
+
+// One-time cleanup shared by both ingest entry points. Idempotent
+// and cheap — the lookup is indexed and usually returns 0 rows.
+async function cleanupLegacyUncategorizedBucket(
+  supabase: SupabaseClient,
+  restaurantId: string,
+): Promise<void> {
+  await supabase
+    .from('menu_categories')
+    .delete()
+    .eq('restaurant_id', restaurantId)
+    .eq('external_id', UNCATEGORIZED_EXTERNAL_ID)
+}
 
 // ================================================================
 // ingestMenu
@@ -69,36 +94,13 @@ export async function ingestMenu({
   sourceId,
   menu,
 }: IngestMenuArgs): Promise<IngestMenuResult> {
-  // ---- Resolve / ensure the Uncategorized fallback bucket ----
-  const { data: uncatRows } = await supabase
-    .from('menu_categories')
-    .select('id')
-    .eq('restaurant_id', restaurantId)
-    .eq('external_provider', sourceId)
-    .eq('external_id', UNCATEGORIZED_EXTERNAL_ID)
-    .limit(1)
-
-  let uncategorizedId: string
-  if (uncatRows && uncatRows.length > 0) {
-    uncategorizedId = uncatRows[0].id
-  } else {
-    const { data: inserted, error: insertUncatErr } = await supabase
-      .from('menu_categories')
-      .insert({
-        restaurant_id: restaurantId,
-        name: UNCATEGORIZED_NAME,
-        source: 'imported',
-        external_provider: sourceId,
-        external_id: UNCATEGORIZED_EXTERNAL_ID,
-        sort_order: 9999,
-      })
-      .select('id')
-      .single()
-    if (insertUncatErr || !inserted) {
-      return { categoriesUpserted: 0, itemsUpserted: 0, error: insertUncatErr?.message ?? 'fallback category' }
-    }
-    uncategorizedId = inserted.id
-  }
+  // Cleanup: earlier ingest revisions auto-created an "Imported ·
+  // Uncategorized" category for items with no upstream category.
+  // We no longer do that — those items now get `category_id = null`
+  // and surface in the "Awaiting a section" band on /menu. Zap any
+  // stale bucket rows so managers don't keep seeing them as a chip.
+  // FK is `on delete set null`, so items reparent to null cleanly.
+  await cleanupLegacyUncategorizedBucket(supabase, restaurantId)
 
   // ---- Upsert categories ----
   //
@@ -227,9 +229,12 @@ export async function ingestMenu({
   let itemsUpserted = 0
 
   for (const item of menu.items) {
-    const categoryId = item.categoryExternalId
-      ? (categoryIdByExternalId.get(item.categoryExternalId) ?? uncategorizedId)
-      : uncategorizedId
+    // No upstream category, or upstream category didn't survive the
+    // upsert pass → null, which surfaces the item in the "Awaiting a
+    // section" band on /menu for the manager to assign.
+    const categoryId: string | null = item.categoryExternalId
+      ? (categoryIdByExternalId.get(item.categoryExternalId) ?? null)
+      : null
 
     const { data: existing } = await supabase
       .from('menu_items')
@@ -339,31 +344,12 @@ export async function ingestOrders({
     }
   }
 
-  // 1. Find the source's Uncategorized bucket for placeholder items.
-  const { data: uncat } = await supabase
-    .from('menu_categories')
-    .select('id')
-    .eq('restaurant_id', restaurantId)
-    .eq('external_provider', sourceId)
-    .eq('external_id', UNCATEGORIZED_EXTERNAL_ID)
-    .maybeSingle()
-
-  let uncategorizedId = uncat?.id ?? null
-  if (!uncategorizedId) {
-    const { data: insertedUncat } = await supabase
-      .from('menu_categories')
-      .insert({
-        restaurant_id: restaurantId,
-        name: UNCATEGORIZED_NAME,
-        source: 'imported',
-        external_provider: sourceId,
-        external_id: UNCATEGORIZED_EXTERNAL_ID,
-        sort_order: 9999,
-      })
-      .select('id')
-      .single()
-    uncategorizedId = insertedUncat?.id ?? null
-  }
+  // 1. Cleanup: earlier ingest revisions auto-created an "Imported ·
+  //    Uncategorized" bucket for placeholder items. Placeholders now
+  //    land with category_id = null and surface in the "Awaiting a
+  //    section" band on /menu. FK is `on delete set null`, so any
+  //    stale items reparent to null cleanly.
+  await cleanupLegacyUncategorizedBucket(supabase, restaurantId)
 
   // 2. Pre-resolve all external_item_ids → local menu_item snapshot
   //    in one query. Returning name + category_id lets each line item
@@ -405,7 +391,7 @@ export async function ingestOrders({
           restaurant_id: restaurantId,
           name: placeholderName,
           current_price: li.unitPrice,
-          category_id: uncategorizedId,
+          category_id: null,
           active: true,
           source: 'imported',
           external_provider: sourceId,
@@ -417,7 +403,7 @@ export async function ingestOrders({
         itemSnapByExternalId.set(li.externalItemId, {
           id: placeholder.id as string,
           name: placeholderName,
-          categoryId: uncategorizedId,
+          categoryId: null,
         })
         placeholdersCreated++
       }

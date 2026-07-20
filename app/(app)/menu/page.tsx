@@ -64,6 +64,25 @@ export default async function MenuPage() {
     }
   }
 
+  // Legacy cleanup: prior ingest revisions auto-created an "Imported
+  // · Uncategorized" bucket for CSV/API imports without an upstream
+  // category. That bucket is no longer created — items now land with
+  // category_id = null and surface in the "Awaiting a section" band
+  // below. This delete zaps any stragglers left by the old code
+  // path so managers never see a fake category chip. FK is
+  // `on delete set null`, so affected items reparent to null cleanly
+  // and appear where the manager expects them (Awaiting).
+  //
+  // Cost: one indexed lookup on (restaurant_id, external_id).
+  // Returns 0 rows in the steady state, so it's effectively free.
+  if (restaurantId) {
+    await supabase
+      .from('menu_categories')
+      .delete()
+      .eq('restaurant_id', restaurantId)
+      .eq('external_id', '__uncategorized__')
+  }
+
   const operatingMode = restaurantId
     ? await getOperatingMode(supabase, restaurantId)
     : null

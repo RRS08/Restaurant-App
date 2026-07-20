@@ -43,6 +43,7 @@ import {
   setMenuItemAvailabilityOverride,
   updateMenuItemPrice,
   assignMenuItemCategory,
+  bulkAssignMenuItemCategory,
 } from '@/app/actions/menu'
 import {
   addRecipeComponent,
@@ -216,6 +217,62 @@ export default function MenuClient({
     })
   }
 
+  // Multi-select state for the "Awaiting a section" band. Tapping an
+  // awaiting card toggles its id in this set; when the set is
+  // non-empty a floating action bar exposes "Move all to [section]"
+  // so a manager fresh off a CSV import can sort dozens of items in
+  // a few taps instead of one-by-one drags. Only awaiting items go
+  // in here — once an item leaves the band (assigned or otherwise)
+  // it drops out of the selection automatically via `sanitize` on
+  // the next render.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const toggleSelected = (itemId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(itemId)) next.delete(itemId)
+      else next.add(itemId)
+      return next
+    })
+  }
+  const clearSelection = () => setSelectedIds(new Set())
+
+  const bulkAssignTo = (categoryId: string | null) => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    // Optimistic: stamp every selected id as pending → the whole
+    // batch disappears from the awaiting band instantly.
+    setPendingMoves((prev) => {
+      const next = { ...prev }
+      for (const id of ids) next[id] = categoryId
+      return next
+    })
+    clearSelection()
+    startAssignTransition(async () => {
+      const res = await bulkAssignMenuItemCategory(ids, categoryId)
+      if (res?.error) {
+        // Rollback the whole batch — same shape as single-item.
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          for (const id of ids) delete next[id]
+          return next
+        })
+      }
+      setTimeout(() => {
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          let dirty = false
+          for (const id of ids) {
+            if (next[id] !== undefined) {
+              delete next[id]
+              dirty = true
+            }
+          }
+          return dirty ? next : prev
+        })
+      }, 400)
+    })
+  }
+
   // Apply pending optimistic moves to each item's effective category
   // before bucketing. If the server has already returned the updated
   // row, prev[itemId] === item.categoryId and the effective category
@@ -232,6 +289,27 @@ export default function MenuClient({
     itemsByCategory.get(key)!.push(item)
   }
   const awaitingItems = itemsByCategory.get('__none__') ?? []
+
+  // Sanitize the selection: drop ids that have left the awaiting
+  // bucket (assigned elsewhere, deleted, etc.) so the action bar's
+  // count matches what's actually still selectable.
+  useEffect(() => {
+    if (selectedIds.size === 0) return
+    const awaitingIdSet = new Set(awaitingItems.map((i) => i.id))
+    let stale = false
+    for (const id of selectedIds) {
+      if (!awaitingIdSet.has(id)) {
+        stale = true
+        break
+      }
+    }
+    if (!stale) return
+    setSelectedIds((prev) => {
+      const next = new Set<string>()
+      for (const id of prev) if (awaitingIdSet.has(id)) next.add(id)
+      return next
+    })
+  }, [awaitingItems, selectedIds])
 
   const liveItem = selectedItemId ? items.find((i) => i.id === selectedItemId) ?? null : null
 
@@ -383,9 +461,11 @@ export default function MenuClient({
               <AwaitingSectionBand
                 items={awaitingItems}
                 categories={categories}
-                selectedItemId={selectedItemId}
+                selectedIds={selectedIds}
+                onToggleSelected={toggleSelected}
+                onClearSelection={clearSelection}
+                onBulkAssign={bulkAssignTo}
                 onOpenItem={setSelectedItemId}
-                onAssign={assignTo}
                 onDragStartItem={setDraggingItemId}
                 onDragEndItem={() => setDraggingItemId(null)}
                 t={t}
@@ -574,32 +654,70 @@ function FilterChipsBar({
 // ================================================================
 // AwaitingSectionBand — the pinned-to-the-bottom bucket for items
 // that don't yet belong to a section (imported without a category,
-// mostly). Each row shows the item + a "Move to" popover for
-// keyboard/click users, AND is draggable for the drag-drop path.
+// mostly).
+//
+// UX model: tap-to-multi-select. Tapping a card toggles it in the
+// selection set (highlights amber). Once one or more are selected,
+// a sticky action bar at the top of the band exposes "Move all
+// to [section ▾]" so a manager fresh off a CSV import can sort
+// dozens of items in a few taps instead of dragging one at a time.
+// The old per-card "Move to" popover was pulled — bulk-select
+// covers the single-item case too (select one, move one).
+//
+// Drag-and-drop still works for muscle-memory / power users:
+// drag a single card onto a category chip up top and it moves
+// without touching the selection. Selected/highlighted cards are
+// also draggable, but drag is intentionally single-item; bulk
+// movement goes through the action bar.
 //
 // Rendered as an amber-tinted band so it reads as "needs your
-// attention" without alarming. Empty state simply doesn't render
-// (the parent guards on awaitingItems.length > 0).
+// attention" without alarming.
 // ================================================================
 function AwaitingSectionBand({
   items,
   categories,
-  selectedItemId,
+  selectedIds,
+  onToggleSelected,
+  onClearSelection,
+  onBulkAssign,
   onOpenItem,
-  onAssign,
   onDragStartItem,
   onDragEndItem,
   t,
 }: {
   items: MenuItem[]
   categories: Category[]
-  selectedItemId: string | null
+  selectedIds: Set<string>
+  onToggleSelected: (itemId: string) => void
+  onClearSelection: () => void
+  onBulkAssign: (categoryId: string | null) => void
   onOpenItem: (id: string) => void
-  onAssign: (itemId: string, categoryId: string | null) => void
   onDragStartItem: (id: string) => void
   onDragEndItem: () => void
   t: T
 }) {
+  const [movePickerOpen, setMovePickerOpen] = useState(false)
+  const selectionCount = selectedIds.size
+  const hasSelection = selectionCount > 0
+
+  // Close the picker whenever the selection empties out (either
+  // via bulk-assign clearing it or the user tapping "Clear").
+  useEffect(() => {
+    if (!hasSelection) setMovePickerOpen(false)
+  }, [hasSelection])
+
+  const allSelected = selectionCount > 0 && selectionCount === items.length
+  const toggleAll = () => {
+    if (allSelected) {
+      onClearSelection()
+    } else {
+      // Fresh full-select — toggle each unselected id in.
+      for (const it of items) {
+        if (!selectedIds.has(it.id)) onToggleSelected(it.id)
+      }
+    }
+  }
+
   return (
     <section className="rounded-xl border border-amber-200 bg-amber-50/40 p-4">
       <div className="mb-3 flex items-center gap-3">
@@ -612,22 +730,100 @@ function AwaitingSectionBand({
         </p>
       </div>
 
-      <p className="text-[11px] text-amber-800/80 mb-3 leading-relaxed">
-        {t(
-          'Drag any card onto a category chip above, or click "Move to" to pick a section.',
-          'Arrastra cualquier tarjeta a un chip de categoría arriba, o haz clic en "Mover a" para elegir una sección.'
+      {/* Action bar — sticky so it stays visible while scrolling a
+          long awaiting list. Two states:
+            • idle       → helper text + "Select all" affordance
+            • selection  → count + "Move all to [section]" + Clear
+          The whole bar sits inside the amber band so it reads as
+          part of this workflow, not global chrome. */}
+      <div className="sticky top-2 z-10 mb-3 rounded-lg border border-amber-200 bg-white/95 backdrop-blur px-3 py-2 shadow-sm">
+        {hasSelection ? (
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-[12px] font-semibold text-amber-900 tabular-nums">
+              {selectionCount} {selectionCount === 1 ? t('selected', 'seleccionado') : t('selected', 'seleccionados')}
+            </span>
+            <span className="h-3.5 w-px bg-amber-200" aria-hidden="true" />
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setMovePickerOpen((v) => !v)}
+                disabled={categories.length === 0}
+                className="text-[12px] font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 disabled:cursor-not-allowed transition-colors rounded-md px-3 py-1.5 inline-flex items-center gap-1.5"
+              >
+                {t('Move all to', 'Mover todo a')} <span aria-hidden="true">▾</span>
+              </button>
+              {movePickerOpen && (
+                <Popover
+                  onClose={() => setMovePickerOpen(false)}
+                  className="left-0 top-full mt-1.5 w-60"
+                >
+                  <div className="p-1">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 px-2 pt-1.5 pb-1">
+                      {t('Move to section', 'Mover a sección')}
+                    </p>
+                    <ul>
+                      {categories.map((cat) => (
+                        <li key={cat.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onBulkAssign(cat.id)
+                              setMovePickerOpen(false)
+                            }}
+                            className="w-full text-left px-3 py-2 text-[12.5px] text-gray-700 hover:bg-blue-50 hover:text-blue-800 rounded-md transition-colors"
+                          >
+                            {cat.name}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </Popover>
+              )}
+            </div>
+            {categories.length === 0 && (
+              <span className="text-[11px] text-gray-500">
+                {t('Add a section first.', 'Agrega una sección primero.')}
+              </span>
+            )}
+            <span className="flex-1" />
+            <button
+              type="button"
+              onClick={onClearSelection}
+              className="text-[11px] font-medium text-gray-500 hover:text-gray-800 transition-colors"
+            >
+              {t('Clear', 'Limpiar')}
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap">
+            <p className="text-[11.5px] text-amber-800/90 leading-relaxed flex-1 min-w-0">
+              {t(
+                'Tap items to select them, then move them all together.',
+                'Toca los artículos para seleccionarlos, luego muévelos todos juntos.'
+              )}
+            </p>
+            {items.length > 1 && (
+              <button
+                type="button"
+                onClick={toggleAll}
+                className="text-[11px] font-semibold text-amber-800 hover:text-amber-900 transition-colors"
+              >
+                {t('Select all', 'Seleccionar todo')}
+              </button>
+            )}
+          </div>
         )}
-      </p>
+      </div>
 
       <div className="grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((item) => (
           <AwaitingItemCard
             key={item.id}
             item={item}
-            selected={selectedItemId === item.id}
-            categories={categories}
-            onClick={() => onOpenItem(item.id)}
-            onAssign={(catId) => onAssign(item.id, catId)}
+            selected={selectedIds.has(item.id)}
+            onToggle={() => onToggleSelected(item.id)}
+            onOpen={() => onOpenItem(item.id)}
             onDragStart={() => onDragStartItem(item.id)}
             onDragEnd={onDragEndItem}
             t={t}
@@ -638,32 +834,32 @@ function AwaitingSectionBand({
   )
 }
 
-// AwaitingItemCard — like ItemCard but stripped down (no
-// availability projection, no source badge) with an explicit
-// "Move to" popover as the primary affordance.
+// AwaitingItemCard — tap-to-toggle selection. Selected state gets
+// a solid amber ring + checkmark badge. A tiny "Open" affordance
+// (icon-only, right-corner) still lets a manager pop the drawer
+// when they want to inspect details on a single item without
+// disturbing the selection — click on the card body toggles
+// selection instead.
 function AwaitingItemCard({
   item,
   selected,
-  categories,
-  onClick,
-  onAssign,
+  onToggle,
+  onOpen,
   onDragStart,
   onDragEnd,
   t,
 }: {
   item: MenuItem
   selected: boolean
-  categories: Category[]
-  onClick: () => void
-  onAssign: (categoryId: string) => void
+  onToggle: () => void
+  onOpen: () => void
   onDragStart: () => void
   onDragEnd: () => void
   t: T
 }) {
-  const [popoverOpen, setPopoverOpen] = useState(false)
   const ringClass = selected
-    ? 'border-blue-500 shadow-[0_0_0_2px_rgba(59,130,246,0.12)]'
-    : 'border-amber-200 hover:border-amber-300'
+    ? 'border-amber-500 bg-amber-50 shadow-[0_0_0_2px_rgba(217,119,6,0.18)]'
+    : 'border-amber-200 bg-white hover:border-amber-300'
 
   return (
     <div
@@ -675,60 +871,51 @@ function AwaitingItemCard({
         onDragStart()
       }}
       onDragEnd={onDragEnd}
-      className={`relative rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md cursor-grab active:cursor-grabbing ${ringClass}`}
+      onClick={onToggle}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onToggle()
+        }
+      }}
+      className={`relative rounded-xl border shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md cursor-pointer select-none ${ringClass}`}
     >
-      <div className="flex items-baseline justify-between gap-3">
-        <button
-          type="button"
-          onClick={onClick}
-          className="text-sm font-semibold tracking-tight truncate text-gray-900 hover:text-blue-700 transition-colors text-left flex-1 min-w-0"
+      {/* Selection checkmark — top-left corner, only when selected. */}
+      {selected && (
+        <span
+          aria-hidden="true"
+          className="absolute -top-1.5 -left-1.5 h-5 w-5 rounded-full bg-amber-600 text-white flex items-center justify-center text-[11px] font-bold shadow-sm"
         >
+          ✓
+        </span>
+      )}
+
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-sm font-semibold tracking-tight truncate text-gray-900 flex-1 min-w-0">
           {item.name}
-        </button>
+        </span>
         <span className="text-sm font-mono tabular-nums text-gray-500 flex-shrink-0">
           ${item.currentPrice.toFixed(2)}
         </span>
       </div>
 
-      <div className="mt-2 relative">
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[10.5px] uppercase tracking-wider text-amber-700/80 font-semibold">
+          {selected ? t('Selected', 'Seleccionado') : t('Tap to select', 'Toca para seleccionar')}
+        </span>
         <button
           type="button"
-          onClick={() => setPopoverOpen((v) => !v)}
-          className="text-[11px] font-semibold text-amber-800 hover:text-amber-900 transition-colors inline-flex items-center gap-1"
+          onClick={(e) => {
+            e.stopPropagation()
+            onOpen()
+          }}
+          className="text-[11px] font-medium text-gray-500 hover:text-blue-700 transition-colors"
         >
-          {t('Move to', 'Mover a')} <span aria-hidden="true">→</span>
+          {t('Open', 'Abrir')}
         </button>
-        {popoverOpen && (
-          <Popover
-            onClose={() => setPopoverOpen(false)}
-            className="left-0 top-full mt-1.5 w-56"
-          >
-            <div className="p-1">
-              {categories.length === 0 ? (
-                <p className="text-[11px] text-gray-500 px-2 py-3">
-                  {t('Add a section first.', 'Agrega una sección primero.')}
-                </p>
-              ) : (
-                <ul>
-                  {categories.map((cat) => (
-                    <li key={cat.id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onAssign(cat.id)
-                          setPopoverOpen(false)
-                        }}
-                        className="w-full text-left px-3 py-2 text-[12.5px] text-gray-700 hover:bg-blue-50 hover:text-blue-800 rounded-md transition-colors"
-                      >
-                        {cat.name}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          </Popover>
-        )}
       </div>
     </div>
   )

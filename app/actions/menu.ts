@@ -397,6 +397,64 @@ export async function assignMenuItemCategory(
   return null
 }
 
+// ----------------------------------------------------------------
+// bulkAssignMenuItemCategory — move many menu items into a category
+// (or clear their assignments) in one round-trip. Powers the
+// tap-to-select bulk workflow on the "Awaiting a section" band,
+// where a manager fresh off a CSV import needs to sort dozens of
+// items into their real sections quickly.
+//
+// Same trust model as the single-item variant: owner-only, target
+// category is verified restaurant-scoped, RLS also gates the write.
+// Empty input is a no-op (returns null) rather than an error — the
+// UI can call it defensively without checking selection size.
+// ----------------------------------------------------------------
+export async function bulkAssignMenuItemCategory(
+  menuItemIds: string[],
+  categoryId: string | null,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can reorganize the menu.' }
+  }
+
+  if (menuItemIds.length === 0) return null
+
+  if (categoryId) {
+    const { data: cat } = await ctx.supabase
+      .from('menu_categories')
+      .select('id')
+      .eq('id', categoryId)
+      .eq('restaurant_id', ctx.restaurantId)
+      .maybeSingle()
+    if (!cat) return { error: 'That section does not exist.' }
+  }
+
+  const { error } = await ctx.supabase
+    .from('menu_items')
+    .update({ category_id: categoryId })
+    .in('id', menuItemIds)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('menu item', error) }
+
+  await logAudit(
+    ctx,
+    null,
+    'bulk_assign_menu_item_category',
+    'menu_items',
+    undefined,
+    { menuItemIds, categoryId, count: menuItemIds.length },
+  )
+
+  revalidatePath('/menu')
+  revalidatePath('/web/menu')
+  revalidatePath('/pos')
+  return null
+}
+
 export async function setMenuItemActive(
   prevState: { error: string } | null,
   formData: FormData,

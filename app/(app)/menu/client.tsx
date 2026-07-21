@@ -465,7 +465,6 @@ export default function MenuClient({
                 onToggleSelected={toggleSelected}
                 onClearSelection={clearSelection}
                 onBulkAssign={bulkAssignTo}
-                onOpenItem={setSelectedItemId}
                 onDragStartItem={setDraggingItemId}
                 onDragEndItem={() => setDraggingItemId(null)}
                 t={t}
@@ -680,7 +679,6 @@ function AwaitingSectionBand({
   onToggleSelected,
   onClearSelection,
   onBulkAssign,
-  onOpenItem,
   onDragStartItem,
   onDragEndItem,
   t,
@@ -691,7 +689,6 @@ function AwaitingSectionBand({
   onToggleSelected: (itemId: string) => void
   onClearSelection: () => void
   onBulkAssign: (categoryId: string | null) => void
-  onOpenItem: (id: string) => void
   onDragStartItem: (id: string) => void
   onDragEndItem: () => void
   t: T
@@ -719,7 +716,7 @@ function AwaitingSectionBand({
   }
 
   return (
-    <section className="rounded-[14px] border border-dashed border-[#E7E6E2] bg-[#F4F1EA] p-5">
+    <section className="rounded-[14px] border border-dashed border-[#E7E6E2] p-5">
       <div className="mb-4 flex items-center gap-4">
         <h2 className="font-mono text-[11.5px] uppercase tracking-[0.14em] text-[#6B6B70]">
           {t('Awaiting a section', 'Sin sección asignada')}
@@ -823,7 +820,6 @@ function AwaitingSectionBand({
             item={item}
             selected={selectedIds.has(item.id)}
             onToggle={() => onToggleSelected(item.id)}
-            onOpen={() => onOpenItem(item.id)}
             onDragStart={() => onDragStartItem(item.id)}
             onDragEnd={onDragEndItem}
             t={t}
@@ -844,7 +840,6 @@ function AwaitingItemCard({
   item,
   selected,
   onToggle,
-  onOpen,
   onDragStart,
   onDragEnd,
   t,
@@ -852,7 +847,6 @@ function AwaitingItemCard({
   item: MenuItem
   selected: boolean
   onToggle: () => void
-  onOpen: () => void
   onDragStart: () => void
   onDragEnd: () => void
   t: T
@@ -908,20 +902,21 @@ function AwaitingItemCard({
         </span>
       </div>
 
-      <div className="mt-2.5 flex items-center justify-between">
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#A1A1A6]">
-          {selected ? t('Selected', 'Seleccionado') : t('Tap to select', 'Toca para seleccionar')}
-        </span>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onOpen()
-          }}
-          className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#A1A1A6] hover:text-[#18181B] transition-colors"
+      <div className="mt-2.5">
+        {/* Warm-terra accent on the idle CTA — noticeable against
+            the cream/white card without breaking out of the warm
+            neutral palette. Once selected, the label settles into
+            a muted "Selected" so the eye is drawn to the sticky
+            action bar (Move all to …), not the individual card. */}
+        <span
+          className={
+            selected
+              ? 'font-mono text-[10px] uppercase tracking-[0.14em] text-[#A1A1A6]'
+              : 'font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#B45309]'
+          }
         >
-          {t('Open', 'Abrir')}
-        </button>
+          {selected ? t('Selected', 'Seleccionado') : t('Tap to assign', 'Toca para asignar')}
+        </span>
       </div>
     </div>
   )

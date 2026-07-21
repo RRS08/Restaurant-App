@@ -143,7 +143,7 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
     // fetch() requires an absolute URL, so resolve any relative
     // href against our base. Absolute hrefs (rare but possible if
     // Poynt ever changes shape) pass through untouched.
-    const rawHref = next?.href ?? null
+    const rawHref: string | null = next?.href ?? null
     if (rawHref) {
       try {
         nextUrl = new URL(rawHref, baseUrl()).toString()

@@ -77,6 +77,103 @@ async function verifyTurnstile(token: string | null): Promise<boolean> {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // ----------------------------------------------------------------
+// notifyDemoLead — fire-and-forget email to the owner inbox when a
+// legitimate demo lead lands. Resend REST API, no SDK (same
+// zero-dep pattern as verifyTurnstile above).
+//
+// Gated on env vars — when any of the three below is missing, the
+// call is a no-op and the form still returns success. That means:
+//   • the code can ship before Resend is set up (staged rollout)
+//   • an outage or key rotation never blocks a form submission
+//   • the demo_leads table is always the source of truth; email is
+//     just a nudge so the owner doesn't have to poll /dev-tools
+//
+// Required env in Vercel once Resend is live:
+//   RESEND_API_KEY   → Resend dashboard → API Keys → create
+//   NOTIFY_EMAIL     → renato@onchecked.app (or wherever)
+//   MARKETING_FROM   → e.g. leads@onchecked.app — must be a sender
+//                      on a Resend-verified domain
+// ----------------------------------------------------------------
+async function notifyDemoLead(input: {
+  email: string
+  concept: string | null
+  message: string | null
+  ip: string
+  userAgent: string | null
+}): Promise<void> {
+  const key = process.env.RESEND_API_KEY
+  const to = process.env.NOTIFY_EMAIL
+  const from = process.env.MARKETING_FROM
+  if (!key || !to || !from) return
+
+  const subject = `New demo lead — ${input.email}`
+  const rows: [string, string][] = [
+    ['Email',   input.email],
+    ['Concept', input.concept ?? '—'],
+    ['Message', input.message ?? '—'],
+    ['IP',      input.ip],
+    ['Agent',   (input.userAgent ?? '—').slice(0, 200)],
+    ['When',    new Date().toISOString()],
+  ]
+
+  // Plain-text body first (some inboxes prefer it), HTML as the
+  // richer alternative — Resend uses HTML when both are provided.
+  const text = rows.map(([k, v]) => `${k}: ${v}`).join('\n')
+  const html = `
+<div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;color:#18181B;">
+  <p style="margin:0 0 12px;font-weight:600;">New demo lead landed.</p>
+  <table cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+    ${rows.map(([k, v]) => `
+      <tr>
+        <td style="padding:2px 12px 2px 0;color:#6B6B70;vertical-align:top;">${k}</td>
+        <td style="padding:2px 0;color:#18181B;">${escapeHtml(v)}</td>
+      </tr>
+    `).join('')}
+  </table>
+</div>
+  `.trim()
+
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'authorization': `Bearer ${key}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: [to],
+        // Set reply-to so hitting Reply in the inbox goes straight to
+        // the prospect instead of the noreply sender.
+        reply_to: input.email,
+        subject,
+        text,
+        html,
+      }),
+    })
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      console.error('[demo-leads] Resend send failed', res.status, body)
+    }
+  } catch (err) {
+    // Never let email failure surface to the submitter — the DB
+    // write already succeeded and that's what matters.
+    console.error('[demo-leads] Resend send threw', err)
+  }
+}
+
+// Minimal HTML entity escape for the notification body — covers
+// the four characters that can break the table layout or turn a
+// stray "<script" from a bot payload into markup.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+// ----------------------------------------------------------------
 // submitDemoLead — the public-facing call.
 // Returns useActionState-friendly { error?, ok? } from the form.
 // ----------------------------------------------------------------
@@ -163,6 +260,13 @@ export async function submitDemoLead(
   if (insertErr) {
     return { error: 'Could not save your request right now. Try again.' }
   }
+
+  // Fire-and-forget owner notification. `await` because we're in a
+  // server action (no background task infrastructure to detach to),
+  // but the function swallows its own errors — a Resend outage
+  // never blocks the form's success response.
+  await notifyDemoLead({ email, concept, message, ip, userAgent })
+
   return { ok: true }
 }
 

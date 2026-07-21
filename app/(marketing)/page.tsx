@@ -22,6 +22,7 @@ import FloorSim from '@/components/marketing/floor-sim'
 import DemoForm from '@/components/marketing/demo-form'
 import ProblemCards from '@/components/marketing/problem-cards'
 import LanguageToggle from '@/components/marketing/language-toggle'
+import TestimonialsCarousel from '@/components/marketing/testimonials-carousel'
 
 type Lang = 'en' | 'es'
 
@@ -74,114 +75,9 @@ const popIn = (delay: number): CSSProperties => ({
 // inside MarketingPage so they can use the request-scoped `t()`
 // helper for inline translation.
 
-function TestimonialCard({ q, who, city }: { q: string; who: string; city: string }) {
-  return (
-    <div style={{ flex: '0 0 300px', width: 300, marginRight: 14, background: '#FFFFFF', border: '1px dashed #D8D8D4', borderRadius: 16, padding: 24, minHeight: 188, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-      <div>
-        <div style={mono({ fontSize: 34, lineHeight: 0.7, color: '#DCDAD4' })}>&ldquo;</div>
-        <p style={{ fontSize: 14.5, lineHeight: 1.55, color: '#A1A1A6', margin: '10px 0 0' }}>{q}</p>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 11, marginTop: 18 }}>
-        <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'repeating-linear-gradient(135deg,#EFEFEC 0 6px,#E7E6E2 6px 12px)' }} />
-        <div style={mono({ fontSize: 11, lineHeight: 1.4, color: '#A1A1A6' })}>{who}<br />{city}</div>
-      </div>
-    </div>
-  )
-}
-
-// ----------------------------------------------------------------
-// PartnerCard — real pilot partner. Renders in the same 300×188
-// footprint as TestimonialCard so the marquee's rhythm stays even,
-// but wraps the card in an anchor to the partner's site and flips
-// on hover to reveal the quote.
-//
-// Interaction:
-//   • Desktop (hover-capable): front = logo prominent, hover flips
-//     the card to reveal the quote + owner/city on the back.
-//   • Touch (no hover): the front is what visitors see — no flip.
-//     Tapping the card still follows the link. This keeps card
-//     heights stable across the marquee on mobile; the quote is a
-//     desktop-only delight.
-//
-// The .mk-partner-* class names hook the CSS block below (`html {`
-// style tag) — flip transform, backface visibility, touch guard.
-// ----------------------------------------------------------------
-function PartnerCard({
-  q, who, city, logo, href, businessName,
-}: {
-  q: string; who: string; city: string
-  logo: string; href: string; businessName: string
-}) {
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      aria-label={`${businessName} — ${who}, ${city}`}
-      className="mk-partner-card"
-      style={{
-        flex: '0 0 300px', width: 300, marginRight: 14, minHeight: 188,
-        perspective: '1000px', textDecoration: 'none', color: 'inherit',
-        display: 'block',
-      }}
-    >
-      <div
-        className="mk-partner-inner"
-        style={{
-          position: 'relative', width: '100%', minHeight: 188,
-          transformStyle: 'preserve-3d',
-          transition: 'transform 0.55s cubic-bezier(0.4, 0, 0.2, 1)',
-        }}
-      >
-        {/* Front — logo prominent, small business-name caption. */}
-        <div
-          className="mk-partner-front"
-          style={{
-            position: 'absolute', inset: 0, background: '#FFFFFF',
-            border: '1px solid #E7E6E2', borderRadius: 16, padding: 18,
-            display: 'flex', flexDirection: 'column', alignItems: 'center',
-            justifyContent: 'center', gap: 8,
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-          }}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={logo}
-            alt={businessName}
-            style={{ maxWidth: '100%', maxHeight: 132, objectFit: 'contain', display: 'block' }}
-          />
-          <div style={mono({ fontSize: 10, color: '#A1A1A6', letterSpacing: '0.08em', textAlign: 'center' })}>
-            {businessName}
-          </div>
-        </div>
-        {/* Back — quote + attribution. Ink-black hairline
-            distinguishes the "real one" from placeholder cards
-            when a hovering visitor peeks at both. */}
-        <div
-          className="mk-partner-back"
-          style={{
-            position: 'absolute', inset: 0, background: '#FFFFFF',
-            border: '1px solid #18181B', borderRadius: 16, padding: 24,
-            display: 'flex', flexDirection: 'column',
-            justifyContent: 'space-between',
-            backfaceVisibility: 'hidden',
-            WebkitBackfaceVisibility: 'hidden',
-            transform: 'rotateY(180deg)',
-          }}
-        >
-          <div>
-            <div style={mono({ fontSize: 34, lineHeight: 0.7, color: '#DCDAD4' })}>&ldquo;</div>
-            <p style={{ fontSize: 14, lineHeight: 1.5, color: '#18181B', margin: '10px 0 0', fontWeight: 500 }}>{q}</p>
-          </div>
-          <div style={mono({ fontSize: 11, lineHeight: 1.4, color: '#52525B' })}>
-            {who}<br />{city}
-          </div>
-        </div>
-      </div>
-    </a>
-  )
-}
+// TestimonialCard + PartnerCard used to be defined inline here.
+// Both moved into components/marketing/testimonials-carousel.tsx
+// alongside the client-side carousel that renders them.
 
 export default async function MarketingPage() {
   const lang = await resolveLanguage()
@@ -365,7 +261,6 @@ export default async function MarketingPage() {
     <div style={{ background: '#FAF9F6', color: '#18181B', minHeight: '100vh', overflowX: 'hidden' }}>
       <style>{`
         @keyframes cPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.8)}}
-        @keyframes testiScroll{from{transform:translateX(0)}to{transform:translateX(-50%)}}
         @keyframes fadeMerge{0%,100%{opacity:1;transform:translateX(0)}58%{opacity:.2;transform:translateX(16px)}}
         @keyframes fadeMergePhone{0%,100%{opacity:1}58%{opacity:.35}}
         @keyframes arrowPulse{0%,100%{opacity:.35}50%{opacity:1}}
@@ -389,7 +284,6 @@ export default async function MarketingPage() {
            target section instead of snapping. The scroll-margin keeps
            each section's heading clear of the sticky nav bar. */
         html{scroll-behavior:smooth}
-        .mk-marquee:hover{animation-play-state:paused}
         .mk-sec{scroll-margin-top:96px}
         /* Partner-card flip. Only fires on true-hover devices; on
            touch the flip is skipped so mobile visitors see the
@@ -918,20 +812,13 @@ export default async function MarketingPage() {
           'We’re in pilot, so we don’t have testimonials yet — and we’d rather leave this space honestly empty than fill it with words we made up. As our first partners come on, theirs go right here.',
           'Estamos en piloto, así que aún no tenemos testimonios — y preferimos dejar este espacio honestamente vacío que llenarlo con palabras inventadas. Conforme entren nuestros primeros socios, sus palabras van aquí.'
         )}</p>
-        <div style={{ marginTop: 28, overflow: 'hidden', WebkitMaskImage: 'linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent)', maskImage: 'linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent)' }}>
-          <div className="mk-marquee" style={{ display: 'flex', width: 'max-content', animation: 'testiScroll 48s linear infinite' }}>
-            {[...TESTIMONIALS, ...TESTIMONIALS].map((row, i) => (
-              row.logo && row.href && row.businessName ? (
-                <PartnerCard
-                  key={i}
-                  q={row.q} who={row.who} city={row.city}
-                  logo={row.logo} href={row.href} businessName={row.businessName}
-                />
-              ) : (
-                <TestimonialCard key={i} q={row.q} who={row.who} city={row.city} />
-              )
-            ))}
-          </div>
+        {/* The old CSS-only marquee sat here. Swapped for a snap
+            carousel with dot navigation + hover pause + auto-
+            advance every 4s so the real partner card comes back
+            around ~4× faster than before. See
+            components/marketing/testimonials-carousel.tsx. */}
+        <div style={{ marginTop: 28 }}>
+          <TestimonialsCarousel items={TESTIMONIALS} lang={lang} />
         </div>
       </section>
 

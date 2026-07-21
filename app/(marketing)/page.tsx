@@ -211,7 +211,7 @@ export default async function MarketingPage() {
       ),
       who: t('Dr. Elliot C. Chavez · Tea Shop', 'Dr. Elliot C. Chavez · Tienda de té'),
       city: t('Weslaco, TX', 'Weslaco, TX'),
-      logo: '/testimonials/hatziri.jpg',
+      logo: '/testimonials/hatziri.png',
       href: 'https://hatziribotanicals.com/',
       businessName: 'Hatziri Tea & Botanicals',
     },

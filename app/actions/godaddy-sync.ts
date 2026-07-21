@@ -3,20 +3,27 @@
 // ----------------------------------------------------------------
 // GoDaddy Poynt — "Sync now" server action
 //
-// Manual pull triggered by the Settings card. Pulls up to 200
-// recent orders across POS + online in one shot and hands them to
-// the shared ingest helper (`lib/godaddy/ingest.ts`), which is also
-// used by the webhook route. Idempotent thanks to dedupe on
-// (provider, external_id).
+// Manual pull triggered by the Settings card. Two data sources
+// combined into one click:
 //
-// Owner-gated; the shared helper is auth-agnostic so a webhook
-// invocation can reuse it without threading a user session
+//   1. /orders       — online storefront + POS orders that
+//                       created full Order objects.
+//   2. /transactions — terminal / Virtual Terminal / MOTO
+//                       charges that don't create Order objects
+//                       (Poynt terminal payments live here).
+//
+// Both get normalized and handed to the shared ingest pipeline.
+// Idempotent thanks to dedupe on (provider, external_id) —
+// re-clicking Sync now is safe.
+//
+// Owner-gated; the shared helpers are auth-agnostic so a webhook
+// invocation can reuse them without threading a user session
 // through.
 // ----------------------------------------------------------------
 
 import { getAuthContext } from '@/lib/auth'
-import { fetchPoyntOrders } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { fetchPoyntOrders, fetchPoyntTransactions } from '@/lib/godaddy/api'
+import { ingestPoyntOrders, ingestPoyntTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export type SyncResult = IngestBatchResult
@@ -37,19 +44,46 @@ export async function syncGodaddyOrders(): Promise<SyncResult> {
   if (authError || !ctx) return { ...EMPTY, error: authError ?? 'Authentication error.' }
   if (ctx.role !== 'owner') return { ...EMPTY, error: 'Only the owner can trigger a sync.' }
 
-  // Raised from 200 to 1000. A busy 30-day storefront can easily
-  // exceed 200 orders (Hatziri has 419+ in the last month), and
-  // capping at 200 meant only the OLDEST 200 pulled — the manager
-  // saw sales from two weeks ago but nothing recent. 1000 covers
-  // essentially all real Pilot V1 volumes; if we ever cap out
-  // we'll cross that bridge with an incremental-since-last-order
-  // strategy.
-  const pull = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 1000 })
-  if ('error' in pull) return { ...EMPTY, error: pull.error }
+  const supabase = createAdminClient()
+  const merged: SyncResult = { ...EMPTY, channelBreakdown: { pos: 0, online: 0 }, notes: [] }
 
-  return await ingestPoyntOrders({
-    supabase: createAdminClient(),
-    restaurantId: ctx.restaurantId,
-    raw: pull.orders,
-  })
+  // 1. /orders — online + Order-shaped POS sales.
+  const pullOrders = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 1000 })
+  if ('error' in pullOrders) {
+    // Bubble the error but continue to /transactions — one endpoint
+    // failing shouldn't block the other.
+    merged.notes.push(`/orders fetch failed: ${pullOrders.error}`)
+  } else {
+    const r = await ingestPoyntOrders({
+      supabase, restaurantId: ctx.restaurantId, raw: pullOrders.orders,
+    })
+    mergeIn(merged, r)
+  }
+
+  // 2. /transactions — terminal charges that skip the Order table.
+  //    Critical for merchants (Hatziri) who use the Poynt terminal
+  //    heavily; without this we miss all in-person card sales.
+  const pullTx = await fetchPoyntTransactions({ restaurantId: ctx.restaurantId, maxTransactions: 1000 })
+  if ('error' in pullTx) {
+    merged.notes.push(`/transactions fetch failed: ${pullTx.error}`)
+  } else {
+    const r = await ingestPoyntTransactions({
+      supabase, restaurantId: ctx.restaurantId, raw: pullTx.transactions,
+    })
+    mergeIn(merged, r)
+  }
+
+  return merged
+}
+
+function mergeIn(target: SyncResult, src: SyncResult) {
+  target.ordersInserted += src.ordersInserted
+  target.ordersSkipped += src.ordersSkipped
+  target.ordersFailed += src.ordersFailed
+  target.placeholdersCreated += src.placeholdersCreated
+  target.inventoryDepletionsWritten += src.inventoryDepletionsWritten
+  target.channelBreakdown.pos += src.channelBreakdown.pos
+  target.channelBreakdown.online += src.channelBreakdown.online
+  target.notes.push(...src.notes)
+  if (src.error && !target.error) target.error = src.error
 }

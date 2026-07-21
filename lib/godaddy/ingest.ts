@@ -26,7 +26,7 @@
 
 import { ingestOrders } from '@/lib/import/ingest'
 import type { NormalizedOrder } from '@/lib/import/types'
-import type { PoyntOrder } from './api'
+import type { PoyntOrder, PoyntTransaction } from './api'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -108,6 +108,55 @@ export async function ingestPoyntOrders(args: {
     })
     fold(result, r)
   }
+  return result
+}
+
+/** Ingest a batch of Poynt Transactions (terminal / MOTO / VT
+ *  charges that don't necessarily create Order objects) under
+ *  the given restaurant. Every non-void CAPTURED sale becomes a
+ *  synthetic Order in Checked with one line item ("In-person
+ *  sale") since Transactions don't carry line-item detail.
+ *  Voids/refunds are marked as `voided` so downstream reporting
+ *  can back them out.
+ *
+ *  All transactions ingest under `godaddy_pos` since terminal +
+ *  MOTO are both in-person / operator-driven flows. */
+export async function ingestPoyntTransactions(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  raw: PoyntTransaction[]
+}): Promise<IngestBatchResult> {
+  const { supabase, restaurantId, raw } = args
+  const result: IngestBatchResult = {
+    ...EMPTY_BATCH,
+    channelBreakdown: { pos: 0, online: 0 },
+    notes: [],
+  }
+  if (raw.length === 0) return result
+
+  const pos: NormalizedOrder[] = []
+  for (const t of raw) {
+    const normalized = normalizePoyntTransaction(t, result.notes)
+    if (!normalized) continue
+    pos.push(normalized)
+  }
+  result.channelBreakdown = { pos: pos.length, online: 0 }
+  if (pos.length === 0) return result
+
+  const { data: loc } = await supabase
+    .from('locations')
+    .select('id')
+    .eq('restaurant_id', restaurantId)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (!loc) return { ...result, error: 'No location found for this restaurant.' }
+
+  const r = await ingestOrders({
+    supabase, restaurantId, locationId: loc.id as string,
+    sourceId: 'godaddy_pos', orders: pos,
+  })
+  fold(result, r)
   return result
 }
 
@@ -227,6 +276,87 @@ export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedO
     const msg = err instanceof Error ? err.message : String(err)
     console.warn('[godaddy/ingest] normalize threw — order skipped', { orderId: idHint, err: msg })
     notes.push(`Order ${idHint} failed to normalize (${msg}) — skipped.`)
+    return null
+  }
+}
+
+/** Normalize a Poynt Transaction into our order shape. Terminal
+ *  transactions don't have line items, so we synthesize one with
+ *  a generic name + the transaction amount. Refunds / voids are
+ *  marked as `voided` so reporting can subtract them cleanly.
+ *
+ *  Only CAPTURED sales count as real revenue. AUTHORIZED without
+ *  a matching capture would double-count against a downstream
+ *  capture event, so we skip AUTHORIZED and only ingest terminal
+ *  charges once they've settled. */
+export function normalizePoyntTransaction(t: PoyntTransaction, notes: string[]): NormalizedOrder | null {
+  try {
+    const externalId = safeIdStr(t.id)
+    if (!externalId) return null
+    const postedAt = (t.createdAt ?? t.updatedAt ?? '').trim()
+    if (!postedAt) return null
+
+    const rawStatus = (t.status ?? '').toUpperCase()
+    const rawAction = (t.action ?? '').toUpperCase()
+
+    // Refunds & voids are still worth ingesting so the ledger
+    // reflects them; they mark as voided so reporting subtracts.
+    // Anything that isn't CAPTURED (and isn't a refund/void) is
+    // skipped — an AUTHORIZED transaction gets counted when it
+    // captures.
+    let status: NormalizedOrder['status'] | undefined
+    const isVoid = rawStatus.includes('VOID') || rawStatus.includes('CANCEL')
+    const isRefund = rawStatus.includes('REFUND') || rawAction === 'REFUND'
+    if (isVoid || isRefund) {
+      status = 'voided'
+    } else if (rawStatus === 'CAPTURED') {
+      status = 'completed'
+    } else {
+      // Skip: authorized-not-yet-captured, pending, unknown.
+      return null
+    }
+
+    const rawAmount =
+      t.amounts?.orderAmount
+      ?? t.amounts?.transactionAmount
+      ?? 0
+    const totalAmount = normalizeAmount(rawAmount)
+    if (totalAmount <= 0) {
+      notes.push(`Transaction ${externalId} has non-positive amount — skipped.`)
+      return null
+    }
+
+    // Payment type inference from the funding source.
+    const fundingType = (t.fundingSource?.type ?? '').toUpperCase()
+    let paymentType: NormalizedOrder['paymentType'] = 'other'
+    if (fundingType.includes('CASH')) paymentType = 'cash'
+    else if (fundingType.includes('CREDIT') || fundingType.includes('DEBIT') || fundingType.includes('CARD')) paymentType = 'card'
+
+    // Synthesize one line item so the sale isn't lost. Use the
+    // transaction id as the external_item_id so re-syncs don't
+    // duplicate the synthetic item as a "new" placeholder every
+    // time. Downstream: the placeholder-item creation path will
+    // make a menu_item on first sight and reuse it on next.
+    return {
+      externalId,
+      postedAt,
+      totalAmount,
+      status,
+      paymentType,
+      paymentStatus: status === 'voided' ? 'unpaid' : 'paid',
+      lineItems: [{
+        externalItemId: `terminal-charge`,
+        itemName: 'In-person sale',
+        quantity: 1,
+        unitPrice: totalAmount,
+        totalPrice: totalAmount,
+      }],
+    }
+  } catch (err) {
+    const idHint = safeIdStr(t.id) || '<unknown>'
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[godaddy/ingest] normalize transaction threw', { txId: idHint, err: msg })
+    notes.push(`Transaction ${idHint} failed to normalize (${msg}) — skipped.`)
     return null
   }
 }

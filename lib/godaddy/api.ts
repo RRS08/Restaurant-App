@@ -182,6 +182,110 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
   return { businessId: tok.businessId, orders }
 }
 
+// ================================================================
+// Transactions — Poynt terminal / Virtual Terminal sales
+// ================================================================
+//
+// Merchants who take card payments on a Poynt terminal don't
+// necessarily create Order objects for those sales — the payment
+// leg lives in /transactions instead. Hatziri's real business
+// uses the terminal heavily; without this endpoint we'd miss all
+// his in-person sales.
+//
+// A Transaction carries: amount (integer cents), status
+// (AUTHORIZED / CAPTURED / VOIDED / REFUNDED), tender info, and
+// context.source (INSTORE / MOTO / etc.). It usually doesn't
+// carry line-item detail — for that we'd need to also fetch the
+// linked Order if one exists. For Pilot V1 we synthesize a
+// single "In-person sale" line item so the sale isn't lost.
+
+export interface PoyntTransaction {
+  id?: string
+  amounts?: {
+    orderAmount?: number
+    tipAmount?: number
+    transactionAmount?: number
+    currency?: string
+  }
+  status?: string     // e.g. 'CAPTURED', 'AUTHORIZED', 'VOIDED', 'REFUNDED'
+  action?: string     // e.g. 'SALE', 'REFUND', 'AUTHORIZE'
+  fundingSource?: {
+    type?: string     // 'CREDIT_DEBIT', 'CASH', 'CHECK', etc.
+    card?: { type?: string }
+  }
+  context?: PoyntOrderContext
+  createdAt?: string
+  updatedAt?: string
+  parentId?: string   // set on refunds — points to original SALE
+  orderId?: string    // some transactions link back to an Order
+  references?: Array<{ type?: string; id?: string; customType?: string }>
+}
+
+export interface PoyntTransactionList {
+  transactions?: PoyntTransaction[]
+  links?: PoyntLink[]
+  count?: number
+}
+
+interface FetchTransactionsArgs {
+  restaurantId: string
+  startAt?: string
+  maxTransactions?: number
+}
+
+/** Pull terminal / MOTO transactions for the connected merchant.
+ *  Mirrors fetchPoyntOrders but against /transactions. Same
+ *  HATEOAS pagination + windowing model; caller supplies the
+ *  same restaurantId. */
+export async function fetchPoyntTransactions(args: FetchTransactionsArgs): Promise<
+  | { businessId: string; transactions: PoyntTransaction[] }
+  | { error: string }
+> {
+  const tok = await getValidAccessToken(args.restaurantId)
+  if ('error' in tok) return { error: tok.error }
+
+  const startingQuery = new URLSearchParams()
+  const startAtIso =
+    args.startAt ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  startingQuery.set('startAt', startAtIso)
+  const startingUrl =
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/transactions?${startingQuery.toString()}`
+
+  const cap = args.maxTransactions ?? 1000
+  const transactions: PoyntTransaction[] = []
+  let nextUrl: string | null = startingUrl
+  let safety = 120
+
+  while (nextUrl && transactions.length < cap && safety > 0) {
+    safety--
+    console.info('[godaddy/api] GET transactions', { url: nextUrl, businessId: tok.businessId })
+    const page: { data: PoyntTransactionList } | { error: string } =
+      await getJson<PoyntTransactionList>(nextUrl, tok.accessToken)
+    if ('error' in page) return { error: page.error }
+    const pageTxs = page.data.transactions ?? []
+    console.info('[godaddy/api] transactions page returned', {
+      count: page.data.count,
+      onPage: pageTxs.length,
+      hasLinks: (page.data.links ?? []).length > 0,
+    })
+    for (const t of pageTxs) {
+      transactions.push(t)
+      if (transactions.length >= cap) break
+    }
+    const next: PoyntLink | undefined = (page.data.links ?? []).find(
+      (l: PoyntLink) => (l.rel ?? '').toLowerCase() === 'next' && !!l.href,
+    )
+    const rawHref: string | null = next?.href ?? null
+    if (rawHref) {
+      try { nextUrl = new URL(rawHref, baseUrl()).toString() } catch { nextUrl = null }
+    } else {
+      nextUrl = null
+    }
+  }
+
+  return { businessId: tok.businessId, transactions }
+}
+
 /** Fetch a single Poynt order by id. Powers the webhook handler,
  *  which receives a lightweight event payload (§8 of the spec:
  *  event type + resource id + links) and then does a full GET

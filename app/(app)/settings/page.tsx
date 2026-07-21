@@ -35,6 +35,8 @@ import AccessCodesCard from './access-codes-card'
 import LanguageCard from './language-card'
 import GoDaddySalesImportCard from './godaddy-sales-import-card'
 import GoDaddyMenuImportCard from './godaddy-menu-import-card'
+import GoDaddyConnectCard from './godaddy-connect-card'
+import { getStoredToken } from '@/lib/godaddy/tokens'
 import { getLang, getT } from '@/lib/i18n-server'
 
 export default async function SettingsPage() {
@@ -223,6 +225,24 @@ export default async function SettingsPage() {
   // testing workflow can hit both flows.
   const showExternalPosCard = !!isOwner && !!restaurantId && (isDev || operatingMode === 'external_pos')
 
+  // Live GoDaddy Poynt connection status — powers GoDaddyConnectCard.
+  // Owner-only; null when the restaurant hasn't linked a merchant.
+  let godaddyConnected: {
+    businessId: string
+    connectedAt: string
+    expiresAt: string
+  } | null = null
+  if (isOwner && restaurantId) {
+    const stored = await getStoredToken(restaurantId)
+    if (stored) {
+      godaddyConnected = {
+        businessId: stored.businessId,
+        connectedAt: stored.connectedAt,
+        expiresAt: stored.expiresAt,
+      }
+    }
+  }
+
   return (
     <PageShell
       title={t('Settings', 'Ajustes')}
@@ -287,6 +307,18 @@ export default async function SettingsPage() {
             manager (location-scoped) or staff via email. */}
         {(isOwner && restaurantId) && (
           <TeamCard lang={lang} locations={teamLocations} invitations={teamInvitations} />
+        )}
+
+        {/* Live GoDaddy Poynt connection — owner-only. Kicks off the
+            OAuth install flow at /api/godaddy/oauth/install; the
+            callback lands tokens in godaddy_poynt_tokens keyed by
+            (restaurant_id, business_id). Once connected, "Sync now"
+            calls the syncGodaddyOrders server action which pulls
+            orders via /businesses/{id}/orders and routes them to
+            the shared ingest pipeline. Rendered above the CSV cards
+            since the API path is the preferred workflow. */}
+        {(isOwner && restaurantId) && (
+          <GoDaddyConnectCard connected={godaddyConnected} />
         )}
 
         {/* GoDaddy CSV imports — owner-only. Two one-shot upload

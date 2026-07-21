@@ -91,6 +91,40 @@ create table if not exists public.demo_leads (
 alter table public.demo_leads enable row level security;
 
 
+-- GoDaddy Poynt Cloud App tokens (per-merchant) — see
+-- supabase/migrations/2026-07-21-godaddy-poynt-tokens.sql.
+-- One row per (restaurant, business) after a successful OAuth
+-- install. RLS-locked; every read/write goes through the admin
+-- client inside server actions or the /api/godaddy/oauth/callback
+-- route handler. Refresh tokens are used preemptively via
+-- lib/godaddy/tokens.ts#getValidAccessToken.
+create table if not exists public.godaddy_poynt_tokens (
+  id             uuid primary key default gen_random_uuid(),
+  restaurant_id  uuid not null references public.restaurants(id) on delete cascade,
+  business_id    text not null,
+  access_token   text not null,
+  refresh_token  text not null,
+  scope          text,
+  token_type     text not null default 'BEARER',
+  expires_at     timestamptz not null,
+  connected_at   timestamptz not null default now(),
+  updated_at     timestamptz not null default now(),
+  unique(restaurant_id, business_id)
+);
+alter table public.godaddy_poynt_tokens enable row level security;
+
+-- Short-lived CSRF state for the Poynt install redirect. A random
+-- state is minted at /api/godaddy/oauth/install and consumed on
+-- the /callback single-use, 15-min expiry.
+create table if not exists public.godaddy_poynt_oauth_states (
+  state          text primary key,
+  restaurant_id  uuid not null references public.restaurants(id) on delete cascade,
+  created_at     timestamptz not null default now(),
+  expires_at     timestamptz not null default (now() + interval '15 minutes')
+);
+alter table public.godaddy_poynt_oauth_states enable row level security;
+
+
 -- ----------------------------------------------------------------
 -- user_roles: connects users to restaurants with a specific role
 -- ----------------------------------------------------------------

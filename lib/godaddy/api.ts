@@ -114,6 +114,20 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
   // when neither startAt nor endAt is passed, and empirically an
   // unfiltered call returned 0 orders even against a business
   // with active sales — so we bind a window explicitly.
+  //
+  // Poynt returns orders in ASCENDING (oldest-first) order and
+  // paginates via HATEOAS `next` links. If we cap at N and the
+  // merchant has more than N orders in the window, we get the
+  // OLDEST N and miss the most recent ones — which is the
+  // opposite of what a manager wants when they hit "Sync now."
+  // Two mitigations:
+  //   1. Raise the default cap from 200 → 1000 so a busy 30-day
+  //      history fits in a single sync.
+  //   2. Also raise the hard page ceiling from 20 → 120 so the
+  //      cap can actually be reached at 10 orders/page.
+  // Future work: pull most-recent-first by iterating the window
+  // in reverse chunks (endAt=now → walk backward). Not needed
+  // for Pilot V1 volumes.
   const startingQuery = new URLSearchParams()
   const startAtIso =
     args.startAt ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
@@ -121,11 +135,11 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
   const startingUrl =
     `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/orders?${startingQuery.toString()}`
 
-  const cap = args.maxOrders ?? 500
+  const cap = args.maxOrders ?? 1000
   const orders: PoyntOrder[] = []
 
   let nextUrl: string | null = startingUrl
-  let safety = 20 // hard page cap — 20 pages × default page size covers a busy month
+  let safety = 120 // hard page cap — 120 pages × ~10 orders covers ~1200 orders
 
   while (nextUrl && orders.length < cap && safety > 0) {
     safety--

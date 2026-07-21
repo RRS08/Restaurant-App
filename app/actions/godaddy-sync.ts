@@ -37,7 +37,14 @@ export async function syncGodaddyOrders(): Promise<SyncResult> {
   if (authError || !ctx) return { ...EMPTY, error: authError ?? 'Authentication error.' }
   if (ctx.role !== 'owner') return { ...EMPTY, error: 'Only the owner can trigger a sync.' }
 
-  const pull = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 200 })
+  // Raised from 200 to 1000. A busy 30-day storefront can easily
+  // exceed 200 orders (Hatziri has 419+ in the last month), and
+  // capping at 200 meant only the OLDEST 200 pulled — the manager
+  // saw sales from two weeks ago but nothing recent. 1000 covers
+  // essentially all real Pilot V1 volumes; if we ever cap out
+  // we'll cross that bridge with an incremental-since-last-order
+  // strategy.
+  const pull = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 1000 })
   if ('error' in pull) return { ...EMPTY, error: pull.error }
 
   return await ingestPoyntOrders({

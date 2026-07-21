@@ -28,6 +28,7 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { exchangeAuthorizationCode, decodeBusinessId } from '@/lib/godaddy/oauth'
 import { consumeOAuthState, upsertMerchantToken } from '@/lib/godaddy/tokens'
+import { registerMerchantWebhook } from '@/lib/godaddy/webhooks'
 
 function redirectToSettings(req: NextRequest, flag: string): NextResponse {
   return NextResponse.redirect(new URL(`/settings?godaddy=${flag}`, req.url))
@@ -92,6 +93,26 @@ export async function GET(req: NextRequest) {
       tokenType: tokens.tokenType,
       expiresInSeconds: tokens.expiresIn,
     })
+
+    // Register the delivery webhook so future orders push in
+    // live. Fire-and-forget by intent: registration failure
+    // doesn't roll back the connect — manual "Sync now" still
+    // works while we sort out webhook wiring. The registration
+    // helper persists { webhook_id, webhook_secret } on the
+    // token row itself, so no plumbing here beyond the call.
+    const deliveryUrl = `${origin}/api/godaddy/webhooks`
+    const reg = await registerMerchantWebhook({
+      restaurantId,
+      businessId,
+      accessToken: tokens.accessToken,
+      deliveryUrl,
+    })
+    if ('error' in reg) {
+      console.warn('[godaddy/oauth/callback] webhook registration failed (manual sync still works)', reg.error)
+    } else {
+      console.info('[godaddy/oauth/callback] webhook registered', { businessId })
+    }
+
     return redirectToSettings(req, 'connected')
   } catch (err) {
     console.error('[godaddy/oauth/callback] token exchange failed', err)

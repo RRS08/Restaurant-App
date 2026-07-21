@@ -132,6 +132,28 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
   return { businessId: tok.businessId, orders }
 }
 
+/** Fetch a single Poynt order by id. Powers the webhook handler,
+ *  which receives a lightweight event payload (§8 of the spec:
+ *  event type + resource id + links) and then does a full GET
+ *  for the whole order object. */
+export async function fetchSinglePoyntOrder(args: {
+  restaurantId: string
+  orderId: string
+}): Promise<
+  | { businessId: string; order: PoyntOrder }
+  | { error: string }
+> {
+  const tok = await getValidAccessToken(args.restaurantId)
+  if ('error' in tok) return { error: tok.error }
+
+  const url =
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/orders/` +
+    encodeURIComponent(args.orderId)
+  const res = await getJson<PoyntOrder>(url, tok.accessToken)
+  if ('error' in res) return { error: res.error }
+  return { businessId: tok.businessId, order: res.data }
+}
+
 async function getJson<T>(url: string, accessToken: string): Promise<
   | { data: T }
   | { error: string }

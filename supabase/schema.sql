@@ -109,6 +109,16 @@ create table if not exists public.godaddy_poynt_tokens (
   expires_at     timestamptz not null,
   connected_at   timestamptz not null default now(),
   updated_at     timestamptz not null default now(),
+  -- Populated at OAuth install time by
+  -- lib/godaddy/webhooks.ts#registerMerchantWebhook. `webhook_id`
+  -- is Poynt's identifier for the hook (used to delete/rotate);
+  -- `webhook_secret` is the HMAC-SHA1 secret we generated and
+  -- handed to Poynt, verified on every incoming event at
+  -- /api/godaddy/webhooks. Both nullable — a merchant whose
+  -- registration failed still has a valid token row and can be
+  -- synced manually via the "Sync now" button.
+  webhook_id     text,
+  webhook_secret text,
   unique(restaurant_id, business_id)
 );
 alter table public.godaddy_poynt_tokens enable row level security;

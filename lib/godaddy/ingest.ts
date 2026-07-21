@@ -131,16 +131,23 @@ export async function ingestSinglePoyntOrder(args: {
 // Normalization
 // ================================================================
 
-/** Poynt monetary amounts arrive as major-unit numbers (dollars)
- *  OR as minor-unit integers (cents) depending on the endpoint
- *  and merchant currency. Heuristic: integers >= 1000 are treated
- *  as cents. Not perfect (a $999 order in cents lands as $99.9)
- *  but tolerable for v1 and easy to revisit once we see real
- *  merchant amounts. */
+/** Poynt's Cloud API returns every monetary amount as an integer
+ *  in minor units (cents for USD). My first pass used a "if it
+ *  looks big, divide by 100" heuristic that was wrong — real
+ *  merchant data has a lot of orders below $10 (400 cents = $4)
+ *  that stayed unscaled and rendered as $400. Rule now:
+ *
+ *    integer   → treat as cents, divide by 100
+ *    non-int   → treat as already-dollars (defensive; shouldn't
+ *                happen on the Cloud API but a stray decimal from
+ *                some payload variant shouldn't be double-scaled)
+ *
+ *  Applied uniformly to netTotal / subTotal / unitPrice / anything
+ *  else the normalizer touches. */
 export function normalizeAmount(raw: number): number {
   const n = Number(raw)
   if (!Number.isFinite(n)) return 0
-  if (Number.isInteger(n) && Math.abs(n) >= 1000) return +(n / 100).toFixed(2)
+  if (Number.isInteger(n)) return +(n / 100).toFixed(2)
   return +n.toFixed(2)
 }
 

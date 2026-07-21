@@ -138,7 +138,21 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
     const next: PoyntLink | undefined = (page.data.links ?? []).find(
       (l: PoyntLink) => (l.rel ?? '').toLowerCase() === 'next' && !!l.href,
     )
-    nextUrl = next?.href ?? null
+    // Poynt returns pagination links as RELATIVE paths (e.g.
+    // `/businesses/{id}/orders?startAt=...&endAt=...&startOffset=...`).
+    // fetch() requires an absolute URL, so resolve any relative
+    // href against our base. Absolute hrefs (rare but possible if
+    // Poynt ever changes shape) pass through untouched.
+    const rawHref = next?.href ?? null
+    if (rawHref) {
+      try {
+        nextUrl = new URL(rawHref, baseUrl()).toString()
+      } catch {
+        nextUrl = null
+      }
+    } else {
+      nextUrl = null
+    }
   }
 
   return { businessId: tok.businessId, orders }

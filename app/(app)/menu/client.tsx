@@ -118,21 +118,6 @@ function isImportedSource(source: string): boolean {
   return source !== 'manual' && source.length > 0
 }
 
-// Display-cased provider name for UI hints. We trust the values the
-// import pipeline writes (square / clover / toast / mock / csv /
-// custom_json) and fall back to the raw string for anything else.
-function capitalizeProvider(provider: string): string {
-  const named: Record<string, string> = {
-    square: 'Square',
-    clover: 'Clover',
-    toast: 'Toast',
-    mock: 'Mock',
-    csv: 'CSV',
-    custom_json: 'Custom JSON',
-  }
-  return named[provider] ?? provider.charAt(0).toUpperCase() + provider.slice(1)
-}
-
 // Single source of truth for "is this menu item mapped to inventory?"
 //
 // One or more linked recipe components → mapped. Several places used
@@ -1735,25 +1720,6 @@ function ItemDrawer({
         {activeState?.error && !item.active && (
           <div className="border-b border-red-200/60 bg-red-50/60 px-6 py-2 flex-shrink-0">
             <p className="text-[11px] text-red-700">{activeState.error}</p>
-          </div>
-        )}
-
-        {/* External-provider scope ribbon. For Square/Clover/etc.
-            items, our active/inactive controls visibility in OUR
-            records and OUR analytics only. The external POS owns
-            "is this actually sellable right now?" — that decision
-            still lives in their dashboard. We surface this here so
-            a manager doesn't deactivate something locally and
-            assume Square has stopped accepting orders for it. */}
-        {item.externalProvider && (
-          <div className="border-b border-blue-200/60 bg-blue-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-            <p className="text-[11px] text-blue-700 leading-relaxed">
-              {t(
-                `Imported from ${capitalizeProvider(item.externalProvider)} · local-only controls. Manage availability for sale in the ${capitalizeProvider(item.externalProvider)} dashboard.`,
-                `Importado desde ${capitalizeProvider(item.externalProvider)} · controles solo locales. Administra la disponibilidad para venta en el panel de ${capitalizeProvider(item.externalProvider)}.`,
-              )}
-            </p>
           </div>
         )}
 

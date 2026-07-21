@@ -181,10 +181,12 @@ export default async function MenuPage() {
 
     fetchMenuItems(),
 
-    // All recipe components with inventory item name + unit
+    // All recipe components with inventory item name + unit. The
+    // top-level `unit` column is the RECIPE's own unit (nullable —
+    // null means "same as the inventory item's unit_of_measure").
     supabase
       .from('recipe_components')
-      .select('id, menu_item_id, inventory_item_id, quantity_required, inventory_items ( name, unit_of_measure )')
+      .select('id, menu_item_id, inventory_item_id, quantity_required, unit, inventory_items ( name, unit_of_measure )')
       .order('created_at', { ascending: true }),
 
     // Active inventory items for the ingredient dropdown — also
@@ -285,13 +287,16 @@ export default async function MenuPage() {
   const inventoryActive = !!setupRow?.inventory_activated_at
   const stockSnapshot = computeStockSnapshot(invCounts, invTransactions)
 
-  // Build recipe map: menu_item_id → components[]
+  // Build recipe map: menu_item_id → components[]. `unit` here is
+  // the recipe's own unit (may be null → treat as identity with the
+  // inventory item's unit_of_measure at render time).
   const recipeMap = new Map<string, {
     id: string
     inventoryItemId: string
     inventoryItemName: string
     unitOfMeasure: string
     quantityRequired: number
+    unit: string | null
   }[]>()
 
   for (const rc of recipeComponents ?? []) {
@@ -302,6 +307,7 @@ export default async function MenuPage() {
       inventoryItemName: inv?.name ?? 'Unknown',
       unitOfMeasure: inv?.unit_of_measure ?? '',
       quantityRequired: Number(rc.quantity_required),
+      unit: (rc.unit as string | null) ?? null,
     }
     if (!recipeMap.has(rc.menu_item_id)) recipeMap.set(rc.menu_item_id, [])
     recipeMap.get(rc.menu_item_id)!.push(entry)

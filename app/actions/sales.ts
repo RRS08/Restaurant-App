@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { getAuthContext, logAudit, formatError, resolveLocationId } from '@/lib/auth'
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { getInventoryActivation } from '@/lib/readiness'
+import { convertQty } from '@/lib/units'
 import {
   cancelOpenPaymentIntentsForOrder,
   verifyAndLinkTerminalIntent,
@@ -267,7 +268,7 @@ export async function createOrder(
   if (inventoryActive) {
     const { data: recipeComponents, error: recipeError } = await ctx.supabase
       .from('recipe_components')
-      .select('menu_item_id, inventory_item_id, quantity_required')
+      .select('menu_item_id, inventory_item_id, quantity_required, unit')
       .in('menu_item_id', menuItemIds)
 
     depletionRecipeRowsFound = recipeComponents?.length ?? 0
@@ -279,6 +280,22 @@ export async function createOrder(
     } else if (!recipeComponents || recipeComponents.length === 0) {
       depletionOutcome = 'no_recipe_components'
     } else {
+      // Fetch the unit_of_measure for every inventory item involved
+      // so the conversion step below can translate a recipe measured
+      // in oz/g/ml into the units the inventory row is tracked in.
+      // Pre-migration recipe rows have unit = null → we treat the
+      // recipe's quantity as already being in the inventory unit
+      // (identity convert), preserving old behavior exactly.
+      const invIds = [...new Set(recipeComponents.map((rc) => rc.inventory_item_id as string))]
+      const { data: invRows } = await ctx.supabase
+        .from('inventory_items')
+        .select('id, unit_of_measure')
+        .in('id', invIds)
+      const invUnitById = new Map<string, string>()
+      for (const r of invRows ?? []) {
+        invUnitById.set(r.id as string, (r.unit_of_measure as string | null) ?? '')
+      }
+
       const usageRows: {
         restaurant_id: string; location_id: string
         inventory_item_id: string; transaction_type: string
@@ -300,12 +317,32 @@ export async function createOrder(
             })
             continue
           }
+          // Convert recipe unit → inventory unit. Null recipe unit
+          // = "same as inventory", so convertQty is identity in the
+          // common backward-compat path.
+          const invUnit = invUnitById.get(comp.inventory_item_id as string) ?? ''
+          const recipeUnit = (comp.unit as string | null) ?? invUnit
+          const converted = convertQty(required, recipeUnit, invUnit)
+          if (converted === null) {
+            // Unit mismatch that can't be converted (e.g. recipe in
+            // oz vs inventory in `case`). Skip depletion for THIS
+            // component only — the order still commits. Loud log so
+            // the manager can fix the recipe.
+            console.warn('[sales/createOrder] skipping recipe component with incompatible units', {
+              menu_item_id: comp.menu_item_id,
+              inventory_item_id: comp.inventory_item_id,
+              recipe_unit: recipeUnit,
+              inventory_unit: invUnit,
+              quantity_required: required,
+            })
+            continue
+          }
           usageRows.push({
             restaurant_id: ctx.restaurantId,
             location_id: locationId,
             inventory_item_id: comp.inventory_item_id,
             transaction_type: 'usage',
-            quantity_change: -(required * oi.quantity),
+            quantity_change: -(converted * oi.quantity),
             reference_note: `Order ${order.id}`,
           })
         }
@@ -441,10 +478,25 @@ export async function voidOrder(
     const menuItemIds = [...new Set(orderItems.map((oi) => oi.menu_item_id))]
     const { data: recipeComponents } = await ctx.supabase
       .from('recipe_components')
-      .select('menu_item_id, inventory_item_id, quantity_required')
+      .select('menu_item_id, inventory_item_id, quantity_required, unit')
       .in('menu_item_id', menuItemIds)
 
     if (recipeComponents && recipeComponents.length > 0) {
+      // Mirror createOrder's unit-aware depletion so the reversal
+      // exactly cancels what was written. Components with
+      // incompatible units were skipped on deplete → we must skip
+      // them here too (otherwise a void would add stock we never
+      // removed).
+      const invIds = [...new Set(recipeComponents.map((rc) => rc.inventory_item_id as string))]
+      const { data: invRows } = await ctx.supabase
+        .from('inventory_items')
+        .select('id, unit_of_measure')
+        .in('id', invIds)
+      const invUnitById = new Map<string, string>()
+      for (const r of invRows ?? []) {
+        invUnitById.set(r.id as string, (r.unit_of_measure as string | null) ?? '')
+      }
+
       const reversalRows: {
         restaurant_id: string; location_id: string; inventory_item_id: string
         transaction_type: string; quantity_change: number; reference_note: string
@@ -452,12 +504,18 @@ export async function voidOrder(
 
       for (const oi of orderItems) {
         for (const comp of recipeComponents.filter((rc) => rc.menu_item_id === oi.menu_item_id)) {
+          const required = Number(comp.quantity_required)
+          if (!Number.isFinite(required) || required <= 0) continue
+          const invUnit = invUnitById.get(comp.inventory_item_id as string) ?? ''
+          const recipeUnit = (comp.unit as string | null) ?? invUnit
+          const converted = convertQty(required, recipeUnit, invUnit)
+          if (converted === null) continue
           reversalRows.push({
             restaurant_id: ctx.restaurantId,
             location_id: order.location_id,
             inventory_item_id: comp.inventory_item_id,
             transaction_type: 'adjustment',
-            quantity_change: Number(comp.quantity_required) * oi.quantity,
+            quantity_change: converted * oi.quantity,
             reference_note: `Void reversal for order ${order.id}`,
           })
         }

@@ -13,13 +13,14 @@
 // revalidatePath (called in the server action), so the list updates.
 // ----------------------------------------------------------------
 
-import { useState, useActionState } from 'react'
+import { useState, useActionState, useMemo } from 'react'
 import {
   addRecipeComponent,
   removeRecipeComponent,
   createInlineInventoryItem,
 } from '@/app/actions/recipe'
 import { makeT, type Lang } from '@/lib/i18n'
+import { UNIT_GROUPS, normalizeUnit, convertQty, labelFor } from '@/lib/units'
 
 interface InventoryItem {
   id: string
@@ -30,6 +31,9 @@ interface InventoryItem {
 interface Component {
   id: string
   quantity_required: number
+  /** Recipe's own unit — nullable, null = same as the linked
+   *  inventory item's unit. Rendered in the "current recipe" list. */
+  unit: string | null
   inventory_items: InventoryItem | null
 }
 
@@ -60,6 +64,53 @@ export default function RecipeForm({
   const usedIds = new Set(components.map((c) => (c.inventory_items as InventoryItem | null)?.id).filter(Boolean))
   const availableItems = inventoryItems.filter((item) => !usedIds.has(item.id))
 
+  // Selected ingredient + recipe unit + quantity — hoisted so the
+  // unit picker can restrict options to the ingredient's family and
+  // show a live "= X.XX <invUnit>" preview.
+  const [selectedInvId, setSelectedInvId] = useState<string>('')
+  const [qty, setQty] = useState<string>('')
+  const [recipeUnit, setRecipeUnit] = useState<string>('')
+
+  const selectedInv = useMemo(
+    () => availableItems.find((i) => i.id === selectedInvId) ?? null,
+    [availableItems, selectedInvId],
+  )
+  const invCanonical = selectedInv ? normalizeUnit(selectedInv.unit_of_measure) : null
+
+  // Unit picker options track the selected ingredient. Reset the
+  // picked unit whenever the ingredient changes so a stale mass
+  // pick doesn't survive into a volume ingredient.
+  const unitOptions: { code: string; label: string }[] = useMemo(() => {
+    if (!selectedInv) return []
+    if (!invCanonical) return [{ code: selectedInv.unit_of_measure, label: selectedInv.unit_of_measure || 'unit' }]
+    const opts: { code: string; label: string }[] = []
+    for (const grp of UNIT_GROUPS) {
+      if (grp.units.some((u) => u === invCanonical)) {
+        for (const u of grp.units) opts.push({ code: u, label: labelFor(u) })
+      }
+    }
+    return opts
+  }, [selectedInv, invCanonical])
+
+  // Default the picked unit to the ingredient's own canonical unit
+  // whenever the ingredient changes.
+  const effectiveRecipeUnit = recipeUnit || (invCanonical ?? selectedInv?.unit_of_measure ?? '')
+
+  const preview = (() => {
+    const n = parseFloat(qty)
+    if (!Number.isFinite(n) || n <= 0) return null
+    if (!invCanonical) return null
+    const canonPick = normalizeUnit(effectiveRecipeUnit)
+    if (!canonPick || canonPick === invCanonical) return null
+    const converted = convertQty(n, canonPick, invCanonical)
+    if (converted === null) return null
+    const rounded = converted < 0.01 ? converted.toPrecision(2) : converted.toFixed(2).replace(/\.?0+$/, '')
+    return t(
+      `≈ ${rounded} ${labelFor(invCanonical)} of ${selectedInv?.name ?? ''}`,
+      `≈ ${rounded} ${labelFor(invCanonical)} de ${selectedInv?.name ?? ''}`,
+    )
+  })()
+
   return (
     <div className="space-y-8">
 
@@ -89,7 +140,7 @@ export default function RecipeForm({
                       {inv?.name ?? t('Unknown item', 'Artículo desconocido')}
                     </span>
                     <span className="ml-2 text-xs text-gray-400">
-                      {Number(comp.quantity_required)} {inv?.unit_of_measure ?? ''}
+                      {Number(comp.quantity_required)} {comp.unit ?? inv?.unit_of_measure ?? ''}
                     </span>
                   </div>
 
@@ -131,6 +182,11 @@ export default function RecipeForm({
                   id="inventory_item_id"
                   name="inventory_item_id"
                   required
+                  value={selectedInvId}
+                  onChange={(e) => {
+                    setSelectedInvId(e.target.value)
+                    setRecipeUnit('')
+                  }}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
                              focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
@@ -155,26 +211,54 @@ export default function RecipeForm({
               )}
             </div>
 
-            {/* Quantity */}
+            {/* Quantity + unit picker. Unit options are gated on
+                the picked ingredient — a Weight ingredient only
+                offers Weight units, so a recipe can measure in oz
+                even when inventory is tracked in lb. Live preview
+                below shows what actually depletes. */}
             <div>
               <label htmlFor="quantity_required" className="block text-sm font-medium text-gray-700 mb-1.5">
                 {t('Quantity per 1 unit sold', 'Cantidad por 1 unidad vendida')}
               </label>
-              <input
-                id="quantity_required"
-                name="quantity_required"
-                type="number"
-                required
-                min="0.0001"
-                step="0.0001"
-                placeholder={t('e.g. 2', 'p. ej. 2')}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm
-                           placeholder:text-gray-400
-                           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
+              <div className="flex items-stretch gap-2">
+                <input
+                  id="quantity_required"
+                  name="quantity_required"
+                  type="number"
+                  required
+                  min="0.0001"
+                  step="0.0001"
+                  value={qty}
+                  onChange={(e) => setQty(e.target.value)}
+                  placeholder={t('e.g. 2', 'p. ej. 2')}
+                  className="flex-1 min-w-0 rounded-lg border border-gray-300 px-3 py-2.5 text-sm
+                             placeholder:text-gray-400
+                             focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+                <select
+                  name="unit"
+                  value={effectiveRecipeUnit}
+                  onChange={(e) => setRecipeUnit(e.target.value)}
+                  disabled={!selectedInv || unitOptions.length <= 1}
+                  className="rounded-lg border border-gray-300 px-2 py-2.5 text-sm text-gray-700
+                             focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                             disabled:opacity-60"
+                >
+                  {selectedInv ? (
+                    unitOptions.map((o) => (
+                      <option key={o.code} value={o.code}>{o.label}</option>
+                    ))
+                  ) : (
+                    <option value="">{t('Pick ingredient first', 'Elige ingrediente primero')}</option>
+                  )}
+                </select>
+              </div>
               <p className="mt-1 text-xs text-gray-400">
                 {t('How much of this ingredient is used to make one of this menu item.', 'Cuánto de este ingrediente se usa para preparar uno de este artículo del menú.')}
               </p>
+              {preview && (
+                <p className="mt-1 text-[11px] text-gray-500 font-mono tabular-nums">{preview}</p>
+              )}
             </div>
 
             {/* Error */}

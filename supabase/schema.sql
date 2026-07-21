@@ -374,6 +374,14 @@ create table public.recipe_components (
   menu_item_id      uuid not null references public.menu_items(id) on delete cascade,
   inventory_item_id uuid not null references public.inventory_items(id) on delete cascade,
   quantity_required numeric(10,4) not null,
+  -- Unit of measure `quantity_required` is expressed in (e.g. 'g',
+  -- 'oz', 'ml', 'cup'). NULL means "same as the linked
+  -- inventory_item.unit_of_measure" — backward-compat for rows
+  -- written before the unit-conversion feature. Conversion at
+  -- depletion time via lib/units.ts. App-layer is authoritative for
+  -- allowed values; deliberately no CHECK constraint here so
+  -- adding a new unit doesn't require a coordinated migration.
+  unit              text,
   created_at        timestamptz not null default now(),
 
   -- A menu item can only use each inventory item once in its recipe.

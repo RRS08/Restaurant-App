@@ -41,6 +41,7 @@ import type { NormalizedMenu, NormalizedOrder } from './types'
 import type { SourceId, SyncMeta } from './adapter'
 import { getInventoryActivation } from '@/lib/readiness'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { convertQty } from '@/lib/units'
 
 // Cap on how many per-row rejection notes we surface. Keeps result
 // strings short while still making partial failure honest.
@@ -536,6 +537,12 @@ export async function ingestOrders({
     ordersInserted++
 
     // ---- Inventory bridge (gated by activation) ----
+    // Mirrors app/actions/sales.ts createOrder depletion, unit-aware.
+    // A component whose recipe unit can't convert to the inventory
+    // unit is silently skipped so the import never fails a whole
+    // order over one bad recipe row — the missed depletion is
+    // observable via inventoryDepletionsWritten dropping below the
+    // component count.
     if (
       status !== 'voided' &&
       inventoryActivatedAt !== null &&
@@ -544,22 +551,47 @@ export async function ingestOrders({
       const menuItemIds = [...new Set(lineRows.map((l) => l.menu_item_id))]
       const { data: recipeComponents } = await supabase
         .from('recipe_components')
-        .select('menu_item_id, inventory_item_id, quantity_required')
+        .select('menu_item_id, inventory_item_id, quantity_required, unit')
         .in('menu_item_id', menuItemIds)
 
       if (recipeComponents && recipeComponents.length > 0) {
+        const invIds = [...new Set(recipeComponents.map((rc) => rc.inventory_item_id as string))]
+        const { data: invRows } = await supabase
+          .from('inventory_items')
+          .select('id, unit_of_measure')
+          .in('id', invIds)
+        const invUnitById = new Map<string, string>()
+        for (const r of invRows ?? []) {
+          invUnitById.set(r.id as string, (r.unit_of_measure as string | null) ?? '')
+        }
+
         const usageRows: Array<{
           restaurant_id: string; location_id: string;
           inventory_item_id: string; transaction_type: string; quantity_change: number
         }> = []
         for (const li of lineRows) {
           for (const comp of recipeComponents.filter((rc) => rc.menu_item_id === li.menu_item_id)) {
+            const required = Number(comp.quantity_required)
+            if (!Number.isFinite(required) || required <= 0) continue
+            const invUnit = invUnitById.get(comp.inventory_item_id as string) ?? ''
+            const recipeUnit = (comp.unit as string | null) ?? invUnit
+            const converted = convertQty(required, recipeUnit, invUnit)
+            if (converted === null) {
+              console.warn('[import-ingest] skipping component with incompatible units', {
+                menu_item_id: comp.menu_item_id,
+                inventory_item_id: comp.inventory_item_id,
+                recipe_unit: recipeUnit,
+                inventory_unit: invUnit,
+                quantity_required: required,
+              })
+              continue
+            }
             usageRows.push({
               restaurant_id: restaurantId,
               location_id: locationId,
               inventory_item_id: comp.inventory_item_id,
               transaction_type: 'usage',
-              quantity_change: -(Number(comp.quantity_required) * li.quantity),
+              quantity_change: -(converted * li.quantity),
             })
           }
         }

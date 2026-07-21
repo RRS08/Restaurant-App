@@ -59,6 +59,12 @@ import {
   type EffectiveSellability,
   type ProjectionState,
 } from '@/lib/menu/availability'
+import {
+  UNIT_GROUPS,
+  normalizeUnit,
+  convertQty,
+  labelFor,
+} from '@/lib/units'
 import { makeT, type Lang } from '@/lib/i18n'
 
 type T = (en: string, es?: string) => string
@@ -70,7 +76,13 @@ type T = (en: string, es?: string) => string
 interface Category { id: string; name: string; sortOrder: number }
 interface RecipeEntry {
   id: string; inventoryItemId: string; inventoryItemName: string
-  unitOfMeasure: string; quantityRequired: number
+  /** The inventory item's own unit. */
+  unitOfMeasure: string
+  quantityRequired: number
+  /** The recipe's own unit. Null = "same as unitOfMeasure" (the
+   *  backward-compat identity path for rows written before the
+   *  unit-conversion feature). */
+  unit: string | null
 }
 interface MenuItem {
   id: string; name: string; currentPrice: number; active: boolean
@@ -1990,24 +2002,20 @@ function ItemDrawer({
                       <p className="text-[11px] text-gray-500 mt-0.5">{selectedIngredient.unitOfMeasure}</p>
                     </div>
 
-                    {/* Quantity input — only after selection */}
+                    {/* Quantity input — only after selection.
+                        Unit picker sits next to the number so a
+                        recipe can measure in oz / g / ml even
+                        when inventory is tracked in lb / kg / gal. */}
                     <label className="block mb-3">
                       <span className="block text-[11px] font-semibold text-gray-600 mb-1.5">
                         {t('Quantity per dish', 'Cantidad por platillo')}
                       </span>
-                      <div className="flex items-center gap-2">
-                        <input
-                          name="quantity_required"
-                          type="number"
-                          required
-                          min="0.0001"
-                          step="0.0001"
-                          autoFocus
-                          placeholder="0.00"
-                          className="flex-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-                        />
-                        <span className="text-xs text-gray-500 whitespace-nowrap">{selectedIngredient.unitOfMeasure}</span>
-                      </div>
+                      <QtyWithUnitPicker
+                        inventoryUnit={selectedIngredient.unitOfMeasure}
+                        inventoryName={selectedIngredient.name}
+                        autoFocus
+                        t={t}
+                      />
                     </label>
 
                     {/* Action row */}
@@ -2351,6 +2359,129 @@ function XIcon({ size = 16 }: { size?: number }) {
 }
 
 // ================================================================
+// QtyWithUnitPicker — number input + unit select + live-conversion
+// hint, in one self-contained component. Used everywhere a recipe
+// row asks for "how much of this ingredient per dish."
+//
+// Two channels feed the parent form on submit:
+//   • name="quantity_required" (number, required, > 0)
+//   • name="unit"              (canonical unit code from lib/units,
+//                                or "" to mean "same as inventory")
+//
+// Default selected unit = the inventory item's unit, normalized to
+// a canonical code we know how to convert. If the inventory's unit
+// is opaque or unknown (`case`, `bag`, `bunches`, etc.), the
+// picker only offers that literal option — the recipe must match.
+//
+// Live hint under the input shows what will actually be depleted:
+//   • same-unit picks: "" (nothing to say)
+//   • cross-unit picks: "≈ 0.03 lb of Flour" so the manager sees
+//     the real depletion at a glance and catches surprises early.
+// ================================================================
+function QtyWithUnitPicker({
+  inventoryUnit,
+  inventoryName,
+  defaultQty,
+  defaultUnit,
+  autoFocus,
+  t,
+}: {
+  inventoryUnit: string
+  inventoryName: string
+  defaultQty?: string
+  defaultUnit?: string | null
+  autoFocus?: boolean
+  t: T
+}) {
+  const invCanonical = normalizeUnit(inventoryUnit)
+  const initialUnit: string = (() => {
+    if (defaultUnit) {
+      const canon = normalizeUnit(defaultUnit)
+      if (canon) return canon
+    }
+    if (invCanonical) return invCanonical
+    // Opaque inventory unit we don't recognize — mirror it verbatim
+    // so the option renders and the recipe row matches the inventory.
+    return inventoryUnit
+  })()
+
+  const [qty, setQty] = useState(defaultQty ?? '')
+  const [unit, setUnit] = useState(initialUnit)
+
+  // Available options: if the inventory unit is a known canonical,
+  // show every unit in its family (or every convertible unit family +
+  // the fallback opaque). If the inventory unit is opaque/unknown,
+  // the picker only offers that literal option — no cross-conversion
+  // is safe.
+  const options: { code: string; label: string; groupLabel?: string }[] = (() => {
+    if (!invCanonical) {
+      // Opaque or unknown: only offer the literal inventory unit.
+      return [{ code: inventoryUnit, label: inventoryUnit || 'unit' }]
+    }
+    const opts: { code: string; label: string; groupLabel?: string }[] = []
+    for (const grp of UNIT_GROUPS) {
+      const inGroup = grp.units.some((u) => u === invCanonical)
+      // Same family as inventory → offer everything in that family.
+      // Opaque family is only offered when inventory is opaque, and
+      // that branch was already handled above.
+      if (inGroup) {
+        for (const u of grp.units) opts.push({ code: u, label: labelFor(u), groupLabel: grp.label })
+      }
+    }
+    return opts
+  })()
+
+  // Live conversion hint. Only shown when the picked unit differs
+  // from the inventory's canonical unit AND the two are compatible.
+  const preview = (() => {
+    const n = parseFloat(qty)
+    if (!Number.isFinite(n) || n <= 0) return null
+    if (!invCanonical) return null // no conversion possible
+    const canonPick = normalizeUnit(unit)
+    if (!canonPick || canonPick === invCanonical) return null
+    const converted = convertQty(n, canonPick, invCanonical)
+    if (converted === null) return null
+    const rounded = converted < 0.01 ? converted.toPrecision(2) : converted.toFixed(2).replace(/\.?0+$/, '')
+    return t(
+      `≈ ${rounded} ${labelFor(invCanonical)} of ${inventoryName}`,
+      `≈ ${rounded} ${labelFor(invCanonical)} de ${inventoryName}`,
+    )
+  })()
+
+  return (
+    <div>
+      <div className="flex items-center gap-2">
+        <input
+          name="quantity_required"
+          type="number"
+          required
+          min="0.0001"
+          step="0.0001"
+          autoFocus={autoFocus}
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          placeholder="0.00"
+          className="flex-1 min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+        />
+        <select
+          name="unit"
+          value={unit}
+          onChange={(e) => setUnit(e.target.value)}
+          className="rounded-lg border border-gray-300 bg-white px-2 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+        >
+          {options.map((o) => (
+            <option key={o.code} value={o.code}>{o.label}</option>
+          ))}
+        </select>
+      </div>
+      {preview && (
+        <p className="mt-1.5 text-[11px] text-gray-500 font-mono tabular-nums">{preview}</p>
+      )}
+    </div>
+  )
+}
+
+// ================================================================
 // HeaderNameEditor — inline name-edit affordance in the drawer
 // header. Same interaction shape as HeaderPriceEditor: display
 // mode shows the item name with a small Edit link; clicking swaps
@@ -2535,17 +2666,57 @@ function HeaderPriceEditor({ item, t }: { item: MenuItem; t: T }) {
 function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string; t: T }) {
   const [pending, startTransition] = useTransition()
   const [qty, setQty] = useState(String(rc.quantityRequired))
+  // The row's own recipe unit. Null in the DB → we display the
+  // inventory item's unit and, on save, send an empty string so
+  // the action persists NULL again (identity-with-inventory).
+  const invCanonical = normalizeUnit(rc.unitOfMeasure)
+  const initialUnit: string = (() => {
+    if (rc.unit) {
+      const c = normalizeUnit(rc.unit)
+      if (c) return c
+    }
+    if (invCanonical) return invCanonical
+    return rc.unitOfMeasure
+  })()
+  const [unit, setUnit] = useState(initialUnit)
   const [err, setErr] = useState<string | null>(null)
 
-  // Compare the typed value against the stored quantity. parseFloat
-  // ignores trailing zeros / decimals, so "3", "3.0", "3.00" all
-  // collapse to 3 — the Save button hides when the saved value
-  // already matches what the user typed.
+  // Unit options — same rule as QtyWithUnitPicker: full family when
+  // the inventory unit is a known canonical, otherwise just the
+  // literal opaque unit.
+  const options: { code: string; label: string }[] = (() => {
+    if (!invCanonical) return [{ code: rc.unitOfMeasure, label: rc.unitOfMeasure || 'unit' }]
+    const opts: { code: string; label: string }[] = []
+    for (const grp of UNIT_GROUPS) {
+      if (grp.units.some((u) => u === invCanonical)) {
+        for (const u of grp.units) opts.push({ code: u, label: labelFor(u) })
+      }
+    }
+    return opts
+  })()
+
+  // Dirty check spans BOTH channels so a unit-only change is
+  // savable too.
   const parsed = parseFloat(qty)
-  const dirty =
+  const qtyChanged =
     qty.trim().length > 0 &&
     Number.isFinite(parsed) &&
     parsed !== rc.quantityRequired
+  const unitChanged = unit !== initialUnit
+  const dirty = qtyChanged || unitChanged
+
+  // Live preview of what will actually deplete inventory, computed
+  // in the picked unit → inventory unit. Same rules as the picker.
+  const preview = (() => {
+    if (!Number.isFinite(parsed) || parsed <= 0) return null
+    if (!invCanonical) return null
+    const canonPick = normalizeUnit(unit)
+    if (!canonPick || canonPick === invCanonical) return null
+    const converted = convertQty(parsed, canonPick, invCanonical)
+    if (converted === null) return null
+    const rounded = converted < 0.01 ? converted.toPrecision(2) : converted.toFixed(2).replace(/\.?0+$/, '')
+    return `≈ ${rounded} ${labelFor(invCanonical)}`
+  })()
 
   function save() {
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -2557,6 +2728,9 @@ function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string;
     fd.append('component_id', rc.id)
     fd.append('menu_item_id', menuItemId)
     fd.append('quantity_required', qty)
+    // Only send `unit` when the manager picked something meaningful.
+    // Same-as-inventory selections persist as NULL (identity).
+    fd.append('unit', unit === invCanonical ? '' : unit)
     startTransition(async () => {
       const res = await updateRecipeComponentQuantity(null, fd)
       if (res?.error) setErr(res.error)
@@ -2577,7 +2751,7 @@ function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string;
     <li className="px-3.5 py-2.5 transition-colors hover:bg-gray-50/60">
       <p className="text-xs font-medium text-gray-900 truncate">{rc.inventoryItemName}</p>
       <div className="mt-1 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
           <input
             type="number"
             min="0.0001"
@@ -2588,8 +2762,19 @@ function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string;
             aria-label={t(`Quantity per sale for ${rc.inventoryItemName}`, `Cantidad por venta para ${rc.inventoryItemName}`)}
             className="w-16 h-7 rounded border border-gray-200 bg-white px-1.5 text-[11px] font-mono tabular-nums text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60"
           />
+          <select
+            value={unit}
+            onChange={(e) => setUnit(e.target.value)}
+            disabled={pending || options.length === 1}
+            aria-label={t('Recipe unit', 'Unidad de receta')}
+            className="h-7 rounded border border-gray-200 bg-white px-1.5 text-[11px] text-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-60"
+          >
+            {options.map((o) => (
+              <option key={o.code} value={o.code}>{o.label}</option>
+            ))}
+          </select>
           <span className="text-[11px] text-gray-500 whitespace-nowrap">
-            {rc.unitOfMeasure} {t('used per sale', 'por venta')}
+            {t('per sale', 'por venta')}
           </span>
           {dirty && (
             <button
@@ -2612,6 +2797,9 @@ function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string;
           {t('Remove', 'Eliminar')}
         </button>
       </div>
+      {preview && (
+        <p className="mt-1 text-[10px] text-gray-500 font-mono tabular-nums">{preview}</p>
+      )}
       {err && <p className="mt-1 text-[10px] text-red-600">{err}</p>}
     </li>
   )

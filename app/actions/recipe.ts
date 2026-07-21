@@ -3,6 +3,22 @@
 import { revalidatePath } from 'next/cache'
 import { getAuthContext, resolveLocationId, formatError, logAudit } from '@/lib/auth'
 import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
+import { normalizeUnit, type CanonicalUnit } from '@/lib/units'
+
+// Small helper: parse an optional `unit` form field into a canonical
+// unit code. Blank/missing → null → the DB stores NULL, which
+// downstream conversion reads as "same as the inventory item's
+// unit_of_measure" (backward-compat for pre-migration rows).
+// Anything present but unrecognized is rejected — better than
+// silently persisting a value depletion later can't interpret.
+function parseUnit(formData: FormData): { unit: CanonicalUnit | null; error: string | null } {
+  const raw = (formData.get('unit') as string | null) ?? ''
+  const trimmed = raw.trim()
+  if (!trimmed) return { unit: null, error: null }
+  const canonical = normalizeUnit(trimmed)
+  if (!canonical) return { unit: null, error: `Unit "${trimmed}" isn't one we can convert.` }
+  return { unit: canonical, error: null }
+}
 
 export async function addRecipeComponent(
   prevState: { error: string } | null,
@@ -27,11 +43,15 @@ export async function addRecipeComponent(
   const quantity = parseFloat(quantityRaw)
   if (isNaN(quantity) || quantity <= 0) return { error: 'Quantity must be greater than 0.' }
 
+  const { unit, error: unitErr } = parseUnit(formData)
+  if (unitErr) return { error: unitErr }
+
   const { error } = await ctx.supabase.from('recipe_components').insert({
     restaurant_id: ctx.restaurantId,
     menu_item_id: menuItemId,
     inventory_item_id: inventoryItemId,
     quantity_required: quantity,
+    unit,
   })
 
   if (error) {
@@ -44,6 +64,7 @@ export async function addRecipeComponent(
     menu_item_id: menuItemId,
     inventory_item_id: inventoryItemId,
     quantity_required: quantity,
+    unit,
   })
 
   revalidatePath(`/menu/${menuItemId}/recipe`)
@@ -88,9 +109,12 @@ export async function updateRecipeComponentQuantity(
     return { error: 'Quantity must be greater than 0.' }
   }
 
+  const { unit, error: unitErr } = parseUnit(formData)
+  if (unitErr) return { error: unitErr }
+
   const { error } = await ctx.supabase
     .from('recipe_components')
-    .update({ quantity_required: quantity })
+    .update({ quantity_required: quantity, unit })
     .eq('id', componentId)
     .eq('restaurant_id', ctx.restaurantId)
 
@@ -99,6 +123,7 @@ export async function updateRecipeComponentQuantity(
   await logAudit(ctx, null, 'update_recipe_component_quantity', 'recipe_components', componentId, {
     menu_item_id: menuItemId || null,
     quantity_required: quantity,
+    unit,
   })
 
   if (menuItemId) revalidatePath(`/menu/${menuItemId}/recipe`)

@@ -45,10 +45,12 @@ export default async function RecipePage({
     )
   }
 
-  // Fetch existing recipe components with the inventory item name + unit.
+  // Fetch existing recipe components with the inventory item name +
+  // unit, plus the recipe row's own `unit` (nullable — null means
+  // "identity with the inventory item's unit_of_measure").
   const { data: components } = await supabase
     .from('recipe_components')
-    .select('id, quantity_required, inventory_items ( id, name, unit_of_measure )')
+    .select('id, quantity_required, unit, inventory_items ( id, name, unit_of_measure )')
     .eq('menu_item_id', menuItemId)
     .order('created_at', { ascending: true })
 
@@ -80,6 +82,7 @@ export default async function RecipePage({
         components={(components ?? []).map((c) => ({
           id: c.id,
           quantity_required: c.quantity_required,
+          unit: (c.unit as string | null) ?? null,
           inventory_items: c.inventory_items as unknown as { id: string; name: string; unit_of_measure: string } | null,
         }))}
         inventoryItems={inventoryItems ?? []}

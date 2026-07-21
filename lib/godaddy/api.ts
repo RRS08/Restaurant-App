@@ -99,11 +99,17 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
   const tok = await getValidAccessToken(args.restaurantId)
   if ('error' in tok) return { error: tok.error }
 
+  // Default to the last 30 days if the caller didn't supply a
+  // window. Poynt's docs don't spell out what /orders returns
+  // when neither startAt nor endAt is passed, and empirically an
+  // unfiltered call returned 0 orders even against a business
+  // with active sales — so we bind a window explicitly.
   const startingQuery = new URLSearchParams()
-  if (args.startAt) startingQuery.set('startAt', args.startAt)
+  const startAtIso =
+    args.startAt ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+  startingQuery.set('startAt', startAtIso)
   const startingUrl =
-    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/orders` +
-    (startingQuery.toString() ? `?${startingQuery.toString()}` : '')
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/orders?${startingQuery.toString()}`
 
   const cap = args.maxOrders ?? 500
   const orders: PoyntOrder[] = []

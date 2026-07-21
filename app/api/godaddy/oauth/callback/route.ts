@@ -33,16 +33,37 @@ function redirectToSettings(req: NextRequest, flag: string): NextResponse {
   return NextResponse.redirect(new URL(`/settings?godaddy=${flag}`, req.url))
 }
 
+// Explicit rejection markers Poynt might send. The docs describe
+// `status` as "whether the merchant authorized" without pinning
+// the exact string values. To avoid mistaking a successful
+// authorization for a decline (my first pass matched "authorized"
+// case-insensitively, which rejected any other success wording),
+// we now only bail when the status is one of these explicit
+// rejection words. Anything else — including empty / missing —
+// falls through to the code exchange, which is the real proof of
+// authorization anyway.
+const DECLINE_STATUSES = new Set(['declined', 'denied', 'rejected', 'canceled', 'cancelled', 'error', 'failed'])
+
 export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const code = url.searchParams.get('code')?.trim() ?? ''
   const status = url.searchParams.get('status')?.trim() ?? ''
   const context = url.searchParams.get('context')?.trim() ?? ''
 
+  // One-line log of the callback shape (no code contents, no PII)
+  // so we can diagnose downstream failures from the deployment
+  // logs without having to instrument on the fly.
+  console.info('[godaddy/oauth/callback] hit', {
+    hasCode: !!code,
+    status,
+    hasContext: !!context,
+    knownParams: [...url.searchParams.keys()],
+  })
+
   if (!code || !context) {
     return redirectToSettings(req, 'missing-params')
   }
-  if (status && status.toLowerCase() !== 'authorized') {
+  if (status && DECLINE_STATUSES.has(status.toLowerCase())) {
     return redirectToSettings(req, 'declined')
   }
 

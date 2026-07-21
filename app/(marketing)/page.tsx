@@ -89,6 +89,100 @@ function TestimonialCard({ q, who, city }: { q: string; who: string; city: strin
   )
 }
 
+// ----------------------------------------------------------------
+// PartnerCard — real pilot partner. Renders in the same 300×188
+// footprint as TestimonialCard so the marquee's rhythm stays even,
+// but wraps the card in an anchor to the partner's site and flips
+// on hover to reveal the quote.
+//
+// Interaction:
+//   • Desktop (hover-capable): front = logo prominent, hover flips
+//     the card to reveal the quote + owner/city on the back.
+//   • Touch (no hover): the front is what visitors see — no flip.
+//     Tapping the card still follows the link. This keeps card
+//     heights stable across the marquee on mobile; the quote is a
+//     desktop-only delight.
+//
+// The .mk-partner-* class names hook the CSS block below (`html {`
+// style tag) — flip transform, backface visibility, touch guard.
+// ----------------------------------------------------------------
+function PartnerCard({
+  q, who, city, logo, href, businessName,
+}: {
+  q: string; who: string; city: string
+  logo: string; href: string; businessName: string
+}) {
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={`${businessName} — ${who}, ${city}`}
+      className="mk-partner-card"
+      style={{
+        flex: '0 0 300px', width: 300, marginRight: 14, minHeight: 188,
+        perspective: '1000px', textDecoration: 'none', color: 'inherit',
+        display: 'block',
+      }}
+    >
+      <div
+        className="mk-partner-inner"
+        style={{
+          position: 'relative', width: '100%', minHeight: 188,
+          transformStyle: 'preserve-3d',
+          transition: 'transform 0.55s cubic-bezier(0.4, 0, 0.2, 1)',
+        }}
+      >
+        {/* Front — logo prominent, small business-name caption. */}
+        <div
+          className="mk-partner-front"
+          style={{
+            position: 'absolute', inset: 0, background: '#FFFFFF',
+            border: '1px solid #E7E6E2', borderRadius: 16, padding: 18,
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', gap: 8,
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+          }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={logo}
+            alt={businessName}
+            style={{ maxWidth: '100%', maxHeight: 132, objectFit: 'contain', display: 'block' }}
+          />
+          <div style={mono({ fontSize: 10, color: '#A1A1A6', letterSpacing: '0.08em', textAlign: 'center' })}>
+            {businessName}
+          </div>
+        </div>
+        {/* Back — quote + attribution. Ink-black hairline
+            distinguishes the "real one" from placeholder cards
+            when a hovering visitor peeks at both. */}
+        <div
+          className="mk-partner-back"
+          style={{
+            position: 'absolute', inset: 0, background: '#FFFFFF',
+            border: '1px solid #18181B', borderRadius: 16, padding: 24,
+            display: 'flex', flexDirection: 'column',
+            justifyContent: 'space-between',
+            backfaceVisibility: 'hidden',
+            WebkitBackfaceVisibility: 'hidden',
+            transform: 'rotateY(180deg)',
+          }}
+        >
+          <div>
+            <div style={mono({ fontSize: 34, lineHeight: 0.7, color: '#DCDAD4' })}>&ldquo;</div>
+            <p style={{ fontSize: 14, lineHeight: 1.5, color: '#18181B', margin: '10px 0 0', fontWeight: 500 }}>{q}</p>
+          </div>
+          <div style={mono({ fontSize: 11, lineHeight: 1.4, color: '#52525B' })}>
+            {who}<br />{city}
+          </div>
+        </div>
+      </div>
+    </a>
+  )
+}
+
 export default async function MarketingPage() {
   const lang = await resolveLanguage()
   // Translation helper. First arg is English (default fallback).
@@ -199,7 +293,32 @@ export default async function MarketingPage() {
     },
   ]
 
-  const TESTIMONIALS = [
+  // TESTIMONIALS[0] is the current real pilot — logo, href, and
+  // businessName present flip the render to the PartnerCard variant
+  // (see the map below). The rest are honest placeholders that fill
+  // in as more partners come online. TODO: Dr. Chavez has not yet
+  // supplied his own quote; the string below is a draft that leans
+  // into the tea-shop use case (weighed inventory + retail POS +
+  // finance in one screen). Swap when the real quote lands.
+  const TESTIMONIALS: Array<{
+    q: string
+    who: string
+    city: string
+    logo?: string
+    href?: string
+    businessName?: string
+  }> = [
+    {
+      q: t(
+        'Grams to pounds to the register — one screen, one truth.',
+        'De gramos a libras a la caja — una sola pantalla, una sola verdad.'
+      ),
+      who: t('Dr. Elliot C. Chavez · Tea Shop', 'Dr. Elliot C. Chavez · Tienda de té'),
+      city: t('Weslaco, TX', 'Weslaco, TX'),
+      logo: '/testimonials/hatziri.jpg',
+      href: 'https://hatziribotanicals.com/',
+      businessName: 'Hatziri Tea & Botanicals',
+    },
     {
       q: t(
         'A pilot partner’s words go here — what changed once every number finally agreed.',
@@ -272,6 +391,12 @@ export default async function MarketingPage() {
         html{scroll-behavior:smooth}
         .mk-marquee:hover{animation-play-state:paused}
         .mk-sec{scroll-margin-top:96px}
+        /* Partner-card flip. Only fires on true-hover devices; on
+           touch the flip is skipped so mobile visitors see the
+           logo card and tap through to the partner's site. */
+        @media (hover: hover){
+          .mk-partner-card:hover .mk-partner-inner{transform:rotateY(180deg)}
+        }
 
         /* Act 1 phone-only short paragraph — hidden by default;
            the mobile media-query block below promotes it back. */
@@ -796,7 +921,15 @@ export default async function MarketingPage() {
         <div style={{ marginTop: 28, overflow: 'hidden', WebkitMaskImage: 'linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent)', maskImage: 'linear-gradient(90deg,transparent,#000 5%,#000 95%,transparent)' }}>
           <div className="mk-marquee" style={{ display: 'flex', width: 'max-content', animation: 'testiScroll 48s linear infinite' }}>
             {[...TESTIMONIALS, ...TESTIMONIALS].map((row, i) => (
-              <TestimonialCard key={i} q={row.q} who={row.who} city={row.city} />
+              row.logo && row.href && row.businessName ? (
+                <PartnerCard
+                  key={i}
+                  q={row.q} who={row.who} city={row.city}
+                  logo={row.logo} href={row.href} businessName={row.businessName}
+                />
+              ) : (
+                <TestimonialCard key={i} q={row.q} who={row.who} city={row.city} />
+              )
             ))}
           </div>
         </div>

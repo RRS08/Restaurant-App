@@ -29,8 +29,8 @@
 // RS256 is the documented default).
 // ----------------------------------------------------------------
 
-import { SignJWT, importPKCS8 } from 'jose'
-import { randomUUID } from 'crypto'
+import { SignJWT } from 'jose'
+import { createPrivateKey, randomUUID, type KeyObject } from 'crypto'
 
 const JWT_ALG = 'RS256'
 const JWT_LIFETIME_SEC = 300
@@ -43,15 +43,23 @@ function unescapePem(pem: string): string {
   return pem.includes('\\n') ? pem.replace(/\\n/g, '\n') : pem
 }
 
-// Cache the imported key across warm invocations. jose's
-// importPKCS8 does key parsing on every call; caching skips it
-// when the same process handles multiple sign operations. Reset
-// on env-var change is handled by process restart (Vercel
-// redeploy), which is the correct model.
-let cachedKey: CryptoKey | null = null
+// Cache the imported key across warm invocations. Node's
+// createPrivateKey does the parsing once; caching skips it when
+// the same process handles multiple sign ops. Reset on env-var
+// change is handled by process restart (Vercel redeploy), which
+// is the correct model.
+let cachedKey: KeyObject | null = null
 let cachedKeyPem: string | null = null
 
-async function getSigningKey(): Promise<CryptoKey> {
+// Poynt's Developer Center hands out RSA private keys in either
+// PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) or PKCS#8
+// (`-----BEGIN PRIVATE KEY-----`) depending on how they were
+// generated. Node's crypto.createPrivateKey auto-detects both
+// formats from the PEM header, and its returned KeyObject
+// satisfies jose's KeyLike so SignJWT accepts it directly. This
+// is more robust than importPKCS8 (which rejects PKCS#1) and
+// avoids a manual convert step on the user's end.
+function getSigningKey(): KeyObject {
   const rawPem = process.env.GODADDY_POYNT_PRIVATE_KEY
   if (!rawPem) {
     throw new Error(
@@ -60,7 +68,7 @@ async function getSigningKey(): Promise<CryptoKey> {
   }
   const pem = unescapePem(rawPem)
   if (cachedKey && cachedKeyPem === pem) return cachedKey
-  const key = await importPKCS8(pem, JWT_ALG)
+  const key = createPrivateKey({ key: pem, format: 'pem' })
   cachedKey = key
   cachedKeyPem = pem
   return key
@@ -77,7 +85,7 @@ export async function signPoyntAppJwt(): Promise<string> {
   }
   const audience = process.env.GODADDY_POYNT_BASE_URL || 'https://services.poynt.net'
 
-  const key = await getSigningKey()
+  const key = getSigningKey()
   const now = Math.floor(Date.now() / 1000)
 
   return await new SignJWT({})

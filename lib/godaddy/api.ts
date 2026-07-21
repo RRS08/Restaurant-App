@@ -187,7 +187,25 @@ async function getJson<T>(url: string, accessToken: string): Promise<
         error: `Poynt API ${res.status} ${res.statusText}${snippet ? ` — ${snippet}` : ''}`,
       }
     }
-    const data = (await res.json().catch(() => null)) as T | null
+    // Diagnostic: log the raw response body (truncated) on success
+    // too so we can see exactly what Poynt sent back. Poynt's
+    // `/orders` endpoint has been silently returning empty payloads
+    // and there's no other way to see what shape it's actually
+    // using without this. Truncated to a safe length — we only
+    // care about the first orders + top-level fields.
+    const rawText = await res.text().catch(() => '')
+    console.info('[godaddy/api] response snippet', {
+      url,
+      status: res.status,
+      length: rawText.length,
+      body: rawText.slice(0, 800),
+    })
+    let data: T | null = null
+    try {
+      data = JSON.parse(rawText) as T
+    } catch {
+      return { error: 'Poynt API returned invalid JSON.' }
+    }
     if (data === null) return { error: 'Poynt API returned invalid JSON.' }
     return { data }
   } catch (err) {

@@ -144,50 +144,83 @@ export function normalizeAmount(raw: number): number {
   return +n.toFixed(2)
 }
 
+/** Coerce any Poynt id-like value to a trimmed string, safely.
+ *  Poynt returns numeric ids in several places (line item `id`,
+ *  employee ids, transaction ids…) and my first pass assumed
+ *  strings, crashing on `.trim()`. */
+function safeIdStr(v: unknown): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'string') return v.trim()
+  if (typeof v === 'number') return String(v)
+  return ''
+}
+
 export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedOrder | null {
-  const externalId = (o.id ?? o.orderNumber ?? '').trim()
-  if (!externalId) return null
+  try {
+    const externalId = safeIdStr(o.id) || safeIdStr(o.orderNumber)
+    if (!externalId) return null
 
-  const postedAt = (o.createdAt ?? o.updatedAt ?? '').trim()
-  if (!postedAt) return null
+    const postedAt = (o.createdAt ?? o.updatedAt ?? '').trim()
+    if (!postedAt) return null
 
-  const netTotal = o.amounts?.netTotal ?? o.amounts?.subTotal ?? 0
-  const totalAmount = normalizeAmount(netTotal)
+    const netTotal = o.amounts?.netTotal ?? o.amounts?.subTotal ?? 0
+    const totalAmount = normalizeAmount(netTotal)
 
-  const rawStatus = (o.statuses?.status ?? '').toUpperCase()
-  let status: NormalizedOrder['status'] | undefined
-  if (rawStatus.includes('VOID') || rawStatus.includes('CANCEL')) status = 'voided'
-  else if (rawStatus === 'COMPLETED') status = 'completed'
+    const rawStatus = (o.statuses?.status ?? '').toUpperCase()
+    let status: NormalizedOrder['status'] | undefined
+    if (rawStatus.includes('VOID') || rawStatus.includes('CANCEL')) status = 'voided'
+    else if (rawStatus === 'COMPLETED') status = 'completed'
 
-  const lineItems = (o.items ?? [])
-    .map((li) => {
-      const externalItemId = (li.productId ?? li.id ?? '').trim()
-      const qty = Number(li.quantity ?? 0)
-      const unit = normalizeAmount(li.unitPrice ?? 0)
-      if (!externalItemId || !Number.isFinite(qty) || qty <= 0) return null
-      return {
-        externalItemId,
-        itemName: (li.name ?? '').trim() || `Imported item ${externalItemId}`,
-        quantity: qty,
-        unitPrice: unit,
-        totalPrice: +(unit * qty).toFixed(2),
-      }
-    })
-    .filter(Boolean) as NormalizedOrder['lineItems']
+    const lineItems = (o.items ?? [])
+      .map((li) => {
+        // Preference order for the external item id:
+        //   1. sku    — stable product identifier across orders,
+        //               used for menu-item resolution downstream.
+        //   2. externalId — Poynt's own line-item id (LineItem_...).
+        //   3. productId  — present on POS orders.
+        //   4. numeric id — a per-order index. Not ideal (won't
+        //               dedupe across orders) but keeps the sale
+        //               from being lost.
+        const externalItemId =
+          safeIdStr(li.sku) ||
+          safeIdStr(li.externalId) ||
+          safeIdStr(li.productId) ||
+          safeIdStr(li.id)
+        const qty = Number(li.quantity ?? 0)
+        const unit = normalizeAmount(li.unitPrice ?? 0)
+        if (!externalItemId || !Number.isFinite(qty) || qty <= 0) return null
+        return {
+          externalItemId,
+          itemName: (li.name ?? '').trim() || `Imported item ${externalItemId}`,
+          quantity: qty,
+          unitPrice: unit,
+          totalPrice: +(unit * qty).toFixed(2),
+        }
+      })
+      .filter(Boolean) as NormalizedOrder['lineItems']
 
-  if (lineItems.length === 0) {
-    notes.push(`Order ${externalId} had no resolvable line items — skipped.`)
+    if (lineItems.length === 0) {
+      notes.push(`Order ${externalId} had no resolvable line items — skipped.`)
+      return null
+    }
+
+    return {
+      externalId,
+      postedAt,
+      totalAmount,
+      status,
+      paymentType: 'other',
+      paymentStatus: status === 'voided' ? 'unpaid' : 'paid',
+      lineItems,
+    }
+  } catch (err) {
+    // Defensive: one weird order shouldn't crash the whole sync.
+    // Log the id so we can inspect the offender if it recurs.
+    const idHint = safeIdStr(o.id) || safeIdStr(o.orderNumber) || '<unknown>'
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn('[godaddy/ingest] normalize threw — order skipped', { orderId: idHint, err: msg })
+    notes.push(`Order ${idHint} failed to normalize (${msg}) — skipped.`)
     return null
-  }
-
-  return {
-    externalId,
-    postedAt,
-    totalAmount,
-    status,
-    paymentType: 'other',
-    paymentStatus: status === 'voided' ? 'unpaid' : 'paid',
-    lineItems,
   }
 }
 

@@ -36,8 +36,18 @@ export interface PoyntOrderAmounts {
 }
 
 export interface PoyntOrderItem {
-  id?: string
+  // In Poynt's WEB storefront payloads, `id` is a NUMERIC line-
+  // item index within the order (1, 2, 3…), not a stable
+  // product identifier. Type it as number|string here so the
+  // normalizer's String() coercion + trim doesn't blow up when
+  // it's a number.
+  id?: string | number
   productId?: string
+  // The stable product identifier we actually want as the
+  // externalItemId. Poynt WEB orders always carry sku; POS
+  // orders may too, and we fall back to externalId if not.
+  sku?: string
+  externalId?: string
   name?: string
   quantity?: number
   unitPrice?: number

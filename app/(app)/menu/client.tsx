@@ -42,8 +42,10 @@ import {
   deleteCategory,
   setMenuItemAvailabilityOverride,
   updateMenuItemPrice,
+  updateMenuItemName,
   assignMenuItemCategory,
   bulkAssignMenuItemCategory,
+  reorderCategories,
 } from '@/app/actions/menu'
 import {
   addRecipeComponent,
@@ -171,6 +173,16 @@ export default function MenuClient({
   const [draggingItemId, setDraggingItemId] = useState<string | null>(null)
   const [hoverTargetId, setHoverTargetId] = useState<string | null>(null)
 
+  // Chip-reorder state — parallel to draggingItemId but scoped to
+  // filter-chip drag. Keeping the two channels separate lets the
+  // chip drop handler tell "did the user drag a menu ITEM here"
+  // (assign to this category) apart from "did the user drag a
+  // CHIP here" (reorder the chip row) without mime-type gymnastics.
+  const [draggingChipId, setDraggingChipId] = useState<string | null>(null)
+  const [chipHoverTargetId, setChipHoverTargetId] = useState<string | null>(null)
+  const [optimisticOrder, setOptimisticOrder] = useState<string[] | null>(null)
+  const [, startReorderTransition] = useTransition()
+
   // Pending optimistic move — used to hide the item from its source
   // bucket immediately on drop without waiting for revalidation.
   const [pendingMoves, setPendingMoves] = useState<Record<string, string | null>>({})
@@ -275,6 +287,50 @@ export default function MenuClient({
   }
   const awaitingItems = itemsByCategory.get('__none__') ?? []
 
+  // Apply the pending drag-reorder to the displayed chip row so the
+  // moved chip lands under the cursor instantly. When the server
+  // catches up (revalidation), optimisticOrder clears and we fall
+  // back to the freshly-fetched `categories` ordering.
+  const displayedCategories: Category[] = (() => {
+    if (!optimisticOrder) return categories
+    const byId = new Map(categories.map((c) => [c.id, c]))
+    const ordered: Category[] = []
+    const consumed = new Set<string>()
+    for (const id of optimisticOrder) {
+      const c = byId.get(id)
+      if (c && !consumed.has(id)) {
+        ordered.push(c)
+        consumed.add(id)
+      }
+    }
+    // Append any categories not in the optimistic sequence — belt
+    // and suspenders for a stale-tab payload.
+    for (const c of categories) if (!consumed.has(c.id)) ordered.push(c)
+    return ordered
+  })()
+
+  const reorderChipTo = (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return
+    const currentIds = displayedCategories.map((c) => c.id)
+    const srcIdx = currentIds.indexOf(sourceId)
+    const tgtIdx = currentIds.indexOf(targetId)
+    if (srcIdx === -1 || tgtIdx === -1) return
+    const next = [...currentIds]
+    next.splice(srcIdx, 1)
+    next.splice(tgtIdx, 0, sourceId)
+    setOptimisticOrder(next)
+    startReorderTransition(async () => {
+      const res = await reorderCategories(next)
+      if (res?.error) {
+        setOptimisticOrder(null)
+      } else {
+        // On success, clear on the next tick after revalidation so
+        // we don't fight the incoming fresh data.
+        setTimeout(() => setOptimisticOrder(null), 400)
+      }
+    })
+  }
+
   // Sanitize the selection: drop ids that have left the awaiting
   // bucket (assigned elsewhere, deleted, etc.) so the action bar's
   // count matches what's actually still selectable.
@@ -375,7 +431,7 @@ export default function MenuClient({
               shows when there are unassigned items so it doesn't
               nag on a clean menu. */}
           <FilterChipsBar
-            categories={categories}
+            categories={displayedCategories}
             itemsByCategory={itemsByCategory}
             awaitingCount={awaitingItems.length}
             totalCount={items.length}
@@ -385,13 +441,18 @@ export default function MenuClient({
             draggingItemId={draggingItemId}
             hoverTargetId={hoverTargetId}
             setHoverTargetId={setHoverTargetId}
+            draggingChipId={draggingChipId}
+            setDraggingChipId={setDraggingChipId}
+            chipHoverTargetId={chipHoverTargetId}
+            setChipHoverTargetId={setChipHoverTargetId}
+            onReorderChip={reorderChipTo}
             t={t}
           />
 
           {/* Main content — the current filter's items. */}
           {filter === 'all' ? (
             <div className="space-y-10">
-              {categories.map((cat) => {
+              {displayedCategories.map((cat) => {
                 const sectionItems = itemsByCategory.get(cat.id) ?? []
                 return (
                   <SectionBlock
@@ -536,6 +597,11 @@ function FilterChipsBar({
   draggingItemId,
   hoverTargetId,
   setHoverTargetId,
+  draggingChipId,
+  setDraggingChipId,
+  chipHoverTargetId,
+  setChipHoverTargetId,
+  onReorderChip,
   t,
 }: {
   categories: Category[]
@@ -548,13 +614,19 @@ function FilterChipsBar({
   draggingItemId: string | null
   hoverTargetId: string | null
   setHoverTargetId: (id: string | null) => void
+  draggingChipId: string | null
+  setDraggingChipId: (id: string | null) => void
+  chipHoverTargetId: string | null
+  setChipHoverTargetId: (id: string | null) => void
+  onReorderChip: (sourceId: string, targetId: string) => void
   t: T
 }) {
-  // Native drag-drop handlers, applied to every chip identically.
-  // The chip's key (categoryId or 'awaiting') drives both the
-  // visual highlight and the assignment on drop.
+  // Native drag-drop handlers for the ITEM-onto-chip channel. Skipped
+  // when a chip is being dragged so the chip-reorder handlers own the
+  // event without competing hover state.
   const chipDragProps = (targetId: string, categoryIdOnDrop: string | null) => ({
     onDragOver: (e: React.DragEvent) => {
+      if (draggingChipId) return
       if (!draggingItemId) return
       e.preventDefault()
       e.dataTransfer.dropEffect = 'move'
@@ -564,6 +636,7 @@ function FilterChipsBar({
       if (hoverTargetId === targetId) setHoverTargetId(null)
     },
     onDrop: (e: React.DragEvent) => {
+      if (draggingChipId) return
       e.preventDefault()
       const itemId = e.dataTransfer.getData('text/plain')
       setHoverTargetId(null)
@@ -602,14 +675,57 @@ function FilterChipsBar({
       {categories.map((cat) => {
         const count = (itemsByCategory.get(cat.id) ?? []).length
         const active = filter === cat.id
-        const hover = hoverTargetId === cat.id
+        const itemHover = hoverTargetId === cat.id
+        const chipHover = chipHoverTargetId === cat.id && draggingChipId !== cat.id
+        const isDraggingSelf = draggingChipId === cat.id
+        // Merged drop handler: chip-in-transit wins; falls back to
+        // the item-onto-chip channel when no chip is being dragged.
+        const itemHandlers = chipDragProps(cat.id, cat.id)
         return (
           <button
             key={cat.id}
             type="button"
             onClick={() => onFilter(cat.id)}
-            {...chipDragProps(cat.id, cat.id)}
-            className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border transition-all ${chipClass(cat.id, active, hover)}`}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('application/x-menu-chip-id', cat.id)
+              // Also stamp a plain-text payload — Safari refuses to
+              // start a drag without one, and this string is never
+              // read (item drops key off getData('text/plain') set
+              // by the item card path, which uses the menu item id).
+              e.dataTransfer.setData('text/plain', `chip:${cat.id}`)
+              setDraggingChipId(cat.id)
+            }}
+            onDragEnd={() => {
+              setDraggingChipId(null)
+              setChipHoverTargetId(null)
+            }}
+            onDragOver={(e) => {
+              if (draggingChipId && draggingChipId !== cat.id) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                if (chipHoverTargetId !== cat.id) setChipHoverTargetId(cat.id)
+                return
+              }
+              itemHandlers.onDragOver(e)
+            }}
+            onDragLeave={() => {
+              if (chipHoverTargetId === cat.id) setChipHoverTargetId(null)
+              itemHandlers.onDragLeave()
+            }}
+            onDrop={(e) => {
+              const src = e.dataTransfer.getData('application/x-menu-chip-id')
+              if (src && src !== cat.id) {
+                e.preventDefault()
+                setChipHoverTargetId(null)
+                onReorderChip(src, cat.id)
+                return
+              }
+              itemHandlers.onDrop(e)
+            }}
+            title={t('Drag to reorder', 'Arrastra para reordenar')}
+            className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border cursor-grab active:cursor-grabbing transition-all ${chipClass(cat.id, active, itemHover)} ${chipHover ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-white' : ''} ${isDraggingSelf ? 'opacity-40' : ''}`}
           >
             {cat.name} · {count}
           </button>
@@ -1553,9 +1669,7 @@ function ItemDrawer({
         <div className="border-b border-gray-100 px-6 py-5 flex-shrink-0">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
-              <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">
-                {item.name}
-              </h2>
+              <HeaderNameEditor item={item} t={t} />
               {/* Meta row — section + source on either side of the
                   inline price editor. Wrapped in a flex container
                   (not a <p>) so the price editor can swap to an
@@ -2233,6 +2347,87 @@ function XIcon({ size = 16 }: { size?: number }) {
     <svg width={size} height={size} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
     </svg>
+  )
+}
+
+// ================================================================
+// HeaderNameEditor — inline name-edit affordance in the drawer
+// header. Same interaction shape as HeaderPriceEditor: display
+// mode shows the item name with a small Edit link; clicking swaps
+// to an input + Save/Cancel. Closes automatically on the
+// pending → not-pending transition when the server returned no
+// error. Keeps the truncation behavior of the original h2 in the
+// display state so long names don't blow the drawer header out.
+// ================================================================
+function HeaderNameEditor({ item, t }: { item: MenuItem; t: T }) {
+  const [state, action, pending] = useActionState(updateMenuItemName, null)
+  const [editing, setEditing] = useState(false)
+  const [val, setVal] = useState(item.name)
+
+  const wasPendingRef = useRef(false)
+  useEffect(() => {
+    if (wasPendingRef.current && !pending && !state?.error) {
+      setEditing(false)
+      setVal(item.name)
+    }
+    wasPendingRef.current = pending
+  }, [pending, state, item.name])
+
+  if (!editing) {
+    return (
+      <div className="flex items-start gap-2 min-w-0">
+        <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate min-w-0">
+          {item.name}
+        </h2>
+        <button
+          type="button"
+          onClick={() => {
+            setVal(item.name)
+            setEditing(true)
+          }}
+          className="mt-1 flex-shrink-0 text-[10px] font-medium text-blue-700 hover:text-blue-900 px-1.5 py-0.5 rounded hover:bg-blue-50 transition-colors"
+        >
+          {t('Edit', 'Editar')}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <form action={action} className="flex flex-wrap items-center gap-1.5">
+      <input type="hidden" name="item_id" value={item.id} />
+      <input
+        name="name"
+        type="text"
+        value={val}
+        onChange={(e) => setVal(e.target.value)}
+        autoFocus
+        required
+        maxLength={80}
+        className="min-w-0 flex-1 h-8 rounded border border-gray-300 px-2 text-[15px] font-semibold text-gray-900 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+      />
+      <button
+        type="submit"
+        disabled={pending}
+        className="text-[10px] font-semibold text-white bg-gray-900 hover:bg-gray-800 px-2 py-1 rounded disabled:opacity-60 transition-colors"
+      >
+        {pending ? t('Saving…', 'Guardando…') : t('Save name', 'Guardar nombre')}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false)
+          setVal(item.name)
+        }}
+        disabled={pending}
+        className="text-[10px] font-medium text-gray-600 hover:text-gray-800 px-1.5 py-1 rounded hover:bg-gray-100 disabled:opacity-60 transition-colors"
+      >
+        {t('Cancel', 'Cancelar')}
+      </button>
+      {state?.error && (
+        <span className="basis-full text-[10px] text-red-600 mt-0.5">{state.error}</span>
+      )}
+    </form>
   )
 }
 

@@ -332,6 +332,43 @@ export async function updateMenuItemPrice(
 }
 
 // ----------------------------------------------------------------
+// updateMenuItemName — inline name editor in the item drawer.
+// Same shape and safety model as updateMenuItemPrice: form-encoded,
+// restaurant-scoped, price/recipe/availability untouched, audited.
+// Trim trailing whitespace and reject empty; enforce a soft length
+// cap so a manager can't blow past the POS strip's display budget.
+// ----------------------------------------------------------------
+export async function updateMenuItemName(
+  prevState: { error: string } | null,
+  formData: FormData,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  const itemId = ((formData.get('item_id') as string | null) ?? '').trim()
+  if (!itemId) return { error: 'No item specified.' }
+
+  const nameRaw = ((formData.get('name') as string | null) ?? '').trim()
+  if (!nameRaw) return { error: 'Name is required.' }
+  if (nameRaw.length > 80) return { error: 'Name is too long (80 max).' }
+
+  const { error } = await ctx.supabase
+    .from('menu_items')
+    .update({ name: nameRaw })
+    .eq('id', itemId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) return { error: formatError('menu item', error) }
+
+  await logAudit(ctx, null, 'update_menu_item_name', 'menu_items', itemId, { name: nameRaw })
+
+  revalidatePath('/menu')
+  revalidatePath('/web/menu')
+  revalidatePath('/pos')
+  return null
+}
+
+// ----------------------------------------------------------------
 // assignMenuItemCategory — move a menu item into a category (or
 // clear its assignment). Powers both the click-to-assign popover on
 // the "Awaiting a section" band and the drag-and-drop reorganize
@@ -447,6 +484,75 @@ export async function bulkAssignMenuItemCategory(
     'menu_items',
     undefined,
     { menuItemIds, categoryId, count: menuItemIds.length },
+  )
+
+  revalidatePath('/menu')
+  revalidatePath('/web/menu')
+  revalidatePath('/pos')
+  return null
+}
+
+// ----------------------------------------------------------------
+// reorderCategories — set the display order of the caller's menu
+// categories by rewriting sort_order for each id in the given
+// sequence. Powers the drag-to-reorder chip row on /menu.
+//
+// Contract:
+//   • Every id in the sequence must belong to the caller's
+//     restaurant — mismatch is an all-or-nothing error, no
+//     partial write.
+//   • Ids not in the sequence keep their existing sort_order.
+//     The client always passes the full displayed order, but
+//     this guarantee means a stale-tab partial payload can't
+//     silently pin some categories to the top.
+//   • sort_order steps by 10 so ad-hoc single inserts later
+//     (say, from an import) have room to slot in without a full
+//     rewrite.
+// ----------------------------------------------------------------
+export async function reorderCategories(
+  orderedCategoryIds: string[],
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+
+  if (ctx.role !== 'owner') {
+    return { error: 'Only the owner can reorganize the menu.' }
+  }
+
+  if (orderedCategoryIds.length === 0) return null
+
+  // Verify every id belongs to this restaurant BEFORE writing.
+  const { data: cats, error: verifyErr } = await ctx.supabase
+    .from('menu_categories')
+    .select('id')
+    .eq('restaurant_id', ctx.restaurantId)
+    .in('id', orderedCategoryIds)
+  if (verifyErr) return { error: formatError('section', verifyErr) }
+  if (!cats || cats.length !== orderedCategoryIds.length) {
+    return { error: 'Some sections do not exist.' }
+  }
+
+  // Fan out the sort_order writes in parallel. Each is scoped to
+  // restaurant_id as defense-in-depth alongside RLS.
+  const writes = orderedCategoryIds.map((id, i) =>
+    ctx.supabase
+      .from('menu_categories')
+      .update({ sort_order: (i + 1) * 10 })
+      .eq('id', id)
+      .eq('restaurant_id', ctx.restaurantId),
+  )
+  const results = await Promise.all(writes)
+  for (const r of results) {
+    if (r.error) return { error: formatError('section', r.error) }
+  }
+
+  await logAudit(
+    ctx,
+    null,
+    'reorder_menu_categories',
+    'menu_categories',
+    undefined,
+    { orderedCategoryIds, count: orderedCategoryIds.length },
   )
 
   revalidatePath('/menu')

@@ -48,29 +48,43 @@ export async function syncGodaddyOrders(): Promise<SyncResult> {
   const merged: SyncResult = { ...EMPTY, channelBreakdown: { pos: 0, online: 0 }, notes: [] }
 
   // 1. /orders — online + Order-shaped POS sales.
-  const pullOrders = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 1000 })
-  if ('error' in pullOrders) {
-    // Bubble the error but continue to /transactions — one endpoint
-    // failing shouldn't block the other.
-    merged.notes.push(`/orders fetch failed: ${pullOrders.error}`)
-  } else {
-    const r = await ingestPoyntOrders({
-      supabase, restaurantId: ctx.restaurantId, raw: pullOrders.orders,
-    })
-    mergeIn(merged, r)
+  //    Wrapped so an unhandled throw here can't kill the whole
+  //    action — /transactions still gets a chance to run.
+  try {
+    const pullOrders = await fetchPoyntOrders({ restaurantId: ctx.restaurantId, maxOrders: 1000 })
+    if ('error' in pullOrders) {
+      merged.notes.push(`/orders fetch failed: ${pullOrders.error}`)
+    } else {
+      const r = await ingestPoyntOrders({
+        supabase, restaurantId: ctx.restaurantId, raw: pullOrders.orders,
+      })
+      mergeIn(merged, r)
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[godaddy/sync] /orders leg threw', err)
+    merged.notes.push(`/orders leg threw: ${msg}`)
   }
 
   // 2. /transactions — terminal charges that skip the Order table.
   //    Critical for merchants (Hatziri) who use the Poynt terminal
   //    heavily; without this we miss all in-person card sales.
-  const pullTx = await fetchPoyntTransactions({ restaurantId: ctx.restaurantId, maxTransactions: 1000 })
-  if ('error' in pullTx) {
-    merged.notes.push(`/transactions fetch failed: ${pullTx.error}`)
-  } else {
-    const r = await ingestPoyntTransactions({
-      supabase, restaurantId: ctx.restaurantId, raw: pullTx.transactions,
-    })
-    mergeIn(merged, r)
+  //    Same defensive wrap — an unexpected shape from Poynt on this
+  //    endpoint shouldn't undo the /orders leg's work.
+  try {
+    const pullTx = await fetchPoyntTransactions({ restaurantId: ctx.restaurantId, maxTransactions: 1000 })
+    if ('error' in pullTx) {
+      merged.notes.push(`/transactions fetch failed: ${pullTx.error}`)
+    } else {
+      const r = await ingestPoyntTransactions({
+        supabase, restaurantId: ctx.restaurantId, raw: pullTx.transactions,
+      })
+      mergeIn(merged, r)
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[godaddy/sync] /transactions leg threw', err)
+    merged.notes.push(`/transactions leg threw: ${msg}`)
   }
 
   return merged

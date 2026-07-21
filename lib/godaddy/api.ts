@@ -113,10 +113,16 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
 
   while (nextUrl && orders.length < cap && safety > 0) {
     safety--
+    console.info('[godaddy/api] GET orders', { url: nextUrl, businessId: tok.businessId })
     const page: { data: PoyntOrderList } | { error: string } =
       await getJson<PoyntOrderList>(nextUrl, tok.accessToken)
     if ('error' in page) return { error: page.error }
     const pageOrders = page.data.orders ?? []
+    console.info('[godaddy/api] page returned', {
+      count: page.data.count,
+      ordersOnPage: pageOrders.length,
+      hasLinks: (page.data.links ?? []).length > 0,
+    })
     for (const o of pageOrders) {
       orders.push(o)
       if (orders.length >= cap) break

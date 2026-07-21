@@ -3,41 +3,36 @@
 // ----------------------------------------------------------------
 // TestimonialsCarousel — marketing testimonials strip.
 //
-// Replaces the CSS-only marquee that used to live inline in the
-// marketing page. Reasons:
-//   • The marquee cycled every 48s so it took forever to see the
-//     real partner (Hatziri) come back around.
-//   • No way to jump to a specific card — passive-only UX.
-//   • Card heights weren't guaranteed uniform across variants.
+// Marquee-style continuous scroll (RAF-driven translation) with
+// dot navigation, hover-pause, and reduced-motion honor.
 //
-// This carousel fixes all three:
-//   • Auto-advance every 4s, hover pauses — one full cycle in
-//     ~cards × 4s (currently 20s).
-//   • Dots at the bottom mirror the card count; click to jump.
-//     Active dot widens into a pill so the current position is
-//     obvious at a glance.
-//   • Every card locks to `height: 200 + boxSizing: border-box`
-//     so partner and placeholder variants share the same vertical
-//     footprint regardless of content.
+// Why RAF and not a CSS animation:
+//   • Clicking a dot needs to jump the track to a specific
+//     position AND have the auto-scroll resume from there. A CSS
+//     @keyframes animation has no idea about that runtime state,
+//     so mid-animation jumps snap back or double-up.
+//   • With RAF we own the offset; hover pauses it, clicks reseat
+//     it, resume continues from wherever it is — coherent state.
 //
-// Scroll uses `scroll-snap-type: x mandatory` + `scrollIntoView`
-// so keyboard/trackpad scrolling still feels native, and the auto
-// advance's programmatic scrolls animate with the browser's own
-// smooth-scroll (no rAF loop we own).
+// Items are rendered twice ([...items, ...items]) so the wrap
+// at one-set-length is visually invisible: the card at that
+// physical index sits at the exact same on-screen x as the card
+// at index 0, making the reset seamless.
+//
+// All cards lock to height=200 + boxSizing:border-box so the
+// PartnerCard variant and placeholder cards share the exact same
+// vertical footprint regardless of content.
 // ----------------------------------------------------------------
 
-import { useState, useEffect, useRef, type CSSProperties } from 'react'
+import { useState, useEffect, useRef, useCallback, type CSSProperties } from 'react'
 
 const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
 const mono = (extra: CSSProperties = {}): CSSProperties => ({ fontFamily: MONO, ...extra })
 
-// All cards lock to this exact footprint. Bumped from the old 188
-// so the PartnerCard's logo + caption + padding have breathing
-// room without pushing any single card taller than its neighbors.
 const CARD_HEIGHT = 200
 const CARD_WIDTH = 300
 const CARD_GAP = 14
-const AUTO_ADVANCE_MS = 4000
+const SCROLL_SPEED_PX_PER_SEC = 30 // Continuous marquee speed.
 
 export interface Testimonial {
   q: string
@@ -55,33 +50,78 @@ export default function TestimonialsCarousel({
   items: Testimonial[]
   lang: 'en' | 'es'
 }) {
-  const [activeIndex, setActiveIndex] = useState(0)
+  const cardStep = CARD_WIDTH + CARD_GAP
+  const setLen = items.length * cardStep // width of one unique set
+
+  const [activeIdx, setActiveIdx] = useState(0)
   const [paused, setPaused] = useState(false)
+  const [reducedMotion, setReducedMotion] = useState(false)
+
   const trackRef = useRef<HTMLDivElement>(null)
+  const offsetRef = useRef(0)
+  const rafRef = useRef<number | null>(null)
+  const lastTsRef = useRef(0)
 
-  // Auto-advance. Hover pauses (setPaused via onMouseEnter/Leave
-  // on the whole container). The timer effect depends on `paused`
-  // so it tears down cleanly and restarts when the pointer leaves.
+  // Respect prefers-reduced-motion — the RAF loop is JS, not CSS,
+  // so it won't get killed by the global reduce-motion rule. Query
+  // once on mount and keep the marquee static for those users; the
+  // dots still work for manual navigation.
   useEffect(() => {
-    if (paused) return
-    const timer = window.setInterval(() => {
-      setActiveIndex((i) => (i + 1) % items.length)
-    }, AUTO_ADVANCE_MS)
-    return () => window.clearInterval(timer)
-  }, [paused, items.length])
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)')
+    setReducedMotion(mq.matches)
+    const handler = (e: MediaQueryListEvent) => setReducedMotion(e.matches)
+    mq.addEventListener('change', handler)
+    return () => mq.removeEventListener('change', handler)
+  }, [])
 
-  // Scroll the active card into the center of the track whenever
-  // activeIndex changes — whether from the auto-advance timer, a
-  // dot click, or a native swipe that landed on a new snap.
+  // Applies the current offset to the track transform and derives
+  // the closest-card index for the dot indicator. Refs (not state)
+  // for offset so we can mutate 60× per second without re-renders.
+  const applyOffset = useCallback((off: number) => {
+    if (trackRef.current) {
+      trackRef.current.style.transform = `translate3d(${-off}px, 0, 0)`
+    }
+    const nearIdx = ((Math.round(off / cardStep) % items.length) + items.length) % items.length
+    setActiveIdx((prev) => (prev === nearIdx ? prev : nearIdx))
+  }, [cardStep, items.length])
+
+  // RAF continuous-scroll loop. Torn down on pause/reduced-motion
+  // and cleanly restarted from wherever offsetRef sits — no jumps
+  // when the pointer enters/leaves the section.
   useEffect(() => {
-    const track = trackRef.current
-    if (!track) return
-    const card = track.children[activeIndex] as HTMLElement | undefined
-    if (!card) return
-    card.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' })
-  }, [activeIndex])
+    if (paused || reducedMotion) return
+    lastTsRef.current = 0
+    const tick = (ts: number) => {
+      if (lastTsRef.current === 0) lastTsRef.current = ts
+      const dt = ts - lastTsRef.current
+      lastTsRef.current = ts
+      offsetRef.current += (SCROLL_SPEED_PX_PER_SEC * dt) / 1000
+      // Wrap once we've scrolled a full set. Because items are
+      // rendered twice, the on-screen visual at wrap == the visual
+      // at offset 0, so the reset is invisible.
+      if (offsetRef.current >= setLen) offsetRef.current -= setLen
+      applyOffset(offsetRef.current)
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+      lastTsRef.current = 0
+    }
+  }, [paused, reducedMotion, setLen, applyOffset])
+
+  // Dot click — snap the marquee so the picked card sits at the
+  // left edge of the viewport. The RAF loop (if running) picks up
+  // from that new offset on the next frame.
+  const goTo = (idx: number) => {
+    offsetRef.current = idx * cardStep
+    applyOffset(offsetRef.current)
+  }
 
   const t = (en: string, es?: string) => (lang === 'es' && es ? es : en)
+  const doubledItems = [...items, ...items]
 
   return (
     <div
@@ -90,48 +130,41 @@ export default function TestimonialsCarousel({
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
     >
-      {/* Track — horizontal scroller with snap points. The mask
-          image is the same 5–95 % fade as the old marquee so
-          cards near the edges of the viewport blend into the
-          section bg instead of ending on a hard line. */}
+      {/* Viewport — clips the wide track and fades the edges so
+          partially-visible cards blend into the section bg. */}
       <div
-        ref={trackRef}
         style={{
-          display: 'flex',
-          gap: CARD_GAP,
-          overflowX: 'auto',
-          overflowY: 'hidden',
-          scrollSnapType: 'x mandatory',
-          scrollBehavior: 'smooth',
-          paddingBlock: 4,
-          // Center the first/last card in the viewport so activeIndex
-          // 0 and N-1 can actually land in the middle when scrolled to.
-          paddingInline: 'max(24px, calc(50% - 150px))',
+          overflow: 'hidden',
           WebkitMaskImage: 'linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)',
           maskImage: 'linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)',
-          scrollbarWidth: 'none',
         }}
-        // Hide native scrollbar in WebKit — the dot row IS the UI.
-        className="mk-carousel-track"
       >
-        {items.map((item, i) => (
-          <div key={i} style={{ scrollSnapAlign: 'center', flex: `0 0 ${CARD_WIDTH}px` }}>
-            {item.logo && item.href && item.businessName ? (
-              <PartnerCard
-                q={item.q} who={item.who} city={item.city}
-                logo={item.logo} href={item.href} businessName={item.businessName}
-              />
-            ) : (
-              <TestimonialCard q={item.q} who={item.who} city={item.city} />
-            )}
-          </div>
-        ))}
+        <div
+          ref={trackRef}
+          style={{
+            display: 'flex',
+            gap: CARD_GAP,
+            width: 'max-content',
+            willChange: 'transform',
+          }}
+        >
+          {doubledItems.map((item, i) => (
+            <div key={i} style={{ flex: `0 0 ${CARD_WIDTH}px` }}>
+              {item.logo && item.href && item.businessName ? (
+                <PartnerCard
+                  q={item.q} who={item.who} city={item.city}
+                  logo={item.logo} href={item.href} businessName={item.businessName}
+                />
+              ) : (
+                <TestimonialCard q={item.q} who={item.who} city={item.city} />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Dot navigation. Active dot widens into a pill so the
-          current position is unmistakable. Buttons for real
-          keyboard + screen-reader semantics; hover on any dot
-          still pauses the timer (bubbles from the outer div). */}
+      {/* Dot navigation. Same-size circles, active dot just gets
+          darker — no shape shift. Full ARIA tablist semantics. */}
       <div
         role="tablist"
         aria-label={t('Testimonial navigation', 'Navegación de testimonios')}
@@ -139,12 +172,12 @@ export default function TestimonialsCarousel({
           display: 'flex',
           justifyContent: 'center',
           alignItems: 'center',
-          gap: 8,
+          gap: 10,
           marginTop: 22,
         }}
       >
         {items.map((_, i) => {
-          const active = i === activeIndex
+          const active = i === activeIdx
           return (
             <button
               key={i}
@@ -152,34 +185,28 @@ export default function TestimonialsCarousel({
               role="tab"
               aria-selected={active}
               aria-label={t(`Go to testimonial ${i + 1} of ${items.length}`, `Ir al testimonio ${i + 1} de ${items.length}`)}
-              onClick={() => setActiveIndex(i)}
+              onClick={() => goTo(i)}
               style={{
-                width: active ? 24 : 8,
+                width: 8,
                 height: 8,
-                borderRadius: 4,
+                borderRadius: '50%',
                 background: active ? '#18181B' : '#D8D8D4',
                 border: 'none',
                 padding: 0,
                 cursor: 'pointer',
-                transition: 'width 220ms ease, background 220ms ease',
+                transition: 'background 200ms ease',
               }}
             />
           )
         })}
       </div>
-
-      {/* Track-scrollbar hider — CSS-only, colocated via a <style>
-          tag so this component stays self-contained. */}
-      <style>{`
-        .mk-carousel-track::-webkit-scrollbar{display:none}
-      `}</style>
     </div>
   )
 }
 
 // ----------------------------------------------------------------
-// TestimonialCard — placeholder-shape card. Same visual as before.
-// Height is now hard-locked so it matches PartnerCard exactly.
+// TestimonialCard — placeholder-shape card. Height hard-locked to
+// match PartnerCard exactly.
 // ----------------------------------------------------------------
 function TestimonialCard({ q, who, city }: { q: string; who: string; city: string }) {
   return (
@@ -201,8 +228,8 @@ function TestimonialCard({ q, who, city }: { q: string; who: string; city: strin
 }
 
 // ----------------------------------------------------------------
-// PartnerCard — real pilot partner. Same flip behavior as before.
-// Height hard-locked to match TestimonialCard.
+// PartnerCard — real pilot partner. Flip on hover, whole card is
+// an anchor to the partner's site. Height hard-locked.
 // ----------------------------------------------------------------
 function PartnerCard({
   q, who, city, logo, href, businessName,

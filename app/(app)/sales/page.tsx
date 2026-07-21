@@ -47,7 +47,13 @@ export default async function SalesPage() {
       order_items ( id, quantity, unit_price, total_price, menu_items ( name ) )
     `)
     .order('created_at', { ascending: false })
-    .limit(50)
+    // Was 50 — too tight for merchants doing 20+ sales a day
+    // (a couple of days of history vanishes off the bottom).
+    // 500 covers ~2 weeks of a busy retail day at Hatziri's
+    // volume; still a bounded read so a merchant with years of
+    // orders doesn't ship megabytes to the browser. Proper
+    // pagination is a phase-2 build if this ceiling gets hit.
+    .limit(500)
 
   const normalized = (orders ?? []).map((o) => ({
     id: o.id,

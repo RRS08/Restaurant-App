@@ -1298,15 +1298,28 @@ function SectionBlock({
   const canAccept =
     !!onAssign && !!draggingItemId && !items.some((it) => it.id === draggingItemId)
 
-  // Nested sub-section styling: softer background, indented, more
-  // compact header. Top-level parents get the standard spacing.
+  // Two levels, two clearly different visual identities:
+  //
+  // depth 0 (parent) — elevated white card with a subtle border
+  //   and shadow. Reads as a first-class container. Header carries
+  //   a SECTION mono eyebrow so its role is legible at a glance,
+  //   plus a heavier name.
+  //
+  // depth 1 (sub-section) — nested inside its parent's card with
+  //   an indent + colored left-border stripe + tinted background.
+  //   Reads as "an item contained by the section above," the way
+  //   Notion callouts / GitHub tree branches / Linear sub-issues
+  //   telegraph nesting without needing a full separate card.
+  //
+  // Drag-hover states scale with depth so the "you can drop here"
+  // affordance stays proportional.
   const outerClass = depth === 1
-    ? `rounded-lg transition-all border border-gray-100 bg-gray-50/60 pl-4 pr-3 pt-3 pb-4 ${dragOver ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-white bg-blue-50/40' : ''}`
-    : `rounded-xl transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30' : ''}`
+    ? `relative rounded-r-lg border-l-[3px] border-l-blue-400/70 bg-blue-50/30 pl-5 pr-3 py-3 transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-white bg-blue-100/50' : ''}`
+    : `rounded-2xl border border-gray-200 bg-white p-5 sm:p-6 shadow-[0_1px_3px_rgba(15,23,42,0.04)] transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30' : ''}`
   const headerNameClass = depth === 1
-    ? 'text-[13px] font-semibold tracking-tight text-gray-700 whitespace-nowrap'
-    : 'text-sm font-semibold tracking-tight text-gray-900 whitespace-nowrap'
-  const headerMarginClass = depth === 1 ? 'mb-2' : 'mb-4'
+    ? 'text-[13px] font-semibold tracking-tight text-gray-800 whitespace-nowrap'
+    : 'text-base font-bold tracking-tight text-gray-900 whitespace-nowrap'
+  const headerMarginClass = depth === 1 ? 'mb-2.5' : 'mb-4'
 
   return (
     <section
@@ -1324,13 +1337,21 @@ function SectionBlock({
       } : undefined}
       className={outerClass}
     >
-      {/* Section header — quieted at depth 0, further quieted at
-          depth 1 so nested sub-blocks read as contained inside
-          the parent, not as competing cards.
-          Mapped count was removed from this row: per-item mapping is
-          surfaced on the card itself. */}
+      {/* Section header — role eyebrow above the name at depth 0
+          so managers can spot section vs sub-section without
+          reading the layout; at depth 1 the leading ↳ + the
+          colored stripe on the container already tell the story,
+          so we skip the extra eyebrow to keep it compact. */}
+      {depth === 0 && (
+        <p className="mb-1 font-mono text-[10px] uppercase tracking-[0.16em] text-gray-400">
+          {t('Section', 'Sección')}
+        </p>
+      )}
       <div className={`${headerMarginClass} flex items-center gap-3`}>
         <h2 className={headerNameClass}>
+          {depth === 1 && (
+            <span aria-hidden="true" className="mr-1.5 text-blue-500/70">↳</span>
+          )}
           {category.name}
         </h2>
         <span className="flex-1 h-px bg-gray-200/70" />

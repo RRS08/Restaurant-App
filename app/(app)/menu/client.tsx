@@ -186,7 +186,11 @@ export default function MenuClient({
       ? t('Build the menu your in-app POS reads from.', 'Construye el menú que lee tu POS integrado.')
       : t('Manage sections, items, and recipe links.', 'Administra secciones, artículos y vínculos de receta.')
 
-  const [addItemTo, setAddItemTo] = useState<string | null>(null)
+  // addItemTo used to lift "which section has its Add Item popover
+  // open" up to the page level for a single-form-at-a-time rule.
+  // That made nested rendering awkward (parent + child both need
+  // their own popover state independently), so each SectionBlock
+  // now owns its own local addItemOpen state.
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null)
 
   // Filter — 'all' shows every section stacked; a category id
@@ -533,11 +537,23 @@ export default function MenuClient({
             t={t}
           />
 
-          {/* Main content — the current filter's items. */}
+          {/* Main content — the current filter's items.
+              Nested rendering: top-level parents render as
+              outer blocks, and each parent's sub-categories render
+              INSIDE that block via the subSections prop. So the
+              flat displayedCategories list is filtered to just
+              top-level here; children come along for the ride via
+              their parent. */}
           {filter === 'all' ? (
             <div className="space-y-10">
-              {displayedCategories.map((cat) => {
+              {displayedCategories.filter((c) => !c.parentId).map((cat) => {
                 const sectionItems = itemsByCategory.get(cat.id) ?? []
+                const subSections = displayedCategories
+                  .filter((c) => c.parentId === cat.id)
+                  .map((sub) => ({
+                    category: sub,
+                    items: itemsByCategory.get(sub.id) ?? [],
+                  }))
                 return (
                   <SectionBlock
                     key={cat.id}
@@ -545,13 +561,11 @@ export default function MenuClient({
                     items={sectionItems}
                     selectedItemId={selectedItemId}
                     onOpenItem={setSelectedItemId}
-                    addItemOpen={addItemTo === cat.id}
-                    onToggleAddItem={() => setAddItemTo((tt) => (tt === cat.id ? null : cat.id))}
-                    onCloseAddItem={() => setAddItemTo(null)}
                     onDragStartItem={setDraggingItemId}
                     onDragEndItem={() => setDraggingItemId(null)}
                     draggingItemId={draggingItemId}
                     onAssign={assignTo}
+                    subSections={subSections}
                     t={t}
                   />
                 )
@@ -567,19 +581,29 @@ export default function MenuClient({
               const cat = categories.find((c) => c.id === filter)
               if (!cat) return null
               const sectionItems = itemsByCategory.get(cat.id) ?? []
+              // When filtering to a top-level parent, still show its
+              // sub-categories nested inside. When filtering to a
+              // sub-category, render it standalone (no children —
+              // 2-level max).
+              const subSections = !cat.parentId
+                ? categories
+                    .filter((c) => c.parentId === cat.id)
+                    .map((sub) => ({
+                      category: sub,
+                      items: itemsByCategory.get(sub.id) ?? [],
+                    }))
+                : []
               return (
                 <SectionBlock
                   category={cat}
                   items={sectionItems}
                   selectedItemId={selectedItemId}
                   onOpenItem={setSelectedItemId}
-                  addItemOpen={addItemTo === cat.id}
-                  onToggleAddItem={() => setAddItemTo((tt) => (tt === cat.id ? null : cat.id))}
-                  onCloseAddItem={() => setAddItemTo(null)}
                   onDragStartItem={setDraggingItemId}
                   onDragEndItem={() => setDraggingItemId(null)}
                   draggingItemId={draggingItemId}
                   onAssign={assignTo}
+                  subSections={subSections}
                   t={t}
                 />
               )
@@ -1208,22 +1232,18 @@ function SectionBlock({
   items,
   selectedItemId,
   onOpenItem,
-  addItemOpen,
-  onToggleAddItem,
-  onCloseAddItem,
   onDragStartItem,
   onDragEndItem,
   draggingItemId,
   onAssign,
+  subSections,
+  depth = 0,
   t,
 }: {
   category: Category
   items: MenuItem[]
   selectedItemId: string | null
   onOpenItem: (id: string) => void
-  addItemOpen: boolean
-  onToggleAddItem: () => void
-  onCloseAddItem: () => void
   /** Fires when the manager begins dragging an item card. Parent
    *  uses it to track which item is in flight so drop targets can
    *  highlight and the card can dim. */
@@ -1237,12 +1257,28 @@ function SectionBlock({
    *  the primary target; the section body is a secondary
    *  convenience so managers don't have to aim precisely. */
   onAssign?: (itemId: string, categoryId: string) => void
+  /** Optional child sections rendered visually contained inside
+   *  this parent's block, after the parent's own items. Populated
+   *  only for top-level categories with sub-categories. Each
+   *  child is a full SectionBlock at depth=1 (smaller header,
+   *  indented, tinted background) so the hierarchy is legible
+   *  without a second surface. */
+  subSections?: Array<{ category: Category; items: MenuItem[] }>
+  /** Visual scale. 0 = top-level parent (full-width, bold header,
+   *  outer card). 1 = sub-section nested inside a parent (smaller
+   *  header, indented, softer container). Any deeper is a bug —
+   *  we enforce 2-level max server-side. */
+  depth?: 0 | 1
   t: T
 }) {
   // deleteCategory is a direct (formData) -> void server action — not
   // a useActionState-shaped one — so we use a plain <form action={...}>
   // here and drive the 2-step confirmation purely via local state.
   const [removeMode, setRemoveMode] = useState(false)
+  // Local "add item" popover state per section — was previously
+  // page-lifted for a single-form-at-a-time rule, but that made
+  // nested-section rendering awkward. Two open forms is fine.
+  const [addItemOpen, setAddItemOpen] = useState(false)
   // Local hover state for the "you're about to drop here" visual.
   // Kept local instead of hoisting to the page because only this
   // section cares about its own highlight.
@@ -1262,6 +1298,16 @@ function SectionBlock({
   const canAccept =
     !!onAssign && !!draggingItemId && !items.some((it) => it.id === draggingItemId)
 
+  // Nested sub-section styling: softer background, indented, more
+  // compact header. Top-level parents get the standard spacing.
+  const outerClass = depth === 1
+    ? `rounded-lg transition-all border border-gray-100 bg-gray-50/60 pl-4 pr-3 pt-3 pb-4 ${dragOver ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-white bg-blue-50/40' : ''}`
+    : `rounded-xl transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30' : ''}`
+  const headerNameClass = depth === 1
+    ? 'text-[13px] font-semibold tracking-tight text-gray-700 whitespace-nowrap'
+    : 'text-sm font-semibold tracking-tight text-gray-900 whitespace-nowrap'
+  const headerMarginClass = depth === 1 ? 'mb-2' : 'mb-4'
+
   return (
     <section
       onDragOver={canAccept ? (e) => {
@@ -1276,18 +1322,15 @@ function SectionBlock({
         const itemId = e.dataTransfer.getData('text/plain')
         if (itemId && onAssign) onAssign(itemId, category.id)
       } : undefined}
-      className={`rounded-xl transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30' : ''}`}
+      className={outerClass}
     >
-      {/* Section header — quieted.
+      {/* Section header — quieted at depth 0, further quieted at
+          depth 1 so nested sub-blocks read as contained inside
+          the parent, not as competing cards.
           Mapped count was removed from this row: per-item mapping is
-          surfaced on the card itself, and the page-level "With recipe"
-          stat covers the aggregate. The header now carries only what
-          identifies and quietly counts the section. "+ Add item" was
-          pulled out of this row and placed below the cards as a softer
-          local action — repeating it across every section header read
-          too heavy. */}
-      <div className="mb-4 flex items-center gap-3">
-        <h2 className="text-sm font-semibold tracking-tight text-gray-900 whitespace-nowrap">
+          surfaced on the card itself. */}
+      <div className={`${headerMarginClass} flex items-center gap-3`}>
+        <h2 className={headerNameClass}>
           {category.name}
         </h2>
         <span className="flex-1 h-px bg-gray-200/70" />
@@ -1357,14 +1400,14 @@ function SectionBlock({
           <div className="relative inline-block mt-2">
             <button
               type="button"
-              onClick={onToggleAddItem}
+              onClick={() => setAddItemOpen((o) => !o)}
               className="text-[11px] font-medium text-blue-600 hover:text-blue-500 transition-colors"
             >
               {t('+ Add first item', '+ Agregar primer artículo')}
             </button>
             {addItemOpen && (
-              <Popover onClose={onCloseAddItem} className="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72">
-                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} t={t} />
+              <Popover onClose={() => setAddItemOpen(false)} className="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72">
+                <AddItemForm categoryId={category.id} onClose={() => setAddItemOpen(false)} t={t} />
               </Popover>
             )}
           </div>
@@ -1391,18 +1434,43 @@ function SectionBlock({
           <div className="relative mt-4 inline-block">
             <button
               type="button"
-              onClick={onToggleAddItem}
+              onClick={() => setAddItemOpen((o) => !o)}
               className="text-[11px] font-medium text-blue-600 hover:text-blue-500 transition-colors"
             >
               {t('+ Add item', '+ Agregar artículo')}
             </button>
             {addItemOpen && (
-              <Popover onClose={onCloseAddItem} className="left-0 top-full mt-1.5 w-72">
-                <AddItemForm categoryId={category.id} onClose={onCloseAddItem} t={t} />
+              <Popover onClose={() => setAddItemOpen(false)} className="left-0 top-full mt-1.5 w-72">
+                <AddItemForm categoryId={category.id} onClose={() => setAddItemOpen(false)} t={t} />
               </Popover>
             )}
           </div>
         </>
+      )}
+
+      {/* Nested sub-sections — rendered visually contained inside
+          the parent block, after the parent's own items. Each is
+          the same SectionBlock component at depth=1, so all drag/
+          drop / add-item / delete affordances carry through
+          consistently. */}
+      {subSections && subSections.length > 0 && (
+        <div className="mt-6 space-y-4">
+          {subSections.map((sub) => (
+            <SectionBlock
+              key={sub.category.id}
+              category={sub.category}
+              items={sub.items}
+              selectedItemId={selectedItemId}
+              onOpenItem={onOpenItem}
+              onDragStartItem={onDragStartItem}
+              onDragEndItem={onDragEndItem}
+              draggingItemId={draggingItemId}
+              onAssign={onAssign}
+              depth={1}
+              t={t}
+            />
+          ))}
+        </div>
       )}
     </section>
   )

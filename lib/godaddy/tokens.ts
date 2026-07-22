@@ -36,6 +36,13 @@ export interface StoredPoyntToken {
   expiresAt: string
   connectedAt: string
   updatedAt: string
+  /** Non-null once webhook registration with Poynt succeeded.
+   *  If null, the merchant is connected but no real-time push is
+   *  active — the manual Sync + GitHub Actions cron carry the
+   *  ingest load and re-registration can be attempted from the
+   *  Settings UI. */
+  webhookId: string | null
+  webhookSecret: string | null
 }
 
 // ================================================================
@@ -137,6 +144,8 @@ export async function getStoredToken(restaurantId: string): Promise<StoredPoyntT
     expiresAt: data.expires_at as string,
     connectedAt: data.connected_at as string,
     updatedAt: data.updated_at as string,
+    webhookId: (data.webhook_id as string | null) ?? null,
+    webhookSecret: (data.webhook_secret as string | null) ?? null,
   }
 }
 

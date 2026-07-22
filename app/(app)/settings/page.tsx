@@ -227,10 +227,14 @@ export default async function SettingsPage() {
 
   // Live GoDaddy Poynt connection status — powers GoDaddyConnectCard.
   // Owner-only; null when the restaurant hasn't linked a merchant.
+  // webhookRegistered flag lets the card show whether real-time
+  // push is live and expose a "Retry registration" affordance
+  // when it isn't.
   let godaddyConnected: {
     businessId: string
     connectedAt: string
     expiresAt: string
+    webhookRegistered: boolean
   } | null = null
   if (isOwner && restaurantId) {
     const stored = await getStoredToken(restaurantId)
@@ -239,6 +243,7 @@ export default async function SettingsPage() {
         businessId: stored.businessId,
         connectedAt: stored.connectedAt,
         expiresAt: stored.expiresAt,
+        webhookRegistered: !!stored.webhookSecret,
       }
     }
   }

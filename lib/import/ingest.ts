@@ -358,29 +358,57 @@ export async function ingestOrders({
   //    menu_category_id_snapshot) for future historical-fidelity
   //    reports — same foundation columns the native createOrder path
   //    populates.
+  //
+  //    Provider-scope note: the Poynt integration syncs the merchant's
+  //    product catalog under external_provider='godaddy_pos'. Both
+  //    channels (godaddy_pos AND godaddy_online orders) share that
+  //    catalog — a merchant sells the same SKUs whether the sale
+  //    happens at the terminal or the website. So for a godaddy_online
+  //    order, we look up menu_items under BOTH slugs and prefer any
+  //    hit. Non-godaddy sources (square, clover, csv) keep the old
+  //    single-slug behavior.
+  const lookupProviders: string[] =
+    sourceId === 'godaddy_online' || sourceId === 'godaddy_pos'
+      ? ['godaddy_pos', 'godaddy_online']
+      : [sourceId]
   const allExternalItemIds = [
     ...new Set(orders.flatMap((o) => o.lineItems.map((li) => li.externalItemId))),
   ]
   const { data: existingItems } = await supabase
     .from('menu_items')
-    .select('id, external_id, name, category_id')
+    .select('id, external_id, name, category_id, external_provider')
     .eq('restaurant_id', restaurantId)
-    .eq('external_provider', sourceId)
+    .in('external_provider', lookupProviders)
     .in('external_id', allExternalItemIds)
 
-  type MenuSnapshot = { id: string; name: string; categoryId: string | null }
+  type MenuSnapshot = { id: string; name: string; categoryId: string | null; provider: string }
   const itemSnapByExternalId = new Map<string, MenuSnapshot>()
   for (const row of existingItems ?? []) {
-    if (row.external_id) {
-      itemSnapByExternalId.set(row.external_id, {
-        id: row.id as string,
-        name: (row.name as string | null) ?? '',
-        categoryId: (row.category_id as string | null) ?? null,
-      })
-    }
+    const extId = row.external_id as string | null
+    if (!extId) continue
+    // If multiple providers have the same external_id (unlikely
+    // but possible after a re-org), prefer the CATALOG provider
+    // (godaddy_pos) over the channel-specific one.
+    const existing = itemSnapByExternalId.get(extId)
+    if (existing && existing.provider === 'godaddy_pos') continue
+    itemSnapByExternalId.set(extId, {
+      id: row.id as string,
+      name: (row.name as string | null) ?? '',
+      categoryId: (row.category_id as string | null) ?? null,
+      provider: (row.external_provider as string) ?? sourceId,
+    })
   }
 
-  // 3. Create placeholder items for unknown externals so sales never fail.
+  // 3. Create placeholder items for unknown externals so sales
+  //    never fail. This is a fallback path — Poynt sources should
+  //    have populated menu_items via the catalog sync above, so
+  //    placeholders should be rare. When they are needed, insert
+  //    under the CATALOG provider (godaddy_pos) so the next
+  //    channel-flipped sync (INSTORE vs WEB) also finds the row
+  //    and doesn't double-create. Non-godaddy sources keep their
+  //    own provider slug.
+  const placeholderProvider: string =
+    (sourceId === 'godaddy_online' || sourceId === 'godaddy_pos') ? 'godaddy_pos' : sourceId
   let placeholdersCreated = 0
   for (const order of orders) {
     for (const li of order.lineItems) {
@@ -395,7 +423,7 @@ export async function ingestOrders({
           category_id: null,
           active: true,
           source: 'imported',
-          external_provider: sourceId,
+          external_provider: placeholderProvider,
           external_id: li.externalItemId,
         })
         .select('id')
@@ -405,6 +433,7 @@ export async function ingestOrders({
           id: placeholder.id as string,
           name: placeholderName,
           categoryId: null,
+          provider: placeholderProvider,
         })
         placeholdersCreated++
       }

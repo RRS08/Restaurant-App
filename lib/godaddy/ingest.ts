@@ -26,9 +26,16 @@
 
 import { ingestOrders } from '@/lib/import/ingest'
 import type { NormalizedOrder } from '@/lib/import/types'
-import type { PoyntOrder, PoyntTransaction } from './api'
+import type { PoyntOrder, PoyntTransaction, PoyntProduct } from './api'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
+
+// Canonical provider slug for the Poynt merchant catalog. Same
+// slug is used by the ORDER ingest lookup so both POS-channel
+// (INSTORE) and WEB-channel orders join to the same catalog
+// row — one product row per SKU, regardless of which surface
+// the sale came through.
+const CATALOG_PROVIDER = 'godaddy_pos' as const
 
 export interface IngestBatchResult {
   ordersInserted: number
@@ -108,6 +115,120 @@ export async function ingestPoyntOrders(args: {
     })
     fold(result, r)
   }
+  return result
+}
+
+// ================================================================
+// Product catalog ingest
+// ================================================================
+//
+// Poynt is the source of truth for what a merchant sells. We
+// upsert every product into menu_items keyed by (restaurant_id,
+// external_provider='godaddy_pos', external_id=SKU). Existing
+// placeholder rows created by the old order-ingest fallback get
+// PROMOTED to real catalog rows on first sync — same external_id
+// matches, upsert refreshes name/price/active.
+//
+// Owner-side flags we deliberately don't touch:
+//   • hidden_from_menu — set by owner via bulk-delete. Catalog
+//     sync leaves it alone so a delete decision stays sticky
+//     across subsequent product syncs.
+//   • category_id — owner assigns categories in Checked; Poynt's
+//     category taxonomy is a phase-2 concern (their category
+//     endpoint is separate from products). We only overwrite it
+//     when it was previously null AND we discover a category on
+//     the product — otherwise leave as-is.
+
+export interface ProductIngestResult {
+  productsUpserted: number
+  productsSkipped: number
+  notes: string[]
+  error: string | null
+}
+
+export async function ingestPoyntProducts(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  raw: PoyntProduct[]
+}): Promise<ProductIngestResult> {
+  const { supabase, restaurantId, raw } = args
+  const result: ProductIngestResult = {
+    productsUpserted: 0,
+    productsSkipped: 0,
+    notes: [],
+    error: null,
+  }
+  if (raw.length === 0) return result
+
+  // Build the upsert rows first. Skip anything without a usable
+  // SKU (SKU is what links line items to menu rows).
+  type UpsertRow = {
+    restaurant_id: string
+    name: string
+    current_price: number
+    active: boolean
+    source: string
+    external_provider: string
+    external_id: string
+  }
+  const rows: UpsertRow[] = []
+  const seenSku = new Set<string>()
+
+  for (const p of raw) {
+    const sku = safeIdStr(p.sku) || safeIdStr(p.id)
+    if (!sku) {
+      result.productsSkipped++
+      continue
+    }
+    // Dedupe within-batch: two products with the same SKU (rare
+    // but possible in test data) would collide on the upsert.
+    // Take the first one; upsert semantics later can refresh.
+    if (seenSku.has(sku)) continue
+    seenSku.add(sku)
+
+    const rawPrice = p.pricing?.price ?? p.pricing?.listPrice ?? p.price ?? p.unitPrice ?? p.amount ?? 0
+    const price = normalizeAmount(Number(rawPrice))
+
+    const name = (p.name ?? p.shortName ?? '').trim() || `Imported item ${sku}`
+    const active = !p.status || p.status.toUpperCase() === 'ACTIVE'
+
+    rows.push({
+      restaurant_id: restaurantId,
+      name,
+      current_price: price > 0 ? price : 0,
+      active,
+      source: 'imported',
+      external_provider: CATALOG_PROVIDER,
+      external_id: sku,
+    })
+  }
+
+  if (rows.length === 0) return result
+
+  // Chunk the upsert — Poynt's docs allow 100 products per page
+  // but a merchant with 400 products fits comfortably in one
+  // batch. Cap at 500 per query to keep single-request payload
+  // small and avoid API gateway limits.
+  const CHUNK = 500
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const slice = rows.slice(i, i + CHUNK)
+    const { error } = await supabase
+      .from('menu_items')
+      .upsert(slice, {
+        onConflict: 'restaurant_id,external_provider,external_id',
+        // ignoreDuplicates=false so an existing row is UPDATED
+        // (name/price/active refresh from Poynt), not skipped.
+        // hidden_from_menu is intentionally NOT in the upsert
+        // payload so the owner's hide decision survives.
+        ignoreDuplicates: false,
+      })
+    if (error) {
+      result.error = `Product upsert failed: ${error.message}`
+      return result
+    }
+    result.productsUpserted += slice.length
+  }
+
   return result
 }
 

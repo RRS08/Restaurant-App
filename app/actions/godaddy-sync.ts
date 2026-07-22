@@ -22,8 +22,8 @@
 // ----------------------------------------------------------------
 
 import { getAuthContext } from '@/lib/auth'
-import { fetchPoyntOrders, fetchPoyntTransactions } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, ingestPoyntTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts } from '@/lib/godaddy/api'
+import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export type SyncResult = IngestBatchResult
@@ -55,6 +55,34 @@ export async function syncGodaddyOrders(): Promise<SyncResult> {
 export async function runSyncForRestaurant(restaurantId: string): Promise<SyncResult> {
   const supabase = createAdminClient()
   const merged: SyncResult = { ...EMPTY, channelBreakdown: { pos: 0, online: 0 }, notes: [] }
+
+  // 0. /products — pull the merchant's product catalog FIRST so
+  //    the subsequent order/transaction ingest finds a real menu
+  //    row for each sale's SKU instead of spawning a throwaway
+  //    placeholder. This is the "menu = mirror of Poynt catalog"
+  //    architecture — placeholder creation in the order path is
+  //    only a fallback for the rare unmapped SKU. Failure is
+  //    non-fatal: if the products endpoint is unavailable, the
+  //    order/transaction legs still run against whatever catalog
+  //    is currently in the DB.
+  try {
+    const pullProducts = await fetchPoyntProducts({ restaurantId, maxProducts: 5000 })
+    if ('error' in pullProducts) {
+      merged.notes.push(`/products fetch failed: ${pullProducts.error}`)
+    } else {
+      const r = await ingestPoyntProducts({
+        supabase, restaurantId, raw: pullProducts.products,
+      })
+      if (r.error) merged.notes.push(`/products ingest error: ${r.error}`)
+      else if (r.productsUpserted > 0) {
+        merged.notes.push(`Catalog: ${r.productsUpserted} product${r.productsUpserted === 1 ? '' : 's'} synced.`)
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[godaddy/sync] /products leg threw', err)
+    merged.notes.push(`/products leg threw: ${msg}`)
+  }
 
   // Incremental startAt — highest created_at we already have from
   // Poynt for this restaurant. Add 1s so we don't refetch the

@@ -101,6 +101,11 @@ interface MenuItem {
    *  that our local `active` toggle controls our records only —
    *  actual availability for sale is managed in the external POS. */
   externalProvider: string | null
+  /** Owner-side "hide from menu" flag. True means the owner hit
+   *  Delete on this item — it's excluded from the Awaiting band
+   *  and from category sections so it stops cluttering the UI.
+   *  Sales history + reports still reference it. */
+  hiddenFromMenu: boolean
   recipe: RecipeEntry[]
   // Availability foundation (computed in the page component).
   override: AvailabilityOverride
@@ -349,20 +354,22 @@ export default function MenuClient({
       ? pendingMoves[item.id]
       : item.categoryId
 
+  // Items the owner explicitly hid via bulk-delete on the Awaiting
+  // band never render — filter them out at bucketing time so
+  // every downstream surface (chips, sections, awaiting, counts)
+  // sees a consistent view. hidden_from_menu is separate from
+  // `active`: `active` mirrors Poynt's own status and can flip
+  // via catalog sync; `hidden_from_menu` is the owner's decision
+  // and stays sticky across every sync.
+  const visibleItems = items.filter((i) => !i.hiddenFromMenu)
+
   const itemsByCategory = new Map<string, MenuItem[]>()
-  for (const item of items) {
+  for (const item of visibleItems) {
     const key = effectiveCategoryId(item) ?? '__none__'
     if (!itemsByCategory.has(key)) itemsByCategory.set(key, [])
     itemsByCategory.get(key)!.push(item)
   }
-  // Awaiting band deliberately excludes inactive items. When a
-  // manager deletes an imported placeholder, we soft-delete it
-  // (active=false) so the ingest pipeline doesn't recreate it on
-  // the next sync — but leaving it in Awaiting would defeat the
-  // point. Inactive items are still visible inside their category
-  // block (with an "Inactive" chip) so the manager can un-hide
-  // them from the drawer; they just don't clutter Awaiting.
-  const awaitingItems = (itemsByCategory.get('__none__') ?? []).filter((i) => i.active !== false)
+  const awaitingItems = itemsByCategory.get('__none__') ?? []
 
   // Apply the pending drag-reorder to the displayed chip row so the
   // moved chip lands under the cursor instantly. When the server
@@ -511,7 +518,7 @@ export default function MenuClient({
             categories={displayedCategories}
             itemsByCategory={itemsByCategory}
             awaitingCount={awaitingItems.length}
-            totalCount={items.length}
+            totalCount={visibleItems.length}
             filter={filter}
             onFilter={setFilter}
             onDropItem={assignTo}

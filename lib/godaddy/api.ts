@@ -183,6 +183,121 @@ export async function fetchPoyntOrders(args: FetchOrdersArgs): Promise<
 }
 
 // ================================================================
+// Products — Poynt merchant catalog
+// ================================================================
+//
+// The merchant's actual product list lives at
+// GET /businesses/{id}/products. Same HATEOAS pagination as
+// /orders — response has a `links[].rel='next'` for the next
+// page. This is the source of truth for what a merchant sells;
+// once ingested into menu_items, the order/transaction ingest
+// finds line items already have a canonical menu row instead
+// of spawning noisy placeholders per SKU per sale.
+//
+// The Product model in Poynt's docs is not fully rendered on
+// the public API reference page, so we type only the small
+// slice we read. Everything else on the response passes
+// through untouched. Fields we care about:
+//   • id       — Poynt's stable product identifier
+//   • sku      — the SKU line items reference. Same value we
+//                use as external_id on menu_items so orders join.
+//   • shortName / name — display name
+//   • price    — integer cents (per Poynt's ORDER amount convention
+//                which we've already validated on the orders side)
+//   • status   — 'ACTIVE' / 'INACTIVE' / similar; maps to
+//                menu_items.active
+
+export interface PoyntProduct {
+  id?: string
+  sku?: string
+  name?: string
+  shortName?: string
+  description?: string
+  status?: string
+  // Price can arrive under a few different keys depending on
+  // whether variants exist. Read all defensively; normalizer
+  // picks the first present one.
+  price?: number
+  unitPrice?: number
+  amount?: number
+  pricing?: {
+    price?: number
+    listPrice?: number
+    amount?: number
+  }
+  // Some products have variants each with their own SKU / price.
+  // We ingest the parent record only (uses its own sku); variant
+  // handling is a phase 2 concern.
+  variants?: Array<{
+    sku?: string
+    price?: number
+  }>
+}
+
+export interface PoyntProductList {
+  products?: PoyntProduct[]
+  links?: PoyntLink[]
+  count?: number
+}
+
+interface FetchProductsArgs {
+  restaurantId: string
+  maxProducts?: number
+}
+
+/** Pull the merchant's full product catalog. Same HATEOAS shape
+ *  as fetchPoyntOrders; caller supplies restaurantId, we resolve
+ *  a valid token internally. Default cap of 5000 comfortably
+ *  covers any Pilot V1 merchant (Hatziri has ~400). */
+export async function fetchPoyntProducts(args: FetchProductsArgs): Promise<
+  | { businessId: string; products: PoyntProduct[] }
+  | { error: string }
+> {
+  const tok = await getValidAccessToken(args.restaurantId)
+  if ('error' in tok) return { error: tok.error }
+
+  // limit=100 (Poynt's max per doc) so a 400-product merchant
+  // finishes in ~4 pages of ~150ms each = well under Vercel's
+  // function timeout.
+  const startingUrl =
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/products?limit=100`
+
+  const cap = args.maxProducts ?? 5000
+  const products: PoyntProduct[] = []
+  let nextUrl: string | null = startingUrl
+  let safety = 100
+
+  while (nextUrl && products.length < cap && safety > 0) {
+    safety--
+    console.info('[godaddy/api] GET products', { url: nextUrl, businessId: tok.businessId })
+    const page: { data: PoyntProductList } | { error: string } =
+      await getJson<PoyntProductList>(nextUrl, tok.accessToken)
+    if ('error' in page) return { error: page.error }
+    const pageProducts = page.data.products ?? []
+    console.info('[godaddy/api] products page', {
+      count: page.data.count,
+      onPage: pageProducts.length,
+      hasLinks: (page.data.links ?? []).length > 0,
+    })
+    for (const p of pageProducts) {
+      products.push(p)
+      if (products.length >= cap) break
+    }
+    const next: PoyntLink | undefined = (page.data.links ?? []).find(
+      (l: PoyntLink) => (l.rel ?? '').toLowerCase() === 'next' && !!l.href,
+    )
+    const rawHref: string | null = next?.href ?? null
+    if (rawHref) {
+      try { nextUrl = new URL(rawHref, baseUrl()).toString() } catch { nextUrl = null }
+    } else {
+      nextUrl = null
+    }
+  }
+
+  return { businessId: tok.businessId, products }
+}
+
+// ================================================================
 // Transactions — Poynt terminal / Virtual Terminal sales
 // ================================================================
 //

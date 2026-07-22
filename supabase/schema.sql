@@ -198,6 +198,13 @@ create table public.menu_items (
   active        boolean not null default true,
   source        text not null default 'manual' check (source in ('manual', 'external')),
   external_id   text,
+  -- Owner-controlled hide flag. Distinct from `active` (which
+  -- mirrors the upstream POS's active/inactive status via the
+  -- catalog sync). Client filters hidden_from_menu=true items
+  -- out of every rendered surface. Catalog sync's upsert
+  -- deliberately leaves this column alone so an owner's hide
+  -- decision survives every subsequent sync.
+  hidden_from_menu boolean not null default false,
   created_at    timestamptz not null default now()
 );
 

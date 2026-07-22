@@ -642,16 +642,19 @@ export async function bulkDeleteMenuItems(
     const isImported = !!meta && meta.source === 'imported' && !!meta.externalProvider
 
     if (isImported) {
-      // Always soft-delete imported items so the next sync's SKU
-      // lookup finds the (inactive) row and doesn't spawn a fresh
-      // placeholder. Client filters inactive out of Awaiting so
-      // it visually looks deleted.
-      const { error: deactErr } = await ctx.supabase
+      // Owner-side "hide from menu." Kept separate from `active`
+      // because the catalog sync sets `active` from Poynt's own
+      // status field — if we set active=false here, the next
+      // product sync would flip it back and the item would
+      // reappear. `hidden_from_menu` is Checked-only and the
+      // catalog sync's upsert never touches it, so the owner's
+      // hide decision survives every subsequent sync.
+      const { error: hideErr } = await ctx.supabase
         .from('menu_items')
-        .update({ active: false })
+        .update({ hidden_from_menu: true })
         .eq('id', id)
         .eq('restaurant_id', ctx.restaurantId)
-      if (!deactErr) deactivated++
+      if (!hideErr) deactivated++
       continue
     }
 

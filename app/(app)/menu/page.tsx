@@ -133,7 +133,7 @@ export default async function MenuPage() {
     const rich = await applySeedFilter(
       supabase
         .from('menu_items')
-        .select('id, name, current_price, active, category_id, source, external_provider, availability_override, availability_override_set_at')
+        .select('id, name, current_price, active, category_id, source, external_provider, hidden_from_menu, availability_override, availability_override_set_at')
     ).order('name', { ascending: true })
     if (!rich.error) return { data: rich.data, hasOverrideColumns: true }
 
@@ -149,7 +149,7 @@ export default async function MenuPage() {
     const base = await applySeedFilter(
       supabase
         .from('menu_items')
-        .select('id, name, current_price, active, category_id, source, external_provider')
+        .select('id, name, current_price, active, category_id, source, external_provider, hidden_from_menu')
     ).order('name', { ascending: true })
     if (base.error) {
       console.error('[menu/page] menu_items base select failed:', base.error)
@@ -236,6 +236,9 @@ export default async function MenuPage() {
     /** Provider tag for items imported from an external POS — drives
      *  the "local-only" hint on the Menu drawer. */
     external_provider?: string | null
+    /** Owner-controlled "hide from menu" flag. Client filters
+     *  these out of every rendered surface. */
+    hidden_from_menu?: boolean
     availability_override?: string | null
     availability_override_set_at?: string | null
   }> | null
@@ -359,6 +362,7 @@ export default async function MenuPage() {
       // "stop selling" decision lives in the external POS dashboard.
       externalProvider:
         (item.external_provider ?? null) as string | null,
+      hiddenFromMenu: item.hidden_from_menu === true,
       recipe,
       override,
       overrideSetAt: (item.availability_override_set_at ?? null) as string | null,

@@ -322,21 +322,42 @@ export async function enrichOrdersFromTransactions(args: {
   const notes: string[] = []
   let enriched = 0
 
+  // Diagnostic counters — every drop-off point along the pipeline
+  // logs so we can tell the difference between "Poynt didn't
+  // return the field", "the transaction wasn't captured", and
+  // "no matching order in DB." Surface a summary line so the
+  // sync toast shows the shape of the data.
+  let txTotal = 0
+  let txWithLink = 0
+  let txCaptured = 0
+  let txCardable = 0
+  let dbMatched = 0
+  const unmatchedSample: string[] = []
+
   // Build a map: Poynt orderId → best-available payment metadata.
   // Prefer CAPTURED sale transactions (skip voids/refunds — those
   // shouldn't rewrite the paid-order's card details).
   interface Patch { payment_type?: 'card' | 'cash'; card_brand?: string; card_last4?: string }
   const patchByPoyntOrderId = new Map<string, Patch>()
   for (const t of transactions) {
+    txTotal++
+    // Match ANY reference type that mentions "ORDER" (POYNT_ORDER,
+    // ORDER, EXTERNAL_ORDER, etc.) OR the customType field. Also
+    // accept a top-level `parentId` when we can't find anything
+    // else — some Poynt transactions link to the order via parentId
+    // instead of orderId.
     const linkedOrderId =
       safeIdStr(t.orderId)
       || safeIdStr((t.references ?? []).find((r) => {
         const type = ((r.type ?? '') + ' ' + (r.customType ?? '')).toUpperCase()
         return type.includes('ORDER')
       })?.id)
+      || safeIdStr((t.references ?? []).find((r) => !!r.id)?.id)
     if (!linkedOrderId) continue
+    txWithLink++
     const status = (t.status ?? '').toUpperCase()
     if (status !== 'CAPTURED') continue
+    txCaptured++
 
     const patch: Patch = {}
     const fundingType = (t.fundingSource?.type ?? '').toUpperCase()
@@ -349,6 +370,7 @@ export async function enrichOrdersFromTransactions(args: {
       if (last4) patch.card_last4 = last4
     }
     if (Object.keys(patch).length === 0) continue
+    if (patch.payment_type === 'card') txCardable++
     // First capture wins — a subsequent refund shouldn't clobber
     // the sale's card. (Refunds are already status-filtered out
     // above but the guard is cheap.)
@@ -357,7 +379,15 @@ export async function enrichOrdersFromTransactions(args: {
     }
   }
 
-  if (patchByPoyntOrderId.size === 0) return { enriched, notes }
+  console.info('[godaddy/enrich] tx pipeline', {
+    txTotal, txWithLink, txCaptured, txCardable,
+    distinctLinkedOrders: patchByPoyntOrderId.size,
+  })
+
+  if (patchByPoyntOrderId.size === 0) {
+    notes.push(`Enrich: 0 transactions carried a linked orderId (of ${txTotal} fetched).`)
+    return { enriched, notes }
+  }
 
   // Resolve Poynt orderIds → local order row ids in one query.
   const poyntIds = [...patchByPoyntOrderId.keys()]
@@ -367,6 +397,12 @@ export async function enrichOrdersFromTransactions(args: {
     .eq('restaurant_id', restaurantId)
     .in('external_provider', ['godaddy_pos', 'godaddy_online'])
     .in('external_id', poyntIds)
+
+  const matchedIds = new Set((rows ?? []).map((r) => r.external_id as string))
+  for (const id of poyntIds) {
+    if (!matchedIds.has(id) && unmatchedSample.length < 3) unmatchedSample.push(id)
+  }
+  dbMatched = matchedIds.size
 
   for (const row of rows ?? []) {
     const patch = patchByPoyntOrderId.get(row.external_id as string)
@@ -388,6 +424,16 @@ export async function enrichOrdersFromTransactions(args: {
     }
     enriched++
   }
+
+  console.info('[godaddy/enrich] db pass', {
+    linkedOrderIds: poyntIds.length,
+    dbMatched,
+    enriched,
+    unmatchedSample,
+  })
+  notes.push(
+    `Enrich: ${txTotal} tx → ${txWithLink} linked → ${txCaptured} captured → ${patchByPoyntOrderId.size} distinct orders → ${dbMatched} matched in DB → ${enriched} updated.`
+  )
 
   return { enriched, notes }
 }

@@ -684,10 +684,7 @@ function EmptyMenuState({ t }: { t: T }) {
         {t('Sections group items the way they appear at the POS. Add one to start.', 'Las secciones agrupan los artículos como aparecen en el POS. Agrega una para comenzar.')}
       </p>
       <div className="mt-4">
-        {/* Empty state: no existing categories to be parents. Pass
-            empty array — the parent picker hides itself when there
-            are no options. */}
-        <AddSectionButton popoverClassName="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72" topLevelCategories={[]} t={t} />
+        <AddSectionButton popoverClassName="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72" t={t} />
       </div>
     </div>
   )
@@ -875,7 +872,6 @@ function FilterChipsBar({
 
       <AddSectionButton
         popoverClassName="right-0 top-full mt-1.5 w-72"
-        topLevelCategories={categories.filter((c) => !c.parentId)}
         t={t}
       />
     </div>
@@ -1180,14 +1176,9 @@ function AwaitingItemCard({
 // ================================================================
 function AddSectionButton({
   popoverClassName,
-  topLevelCategories,
   t,
 }: {
   popoverClassName: string
-  /** Top-level categories only — sub-categories can't be parents,
-   *  and the picker deliberately doesn't offer them. Empty array
-   *  is fine; the picker just doesn't render. */
-  topLevelCategories: Category[]
   t: T
 }) {
   const [open, setOpen] = useState(false)
@@ -1202,7 +1193,7 @@ function AddSectionButton({
       </button>
       {open && (
         <Popover onClose={() => setOpen(false)} className={popoverClassName}>
-          <AddSectionForm onClose={() => setOpen(false)} topLevelCategories={topLevelCategories} t={t} />
+          <AddSectionForm onClose={() => setOpen(false)} t={t} />
         </Popover>
       )}
     </div>
@@ -1256,6 +1247,13 @@ function SectionBlock({
   // Kept local instead of hoisting to the page because only this
   // section cares about its own highlight.
   const [dragOver, setDragOver] = useState(false)
+  // "+ Sub-section" popover open state — kept local so multiple
+  // section blocks each own their own popover independently.
+  const [addSubOpen, setAddSubOpen] = useState(false)
+  // Only top-level categories can have sub-categories (2-level
+  // max, enforced server-side). A sub-category itself doesn't
+  // get the "+ Sub-section" affordance in its header.
+  const isTopLevel = !category.parentId
 
   // Only activate the section as a drop target when a drag is in
   // flight AND the item isn't already in this section (dropping
@@ -1296,6 +1294,32 @@ function SectionBlock({
         <p className="text-[11px] text-gray-500 font-mono tabular-nums whitespace-nowrap">
           {items.length} {items.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
         </p>
+        {/* "+ Sub-section" — only on top-level parents. Anchors a
+            popover that pre-scopes the new category to this
+            parent (hidden parent_id input). Text-link styling
+            keeps the header calm; the affordance is discoverable
+            without competing with the item cards below. */}
+        {isTopLevel && !removeMode && (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setAddSubOpen((o) => !o)}
+              className="text-[11px] font-medium text-blue-600 hover:text-blue-500 transition-colors whitespace-nowrap"
+            >
+              {t('+ Sub-section', '+ Sub-sección')}
+            </button>
+            {addSubOpen && (
+              <Popover onClose={() => setAddSubOpen(false)} className="right-0 top-full mt-1.5 w-72">
+                <AddSubSectionForm
+                  parentId={category.id}
+                  parentName={category.name}
+                  onClose={() => setAddSubOpen(false)}
+                  t={t}
+                />
+              </Popover>
+            )}
+          </div>
+        )}
         {!removeMode ? (
           <button
             type="button"
@@ -1614,13 +1638,19 @@ function Popover({
 // ================================================================
 // AddSectionForm — popover, dark-filled primary commit.
 // ================================================================
+/** Top-level section form: name only, always creates a top-level
+ *  category. Sub-categories get their own entry point on each
+ *  parent's section header — see AddSubSectionForm below. Keeping
+ *  the two flows separate means the top-level "+ Add section"
+ *  button unambiguously means "make a new top-level," and the
+ *  in-section "+ Sub-section" button unambiguously means
+ *  "make a child of THIS parent." No more forgetting to pick a
+ *  parent from a dropdown. */
 function AddSectionForm({
   onClose,
-  topLevelCategories,
   t,
 }: {
   onClose: () => void
-  topLevelCategories: Category[]
   t: T
 }) {
   const [state, action, pending] = useActionState(createCategory, null)
@@ -1648,28 +1678,6 @@ function AddSectionForm({
         placeholder={t('Section name', 'Nombre de la sección')}
         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
       />
-      {/* Optional parent — omit for a top-level category; pick a
-          top-level category to nest this one under it. The picker
-          only shows top-level categories (a sub-category can't be
-          a parent), which the parent action verifies server-side
-          as well. */}
-      {topLevelCategories.length > 0 && (
-        <label className="block">
-          <span className="text-[11px] font-medium text-gray-600">
-            {t('Parent (optional)', 'Categoría padre (opcional)')}
-          </span>
-          <select
-            name="parent_id"
-            defaultValue=""
-            className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
-          >
-            <option value="">{t('— Top level —', '— Nivel principal —')}</option>
-            {topLevelCategories.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-        </label>
-      )}
       {state?.error && <p className="text-[11px] text-red-600">{state.error}</p>}
       <div className="flex gap-2">
         <button
@@ -1678,6 +1686,64 @@ function AddSectionForm({
           className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
         >
           {pending ? t('Adding…', 'Agregando…') : t('Add section', 'Agregar sección')}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs font-medium text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          {t('Cancel', 'Cancelar')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/** In-context sub-section form. Pre-scoped to a specific parent
+ *  via a hidden parent_id input, so the manager just types a
+ *  name and submits — no dropdown, no risk of picking the wrong
+ *  parent. Rendered inside a Popover anchored to the "+ Sub-section"
+ *  button on each parent's SectionBlock header. */
+function AddSubSectionForm({
+  parentId,
+  parentName,
+  onClose,
+  t,
+}: {
+  parentId: string
+  parentName: string
+  onClose: () => void
+  t: T
+}) {
+  const [state, action, pending] = useActionState(createCategory, null)
+  const wasPending = useRef(false)
+  useEffect(() => {
+    if (wasPending.current && !pending && !state?.error) onClose()
+    wasPending.current = pending
+  }, [pending, state, onClose])
+
+  return (
+    <form action={action} className="space-y-3">
+      <p className="text-xs font-semibold text-gray-900">
+        {t(`New sub-section under ${parentName}`, `Nueva sub-sección bajo ${parentName}`)}
+      </p>
+      <input type="hidden" name="parent_id" value={parentId} />
+      <input
+        name="name"
+        type="text"
+        required
+        autoFocus
+        placeholder={t('Sub-section name', 'Nombre de la sub-sección')}
+        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+      />
+      {state?.error && <p className="text-[11px] text-red-600">{state.error}</p>}
+      <div className="flex gap-2">
+        <button
+          type="submit"
+          disabled={pending}
+          className="flex-1 px-3 py-2 rounded-lg bg-gray-900 text-white text-xs font-semibold hover:bg-gray-800 disabled:opacity-60 transition-colors"
+        >
+          {pending ? t('Adding…', 'Agregando…') : t('Add sub-section', 'Agregar sub-sección')}
         </button>
         <button
           type="button"

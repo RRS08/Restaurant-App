@@ -45,6 +45,7 @@ import {
   updateMenuItemName,
   assignMenuItemCategory,
   bulkAssignMenuItemCategory,
+  bulkDeleteMenuItems,
   reorderCategories,
 } from '@/app/actions/menu'
 import {
@@ -73,7 +74,15 @@ type T = (en: string, es?: string) => string
 // Domain types
 // ================================================================
 
-interface Category { id: string; name: string; sortOrder: number }
+interface Category {
+  id: string
+  name: string
+  sortOrder: number
+  /** Non-null when this category is a sub-category of another
+   *  top-level category. Enforced two-level-max at the action
+   *  layer — a sub-category cannot itself have children. */
+  parentId: string | null
+}
 interface RecipeEntry {
   id: string; inventoryItemId: string; inventoryItemName: string
   /** The inventory item's own unit. */
@@ -266,6 +275,54 @@ export default function MenuClient({
           return next
         })
       }
+      setTimeout(() => {
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          let dirty = false
+          for (const id of ids) {
+            if (next[id] !== undefined) {
+              delete next[id]
+              dirty = true
+            }
+          }
+          return dirty ? next : prev
+        })
+      }, 400)
+    })
+  }
+
+  // Bulk delete for the "Awaiting a section" band. Rides the same
+  // optimistic pending-moves record used for bulk assign — sending
+  // items to a fake sentinel category ('__deleted__') hides them
+  // from the awaiting band immediately, and the server deletion
+  // (or FK-restrict fallback to deactivate) resolves via a
+  // revalidate afterwards. Rollback restores them on error.
+  const bulkDeleteSelected = () => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    if (typeof window !== 'undefined' && !window.confirm(
+      `Delete ${ids.length} item${ids.length === 1 ? '' : 's'}? Items that have order history will be deactivated instead of deleted — historical sales data is preserved.`,
+    )) return
+    setPendingMoves((prev) => {
+      const next = { ...prev }
+      for (const id of ids) next[id] = '__deleted__'
+      return next
+    })
+    clearSelection()
+    startAssignTransition(async () => {
+      const res = await bulkDeleteMenuItems(ids)
+      if (res.error) {
+        setPendingMoves((prev) => {
+          const next = { ...prev }
+          for (const id of ids) delete next[id]
+          return next
+        })
+        alert(`Bulk delete failed: ${res.error}`)
+        return
+      }
+      // Successful revalidate will drop the deleted rows from the
+      // items list, so the pending sentinel entries become stale
+      // and can be cleared safely.
       setTimeout(() => {
         setPendingMoves((prev) => {
           const next = { ...prev }
@@ -478,6 +535,8 @@ export default function MenuClient({
                     onCloseAddItem={() => setAddItemTo(null)}
                     onDragStartItem={setDraggingItemId}
                     onDragEndItem={() => setDraggingItemId(null)}
+                    draggingItemId={draggingItemId}
+                    onAssign={assignTo}
                     t={t}
                   />
                 )
@@ -504,6 +563,8 @@ export default function MenuClient({
                   onCloseAddItem={() => setAddItemTo(null)}
                   onDragStartItem={setDraggingItemId}
                   onDragEndItem={() => setDraggingItemId(null)}
+                  draggingItemId={draggingItemId}
+                  onAssign={assignTo}
                   t={t}
                 />
               )
@@ -523,6 +584,7 @@ export default function MenuClient({
                 onToggleSelected={toggleSelected}
                 onClearSelection={clearSelection}
                 onBulkAssign={bulkAssignTo}
+                onBulkDelete={bulkDeleteSelected}
                 onDragStartItem={setDraggingItemId}
                 onDragEndItem={() => setDraggingItemId(null)}
                 t={t}
@@ -567,6 +629,35 @@ function SourceChip({ operatingMode, t }: { operatingMode: OperatingMode; t: T }
   )
 }
 
+/** Flatten the category list so each parent is immediately
+ *  followed by its own children, preserving each cohort's own
+ *  sort order. Sub-categories that reference an unknown parent
+ *  (shouldn't happen, but defensive) fall to the end as
+ *  top-level orphans so nothing disappears. */
+function orderCategoriesForChips(categories: Category[]): Category[] {
+  const parents = categories.filter((c) => !c.parentId)
+  const childrenByParent = new Map<string, Category[]>()
+  for (const c of categories) {
+    if (!c.parentId) continue
+    if (!childrenByParent.has(c.parentId)) childrenByParent.set(c.parentId, [])
+    childrenByParent.get(c.parentId)!.push(c)
+  }
+  const seen = new Set<string>()
+  const out: Category[] = []
+  for (const p of parents) {
+    out.push(p)
+    seen.add(p.id)
+    for (const child of (childrenByParent.get(p.id) ?? [])) {
+      out.push(child)
+      seen.add(child.id)
+    }
+  }
+  // Orphans — sub-categories whose parent was deleted while we
+  // held stale data. Rare, but avoid dropping them silently.
+  for (const c of categories) if (!seen.has(c.id)) out.push(c)
+  return out
+}
+
 // ================================================================
 // EmptyMenuState — the no-sections nudge.
 // ================================================================
@@ -578,7 +669,10 @@ function EmptyMenuState({ t }: { t: T }) {
         {t('Sections group items the way they appear at the POS. Add one to start.', 'Las secciones agrupan los artículos como aparecen en el POS. Agrega una para comenzar.')}
       </p>
       <div className="mt-4">
-        <AddSectionButton popoverClassName="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72" t={t} />
+        {/* Empty state: no existing categories to be parents. Pass
+            empty array — the parent picker hides itself when there
+            are no options. */}
+        <AddSectionButton popoverClassName="left-1/2 -translate-x-1/2 top-full mt-1.5 w-72" topLevelCategories={[]} t={t} />
       </div>
     </div>
   )
@@ -684,12 +778,17 @@ function FilterChipsBar({
         {t('All', 'Todo')} · {totalCount}
       </button>
 
-      {categories.map((cat) => {
+      {/* Hierarchical ordering: each top-level category is followed
+          by its own sub-categories, then the next top-level, etc.
+          Sub-category chips get a `↳` prefix so the parent-child
+          relationship is legible without another visual layer. */}
+      {orderCategoriesForChips(categories).map((cat) => {
         const count = (itemsByCategory.get(cat.id) ?? []).length
         const active = filter === cat.id
         const itemHover = hoverTargetId === cat.id
         const chipHover = chipHoverTargetId === cat.id && draggingChipId !== cat.id
         const isDraggingSelf = draggingChipId === cat.id
+        const isSub = !!cat.parentId
         // Merged drop handler: chip-in-transit wins; falls back to
         // the item-onto-chip channel when no chip is being dragged.
         const itemHandlers = chipDragProps(cat.id, cat.id)
@@ -739,6 +838,7 @@ function FilterChipsBar({
             title={t('Drag to reorder', 'Arrastra para reordenar')}
             className={`text-[11px] font-mono uppercase tracking-[0.1em] px-3 py-1.5 rounded-full border cursor-grab active:cursor-grabbing transition-all ${chipClass(cat.id, active, itemHover)} ${chipHover ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-white' : ''} ${isDraggingSelf ? 'opacity-40' : ''}`}
           >
+            {isSub && <span aria-hidden="true" className="opacity-60 mr-1">↳</span>}
             {cat.name} · {count}
           </button>
         )
@@ -758,7 +858,11 @@ function FilterChipsBar({
 
       <div className="flex-1" />
 
-      <AddSectionButton popoverClassName="right-0 top-full mt-1.5 w-72" t={t} />
+      <AddSectionButton
+        popoverClassName="right-0 top-full mt-1.5 w-72"
+        topLevelCategories={categories.filter((c) => !c.parentId)}
+        t={t}
+      />
     </div>
   )
 }
@@ -792,6 +896,7 @@ function AwaitingSectionBand({
   onToggleSelected,
   onClearSelection,
   onBulkAssign,
+  onBulkDelete,
   onDragStartItem,
   onDragEndItem,
   t,
@@ -802,6 +907,10 @@ function AwaitingSectionBand({
   onToggleSelected: (itemId: string) => void
   onClearSelection: () => void
   onBulkAssign: (categoryId: string | null) => void
+  /** Called with the current selection when the manager hits the
+   *  Delete affordance in the sticky action bar. Parent handles
+   *  the confirm prompt + optimistic hide + server call. */
+  onBulkDelete: () => void
   onDragStartItem: (id: string) => void
   onDragEndItem: () => void
   t: T
@@ -897,6 +1006,15 @@ function AwaitingSectionBand({
               </span>
             )}
             <span className="flex-1" />
+            <button
+              type="button"
+              onClick={onBulkDelete}
+              className="font-mono text-[10.5px] uppercase tracking-[0.14em] text-[#B45309] hover:text-[#7C2D12] transition-colors"
+              title={t('Delete selected items', 'Eliminar artículos seleccionados')}
+            >
+              {t('Delete', 'Eliminar')}
+            </button>
+            <span className="h-3.5 w-px bg-[#E7E6E2]" aria-hidden="true" />
             <button
               type="button"
               onClick={onClearSelection}
@@ -1045,7 +1163,18 @@ function AwaitingItemCard({
 // menu actually needs did nothing. Co-locating trigger and popover
 // makes that drift impossible.
 // ================================================================
-function AddSectionButton({ popoverClassName, t }: { popoverClassName: string; t: T }) {
+function AddSectionButton({
+  popoverClassName,
+  topLevelCategories,
+  t,
+}: {
+  popoverClassName: string
+  /** Top-level categories only — sub-categories can't be parents,
+   *  and the picker deliberately doesn't offer them. Empty array
+   *  is fine; the picker just doesn't render. */
+  topLevelCategories: Category[]
+  t: T
+}) {
   const [open, setOpen] = useState(false)
   return (
     <div className="relative inline-block">
@@ -1058,7 +1187,7 @@ function AddSectionButton({ popoverClassName, t }: { popoverClassName: string; t
       </button>
       {open && (
         <Popover onClose={() => setOpen(false)} className={popoverClassName}>
-          <AddSectionForm onClose={() => setOpen(false)} t={t} />
+          <AddSectionForm onClose={() => setOpen(false)} topLevelCategories={topLevelCategories} t={t} />
         </Popover>
       )}
     </div>
@@ -1078,6 +1207,8 @@ function SectionBlock({
   onCloseAddItem,
   onDragStartItem,
   onDragEndItem,
+  draggingItemId,
+  onAssign,
   t,
 }: {
   category: Category
@@ -1092,15 +1223,48 @@ function SectionBlock({
    *  highlight and the card can dim. */
   onDragStartItem?: (id: string) => void
   onDragEndItem?: () => void
+  /** Currently-in-flight item id — used to enable this section as
+   *  a drop target only when a drag is actually happening. */
+  draggingItemId?: string | null
+  /** Handler that moves a dragged item into this section. Same
+   *  handler the FilterChipsBar uses on chip drops — chips remain
+   *  the primary target; the section body is a secondary
+   *  convenience so managers don't have to aim precisely. */
+  onAssign?: (itemId: string, categoryId: string) => void
   t: T
 }) {
   // deleteCategory is a direct (formData) -> void server action — not
   // a useActionState-shaped one — so we use a plain <form action={...}>
   // here and drive the 2-step confirmation purely via local state.
   const [removeMode, setRemoveMode] = useState(false)
+  // Local hover state for the "you're about to drop here" visual.
+  // Kept local instead of hoisting to the page because only this
+  // section cares about its own highlight.
+  const [dragOver, setDragOver] = useState(false)
+
+  // Only activate the section as a drop target when a drag is in
+  // flight AND the item isn't already in this section (dropping
+  // onto its own current home is a no-op we skip to avoid
+  // flickering the highlight).
+  const canAccept =
+    !!onAssign && !!draggingItemId && !items.some((it) => it.id === draggingItemId)
 
   return (
-    <section>
+    <section
+      onDragOver={canAccept ? (e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        if (!dragOver) setDragOver(true)
+      } : undefined}
+      onDragLeave={canAccept ? () => { if (dragOver) setDragOver(false) } : undefined}
+      onDrop={canAccept ? (e) => {
+        e.preventDefault()
+        setDragOver(false)
+        const itemId = e.dataTransfer.getData('text/plain')
+        if (itemId && onAssign) onAssign(itemId, category.id)
+      } : undefined}
+      className={`rounded-xl transition-all ${dragOver ? 'ring-2 ring-blue-400 ring-offset-2 ring-offset-white bg-blue-50/30' : ''}`}
+    >
       {/* Section header — quieted.
           Mapped count was removed from this row: per-item mapping is
           surfaced on the card itself, and the page-level "With recipe"
@@ -1315,14 +1479,26 @@ function ItemCard({
       : { text: t('No recipe', 'Sin receta'), kind: 'text' as const, tone: 'amber' as const }
 
   return (
-    <button
+    // Was a <button> — but HTML5 drag on <button> is broken in
+    // Firefox and inconsistent in Chrome. AwaitingItemCard uses
+    // <div role="button"> and drags reliably; matching that
+    // pattern here so items in populated sections can also be
+    // dragged onto other chips or section bodies.
+    <div
       // Stable DOM id so external surfaces (e.g. the Inventory item
       // drawer's "Used in menu items" links via /menu?item=<id>) can
       // call scrollIntoView after the menu page hydrates the
       // selection from the URL.
       id={`menu-item-${item.id}`}
-      type="button"
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick()
+        }
+      }}
       aria-pressed={selected}
       // Native HTML5 drag: only enabled when the parent passed
       // onDragStart, so older mount points (drawer, POS side) stay
@@ -1335,7 +1511,7 @@ function ItemCard({
         onDragStart()
       } : undefined}
       onDragEnd={onDragEnd}
-      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''} ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''}`}
+      className={`group relative text-left rounded-xl border bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-4 pt-3.5 pb-3 transition-all duration-150 hover:shadow-md ${ringClass} ${unsellable ? 'opacity-70' : ''} ${onDragStart ? 'cursor-grab active:cursor-grabbing' : ''} cursor-pointer`}
     >
       {/* Identity row — name + price baseline-aligned so the eye reads
           them as one operational pair. */}
@@ -1387,7 +1563,7 @@ function ItemCard({
           </span>
         )}
       </div>
-    </button>
+    </div>
   )
 }
 
@@ -1423,7 +1599,15 @@ function Popover({
 // ================================================================
 // AddSectionForm — popover, dark-filled primary commit.
 // ================================================================
-function AddSectionForm({ onClose, t }: { onClose: () => void; t: T }) {
+function AddSectionForm({
+  onClose,
+  topLevelCategories,
+  t,
+}: {
+  onClose: () => void
+  topLevelCategories: Category[]
+  t: T
+}) {
   const [state, action, pending] = useActionState(createCategory, null)
 
   // Close only once a submit has actually settled clean. The old
@@ -1449,6 +1633,28 @@ function AddSectionForm({ onClose, t }: { onClose: () => void; t: T }) {
         placeholder={t('Section name', 'Nombre de la sección')}
         className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
       />
+      {/* Optional parent — omit for a top-level category; pick a
+          top-level category to nest this one under it. The picker
+          only shows top-level categories (a sub-category can't be
+          a parent), which the parent action verifies server-side
+          as well. */}
+      {topLevelCategories.length > 0 && (
+        <label className="block">
+          <span className="text-[11px] font-medium text-gray-600">
+            {t('Parent (optional)', 'Categoría padre (opcional)')}
+          </span>
+          <select
+            name="parent_id"
+            defaultValue=""
+            className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+          >
+            <option value="">{t('— Top level —', '— Nivel principal —')}</option>
+            {topLevelCategories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
       {state?.error && <p className="text-[11px] text-red-600">{state.error}</p>}
       <div className="flex gap-2">
         <button

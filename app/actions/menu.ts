@@ -25,25 +25,50 @@ export async function createCategory(
   const nameKey = normalizeNameKey(rawName)
   if (!displayName) return { error: 'Category name is required.' }
 
+  // Optional parent — makes this a sub-category. Two-level only:
+  // the picked parent itself must be top-level (parent_id IS
+  // null), so we never end up with grandchildren. Enforced here
+  // instead of in the DB to keep the schema simple.
+  const rawParentId = ((formData.get('parent_id') as string | null) ?? '').trim()
+  let parentId: string | null = null
+  if (rawParentId) {
+    const { data: parent } = await ctx.supabase
+      .from('menu_categories')
+      .select('id, parent_id')
+      .eq('id', rawParentId)
+      .eq('restaurant_id', ctx.restaurantId)
+      .maybeSingle()
+    if (!parent) return { error: 'That parent category does not exist.' }
+    if (parent.parent_id) {
+      return { error: 'Sub-categories can only be one level deep — pick a top-level parent.' }
+    }
+    parentId = parent.id as string
+  }
+
   // Duplicate guard — case-insensitive + whitespace-normalized,
-  // restaurant-scoped. No `active` column on menu_categories, so we
-  // compare against the full set.
+  // restaurant-scoped. Sibling scope: two categories with the
+  // same name but different parents are allowed (e.g., "Chains"
+  // under Tierra Madre AND "Chains" under Herramientas), but
+  // two "Chains" under the same parent aren't.
   const { data: existingCats } = await ctx.supabase
     .from('menu_categories')
-    .select('name')
+    .select('name, parent_id')
     .eq('restaurant_id', ctx.restaurantId)
-  const collision = (existingCats ?? []).find(
-    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
-  )
+  const collision = (existingCats ?? []).find((row) => {
+    const sameName = normalizeNameKey((row.name as string) ?? '') === nameKey
+    const sameParent = ((row.parent_id as string | null) ?? null) === parentId
+    return sameName && sameParent
+  })
   if (collision) {
     return {
-      error: `A menu category named ${normalizeDisplayName((collision.name as string) ?? '')} already exists.`,
+      error: `A menu category named ${normalizeDisplayName((collision.name as string) ?? '')} already exists here.`,
     }
   }
 
   const { error } = await ctx.supabase.from('menu_categories').insert({
     restaurant_id: ctx.restaurantId,
     name: displayName,
+    parent_id: parentId,
   })
 
   if (error) {
@@ -559,6 +584,74 @@ export async function reorderCategories(
   revalidatePath('/web/menu')
   revalidatePath('/pos')
   return null
+}
+
+// ----------------------------------------------------------------
+// bulkDeleteMenuItems — remove many menu items in one round-trip.
+// Powers the "Delete" affordance on the Awaiting-a-section band,
+// where a manager fresh off a CSV import may want to purge a
+// batch of noise rows without opening each drawer individually.
+//
+// Order history rule (same as deleteMenuItem): a hard DELETE
+// against menu_items with associated order_items fails at the FK
+// level (on delete restrict, preserving historical order data).
+// We attempt the delete and, per-id, fall back to a soft
+// deactivate (active = false) on that specific failure so a
+// batch containing one order-having item doesn't kill the
+// operation for the other 39 clean ones.
+// ----------------------------------------------------------------
+export async function bulkDeleteMenuItems(
+  menuItemIds: string[],
+): Promise<{ deleted: number; deactivated: number; error?: string }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { deleted: 0, deactivated: 0, error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { deleted: 0, deactivated: 0, error: 'Only the owner can delete menu items.' }
+  if (menuItemIds.length === 0) return { deleted: 0, deactivated: 0 }
+
+  let deleted = 0
+  let deactivated = 0
+
+  // Iterate rather than a single bulk delete so we can catch the
+  // FK-restrict failure per id and deactivate that one instead of
+  // aborting the whole batch. At small selection sizes (~50) this
+  // is fine; if we ever have to bulk-delete thousands we'll switch
+  // to a two-pass "pre-check for order refs, split into
+  // safe-delete vs must-deactivate, then two batch queries."
+  for (const id of menuItemIds) {
+    const { error: delErr } = await ctx.supabase
+      .from('menu_items')
+      .delete()
+      .eq('id', id)
+      .eq('restaurant_id', ctx.restaurantId)
+    if (!delErr) {
+      deleted++
+      continue
+    }
+    // 23503 = foreign_key_violation. Item has order history →
+    // deactivate to preserve reports.
+    if (delErr.code === '23503') {
+      const { error: deactErr } = await ctx.supabase
+        .from('menu_items')
+        .update({ active: false })
+        .eq('id', id)
+        .eq('restaurant_id', ctx.restaurantId)
+      if (!deactErr) deactivated++
+    }
+  }
+
+  await logAudit(
+    ctx,
+    null,
+    'bulk_delete_menu_items',
+    'menu_items',
+    undefined,
+    { requested: menuItemIds.length, deleted, deactivated },
+  )
+
+  revalidatePath('/menu')
+  revalidatePath('/web/menu')
+  revalidatePath('/pos')
+  return { deleted, deactivated }
 }
 
 export async function setMenuItemActive(

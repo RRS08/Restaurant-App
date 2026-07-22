@@ -174,7 +174,7 @@ export default async function MenuPage() {
     applySeedFilter(
       supabase
         .from('menu_categories')
-        .select('id, name, sort_order, source')
+        .select('id, name, sort_order, source, parent_id')
     )
       .order('sort_order', { ascending: true })
       .order('name', { ascending: true }),
@@ -412,6 +412,7 @@ export default async function MenuPage() {
         id: c.id,
         name: c.name,
         sortOrder: c.sort_order,
+        parentId: (c.parent_id as string | null) ?? null,
       }))}
       items={menuItems}
       inventoryItems={(inventoryItems ?? []).map((ii) => ({

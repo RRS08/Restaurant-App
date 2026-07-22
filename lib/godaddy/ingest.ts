@@ -417,6 +417,22 @@ export function normalizePoyntTransaction(t: PoyntTransaction, notes: string[]):
     const postedAt = (t.createdAt ?? t.updatedAt ?? '').trim()
     if (!postedAt) return null
 
+    // Skip transactions that link back to a Poynt Order — the
+    // /orders sync ingests those with real line-item detail
+    // (product names, per-item unit prices, quantities). If we
+    // also created a "synthetic order" from the transaction leg,
+    // the ledger would show TWO rows for the same sale: one with
+    // real items and one titled "In-person sale." Only orphan
+    // transactions (Virtual Terminal, MOTO, standalone card
+    // charges without an associated order object) should ingest
+    // via this path.
+    if (safeIdStr(t.orderId)) return null
+    const refsOrder = (t.references ?? []).find((r) => {
+      const type = ((r.type ?? '') + ' ' + (r.customType ?? '')).toUpperCase()
+      return type.includes('ORDER')
+    })
+    if (refsOrder && safeIdStr(refsOrder.id)) return null
+
     const rawStatus = (t.status ?? '').toUpperCase()
     const rawAction = (t.action ?? '').toUpperCase()
 

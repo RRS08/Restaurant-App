@@ -31,7 +31,7 @@
 // adjust — the manual sync path keeps working meanwhile.
 // ----------------------------------------------------------------
 
-import { createHmac, timingSafeEqual, randomBytes } from 'crypto'
+import { createHmac, timingSafeEqual, randomBytes, randomUUID } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 const API_VERSION = '1.2'
@@ -55,32 +55,43 @@ interface RegisterHookResponse {
 /** Register the delivery URL with Poynt for a specific merchant.
  *  Persists the returned hook id + our locally-generated secret
  *  alongside the token row so the incoming events can be verified
- *  and, later, the hook can be rotated/deleted. */
+ *  and, later, the hook can be rotated/deleted.
+ *
+ *  Endpoint: POST /hooks (app-level, NOT /businesses/{id}/hooks —
+ *  that path 404s). Body carries both applicationId AND businessId
+ *  so Poynt scopes the hook to (app, merchant). Per Poynt's
+ *  webhooks docs. */
 export async function registerMerchantWebhook(args: {
   restaurantId: string
   businessId: string
   accessToken: string
   deliveryUrl: string
 }): Promise<{ ok: true } | { error: string }> {
+  const applicationId = process.env.GODADDY_POYNT_APP_ID
+  if (!applicationId) {
+    return { error: 'GODADDY_POYNT_APP_ID env var is not set — cannot register a webhook.' }
+  }
   const secret = randomBytes(32).toString('hex')
 
   const body = {
+    applicationId,
+    businessId: args.businessId,
     deliveryUrl: args.deliveryUrl,
     secret,
     eventTypes: [...SUBSCRIBED_EVENTS],
-    active: true,
   }
 
   try {
     const res = await fetch(
-      `${baseUrl()}/businesses/${encodeURIComponent(args.businessId)}/hooks`,
+      `${baseUrl()}/hooks`,
       {
         method: 'POST',
         cache: 'no-store',
         headers: {
           Accept: 'application/json',
-          'Content-Type': 'application/json',
+          'Content-Type': 'application/json;charset=UTF-8',
           'api-version': API_VERSION,
+          'Poynt-Request-Id': randomUUID(),
           Authorization: `BEARER ${args.accessToken}`,
         },
         body: JSON.stringify(body),

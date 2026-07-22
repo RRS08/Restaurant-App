@@ -169,13 +169,14 @@ export async function runSyncForRestaurant(restaurantId: string): Promise<SyncRe
   }
 
   // 4. Backfill any orders still missing receipt-shape fields via
-  //    per-order GET /orders/{id}. Capped per invocation so the
-  //    sync stays within Vercel's function timeout — a big backlog
-  //    drains over a few Sync-now clicks or cron ticks. Once every
-  //    order has payment_type != 'other' and card_brand + subtotal
-  //    populated, this pass finds nothing and is a cheap no-op.
+  //    per-order GET /orders/{id}. Cap tuned for Vercel Hobby's
+  //    10s function timeout — 10 orders × ~300ms each stays well
+  //    under the ceiling after the /orders + /transactions legs
+  //    have already spent time. Big backlogs drain over a few
+  //    Sync-now clicks or cron ticks; once drained the pass finds
+  //    nothing and is a cheap no-op.
   try {
-    const bf = await backfillOrdersFromApi({ supabase, restaurantId, cap: 50 })
+    const bf = await backfillOrdersFromApi({ supabase, restaurantId, cap: 10 })
     if (bf.considered > 0) merged.notes.push(...bf.notes)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -298,6 +298,101 @@ export async function ingestSinglePoyntOrder(args: {
 }
 
 // ================================================================
+// Enrich existing orders from linked transactions
+// ================================================================
+//
+// The /orders LIST endpoint often does not embed transactions[]
+// on each order — the payment leg (funding source, card brand,
+// last 4) lives on the /transactions endpoint. We already fetch
+// both in the same sync, so cross-reference: for every captured
+// transaction that carries an orderId, patch the matching order
+// row with the card details.
+//
+// This only writes when the existing row is missing a value
+// (payment_type = 'other', card_brand null, card_last4 null) so
+// re-runs are cheap no-ops and we never overwrite a value the
+// order-leg already captured from an embedded transaction.
+
+export async function enrichOrdersFromTransactions(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  transactions: PoyntTransaction[]
+}): Promise<{ enriched: number; notes: string[] }> {
+  const { supabase, restaurantId, transactions } = args
+  const notes: string[] = []
+  let enriched = 0
+
+  // Build a map: Poynt orderId → best-available payment metadata.
+  // Prefer CAPTURED sale transactions (skip voids/refunds — those
+  // shouldn't rewrite the paid-order's card details).
+  interface Patch { payment_type?: 'card' | 'cash'; card_brand?: string; card_last4?: string }
+  const patchByPoyntOrderId = new Map<string, Patch>()
+  for (const t of transactions) {
+    const linkedOrderId =
+      safeIdStr(t.orderId)
+      || safeIdStr((t.references ?? []).find((r) => {
+        const type = ((r.type ?? '') + ' ' + (r.customType ?? '')).toUpperCase()
+        return type.includes('ORDER')
+      })?.id)
+    if (!linkedOrderId) continue
+    const status = (t.status ?? '').toUpperCase()
+    if (status !== 'CAPTURED') continue
+
+    const patch: Patch = {}
+    const fundingType = (t.fundingSource?.type ?? '').toUpperCase()
+    if (fundingType.includes('CASH')) patch.payment_type = 'cash'
+    else if (fundingType.includes('CREDIT') || fundingType.includes('DEBIT') || fundingType.includes('CARD')) {
+      patch.payment_type = 'card'
+      const brand = (t.fundingSource?.card?.type ?? '').trim().toUpperCase()
+      if (brand) patch.card_brand = brand
+      const last4 = (t.fundingSource?.card?.numberLast4 ?? '').trim()
+      if (last4) patch.card_last4 = last4
+    }
+    if (Object.keys(patch).length === 0) continue
+    // First capture wins — a subsequent refund shouldn't clobber
+    // the sale's card. (Refunds are already status-filtered out
+    // above but the guard is cheap.)
+    if (!patchByPoyntOrderId.has(linkedOrderId)) {
+      patchByPoyntOrderId.set(linkedOrderId, patch)
+    }
+  }
+
+  if (patchByPoyntOrderId.size === 0) return { enriched, notes }
+
+  // Resolve Poynt orderIds → local order row ids in one query.
+  const poyntIds = [...patchByPoyntOrderId.keys()]
+  const { data: rows } = await supabase
+    .from('orders')
+    .select('id, external_id, payment_type, card_brand, card_last4')
+    .eq('restaurant_id', restaurantId)
+    .in('external_provider', ['godaddy_pos', 'godaddy_online'])
+    .in('external_id', poyntIds)
+
+  for (const row of rows ?? []) {
+    const patch = patchByPoyntOrderId.get(row.external_id as string)
+    if (!patch) continue
+    // Only fill fields that are currently missing so we don't
+    // overwrite anything the /orders leg already captured from an
+    // embedded transaction.
+    const update: Record<string, unknown> = {}
+    if ((row.payment_type ?? 'other') === 'other' && patch.payment_type) {
+      update.payment_type = patch.payment_type
+    }
+    if (!row.card_brand && patch.card_brand) update.card_brand = patch.card_brand
+    if (!row.card_last4 && patch.card_last4) update.card_last4 = patch.card_last4
+    if (Object.keys(update).length === 0) continue
+    const { error } = await supabase.from('orders').update(update).eq('id', row.id)
+    if (error) {
+      notes.push(`Enrich ${row.external_id}: ${error.message}`)
+      continue
+    }
+    enriched++
+  }
+
+  return { enriched, notes }
+}
+
+// ================================================================
 // Normalization
 // ================================================================
 

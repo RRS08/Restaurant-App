@@ -23,7 +23,7 @@
 
 import { getAuthContext } from '@/lib/auth'
 import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export type SyncResult = IngestBatchResult
@@ -125,10 +125,17 @@ export async function runSyncForRestaurant(restaurantId: string): Promise<SyncRe
   // 2. /transactions — terminal charges that skip the Order table.
   //    Critical for merchants (Hatziri) who use the Poynt terminal
   //    heavily; without this we miss all in-person card sales.
+  //    Also feeds the enrichment pass below: /orders LIST rarely
+  //    embeds transactions[] on each order, so we cross-reference
+  //    /transactions here to fill in card brand + last-4 + payment
+  //    type on orders that were tendered by card.
   //    Same defensive wrap — an unexpected shape from Poynt on this
   //    endpoint shouldn't undo the /orders leg's work.
+  //    Pull WITHOUT the incremental startAt window since we want
+  //    to enrich historical orders too. The transaction ingest path
+  //    dedupes by transaction id so re-fetching is safe.
   try {
-    const pullTx = await fetchPoyntTransactions({ restaurantId, maxTransactions: 1000, startAt })
+    const pullTx = await fetchPoyntTransactions({ restaurantId, maxTransactions: 1000 })
     if ('error' in pullTx) {
       merged.notes.push(`/transactions fetch failed: ${pullTx.error}`)
     } else {
@@ -136,6 +143,24 @@ export async function runSyncForRestaurant(restaurantId: string): Promise<SyncRe
         supabase, restaurantId, raw: pullTx.transactions,
       })
       mergeIn(merged, r)
+
+      // 3. Enrich linked orders with card brand + last-4 pulled
+      //    from the transactions that reference them. Only fills
+      //    fields that are currently missing, so it's a cheap
+      //    no-op on subsequent syncs.
+      try {
+        const en = await enrichOrdersFromTransactions({
+          supabase, restaurantId, transactions: pullTx.transactions,
+        })
+        if (en.enriched > 0) {
+          merged.notes.push(`Enriched ${en.enriched} order${en.enriched === 1 ? '' : 's'} with card details.`)
+        }
+        merged.notes.push(...en.notes)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[godaddy/sync] enrich leg threw', err)
+        merged.notes.push(`enrich leg threw: ${msg}`)
+      }
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

@@ -42,9 +42,11 @@ export default async function SalesPage() {
     .select(`
       id, total_amount, created_at,
       source, payment_type, payment_status, status, note,
+      subtotal, discount_total, tax_total,
+      card_brand, card_last4, customer_name, channel_source,
       location_id,
       locations ( name ),
-      order_items ( id, quantity, unit_price, total_price, menu_items ( name ) )
+      order_items ( id, quantity, unit_price, total_price, variant_label, menu_items ( name ) )
     `)
     .order('created_at', { ascending: false })
     // Was 50 — too tight for merchants doing 20+ sales a day
@@ -55,6 +57,17 @@ export default async function SalesPage() {
     // pagination is a phase-2 build if this ceiling gets hit.
     .limit(500)
 
+  const numOrNull = (v: unknown): number | null => {
+    if (v === null || v === undefined) return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const strOrNull = (v: unknown): string | null => {
+    if (v === null || v === undefined) return null
+    const s = String(v).trim()
+    return s.length > 0 ? s : null
+  }
+
   const normalized = (orders ?? []).map((o) => ({
     id: o.id,
     total: Number(o.total_amount),
@@ -64,13 +77,22 @@ export default async function SalesPage() {
     paymentStatus: (o.payment_status ?? 'paid') as 'paid' | 'unpaid',
     status: (o.status ?? 'completed') as 'completed' | 'voided',
     note: o.note ?? null,
+    subtotal:      numOrNull(o.subtotal),
+    discountTotal: numOrNull(o.discount_total),
+    taxTotal:      numOrNull(o.tax_total),
+    cardBrand:     strOrNull(o.card_brand),
+    cardLast4:     strOrNull(o.card_last4),
+    customerName:  strOrNull(o.customer_name),
+    channelSource: strOrNull(o.channel_source),
     locationName: (o.locations as unknown as { name: string } | null)?.name ?? null,
     lineItems: ((o.order_items as unknown as Array<{
       id: string; quantity: number; unit_price: number; total_price: number
+      variant_label: string | null
       menu_items: { name: string } | null
     }>) ?? []).map((li) => ({
       id: li.id,
       name: li.menu_items?.name ?? '—',
+      variantLabel: strOrNull(li.variant_label),
       quantity: li.quantity,
       unitPrice: Number(li.unit_price),
       totalPrice: Number(li.total_price),

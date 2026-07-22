@@ -60,6 +60,11 @@ export interface NormalizedOrderLineItem {
   /** Fallback name used when the item hasn't been imported yet —
    *  lets the placeholder carry a human-readable name. */
   itemName: string
+  /** Variant / modifier subline, when the source exposes it
+   *  (Poynt's selectedVariants[].value). Rendered on its own
+   *  subline in the sales drawer, e.g. "1oz-Loose" beneath the
+   *  product name. Optional — most sources leave it undefined. */
+  variantLabel?: string
   quantity: number
   unitPrice: number
   totalPrice: number
@@ -84,5 +89,24 @@ export interface NormalizedOrder {
    *  (closed tickets in an export are overwhelmingly paid in
    *  practice). The point is: adapters no longer _have_ to lie. */
   paymentStatus?: 'paid' | 'unpaid'
+  /** Receipt-shaped breakdown. All optional — an adapter that
+   *  can't tell (legacy CSV, transaction-only ingest) should
+   *  leave them undefined rather than fabricate zeros. Ingest
+   *  writes null to the DB when undefined. */
+  subtotal?: number
+  discountTotal?: number
+  taxTotal?: number
+  /** Card details from the payment leg, when the sale was card-
+   *  tendered and the adapter exposed the funding source. */
+  cardBrand?: string     // 'VISA' / 'MASTERCARD' / 'AMEX' / …
+  cardLast4?: string
+  /** Combined display name from the source's customer record,
+   *  when present. */
+  customerName?: string
+  /** Raw upstream channel string (Poynt: 'WEB' / 'INSTORE' /
+   *  'MOBILE' / 'CALLIN'). Kept alongside the SourceId routing
+   *  since the SourceId collapses several Poynt values into
+   *  godaddy_pos / godaddy_online. */
+  channelSource?: string
   lineItems: NormalizedOrderLineItem[]
 }

@@ -53,6 +53,23 @@ export interface PoyntOrderItem {
   unitPrice?: number
   unitPriceCurrency?: string
   status?: string
+  // Variant / modifier detail. Poynt's transaction detail page
+  // shows things like "1oz-Loose", "45g - Organic" beneath the
+  // item name — those live on the ordered variant. We fold them
+  // into the display name at normalize time so the receipt in
+  // Checked matches what the merchant sees on Poynt.
+  selectedVariants?: Array<{
+    name?: string
+    value?: string
+    variantId?: string
+  }>
+}
+
+export interface PoyntCustomer {
+  firstName?: string
+  lastName?: string
+  emails?: Array<string | { address?: string }>
+  phones?: Array<string | { number?: string }>
 }
 
 export interface PoyntOrderContext {
@@ -68,6 +85,13 @@ export interface PoyntOrder {
   amounts?: PoyntOrderAmounts
   items?: PoyntOrderItem[]
   context?: PoyntOrderContext
+  customer?: PoyntCustomer
+  // Poynt embeds the payment leg(s) directly on the order object
+  // when the sale was tendered on their terminal or via storefront
+  // checkout. This lets ingest lift card brand + last 4 without
+  // a second /transactions fetch. When absent (rare — sale not
+  // yet captured, or an unlinked draft), the fields stay null.
+  transactions?: PoyntTransaction[]
   createdAt?: string
   updatedAt?: string
   statuses?: {
@@ -326,7 +350,18 @@ export interface PoyntTransaction {
   action?: string     // e.g. 'SALE', 'REFUND', 'AUTHORIZE'
   fundingSource?: {
     type?: string     // 'CREDIT_DEBIT', 'CASH', 'CHECK', etc.
-    card?: { type?: string }
+    card?: {
+      type?: string          // 'VISA' / 'MASTERCARD' / 'AMEX' / 'DISCOVER'
+      numberLast4?: string   // Poynt returns as string; we store as text.
+      numberFirst6?: string
+      cardHolderFirstName?: string
+      cardHolderLastName?: string
+    }
+    entryDetails?: {
+      // 'SWIPE' / 'EMV' / 'CONTACTLESS' / 'MANUAL' — useful later
+      // for reporting but not persisted yet.
+      entryMode?: string
+    }
   }
   context?: PoyntOrderContext
   createdAt?: string

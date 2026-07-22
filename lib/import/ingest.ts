@@ -514,6 +514,16 @@ export async function ingestOrders({
         created_at: o.postedAt,
         business_date: businessDate,
         voided_at: voidedAt,
+        // Receipt-shaped enrichment — undefined fields insert as
+        // NULL so we don't fabricate zeros. Column set added in
+        // migration 2026-07-22-orders-enriched-fields.sql.
+        subtotal: o.subtotal ?? null,
+        discount_total: o.discountTotal ?? null,
+        tax_total: o.taxTotal ?? null,
+        card_brand: o.cardBrand ?? null,
+        card_last4: o.cardLast4 ?? null,
+        customer_name: o.customerName ?? null,
+        channel_source: o.channelSource ?? null,
       })
       .select('id')
       .single()
@@ -547,6 +557,7 @@ export async function ingestOrders({
           total_price: li.totalPrice,
           menu_item_name_snapshot: snap.name || li.itemName || null,
           menu_category_id_snapshot: snap.categoryId,
+          variant_label: li.variantLabel ?? null,
         }
       })
       .filter((r): r is NonNullable<typeof r> => r !== null)

@@ -37,6 +37,10 @@ type OperatingMode = 'native_pos' | 'external_pos' | null
 interface LineItem {
   id: string
   name: string
+  /** Variant / modifier subline for POS sources that expose it
+   *  (Poynt: "1oz-Loose", "45g - Organic"). Null for manual +
+   *  native + legacy. Rendered on its own line beneath the name. */
+  variantLabel: string | null
   quantity: number
   unitPrice: number
   totalPrice: number
@@ -51,6 +55,17 @@ interface Order {
   paymentStatus: PaymentStatus
   status: OrderStatus
   note: string | null
+  // Receipt-shaped enrichment — nullable because manual + legacy
+  // rows don't carry it. When present, the drawer renders a
+  // Subtotal / Discount / Tax breakdown block and payment card
+  // details.
+  subtotal:      number | null
+  discountTotal: number | null
+  taxTotal:      number | null
+  cardBrand:     string | null
+  cardLast4:     string | null
+  customerName:  string | null
+  channelSource: string | null
   locationName: string | null
   lineItems: LineItem[]
 }
@@ -162,6 +177,22 @@ function fmtItemPreview(items: LineItem[], t: T): string {
 function shortId(id: string): string {
   const cleaned = id.replace(/-/g, '')
   return cleaned.slice(-6).toUpperCase()
+}
+
+// Poynt's `context.source` values are terse SCREAM_CASE. Render
+// them as short human strings so the manager doesn't have to
+// parse "INSTORE" every time they open the drawer. Unknown values
+// fall through unchanged rather than getting hidden — a new
+// channel type shouldn't silently disappear from the UI.
+function channelLabel(raw: string, t: T): string {
+  switch (raw.toUpperCase()) {
+    case 'INSTORE': return t('In-store', 'En tienda')
+    case 'WEB':     return t('Online', 'En línea')
+    case 'MOBILE':  return t('Mobile', 'Móvil')
+    case 'CALLIN':  return t('Phone', 'Teléfono')
+    case 'MOTO':    return t('Card-not-present', 'Sin tarjeta presente')
+    default: return raw
+  }
 }
 
 // ================================================================
@@ -571,7 +602,6 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
   const [state, action, pending] = useActionState(voidOrder, null)
   const canVoid = order.status === 'completed'
   const STATUS_META = statusMeta(t)
-  const SOURCE_LABEL = sourceLabel(t)
   const status = STATUS_META[order.status]
   const isVoided = order.status === 'voided'
   const isEs = t('__lang_probe__', 'es') === 'es'
@@ -624,31 +654,14 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
       />
       <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
 
-        {/* HEADER — Order # + status pill, then a "Status · Source ·
-            Payment" meta line so the cashier reads the order's
-            shape at a glance. Date sits below as quiet context. */}
-        <div className="border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-4 flex-shrink-0">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-base font-bold text-gray-900 font-mono tabular-nums">
-                {t('Order', 'Orden')} #{shortId(order.id)}
-              </h2>
-              <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-                {status.label}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-gray-600">
-              {status.label}
-              <span className="text-gray-300 mx-1">·</span>
-              {SOURCE_LABEL[order.source]}
-              <span className="text-gray-300 mx-1">·</span>
-              <span>{paymentTypeLabel}</span>
-            </p>
-            <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
-              {fmtFullDate(order.createdAt, locale)} <span className="text-gray-300">·</span> {fmtRelative(order.createdAt, t)}
-            </p>
-          </div>
+        {/* HEADER — Order identifier on the left, close on the
+            right. Date + status pill live inside the payment hero
+            card below so the header stays quiet and doesn't
+            repeat what's about to follow. */}
+        <div className="border-b border-gray-100 px-5 py-3.5 flex items-center justify-between gap-4 flex-shrink-0">
+          <h2 className="text-[13px] font-semibold text-gray-900 font-mono tabular-nums">
+            {t('Order', 'Orden')} #{shortId(order.id)}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -669,56 +682,97 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
           </div>
         )}
 
-        {/* BODY — Sale total hero → Ticket → Payment → Source →
-            Adjustments → optional Note. */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        {/* BODY — Reshaped to mirror Poynt's transaction detail:
+            a Payment hero card (date · status pill, big total,
+            card-details definition list), then Items, then Sale
+            breakdown, then Source/Customer/Note. Cards use a
+            calmer gray-50 background than plain white so the
+            drawer reads as three distinct stacked receipts
+            instead of a wall of framed rows. */}
+        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-3">
 
-          {/* a. Sale total — hero. Large mono dollar amount + item /
-              line count, framed by a calm bordered card so it reads
-              as the receipt's headline number. */}
-          <div className="rounded-xl border border-gray-200/80 bg-gray-50/40 px-5 py-4">
-            <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              {t('Sale total', 'Total de venta')}
-            </p>
-            <p className={`mt-1 text-[28px] leading-none font-mono tabular-nums font-bold ${
+          {/* PAYMENT HERO — date on the left, status pill on the
+              right, then the big total, then a definition-list
+              of card number + payment method. Matches the top
+              card in Poynt's transaction detail. */}
+          <section className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[11px] text-gray-600 font-mono tabular-nums">
+                {fmtFullDate(order.createdAt, locale)}
+              </p>
+              <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
+                {status.label}
+              </span>
+            </div>
+            <p className={`mt-3 text-[32px] leading-none font-mono tabular-nums font-bold ${
               isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
             }`}>
               {fmtMoney(order.total)}
+              <span className="text-[13px] text-gray-400 font-medium ml-1.5 align-middle">USD</span>
             </p>
-            <p className="mt-2 text-[11px] text-gray-500 font-mono tabular-nums">
-              {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
-              <span className="text-gray-300"> · </span>
-              {order.lineItems.length} {order.lineItems.length === 1 ? t('line', 'línea') : t('lines', 'líneas')}
-            </p>
-          </div>
 
-          {/* b. Ticket — receipt-style line list. Each line:
-                  {name}
-                  {qty} × {unit price}                        {line total}
-              The eyebrow is bumped to gray-700 (the only stronger
-              eyebrow in this drawer) so Ticket reads as the body's
-              primary content. */}
-          <div>
-            <p className="mb-2.5 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              {t('Ticket', 'Ticket')}
+            {/* Definition list — Card Number + Payment Method.
+                Only the Card Number row renders when we actually
+                have card details; otherwise Payment Method stands
+                alone (cash / other). */}
+            <dl className="mt-4 space-y-1.5 text-[12px]">
+              {order.paymentType === 'card' && (order.cardBrand || order.cardLast4) && (
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-gray-500">{t('Card Number', 'Número de tarjeta')}</dt>
+                  <dd className="font-mono tabular-nums text-gray-900">
+                    {order.cardBrand ?? t('Card', 'Tarjeta')}
+                    {order.cardLast4 && <> **{order.cardLast4}</>}
+                  </dd>
+                </div>
+              )}
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-gray-500">{t('Payment Method', 'Método de pago')}</dt>
+                <dd className={`font-medium ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
+                  {paymentTypeLabel}
+                </dd>
+              </div>
+              {order.paymentStatus !== 'paid' && (
+                <div className="flex items-baseline justify-between gap-3">
+                  <dt className="text-gray-500">{t('Status', 'Estado')}</dt>
+                  <dd className={`font-medium ${paymentStatusTone}`}>{paymentStatusLabel}</dd>
+                </div>
+              )}
+            </dl>
+          </section>
+
+          {/* ITEMS — receipt-style line list. Each row:
+                [qty pill] {name}                     {price}
+                          {variant subline, if any}
+              Variant renders on its own line under the name,
+              matching the "1oz-Loose" subline in Poynt's UI. */}
+          <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
+            <p className="mb-3 text-[13px] font-semibold text-gray-900">
+              {t('Items', 'Artículos')}
             </p>
-            <ul className="rounded-xl border border-gray-200/80 bg-white divide-y divide-gray-100">
+            <ul className="space-y-3">
               {order.lineItems.map((li) => (
-                <li
-                  key={li.id}
-                  className="flex items-center justify-between gap-3 px-4 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className={`text-[13px] font-semibold truncate ${
-                      isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-                    }`}>
-                      {li.name}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-gray-500 font-mono tabular-nums">
-                      {li.quantity} × {fmtMoney(li.unitPrice)}
-                    </p>
+                <li key={li.id} className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    {/* Compact qty pill — mimics the "2x" chip
+                        in the screenshot's item list. */}
+                    <span className="mt-0.5 flex-shrink-0 inline-flex items-center justify-center min-w-[28px] h-[22px] px-1.5 rounded-md bg-gray-100 text-gray-700 text-[11px] font-semibold font-mono tabular-nums">
+                      {li.quantity}x
+                    </span>
+                    <div className="min-w-0">
+                      <p className={`text-[13px] leading-tight ${
+                        isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
+                      }`}>
+                        {li.name}
+                      </p>
+                      {li.variantLabel && (
+                        <p className="mt-0.5 text-[11px] text-gray-500">
+                          {li.variantLabel}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <p className={`text-sm font-bold font-mono tabular-nums whitespace-nowrap ${
+                  <p className={`text-[13px] font-mono tabular-nums whitespace-nowrap ${
                     isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
                   }`}>
                     {fmtMoney(li.totalPrice)}
@@ -726,69 +780,90 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
                 </li>
               ))}
             </ul>
-          </div>
+          </section>
 
-          {/* c. Payment — method · status · amount on one line. */}
-          <div>
-            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              {t('Payment', 'Pago')}
-            </p>
-            <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3 flex items-baseline justify-between gap-3">
-              <p className="text-[13px] min-w-0 flex flex-wrap items-baseline gap-x-1.5">
-                <span className={`font-medium ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
-                  {paymentTypeLabel}
-                </span>
-                <span className="text-gray-300">·</span>
-                <span className={`font-medium ${paymentStatusTone}`}>
-                  {paymentStatusLabel}
-                </span>
+          {/* SALE — Subtotal / Discount / Tax / Total. Only
+              rendered when the source gave us at least one of
+              the breakdown fields; a bare Total that duplicates
+              the hero is worthless. Discount only shows when
+              non-zero. */}
+          {(order.subtotal !== null || order.taxTotal !== null || (order.discountTotal !== null && order.discountTotal > 0)) && (
+            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
+              <p className="mb-3 text-[13px] font-semibold text-gray-900">
+                {t('Sale', 'Venta')}
               </p>
-              <p className={`text-sm font-mono tabular-nums font-semibold whitespace-nowrap ${
-                isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-              }`}>
-                {fmtMoney(order.total)}
-              </p>
-            </div>
-          </div>
+              <div className="space-y-1.5 text-[12px]">
+                {order.subtotal !== null && (
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-gray-600">{t('Subtotal', 'Subtotal')}</span>
+                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                      {fmtMoney(order.subtotal)}
+                    </span>
+                  </div>
+                )}
+                {order.discountTotal !== null && order.discountTotal > 0 && (
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-gray-600">{t('Discount', 'Descuento')}</span>
+                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-emerald-700'}`}>
+                      −{fmtMoney(order.discountTotal)}
+                    </span>
+                  </div>
+                )}
+                {order.taxTotal !== null && (
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-gray-600">{t('Tax', 'Impuesto')}</span>
+                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                      {fmtMoney(order.taxTotal)}
+                    </span>
+                  </div>
+                )}
+                <div className="pt-2.5 mt-2 border-t border-gray-100 flex items-baseline justify-between gap-3">
+                  <span className="text-[13px] font-semibold text-gray-900">{t('Total', 'Total')}</span>
+                  <span className={`text-[14px] font-mono tabular-nums font-bold ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
+                    {fmtMoney(order.total)}
+                    <span className="text-[11px] text-gray-400 font-medium ml-1 align-middle">USD</span>
+                  </span>
+                </div>
+              </div>
+            </section>
+          )}
 
-          {/* d. Source — manager-friendly "In-app POS · Location" /
-              "External POS · Location" / "Manual entry · Location". */}
-          <div>
-            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
+          {/* CUSTOMER — only when captured. Standalone card so
+              walk-in sales don't render an empty attribution. */}
+          {order.customerName && (
+            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
+              <p className="mb-2 text-[13px] font-semibold text-gray-900">
+                {t('Customer', 'Cliente')}
+              </p>
+              <p className="text-[13px] text-gray-800">{order.customerName}</p>
+            </section>
+          )}
+
+          {/* SOURCE — manager-friendly source line + optional
+              channel subline (In-store / Online / Mobile). */}
+          <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
+            <p className="mb-2 text-[13px] font-semibold text-gray-900">
               {t('Source', 'Fuente')}
             </p>
-            <div className="rounded-lg border border-gray-200/80 bg-white px-4 py-3">
-              <p className="text-[13px] text-gray-900">{sourceLine}</p>
-            </div>
-          </div>
-
-          {/* e. Adjustments — placeholder. Item-level corrections
-              require schema + action work (see code comment above)
-              and are deferred. When no adjustments exist on the
-              order, the section communicates that calmly without
-              faking a corrections feed. */}
-          <div>
-            <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-              {t('Adjustments', 'Ajustes')}
-            </p>
-            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50/40 px-4 py-3 text-center">
-              <p className="text-[12px] text-gray-600">{t('No adjustments yet.', 'Sin ajustes aún.')}</p>
-              <p className="mt-1 text-[10px] text-gray-400 leading-relaxed">
-                {t('Item-level voids, refunds, and comp tools are coming in a future update.', 'Las anulaciones por artículo, reembolsos y cortesías llegarán en una próxima actualización.')}
+            <p className="text-[13px] text-gray-800">{sourceLine}</p>
+            {order.channelSource && (
+              <p className="mt-0.5 text-[11px] text-gray-500">
+                {channelLabel(order.channelSource, t)}
               </p>
-            </div>
-          </div>
+            )}
+            <p className="mt-2 text-[11px] text-gray-400 font-mono tabular-nums">
+              #{shortId(order.id)} <span className="text-gray-300 mx-1">·</span> {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+            </p>
+          </section>
 
-          {/* f. Note — only when the order carries one. */}
+          {/* NOTE — only when the order carries one. */}
           {order.note && (
-            <div>
-              <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
+            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
+              <p className="mb-2 text-[13px] font-semibold text-gray-900">
                 {t('Note', 'Nota')}
               </p>
-              <div className="rounded-lg border border-gray-200 bg-gray-50/40 px-4 py-3">
-                <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
-              </div>
-            </div>
+              <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
+            </section>
           )}
         </div>
 

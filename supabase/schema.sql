@@ -249,6 +249,18 @@ alter table public.orders add column if not exists payment_status text not null 
 alter table public.orders add column if not exists status         text not null default 'completed';
 alter table public.orders add column if not exists note           text;
 
+-- Receipt-shaped fields. All nullable — populated by adapters
+-- that expose them (Poynt today); left null for manual + legacy.
+-- See migration 2026-07-22-orders-enriched-fields.sql for the
+-- full column-by-column rationale.
+alter table public.orders add column if not exists subtotal        numeric(10,2);
+alter table public.orders add column if not exists discount_total  numeric(10,2);
+alter table public.orders add column if not exists tax_total       numeric(10,2);
+alter table public.orders add column if not exists card_brand      text;
+alter table public.orders add column if not exists card_last4      text;
+alter table public.orders add column if not exists customer_name   text;
+alter table public.orders add column if not exists channel_source  text;
+
 do $$ begin
   if not exists (select 1 from pg_constraint where conname = 'orders_source_check') then
     alter table public.orders add constraint orders_source_check
@@ -296,6 +308,12 @@ create table public.order_items (
   total_price   numeric(10,2) not null,
   created_at    timestamptz not null default now()
 );
+
+-- Variant / modifier subline. Populated by adapters that expose
+-- it (Poynt today, from item.selectedVariants); null for manual
+-- + native POS + legacy CSV. See migration
+-- 2026-07-22-order-items-variant-label.sql.
+alter table public.order_items add column if not exists variant_label text;
 
 
 -- ----------------------------------------------------------------

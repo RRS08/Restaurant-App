@@ -343,6 +343,16 @@ export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedO
     const netTotal = o.amounts?.netTotal ?? o.amounts?.subTotal ?? 0
     const totalAmount = normalizeAmount(netTotal)
 
+    // Receipt-shaped breakdown. undefined (not 0) when Poynt
+    // didn't send the field — 0 has a real meaning ("no tax
+    // charged") that we don't want to conflate with absence.
+    const subtotal = o.amounts?.subTotal !== undefined
+      ? normalizeAmount(o.amounts.subTotal) : undefined
+    const discountTotal = o.amounts?.discountTotal !== undefined
+      ? normalizeAmount(o.amounts.discountTotal) : undefined
+    const taxTotal = o.amounts?.taxTotal !== undefined
+      ? normalizeAmount(o.amounts.taxTotal) : undefined
+
     const rawStatus = (o.statuses?.status ?? '').toUpperCase()
     let status: NormalizedOrder['status'] | undefined
     if (rawStatus.includes('VOID') || rawStatus.includes('CANCEL')) status = 'voided'
@@ -366,9 +376,18 @@ export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedO
         const qty = Number(li.quantity ?? 0)
         const unit = normalizeAmount(li.unitPrice ?? 0)
         if (!externalItemId || !Number.isFinite(qty) || qty <= 0) return null
+        // Base product name stays clean; the variant / modifier
+        // lifts into its own field so the drawer can render it
+        // on a subline (matching Poynt's transaction detail).
+        const itemName = (li.name ?? '').trim() || `Imported item ${externalItemId}`
+        const variantLabel = (li.selectedVariants ?? [])
+          .map((v) => (v.value ?? v.name ?? '').trim())
+          .filter(Boolean)
+          .join(' · ')
         return {
           externalItemId,
-          itemName: (li.name ?? '').trim() || `Imported item ${externalItemId}`,
+          itemName,
+          variantLabel: variantLabel.length > 0 ? variantLabel : undefined,
           quantity: qty,
           unitPrice: unit,
           totalPrice: +(unit * qty).toFixed(2),
@@ -381,13 +400,53 @@ export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedO
       return null
     }
 
+    // Payment leg — lift card details off the first captured
+    // transaction, when one is embedded on the order. Voids /
+    // refunds get skipped so we prefer a real capture; falling
+    // back to the first transaction is fine when nothing captured
+    // (rare on a completed order — but it beats null).
+    const txs = o.transactions ?? []
+    const capturedTx =
+      txs.find((t) => (t.status ?? '').toUpperCase() === 'CAPTURED')
+      ?? txs[0]
+    let paymentType: NormalizedOrder['paymentType'] = 'other'
+    let cardBrand: string | undefined
+    let cardLast4: string | undefined
+    if (capturedTx) {
+      const fundingType = (capturedTx.fundingSource?.type ?? '').toUpperCase()
+      if (fundingType.includes('CASH')) paymentType = 'cash'
+      else if (fundingType.includes('CREDIT') || fundingType.includes('DEBIT') || fundingType.includes('CARD')) {
+        paymentType = 'card'
+        const brand = (capturedTx.fundingSource?.card?.type ?? '').trim().toUpperCase()
+        if (brand) cardBrand = brand
+        const last4 = (capturedTx.fundingSource?.card?.numberLast4 ?? '').trim()
+        if (last4) cardLast4 = last4
+      }
+    }
+
+    // Customer + channel. Both optional — leave undefined when
+    // Poynt didn't send them.
+    const firstName = (o.customer?.firstName ?? '').trim()
+    const lastName = (o.customer?.lastName ?? '').trim()
+    const combinedName = [firstName, lastName].filter(Boolean).join(' ')
+    const customerName = combinedName.length > 0 ? combinedName : undefined
+    const rawChannel = (o.context?.source ?? '').trim()
+    const channelSource = rawChannel.length > 0 ? rawChannel.toUpperCase() : undefined
+
     return {
       externalId,
       postedAt,
       totalAmount,
       status,
-      paymentType: 'other',
+      paymentType,
       paymentStatus: status === 'voided' ? 'unpaid' : 'paid',
+      subtotal,
+      discountTotal,
+      taxTotal,
+      cardBrand,
+      cardLast4,
+      customerName,
+      channelSource,
       lineItems,
     }
   } catch (err) {

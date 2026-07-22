@@ -589,16 +589,27 @@ export async function reorderCategories(
 // ----------------------------------------------------------------
 // bulkDeleteMenuItems — remove many menu items in one round-trip.
 // Powers the "Delete" affordance on the Awaiting-a-section band,
-// where a manager fresh off a CSV import may want to purge a
-// batch of noise rows without opening each drawer individually.
+// where a manager fresh off a CSV / API import may want to purge
+// a batch of noise rows without opening each drawer.
 //
-// Order history rule (same as deleteMenuItem): a hard DELETE
-// against menu_items with associated order_items fails at the FK
-// level (on delete restrict, preserving historical order data).
-// We attempt the delete and, per-id, fall back to a soft
-// deactivate (active = false) on that specific failure so a
-// batch containing one order-having item doesn't kill the
-// operation for the other 39 clean ones.
+// Delete strategy depends on the item's origin:
+//
+//   • Imported items (source='imported' + external_provider set)
+//     always SOFT-delete (active=false). Hard-deleting them just
+//     invites the ingest pipeline to recreate the same row on
+//     the next sync — Poynt/GoDaddy still has the sale referring
+//     to that SKU, our sync looks it up, doesn't find, creates
+//     a placeholder. Groundhog day. Soft-delete keeps the row
+//     around so ingest finds it and moves on; the client hides
+//     inactive rows from the Awaiting band so the manager
+//     experiences it as "deleted."
+//
+//   • Manual items (source='manual'): try hard-delete; fall back
+//     to soft on FK-restrict (order history) so historical
+//     reports keep their references. Same as before.
+//
+// Iteration over batch (rather than one bulk query) lets a single
+// weird row fail without aborting the whole selection.
 // ----------------------------------------------------------------
 export async function bulkDeleteMenuItems(
   menuItemIds: string[],
@@ -608,16 +619,44 @@ export async function bulkDeleteMenuItems(
   if (ctx.role !== 'owner') return { deleted: 0, deactivated: 0, error: 'Only the owner can delete menu items.' }
   if (menuItemIds.length === 0) return { deleted: 0, deactivated: 0 }
 
+  // Look up source + external_provider for each id in one query
+  // so the per-item branch below doesn't need a second round-trip.
+  const { data: metaRows } = await ctx.supabase
+    .from('menu_items')
+    .select('id, source, external_provider')
+    .in('id', menuItemIds)
+    .eq('restaurant_id', ctx.restaurantId)
+  const metaById = new Map<string, { source: string; externalProvider: string | null }>()
+  for (const r of metaRows ?? []) {
+    metaById.set(r.id as string, {
+      source: (r.source as string) ?? 'manual',
+      externalProvider: (r.external_provider as string | null) ?? null,
+    })
+  }
+
   let deleted = 0
   let deactivated = 0
 
-  // Iterate rather than a single bulk delete so we can catch the
-  // FK-restrict failure per id and deactivate that one instead of
-  // aborting the whole batch. At small selection sizes (~50) this
-  // is fine; if we ever have to bulk-delete thousands we'll switch
-  // to a two-pass "pre-check for order refs, split into
-  // safe-delete vs must-deactivate, then two batch queries."
   for (const id of menuItemIds) {
+    const meta = metaById.get(id)
+    const isImported = !!meta && meta.source === 'imported' && !!meta.externalProvider
+
+    if (isImported) {
+      // Always soft-delete imported items so the next sync's SKU
+      // lookup finds the (inactive) row and doesn't spawn a fresh
+      // placeholder. Client filters inactive out of Awaiting so
+      // it visually looks deleted.
+      const { error: deactErr } = await ctx.supabase
+        .from('menu_items')
+        .update({ active: false })
+        .eq('id', id)
+        .eq('restaurant_id', ctx.restaurantId)
+      if (!deactErr) deactivated++
+      continue
+    }
+
+    // Manual items: try hard-delete first; fall back to soft on
+    // FK-restrict (order history).
     const { error: delErr } = await ctx.supabase
       .from('menu_items')
       .delete()
@@ -627,8 +666,6 @@ export async function bulkDeleteMenuItems(
       deleted++
       continue
     }
-    // 23503 = foreign_key_violation. Item has order history →
-    // deactivate to preserve reports.
     if (delErr.code === '23503') {
       const { error: deactErr } = await ctx.supabase
         .from('menu_items')

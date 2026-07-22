@@ -301,7 +301,8 @@ export default function MenuClient({
     const ids = Array.from(selectedIds)
     if (ids.length === 0) return
     if (typeof window !== 'undefined' && !window.confirm(
-      `Delete ${ids.length} item${ids.length === 1 ? '' : 's'}? Items that have order history will be deactivated instead of deleted — historical sales data is preserved.`,
+      `Delete ${ids.length} item${ids.length === 1 ? '' : 's'}?\n\n` +
+      `Imported items (from Poynt / GoDaddy sync) get hidden rather than hard-deleted — otherwise they'd come back on the next sync since Poynt still has the SKU. Manual items with sales history also get hidden to preserve reports. Everything else deletes outright.`,
     )) return
     setPendingMoves((prev) => {
       const next = { ...prev }
@@ -354,7 +355,14 @@ export default function MenuClient({
     if (!itemsByCategory.has(key)) itemsByCategory.set(key, [])
     itemsByCategory.get(key)!.push(item)
   }
-  const awaitingItems = itemsByCategory.get('__none__') ?? []
+  // Awaiting band deliberately excludes inactive items. When a
+  // manager deletes an imported placeholder, we soft-delete it
+  // (active=false) so the ingest pipeline doesn't recreate it on
+  // the next sync — but leaving it in Awaiting would defeat the
+  // point. Inactive items are still visible inside their category
+  // block (with an "Inactive" chip) so the manager can un-hide
+  // them from the drawer; they just don't clutter Awaiting.
+  const awaitingItems = (itemsByCategory.get('__none__') ?? []).filter((i) => i.active !== false)
 
   // Apply the pending drag-reorder to the displayed chip row so the
   // moved chip lands under the cursor instantly. When the server

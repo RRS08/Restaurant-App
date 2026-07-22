@@ -467,7 +467,10 @@ export async function ingestOrders({
     .eq('external_provider', sourceId)
     .in('external_id', externalIds)
 
-  const alreadyImported = new Set((existingOrders ?? []).map((o) => o.external_id))
+  const existingIdByExternal = new Map<string, string>()
+  for (const row of existingOrders ?? []) {
+    existingIdByExternal.set(row.external_id as string, row.id as string)
+  }
 
   // 6. Insert each new order + its line items, conditionally deplete inventory.
   let ordersInserted = 0
@@ -476,7 +479,46 @@ export async function ingestOrders({
   let inventoryDepletionsWritten = 0
 
   for (const o of orders) {
-    if (alreadyImported.has(o.externalId)) {
+    const existingOrderId = existingIdByExternal.get(o.externalId)
+    if (existingOrderId) {
+      // Backfill pass: an order we've already imported still gets
+      // its enriched fields refreshed on re-sync so historical
+      // rows synced before those columns existed pick up subtotal
+      // / discount / tax / card / customer / channel the next time
+      // "Sync now" fires. We deliberately do NOT touch total_amount,
+      // status, line items, or business_date — those are locked
+      // at first import so reporting stays stable. Payment_type
+      // does get refreshed because early syncs stored 'other' for
+      // every card sale (transactions weren't inspected yet).
+      const refreshedType = o.paymentType ?? undefined
+      const patch: Record<string, unknown> = {}
+      if (refreshedType && refreshedType !== 'other') patch.payment_type = refreshedType
+      if (o.subtotal !== undefined)      patch.subtotal = o.subtotal
+      if (o.discountTotal !== undefined) patch.discount_total = o.discountTotal
+      if (o.taxTotal !== undefined)      patch.tax_total = o.taxTotal
+      if (o.cardBrand)                   patch.card_brand = o.cardBrand
+      if (o.cardLast4)                   patch.card_last4 = o.cardLast4
+      if (o.customerName)                patch.customer_name = o.customerName
+      if (o.channelSource)               patch.channel_source = o.channelSource
+      if (Object.keys(patch).length > 0) {
+        await supabase.from('orders').update(patch).eq('id', existingOrderId)
+      }
+      // Backfill variant labels on existing line items. Match by
+      // menu_item_id (resolved from li.externalItemId via the
+      // snapshot map built earlier). Multiple physical rows can
+      // share the same menu_item_id inside one order (rare — e.g.
+      // two separate rings of the same SKU); we set the same
+      // variant on all of them since the variant is a property
+      // of the SKU, not of the ring.
+      for (const li of o.lineItems) {
+        if (!li.variantLabel) continue
+        const snap = itemSnapByExternalId.get(li.externalItemId)
+        if (!snap) continue
+        await supabase.from('order_items').update({ variant_label: li.variantLabel })
+          .eq('order_id', existingOrderId)
+          .eq('menu_item_id', snap.id)
+          .is('variant_label', null)
+      }
       ordersSkipped++
       continue
     }

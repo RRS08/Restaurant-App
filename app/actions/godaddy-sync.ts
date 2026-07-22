@@ -23,7 +23,7 @@
 
 import { getAuthContext } from '@/lib/auth'
 import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, backfillOrdersFromApi, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export type SyncResult = IngestBatchResult
@@ -166,6 +166,21 @@ export async function runSyncForRestaurant(restaurantId: string): Promise<SyncRe
     const msg = err instanceof Error ? err.message : String(err)
     console.error('[godaddy/sync] /transactions leg threw', err)
     merged.notes.push(`/transactions leg threw: ${msg}`)
+  }
+
+  // 4. Backfill any orders still missing receipt-shape fields via
+  //    per-order GET /orders/{id}. Capped per invocation so the
+  //    sync stays within Vercel's function timeout — a big backlog
+  //    drains over a few Sync-now clicks or cron ticks. Once every
+  //    order has payment_type != 'other' and card_brand + subtotal
+  //    populated, this pass finds nothing and is a cheap no-op.
+  try {
+    const bf = await backfillOrdersFromApi({ supabase, restaurantId, cap: 50 })
+    if (bf.considered > 0) merged.notes.push(...bf.notes)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[godaddy/sync] backfill leg threw', err)
+    merged.notes.push(`backfill leg threw: ${msg}`)
   }
 
   return merged

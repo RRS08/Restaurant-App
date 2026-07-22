@@ -27,6 +27,7 @@
 import { ingestOrders } from '@/lib/import/ingest'
 import type { NormalizedOrder } from '@/lib/import/types'
 import type { PoyntOrder, PoyntTransaction, PoyntProduct } from './api'
+import { fetchSinglePoyntOrder } from './api'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -436,6 +437,123 @@ export async function enrichOrdersFromTransactions(args: {
   )
 
   return { enriched, notes }
+}
+
+// ================================================================
+// Per-order backfill via GET /orders/{id}
+// ================================================================
+//
+// The /orders LIST endpoint does not reliably embed transactions[]
+// on each row, and the /transactions LIST endpoint often ships
+// without the orderId reference either — so the cheap cross-
+// reference path above only enriches a fraction of historical
+// orders. GET /orders/{id} does embed transactions[] reliably,
+// but it's one API call per order, so we cap at a per-invocation
+// budget and let the sync click self-heal the backlog over a few
+// repeats.
+//
+// Runs after /orders, /transactions, and enrichOrdersFromTransactions
+// — so anything cheap has already been applied and this pass only
+// hits orders that STILL don't have the receipt-shape fields.
+
+export async function backfillOrdersFromApi(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  /** Max orders to fetch individually in this invocation. Each
+   *  call is one Poynt API request; a busy merchant with 400+
+   *  historical orders will need multiple Sync-now clicks (or
+   *  a few cron ticks) to drain the backlog. */
+  cap?: number
+}): Promise<{ backfilled: number; considered: number; notes: string[] }> {
+  const { supabase, restaurantId } = args
+  const cap = args.cap ?? 50
+  const notes: string[] = []
+
+  // Candidates: any Poynt-sourced, non-voided order where the
+  // receipt-shape enrichment is still missing. Prefer the newest
+  // first — that's what a manager is most likely to open next.
+  const { data: candidates } = await supabase
+    .from('orders')
+    .select('id, external_id, external_provider')
+    .eq('restaurant_id', restaurantId)
+    .in('external_provider', ['godaddy_pos', 'godaddy_online'])
+    .neq('status', 'voided')
+    .or('payment_type.eq.other,card_brand.is.null,subtotal.is.null')
+    .order('created_at', { ascending: false })
+    .limit(cap)
+
+  const rows = candidates ?? []
+  if (rows.length === 0) return { backfilled: 0, considered: 0, notes }
+
+  let backfilled = 0
+  const noteBuf: string[] = []
+
+  for (const row of rows) {
+    const externalId = row.external_id as string
+    if (!externalId) continue
+
+    const res = await fetchSinglePoyntOrder({ restaurantId, orderId: externalId })
+    if ('error' in res) {
+      // Rate limit / 404 / auth blip — record a note (capped) and
+      // keep going. A 404 for a specific order usually means it
+      // was deleted upstream; the row can stay as-is.
+      if (noteBuf.length < 3) noteBuf.push(`${externalId.slice(0, 8)}: ${res.error.slice(0, 80)}`)
+      continue
+    }
+
+    const normalized = normalizePoyntOrder(res.order, noteBuf)
+    if (!normalized) continue
+
+    // Only patch the enrichment fields — never touch total, status,
+    // or line items on a backfill. Payment_type is refreshed only
+    // when the normalized value is more specific than 'other'.
+    const patch: Record<string, unknown> = {}
+    if (normalized.paymentType && normalized.paymentType !== 'other') patch.payment_type = normalized.paymentType
+    if (normalized.subtotal !== undefined)      patch.subtotal = normalized.subtotal
+    if (normalized.discountTotal !== undefined) patch.discount_total = normalized.discountTotal
+    if (normalized.taxTotal !== undefined)      patch.tax_total = normalized.taxTotal
+    if (normalized.cardBrand)                   patch.card_brand = normalized.cardBrand
+    if (normalized.cardLast4)                   patch.card_last4 = normalized.cardLast4
+    if (normalized.customerName)                patch.customer_name = normalized.customerName
+    if (normalized.channelSource)               patch.channel_source = normalized.channelSource
+
+    if (Object.keys(patch).length === 0) continue
+    const { error: updErr } = await supabase.from('orders').update(patch).eq('id', row.id)
+    if (updErr) {
+      if (noteBuf.length < 3) noteBuf.push(`${externalId.slice(0, 8)}: ${updErr.message.slice(0, 80)}`)
+      continue
+    }
+
+    // Also fill any missing variant labels on this order's line
+    // items. Match by menu_item_id resolved from the SKU.
+    for (const li of normalized.lineItems) {
+      if (!li.variantLabel) continue
+      const { data: menuItem } = await supabase
+        .from('menu_items')
+        .select('id')
+        .eq('restaurant_id', restaurantId)
+        .in('external_provider', ['godaddy_pos', 'godaddy_online'])
+        .eq('external_id', li.externalItemId)
+        .maybeSingle()
+      if (!menuItem?.id) continue
+      await supabase.from('order_items').update({ variant_label: li.variantLabel })
+        .eq('order_id', row.id)
+        .eq('menu_item_id', menuItem.id)
+        .is('variant_label', null)
+    }
+
+    backfilled++
+  }
+
+  if (noteBuf.length > 0) notes.push(...noteBuf)
+  console.info('[godaddy/backfill] pass', {
+    considered: rows.length,
+    backfilled,
+    remaining: '(re-run Sync now to drain)',
+  })
+  notes.push(`Backfill: ${rows.length} candidates → ${backfilled} enriched via GET /orders/{id}.`)
+
+  return { backfilled, considered: rows.length, notes }
 }
 
 // ================================================================

@@ -16,7 +16,35 @@ import { NextResponse, type NextRequest } from 'next/server'
 //   getUser() validates the token with Supabase's server — it's safe.
 // ----------------------------------------------------------------
 
+// Machine-authenticated routes. These endpoints are called by
+// external systems (GitHub Actions cron, Poynt webhook delivery)
+// that never carry a browser Supabase session. They authenticate
+// themselves at the route layer — CRON_SECRET Bearer for cron,
+// SHA1 HMAC of the raw body for webhooks. Running them through
+// the normal session-based redirect below sends every call to
+// /login (307), which silently kills the cron and prevents Poynt
+// from ever validating the webhook delivery URL.
+//
+// Short-circuit BEFORE creating the Supabase client so we don't
+// pay session-refresh overhead for these calls either. Anything
+// added here must have its own request-level auth.
+const MACHINE_ROUTES = [
+  '/api/cron/',            // any /api/cron/* — GitHub Actions poker
+  '/api/godaddy/webhooks', // Poynt POSTs here — verified via HMAC
+] as const
+
+function isMachineRoute(path: string): boolean {
+  return MACHINE_ROUTES.some((prefix) =>
+    prefix.endsWith('/') ? path.startsWith(prefix) : path === prefix,
+  )
+}
+
 export default async function proxy(request: NextRequest) {
+  const machinePath = request.nextUrl.pathname
+  if (isMachineRoute(machinePath)) {
+    return NextResponse.next()
+  }
+
   // We start with a plain "continue" response and may replace it with
   // a redirect. We must pass the request object into it so Supabase
   // can attach updated cookies to the response.

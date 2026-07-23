@@ -125,23 +125,36 @@ export async function registerMerchantWebhook(args: {
   }
 }
 
-/** SHA1 HMAC verification per Poynt spec §8. Rejects any mismatch
- *  in constant time so a byte-wise probe can't leak the secret. */
+/** SHA1 HMAC verification per Poynt's webhooks doc.
+ *
+ *  Two details that had to be gotten exactly right (both had bugs
+ *  in the initial implementation, which is why every webhook was
+ *  landing as `signature_mismatch` in the audit):
+ *
+ *    1. Digest encoding is BASE64, not hex. Poynt's Node SDK
+ *       example does `.digest("base64")` and every real payload
+ *       header is a base64 string ending in `=`. Our earlier hex
+ *       digest would never match a base64 header of any length.
+ *
+ *    2. Header value is a plain base64 string with no `sha1=`
+ *       prefix (unlike GitHub / SES conventions). Kept the
+ *       forgiving `^sha1=` strip anyway in case Poynt ever adds
+ *       one.
+ *
+ *  Constant-time compare via timingSafeEqual so a byte-wise probe
+ *  can't leak the secret. Any length mismatch bails early — the
+ *  buffer comparison would throw on mismatched lengths otherwise. */
 export function verifyWebhookSignature(args: {
   rawBody: string
   signatureHeader: string | null
   secret: string
 }): boolean {
   if (!args.signatureHeader) return false
-  const expected = createHmac('sha1', args.secret).update(args.rawBody).digest('hex')
-  // Poynt's header value shape isn't nailed down in the docs;
-  // some SES-style services prefix with `sha1=`. Strip that if
-  // present to be forgiving.
-  const received = args.signatureHeader.replace(/^sha1=/i, '').trim().toLowerCase()
-  const expectedNorm = expected.toLowerCase()
-  if (received.length !== expectedNorm.length) return false
+  const expected = createHmac('sha1', args.secret).update(args.rawBody).digest('base64')
+  const received = args.signatureHeader.replace(/^sha1=/i, '').trim()
+  if (received.length !== expected.length) return false
   try {
-    return timingSafeEqual(Buffer.from(received, 'hex'), Buffer.from(expectedNorm, 'hex'))
+    return timingSafeEqual(Buffer.from(received, 'utf8'), Buffer.from(expected, 'utf8'))
   } catch {
     return false
   }

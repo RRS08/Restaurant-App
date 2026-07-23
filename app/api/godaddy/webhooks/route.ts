@@ -195,14 +195,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true }, { status: 200 })
     }
 
-    // Signature verification. Poynt's docs describe SHA1 HMAC over
-    // the raw body. Header name isn't fully specified in the doc
-    // snippet — check the common variants.
+    // Signature verification. Poynt sends `Poynt-Webhook-Signature`
+    // per their webhooks doc §7 — the exact header name we missed
+    // in the first pass, which caused every real webhook to drop
+    // as `signature_mismatch`. Fallback names are kept for other
+    // less-common webhook shapes (Poynt has multiple product lines
+    // and the terminal SDK historically used different names).
     const sigHeader =
-      req.headers.get('x-hook-signature')
-      ?? req.headers.get('x-poynt-signature')
+      req.headers.get('poynt-webhook-signature')
+      ?? req.headers.get('x-poynt-webhook-signature')
+      ?? req.headers.get('x-hook-signature')
       ?? req.headers.get('poynt-signature')
-      ?? req.headers.get('x-signature')
     const valid = verifyWebhookSignature({
       rawBody,
       signatureHeader: sigHeader,

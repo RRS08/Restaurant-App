@@ -119,9 +119,17 @@ create table if not exists public.godaddy_poynt_tokens (
   -- synced manually via the "Sync now" button.
   webhook_id     text,
   webhook_secret text,
+  -- Per-merchant sync mutex + product-fetch throttle.
+  -- See migration 2026-07-22-sync-throttle-and-mutex.sql.
+  sync_locked_until       timestamptz,
+  last_products_synced_at timestamptz,
   unique(restaurant_id, business_id)
 );
 alter table public.godaddy_poynt_tokens enable row level security;
+
+-- Backfill for existing databases (columns added post-launch).
+alter table public.godaddy_poynt_tokens add column if not exists sync_locked_until       timestamptz;
+alter table public.godaddy_poynt_tokens add column if not exists last_products_synced_at timestamptz;
 
 -- Short-lived CSRF state for the Poynt install redirect. A random
 -- state is minted at /api/godaddy/oauth/install and consumed on

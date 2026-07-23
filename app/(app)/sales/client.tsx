@@ -292,7 +292,10 @@ function HeroDayCard({
       // wraps its content, not the full available width.
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
-      className="inline-block max-w-full rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-8 py-6 select-none touch-pan-y text-center"
+      // Full-width card so it lines up with the orders feed below;
+      // content inside stays center-aligned so the big number reads
+      // as the anchor even in a wide surface.
+      className="w-full rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-8 py-6 select-none touch-pan-y text-center"
     >
       {/* Row 1 — date on top, centered over the big number.
           Tap the date to open the native date picker (input
@@ -416,8 +419,8 @@ export default function SalesClient({
       {/* Source chip lives above the card as a quiet page-context      */}
       {/* pill so the card stays focused on the day's numbers.           */}
       {/* ================================================================ */}
-      <section className="mb-6 flex flex-col items-center">
-        <div className="mb-3">
+      <section className="mb-6">
+        <div className="mb-3 flex justify-center">
           <SourceChip operatingMode={operatingMode} t={t} />
         </div>
         <HeroDayCard

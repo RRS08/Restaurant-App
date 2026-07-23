@@ -225,6 +225,39 @@ function str(v: unknown): string | null {
   return t.length > 0 ? t : null
 }
 
+/** Delete a webhook registration from Poynt's side. Called from
+ *  the disconnect flow so the merchant's Poynt account isn't left
+ *  with a dangling hook pointing at our URL. Best-effort — an
+ *  error here doesn't block the local disconnect (we still want
+ *  the token row cleared even if Poynt's DELETE is unavailable). */
+export async function deleteMerchantWebhook(args: {
+  hookId: string
+  accessToken: string
+}): Promise<{ ok: true } | { error: string }> {
+  try {
+    const res = await fetch(`${baseUrl()}/hooks/${encodeURIComponent(args.hookId)}`, {
+      method: 'DELETE',
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'api-version': API_VERSION,
+        'Poynt-Request-Id': randomUUID(),
+        Authorization: `BEARER ${args.accessToken}`,
+      },
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      return {
+        error: `Poynt hook delete failed (${res.status} ${res.statusText}) — ${text.slice(0, 300)}`,
+      }
+    }
+    return { ok: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { error: `Poynt hook delete threw: ${msg}` }
+  }
+}
+
 /** Look up a stored merchant connection by businessId — used by
  *  the webhook receiver to figure out which restaurant an event
  *  belongs to. */

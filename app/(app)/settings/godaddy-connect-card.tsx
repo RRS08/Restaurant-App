@@ -28,7 +28,7 @@
 import { useEffect, useState, useTransition } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { syncGodaddyOrders, type SyncResult } from '@/app/actions/godaddy-sync'
-import { reregisterGodaddyWebhook } from '@/app/actions/godaddy-webhook'
+import { reregisterGodaddyWebhook, disconnectGodaddy } from '@/app/actions/godaddy-webhook'
 
 interface Props {
   connected: null | {
@@ -88,6 +88,12 @@ export default function GoDaddyConnectCard({ connected }: Props) {
     | null
   >(null)
 
+  // Disconnect flow — separate transition + inline confirm state
+  // so the button doesn't act on a single stray click.
+  const [disconnectPending, startDisconnectTransition] = useTransition()
+  const [disconnectConfirming, setDisconnectConfirming] = useState(false)
+  const [disconnectError, setDisconnectError] = useState<string | null>(null)
+
   const onSync = () => {
     setResult(null)
     startTransition(async () => {
@@ -105,6 +111,22 @@ export default function GoDaddyConnectCard({ connected }: Props) {
     startHookTransition(async () => {
       const r = await reregisterGodaddyWebhook()
       setHookResult(r)
+      router.refresh()
+    })
+  }
+
+  const onDisconnect = () => {
+    setDisconnectError(null)
+    startDisconnectTransition(async () => {
+      const r = await disconnectGodaddy()
+      if ('error' in r) {
+        setDisconnectError(r.error)
+        setDisconnectConfirming(false)
+        return
+      }
+      // Success — router.refresh triggers the settings page to
+      // re-fetch, which flips this card back into the
+      // "Not connected" state naturally.
       router.refresh()
     })
   }
@@ -225,6 +247,59 @@ export default function GoDaddyConnectCard({ connected }: Props) {
                 {'ok' in hookResult
                   ? 'Webhook registered. Real-time push is live.'
                   : hookResult.error}
+              </div>
+            )}
+          </div>
+
+          {/* Disconnect — destructive, two-click confirm so it
+              can't fire on a stray tap. Clearing the connection
+              is what a merchant needs when Poynt's stored
+              subscription got out of sync with our webhook_secret,
+              or when they want to re-do the OAuth consent flow.
+              Imported orders stay in the ledger; only the token
+              row + Poynt-side hook get removed. */}
+          <div className="rounded-lg border border-gray-200 bg-gray-50/50 p-3.5">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Disconnect</p>
+                <p className="mt-1 text-xs text-gray-500 max-w-xl">
+                  Removes the stored access + webhook so the merchant can start a fresh install.
+                  Sales already imported stay put. Use this to reset when webhook delivery
+                  keeps failing after re-registration.
+                </p>
+              </div>
+              {!disconnectConfirming ? (
+                <button
+                  type="button"
+                  onClick={() => setDisconnectConfirming(true)}
+                  className="flex-shrink-0 inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 transition-colors"
+                >
+                  Disconnect
+                </button>
+              ) : (
+                <div className="flex-shrink-0 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setDisconnectConfirming(false)}
+                    disabled={disconnectPending}
+                    className="rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-60 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onDisconnect}
+                    disabled={disconnectPending}
+                    className="rounded-md border border-red-300 bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {disconnectPending ? 'Disconnecting…' : 'Confirm disconnect'}
+                  </button>
+                </div>
+              )}
+            </div>
+            {disconnectError && (
+              <div className="mt-2.5 rounded-md bg-red-50 border border-red-200 px-2.5 py-1.5 text-xs text-red-700">
+                {disconnectError}
               </div>
             )}
           </div>

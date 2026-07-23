@@ -18,7 +18,7 @@
 // line items, totals, audit-minded footer, and the correction action.
 // ----------------------------------------------------------------
 
-import { useState, useMemo, useActionState, useEffect } from 'react'
+import { useState, useActionState, useEffect } from 'react'
 import Link from 'next/link'
 import { voidOrder } from '@/app/actions/sales'
 import { makeT, type Lang } from '@/lib/i18n'
@@ -111,22 +111,6 @@ function statusMeta(t: T): Record<OrderStatus, { label: string; chip: string; do
     completed: { label: t('Completed', 'Completada'), chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
     voided:    { label: t('Voided', 'Anulada'),       chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
   }
-}
-
-// ================================================================
-// Filter model
-// ================================================================
-
-type Filter = 'all' | Source
-
-// Filter chips are operating-mode aware so the strip doesn't
-// advertise sources that won't show up. The set is light (UI only) —
-// "All" still surfaces every order, regardless of source, on either
-// branch.
-function filtersForMode(mode: OperatingMode): Filter[] {
-  if (mode === 'external_pos') return ['all', 'external_pos', 'manual']
-  if (mode === 'native_pos') return ['all', 'native_pos', 'manual']
-  return ['all', 'native_pos', 'external_pos', 'manual']
 }
 
 // ================================================================
@@ -309,11 +293,6 @@ function DayNav({
 // Sales client
 // ================================================================
 
-// 6 rows per page. Fixed page size so the ledger card holds a
-// stable visual height (see `min-h` on the card shell below); rows
-// swap inside the surface and the surface itself never resizes.
-const PAGE_SIZE = 6
-
 export default function SalesClient({
   lang,
   orders,
@@ -333,27 +312,7 @@ export default function SalesClient({
   today: string
 }) {
   const t = makeT(lang)
-  const [filter, setFilter] = useState<Filter>('all')
   const [openId, setOpenId] = useState<string | null>(null)
-  const [page, setPage] = useState(0)
-
-  // Filter ordering is mode-aware so the most-relevant source appears
-  // second (right after All), matching the pillar's actual data origin.
-  const availableFilters = filtersForMode(operatingMode)
-
-  const visible = useMemo(() => {
-    if (filter === 'all') return orders
-    return orders.filter((o) => o.source === filter)
-  }, [orders, filter])
-
-  // Reset pagination if the filter narrows past the current page.
-  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE))
-  const safePage = Math.min(page, pageCount - 1)
-  const pagedOrders = visible.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE)
-
-  useEffect(() => {
-    if (page >= pageCount) setPage(0)
-  }, [page, pageCount])
 
   // Close the drawer if the open order disappears after revalidation.
   useEffect(() => {
@@ -362,13 +321,11 @@ export default function SalesClient({
 
   const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-  // Sales-focused metrics for the orientation strip. Scope is the
-  // current filter, not the whole restaurant, so the strip reads as
-  // "what does this slice look like" — ledger truth, not analytics
-  // interpretation. Average ticket = sales total ÷ completed order
-  // count; if no completed orders, it reads $0.00.
-  const completedOrders = visible.filter((o) => o.status === 'completed')
-  const voidedOrders = visible.filter((o) => o.status === 'voided')
+  // Day-scoped metrics. Query already narrows to one business_date,
+  // so these are naturally per-day. Average ticket = sales total ÷
+  // completed order count; $0.00 when no completed orders exist yet.
+  const completedOrders = orders.filter((o) => o.status === 'completed')
+  const voidedOrders = orders.filter((o) => o.status === 'voided')
   const salesTotal = completedOrders.reduce((s, o) => s + o.total, 0)
   const orderCount = completedOrders.length
   const voidCount = voidedOrders.length
@@ -442,109 +399,27 @@ export default function SalesClient({
           </div>
         </div>
 
-        {/* ----- Workflow header / filter bar -----
-            Filter chips on their own row. The header-side range
-            readout that used to live here was consolidated into
-            the footer pager so navigation context lives in one
-            place. */}
-        <div className="mb-3 flex flex-wrap items-center gap-3">
-          <div className="inline-flex items-center gap-1 rounded-lg border border-gray-200/80 bg-white p-1 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-              {availableFilters.map((f) => {
-                const active = filter === f
-                const count = f === 'all' ? orders.length : orders.filter((o) => o.source === f).length
-                const label =
-                  f === 'all' ? t('All', 'Todas') :
-                  f === 'manual' ? t('Manual', 'Manual') :
-                  f === 'native_pos' ? t('POS', 'POS') : t('External', 'Externo')
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    onClick={() => { setFilter(f); setPage(0) }}
-                    className={`text-[12px] font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1.5 ${
-                      active
-                        ? 'bg-gray-900 text-white shadow-sm'
-                        : 'text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    {label}
-                    <span className={`text-[10px] font-mono tabular-nums ${active ? 'text-white/70' : 'text-gray-400'}`}>
-                      {count}
-                    </span>
-                  </button>
-                )
-              })}
-          </div>
-        </div>
-
-        {/* Orders card.
-            Fixed-height ledger surface. The min-h is sized to fit a
-            full page of 10 rows + thead + pager, so the card keeps a
-            stable visual frame regardless of how many rows are on
-            the current page. When a page is short, the existing
-            `mt-auto` on the pager pins it to the bottom and the empty
-            space sits as quiet whitespace inside the same stable
-            surface — no filler rows, no shrinking. */}
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[680px]">
-          {visible.length === 0 ? (
-            <EmptyLedger orders={orders.length} filter={filter} t={t} isToday={date === today} />
+        {/* Orders card — free-scroll list of the day's orders. No
+            pagination (the day is bounded so the browser scroll IS
+            the pager) and no fixed height (card grows with the
+            content, empty state sits in a comfortable box on light
+            days). Rows separated by hairlines inside a single
+            calmly-bordered surface. */}
+        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+          {orders.length === 0 ? (
+            <EmptyLedger t={t} isToday={date === today} />
           ) : (
-            <>
-              {/* Card-list order feed. The table chrome (thead /
-                  tbody / tr / td) was replaced with a stacked ul of
-                  vertical-card rows so each order reads as one scan
-                  surface: date at top, item summary primary, meta
-                  small, and Source · Payment · Status + total on the
-                  bottom row. Less admin-table, more modern ledger. */}
-              <ul className="divide-y divide-gray-100">
-                {pagedOrders.map((o) => (
-                  <OrderRow
-                    key={o.id}
-                    order={o}
-                    selected={openId === o.id}
-                    onOpen={() => setOpenId(o.id)}
-                    t={t}
-                  />
-                ))}
-              </ul>
-
-              {/* Pager pinned at bottom for stable card height.
-                  Compact "Showing N–M of T · ← X / Y →" footer that
-                  matches the rest of the product family (Inventory,
-                  Finance, Restock Orders). */}
-              <div className="mt-auto border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
-                <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                  {t('Showing', 'Mostrando')}{' '}
-                  <span className="font-semibold text-gray-700">
-                    {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, visible.length)}
-                  </span>{' '}
-                  {t('of', 'de')} <span className="font-semibold text-gray-700">{visible.length}</span>
-                </p>
-                <div className="inline-flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.max(0, p - 1))}
-                    disabled={safePage === 0}
-                    aria-label={t('Previous orders', 'Órdenes anteriores')}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    ←
-                  </button>
-                  <span className="text-[10px] text-gray-500 px-1.5 font-mono tabular-nums">
-                    {safePage + 1} / {pageCount}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
-                    disabled={safePage >= pageCount - 1}
-                    aria-label={t('Next orders', 'Siguientes órdenes')}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                  >
-                    →
-                  </button>
-                </div>
-              </div>
-            </>
+            <ul className="divide-y divide-gray-100">
+              {orders.map((o) => (
+                <OrderRow
+                  key={o.id}
+                  order={o}
+                  selected={openId === o.id}
+                  onOpen={() => setOpenId(o.id)}
+                  t={t}
+                />
+              ))}
+            </ul>
           )}
         </div>
       </section>
@@ -687,25 +562,18 @@ function OrderRow({
 // ================================================================
 // EmptyLedger — calm, branch-aware empty state
 // ================================================================
-function EmptyLedger({
-  orders, filter, t, isToday,
-}: { orders: number; filter: Filter; t: T; isToday: boolean }) {
-  const isFilterEmpty = orders > 0 && filter !== 'all'
+function EmptyLedger({ t, isToday }: { t: T; isToday: boolean }) {
   return (
     <div className="px-6 py-20 text-center">
       <p className="text-sm font-semibold text-gray-700">
-        {isFilterEmpty
-          ? t('Nothing matches this filter', 'Nada coincide con este filtro')
-          : isToday
-            ? t('No sales yet today', 'Sin ventas hoy aún')
-            : t('No sales on this day', 'Sin ventas este día')}
+        {isToday
+          ? t('No sales yet today', 'Sin ventas hoy aún')
+          : t('No sales on this day', 'Sin ventas este día')}
       </p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
-        {isFilterEmpty
-          ? t('Switch back to All to see every order, or pick a different source.', 'Vuelve a Todas para ver todas las órdenes, o elige otra fuente.')
-          : isToday
-            ? t('Completed sales land here as they close. The first order will appear automatically.', 'Las ventas completadas aparecen aquí al cerrarse. La primera orden se mostrará automáticamente.')
-            : t('Use the day navigator above to move to another date.', 'Usa el navegador de días arriba para ir a otra fecha.')}
+        {isToday
+          ? t('Completed sales land here as they close. The first order will appear automatically.', 'Las ventas completadas aparecen aquí al cerrarse. La primera orden se mostrará automáticamente.')
+          : t('Use the day navigator above to move to another date.', 'Usa el navegador de días arriba para ir a otra fecha.')}
       </p>
     </div>
   )

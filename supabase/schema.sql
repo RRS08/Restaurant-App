@@ -131,6 +131,31 @@ alter table public.godaddy_poynt_tokens enable row level security;
 alter table public.godaddy_poynt_tokens add column if not exists sync_locked_until       timestamptz;
 alter table public.godaddy_poynt_tokens add column if not exists last_products_synced_at timestamptz;
 
+-- Diagnostic audit trail for every inbound webhook hit.
+-- See migration 2026-07-22-webhook-events.sql for the full
+-- column-by-column rationale and drop_reason enum values.
+create table if not exists public.webhook_events (
+  id                uuid primary key default gen_random_uuid(),
+  received_at       timestamptz not null default now(),
+  provider          text not null default 'godaddy_poynt',
+  business_id       text,
+  restaurant_id     uuid references public.restaurants(id) on delete set null,
+  event_type        text,
+  http_status       int not null default 200,
+  drop_reason       text,
+  raw_body          text,
+  header_keys       text[],
+  error_msg         text
+);
+create index if not exists webhook_events_received_at_idx
+  on public.webhook_events (received_at desc);
+create index if not exists webhook_events_business_id_idx
+  on public.webhook_events (business_id);
+create index if not exists webhook_events_dropped_idx
+  on public.webhook_events (received_at desc)
+  where drop_reason is not null;
+alter table public.webhook_events enable row level security;
+
 -- Short-lived CSRF state for the Poynt install redirect. A random
 -- state is minted at /api/godaddy/oauth/install and consumed on
 -- the /callback single-use, 15-min expiry.

@@ -22,6 +22,15 @@
 //   6. Ingest via the shared normalize/ingest path — same code
 //      the manual "Sync now" button runs.
 //
+// Every hit records a row in `webhook_events` regardless of
+// outcome (success, drop, error) so we have a persistent audit
+// trail independent of Vercel's log retention. Query with:
+//
+//   select received_at, event_type, drop_reason, error_msg
+//   from webhook_events
+//   order by received_at desc
+//   limit 20;
+//
 // Contract with Poynt:
 //   • Respond with HTTP 200 within ~2 seconds or Poynt retries.
 //     We do the work synchronously since single-order fetch +
@@ -41,6 +50,7 @@ import {
   findByBusinessId,
 } from '@/lib/godaddy/webhooks'
 import { ingestSinglePoyntOrder } from '@/lib/godaddy/ingest'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 // Vercel edge runtime doesn't expose crypto's timingSafeEqual /
 // createHmac in the shape we need; pin to Node.
@@ -60,118 +70,201 @@ function snapshotHeaders(req: NextRequest): Record<string, string> {
   return out
 }
 
+// Enum of drop-reason slugs written to webhook_events.drop_reason.
+// Keeping them as string literals rather than a real enum so the
+// migration doc + this file stay in sync visually.
+type DropReason =
+  | 'unparseable_body'
+  | 'payload_missing_required_fields'
+  | 'no_linked_restaurant'
+  | 'no_webhook_secret'
+  | 'signature_mismatch'
+  | 'order_fetch_failed'
+  | 'handler_threw'
+
+interface AuditEntry {
+  business_id: string | null
+  restaurant_id: string | null
+  event_type: string | null
+  http_status: number
+  drop_reason: DropReason | null
+  raw_body: string | null
+  header_keys: string[]
+  error_msg: string | null
+}
+
+/** Persist a webhook_events row. Never throws — audit failures
+ *  must not affect the response to Poynt. Truncates raw_body to
+ *  2000 chars as a size + safety guardrail. */
+async function recordAudit(entry: AuditEntry): Promise<void> {
+  try {
+    const admin = createAdminClient()
+    await admin.from('webhook_events').insert({
+      provider: 'godaddy_poynt',
+      business_id: entry.business_id,
+      restaurant_id: entry.restaurant_id,
+      event_type: entry.event_type,
+      http_status: entry.http_status,
+      drop_reason: entry.drop_reason,
+      raw_body: entry.raw_body ? entry.raw_body.slice(0, 2000) : null,
+      header_keys: entry.header_keys,
+      error_msg: entry.error_msg ? entry.error_msg.slice(0, 500) : null,
+    })
+  } catch (err) {
+    console.warn('[godaddy/webhooks] audit insert failed (non-fatal)', err)
+  }
+}
+
 export async function POST(req: NextRequest) {
-  const rawBody = await req.text()
-  // Truncated body for diagnostic logs. Kept small enough not to
-  // blow up log volume but big enough to see the envelope shape.
-  const bodySnippet = rawBody.length > 800 ? rawBody.slice(0, 800) + '…' : rawBody
-  const headerSnapshot = snapshotHeaders(req)
+  // Single audit row per invocation. Fields fill in as we walk
+  // the pipeline; drop_reason stays null on success.
+  const audit: AuditEntry = {
+    business_id: null,
+    restaurant_id: null,
+    event_type: null,
+    http_status: 200,
+    drop_reason: null,
+    raw_body: null,
+    header_keys: [],
+    error_msg: null,
+  }
 
-  console.info('[godaddy/webhooks] hit', {
-    contentLength: rawBody.length,
-    contentType: req.headers.get('content-type'),
-    headerKeys: Object.keys(headerSnapshot),
-  })
-
-  let json: unknown = null
   try {
-    json = JSON.parse(rawBody)
-  } catch {
-    console.warn('[godaddy/webhooks] DROP: unparseable body', {
-      body: bodySnippet,
-      headers: headerSnapshot,
-    })
-    return NextResponse.json({ ok: true }, { status: 200 })
-  }
+    const rawBody = await req.text()
+    audit.raw_body = rawBody
+    audit.header_keys = Array.from(req.headers.keys())
 
-  const parsed = parseWebhookPayload(json)
-  console.info('[godaddy/webhooks] event', {
-    eventType: parsed.eventType,
-    hasBusinessId: !!parsed.businessId,
-    hasResourceId: !!parsed.resourceId,
-    businessIdSample: parsed.businessId?.slice(0, 8),
-  })
+    const bodySnippet = rawBody.length > 800 ? rawBody.slice(0, 800) + '…' : rawBody
+    const headerSnapshot = snapshotHeaders(req)
 
-  if (!parsed.businessId || !parsed.resourceId || !parsed.eventType) {
-    console.warn('[godaddy/webhooks] DROP: payload missing required fields', {
-      parsed,
-      body: bodySnippet,
-      headers: headerSnapshot,
+    console.info('[godaddy/webhooks] hit', {
+      contentLength: rawBody.length,
+      contentType: req.headers.get('content-type'),
+      headerKeys: audit.header_keys,
     })
-    return NextResponse.json({ ok: true }, { status: 200 })
-  }
 
-  const conn = await findByBusinessId(parsed.businessId)
-  if (!conn) {
-    console.warn('[godaddy/webhooks] DROP: no linked restaurant for businessId', {
-      businessId: parsed.businessId,
-      body: bodySnippet,
-    })
-    return NextResponse.json({ ok: true }, { status: 200 })
-  }
-  if (!conn.webhookSecret) {
-    console.warn('[godaddy/webhooks] DROP: merchant has no webhook_secret on file — registration likely failed at install', {
-      restaurantId: conn.restaurantId,
-    })
-    return NextResponse.json({ ok: true }, { status: 200 })
-  }
-
-  // Signature verification. Poynt's docs describe SHA1 HMAC over
-  // the raw body. Header name isn't fully specified in the doc
-  // snippet — check the common variants.
-  const sigHeader =
-    req.headers.get('x-hook-signature')
-    ?? req.headers.get('x-poynt-signature')
-    ?? req.headers.get('poynt-signature')
-    ?? req.headers.get('x-signature')
-  const valid = verifyWebhookSignature({
-    rawBody,
-    signatureHeader: sigHeader,
-    secret: conn.webhookSecret,
-  })
-  if (!valid) {
-    // Signature mismatch — could be a wrong header name (Poynt sends
-    // under a name we don't check), a wrong algorithm (SHA256 instead
-    // of SHA1), or a stale secret from a re-register. Log the header
-    // snapshot so next time we can spot the actual name.
-    console.warn('[godaddy/webhooks] DROP: signature mismatch', {
-      hasHeader: !!sigHeader,
-      headerSample: sigHeader?.slice(0, 20),
-      headers: headerSnapshot,
-      body: bodySnippet,
-    })
-    // 200 deliberately — see contract comment above.
-    return NextResponse.json({ ok: true }, { status: 200 })
-  }
-
-  // Fetch the full order + ingest. All errors are swallowed to a
-  // 200 so Poynt doesn't retry endlessly on our-side failures.
-  try {
-    const fetched = await fetchSinglePoyntOrder({
-      restaurantId: conn.restaurantId,
-      orderId: parsed.resourceId,
-    })
-    if ('error' in fetched) {
-      console.error('[godaddy/webhooks] order fetch failed', fetched.error)
+    let json: unknown = null
+    try {
+      json = JSON.parse(rawBody)
+    } catch {
+      audit.drop_reason = 'unparseable_body'
+      console.warn('[godaddy/webhooks] DROP: unparseable body', {
+        body: bodySnippet,
+        headers: headerSnapshot,
+      })
       return NextResponse.json({ ok: true }, { status: 200 })
     }
 
-    const result = await ingestSinglePoyntOrder({
-      restaurantId: conn.restaurantId,
-      order: fetched.order,
-    })
-    console.info('[godaddy/webhooks] ingested', {
-      eventType: parsed.eventType,
-      orderId: parsed.resourceId,
-      inserted: result.ordersInserted,
-      skipped: result.ordersSkipped,
-      failed: result.ordersFailed,
-    })
-  } catch (err) {
-    console.error('[godaddy/webhooks] handler threw', err)
-  }
+    const parsed = parseWebhookPayload(json)
+    audit.event_type = parsed.eventType
+    audit.business_id = parsed.businessId
 
-  return NextResponse.json({ ok: true }, { status: 200 })
+    console.info('[godaddy/webhooks] event', {
+      eventType: parsed.eventType,
+      hasBusinessId: !!parsed.businessId,
+      hasResourceId: !!parsed.resourceId,
+      businessIdSample: parsed.businessId?.slice(0, 8),
+    })
+
+    if (!parsed.businessId || !parsed.resourceId || !parsed.eventType) {
+      audit.drop_reason = 'payload_missing_required_fields'
+      console.warn('[godaddy/webhooks] DROP: payload missing required fields', {
+        parsed,
+        body: bodySnippet,
+        headers: headerSnapshot,
+      })
+      return NextResponse.json({ ok: true }, { status: 200 })
+    }
+
+    const conn = await findByBusinessId(parsed.businessId)
+    if (!conn) {
+      audit.drop_reason = 'no_linked_restaurant'
+      console.warn('[godaddy/webhooks] DROP: no linked restaurant for businessId', {
+        businessId: parsed.businessId,
+        body: bodySnippet,
+      })
+      return NextResponse.json({ ok: true }, { status: 200 })
+    }
+    audit.restaurant_id = conn.restaurantId
+
+    if (!conn.webhookSecret) {
+      audit.drop_reason = 'no_webhook_secret'
+      console.warn('[godaddy/webhooks] DROP: merchant has no webhook_secret on file — registration likely failed at install', {
+        restaurantId: conn.restaurantId,
+      })
+      return NextResponse.json({ ok: true }, { status: 200 })
+    }
+
+    // Signature verification. Poynt's docs describe SHA1 HMAC over
+    // the raw body. Header name isn't fully specified in the doc
+    // snippet — check the common variants.
+    const sigHeader =
+      req.headers.get('x-hook-signature')
+      ?? req.headers.get('x-poynt-signature')
+      ?? req.headers.get('poynt-signature')
+      ?? req.headers.get('x-signature')
+    const valid = verifyWebhookSignature({
+      rawBody,
+      signatureHeader: sigHeader,
+      secret: conn.webhookSecret,
+    })
+    if (!valid) {
+      audit.drop_reason = 'signature_mismatch'
+      // Signature mismatch — could be a wrong header name (Poynt sends
+      // under a name we don't check), a wrong algorithm (SHA256 instead
+      // of SHA1), or a stale secret from a re-register. Log the header
+      // snapshot so next time we can spot the actual name.
+      console.warn('[godaddy/webhooks] DROP: signature mismatch', {
+        hasHeader: !!sigHeader,
+        headerSample: sigHeader?.slice(0, 20),
+        headers: headerSnapshot,
+        body: bodySnippet,
+      })
+      return NextResponse.json({ ok: true }, { status: 200 })
+    }
+
+    // Fetch the full order + ingest. All errors are swallowed to a
+    // 200 so Poynt doesn't retry endlessly on our-side failures.
+    try {
+      const fetched = await fetchSinglePoyntOrder({
+        restaurantId: conn.restaurantId,
+        orderId: parsed.resourceId,
+      })
+      if ('error' in fetched) {
+        audit.drop_reason = 'order_fetch_failed'
+        audit.error_msg = fetched.error
+        console.error('[godaddy/webhooks] order fetch failed', fetched.error)
+        return NextResponse.json({ ok: true }, { status: 200 })
+      }
+
+      const result = await ingestSinglePoyntOrder({
+        restaurantId: conn.restaurantId,
+        order: fetched.order,
+      })
+      console.info('[godaddy/webhooks] ingested', {
+        eventType: parsed.eventType,
+        orderId: parsed.resourceId,
+        inserted: result.ordersInserted,
+        skipped: result.ordersSkipped,
+        failed: result.ordersFailed,
+      })
+      // drop_reason stays null → this row represents a successful
+      // ingest in the audit view.
+    } catch (err) {
+      audit.drop_reason = 'handler_threw'
+      audit.error_msg = err instanceof Error ? err.message : String(err)
+      console.error('[godaddy/webhooks] handler threw', err)
+    }
+
+    return NextResponse.json({ ok: true }, { status: 200 })
+  } finally {
+    // Persist the audit row. Runs on every return path — including
+    // early returns above — so nothing bypasses the trail. Awaited
+    // so the write completes before Vercel tears down the function
+    // context; the added latency (~30–80ms Supabase roundtrip) is
+    // well within Poynt's 2s deadline.
+    await recordAudit(audit)
+  }
 }
 
 // A GET on this path is handy for Poynt's admin UI (some hook

@@ -19,6 +19,7 @@
 // ----------------------------------------------------------------
 
 import { useState, useMemo, useActionState, useEffect } from 'react'
+import Link from 'next/link'
 import { voidOrder } from '@/app/actions/sales'
 import { makeT, type Lang } from '@/lib/i18n'
 
@@ -196,6 +197,115 @@ function channelLabel(raw: string, t: T): string {
 }
 
 // ================================================================
+// Day navigator helpers + component
+// ================================================================
+//
+// Dates in the URL are plain YYYY-MM-DD strings (business_date
+// in the restaurant's local timezone). Prev/next arithmetic uses
+// UTC-noon parsing so shifting by 24 h can't accidentally roll
+// into the wrong day at DST edges — a plain new Date('2026-03-08')
+// would be interpreted as midnight UTC and offsetting 24 h across
+// a DST boundary in the browser's local zone could land on the
+// same date. Anchor at noon keeps us safely in the middle of
+// the day.
+
+function shiftBusinessDate(iso: string, deltaDays: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const noon = Date.UTC(y, m - 1, d, 12, 0, 0)
+  const shifted = new Date(noon + deltaDays * 86_400_000)
+  const yy = shifted.getUTCFullYear()
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+function fmtBusinessDate(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const local = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return local.toLocaleDateString(locale, {
+    weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+  })
+}
+
+function DayNav({
+  date, today, lang, t,
+}: { date: string; today: string; lang: Lang; t: T }) {
+  const isEs = lang === 'es'
+  const locale = isEs ? 'es-ES' : 'en-US'
+  const prevDate = shiftBusinessDate(date, -1)
+  const nextDate = shiftBusinessDate(date, +1)
+  const isToday = date === today
+  const canGoNext = date < today
+
+  // The label reads "Today · Wednesday, July 22" on today and
+  // "Wednesday, July 22" (no eyebrow) on any other day. Extra
+  // "N days ago" hint appears on older dates so the manager
+  // doesn't have to count backwards.
+  const daysDelta = Math.round(
+    (Date.UTC(
+      ...(today.split('-').map(Number) as [number, number, number]),
+    ) - Date.UTC(
+      ...(date.split('-').map(Number) as [number, number, number]),
+    )) / 86_400_000,
+  )
+  const relative =
+    daysDelta === 0 ? t('Today', 'Hoy')
+      : daysDelta === 1 ? t('Yesterday', 'Ayer')
+        : daysDelta > 1 ? `${daysDelta} ${t('days ago', 'días atrás')}`
+          : null // future — not reachable via arrows, only via URL fiddling
+
+  const arrowCls =
+    'inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors'
+  const arrowDisabledCls =
+    'inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-100 bg-gray-50/60 text-gray-300 cursor-not-allowed'
+
+  return (
+    <div className="rounded-xl border border-gray-200/80 bg-white px-4 py-2.5 flex items-center justify-between gap-3">
+      <Link
+        href={`/sales?date=${prevDate}`}
+        className={arrowCls}
+        aria-label={t('Previous day', 'Día anterior')}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+      </Link>
+
+      <div className="flex-1 min-w-0 text-center">
+        <p className="text-[13px] font-semibold text-gray-900 truncate">
+          {fmtBusinessDate(date, locale)}
+        </p>
+        {relative && (
+          <p className="text-[11px] text-gray-500 mt-0.5">
+            {relative}
+            {!isToday && (
+              <>
+                <span className="text-gray-300 mx-1.5">·</span>
+                <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
+                  {t('Jump to today', 'Ir a hoy')}
+                </Link>
+              </>
+            )}
+          </p>
+        )}
+      </div>
+
+      {canGoNext ? (
+        <Link
+          href={`/sales?date=${nextDate}`}
+          className={arrowCls}
+          aria-label={t('Next day', 'Día siguiente')}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+        </Link>
+      ) : (
+        <span className={arrowDisabledCls} aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+        </span>
+      )}
+    </div>
+  )
+}
+
+// ================================================================
 // Sales client
 // ================================================================
 
@@ -208,10 +318,19 @@ export default function SalesClient({
   lang,
   orders,
   operatingMode = null,
+  date,
+  today,
 }: {
   lang: Lang
   orders: Order[]
   operatingMode?: OperatingMode
+  /** YYYY-MM-DD of the day currently displayed. Server picked it
+   *  from ?date or defaulted to today in the restaurant's TZ. */
+  date: string
+  /** YYYY-MM-DD of today in the restaurant's timezone. Used by
+   *  the DayNav to know when to show a "Jump to today" link and
+   *  to gate the next-day arrow (no browsing the future). */
+  today: string
 }) {
   const t = makeT(lang)
   const [filter, setFilter] = useState<Filter>('all')
@@ -279,6 +398,18 @@ export default function SalesClient({
       {/* 2. ACTIVITY                                                      */}
       {/* ================================================================ */}
       <section>
+        {/* ----- Day navigator -----
+            Prev / current-day / next arrows sitting above the stats
+            strip. The whole page is scoped to one calendar day (in
+            restaurant timezone); this is how the manager walks
+            through history. Server owns the date via ?date search
+            param — arrows are Next.js Links that swap the URL and
+            trigger a fresh render. Next arrow is disabled when the
+            displayed day is already today (no browsing the future). */}
+        <div className="mb-4">
+          <DayNav date={date} today={today} lang={lang} t={t} />
+        </div>
+
         {/* ----- Sales snapshot strip -----
             Four sales-focused cells: Sales total / Orders / Average
             ticket / Voids. Reads as a quick commercial summary, not
@@ -356,7 +487,7 @@ export default function SalesClient({
             surface — no filler rows, no shrinking. */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden flex flex-col min-h-[680px]">
           {visible.length === 0 ? (
-            <EmptyLedger orders={orders.length} filter={filter} t={t} />
+            <EmptyLedger orders={orders.length} filter={filter} t={t} isToday={date === today} />
           ) : (
             <>
               {/* Card-list order feed. The table chrome (thead /
@@ -556,17 +687,25 @@ function OrderRow({
 // ================================================================
 // EmptyLedger — calm, branch-aware empty state
 // ================================================================
-function EmptyLedger({ orders, filter, t }: { orders: number; filter: Filter; t: T }) {
+function EmptyLedger({
+  orders, filter, t, isToday,
+}: { orders: number; filter: Filter; t: T; isToday: boolean }) {
   const isFilterEmpty = orders > 0 && filter !== 'all'
   return (
     <div className="px-6 py-20 text-center">
       <p className="text-sm font-semibold text-gray-700">
-        {isFilterEmpty ? t('Nothing matches this filter', 'Nada coincide con este filtro') : t('No orders in the ledger yet', 'Sin órdenes en el libro aún')}
+        {isFilterEmpty
+          ? t('Nothing matches this filter', 'Nada coincide con este filtro')
+          : isToday
+            ? t('No sales yet today', 'Sin ventas hoy aún')
+            : t('No sales on this day', 'Sin ventas este día')}
       </p>
       <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
         {isFilterEmpty
           ? t('Switch back to All to see every order, or pick a different source.', 'Vuelve a Todas para ver todas las órdenes, o elige otra fuente.')
-          : t('Completed sales appear here for review and correction. The first order will land in this list automatically.', 'Las ventas completadas aparecen aquí para revisar y corregir. La primera orden se mostrará automáticamente.')}
+          : isToday
+            ? t('Completed sales land here as they close. The first order will appear automatically.', 'Las ventas completadas aparecen aquí al cerrarse. La primera orden se mostrará automáticamente.')
+            : t('Use the day navigator above to move to another date.', 'Usa el navegador de días arriba para ir a otra fecha.')}
       </p>
     </div>
   )

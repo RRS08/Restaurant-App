@@ -416,8 +416,8 @@ export default function SalesClient({
       {/* Source chip lives above the card as a quiet page-context      */}
       {/* pill so the card stays focused on the day's numbers.           */}
       {/* ================================================================ */}
-      <section className="mb-6">
-        <div className="mb-3 flex justify-end">
+      <section className="mb-6 flex flex-col items-center">
+        <div className="mb-3">
           <SourceChip operatingMode={operatingMode} t={t} />
         </div>
         <HeroDayCard

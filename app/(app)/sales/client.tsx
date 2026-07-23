@@ -18,8 +18,9 @@
 // line items, totals, audit-minded footer, and the correction action.
 // ----------------------------------------------------------------
 
-import { useState, useActionState, useEffect } from 'react'
+import { useState, useActionState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { voidOrder } from '@/app/actions/sales'
 import { makeT, type Lang } from '@/lib/i18n'
 
@@ -211,20 +212,26 @@ function fmtBusinessDate(iso: string, locale: string): string {
   })
 }
 
-function DayNav({
-  date, today, lang, t,
-}: { date: string; today: string; lang: Lang; t: T }) {
-  const isEs = lang === 'es'
-  const locale = isEs ? 'es-ES' : 'en-US'
+// Minimum horizontal drag distance (px) to register a swipe. Small
+// enough to feel responsive on iPad, large enough that a slow tap
+// with slight finger drift doesn't accidentally navigate.
+const SWIPE_THRESHOLD_PX = 55
+
+function HeroDayCard({
+  date, today, lang, t, operatingMode,
+  salesTotal, orderCount, avgTicket, voidCount,
+}: {
+  date: string; today: string; lang: Lang; t: T
+  operatingMode: OperatingMode
+  salesTotal: number; orderCount: number; avgTicket: number; voidCount: number
+}) {
+  const router = useRouter()
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
   const prevDate = shiftBusinessDate(date, -1)
   const nextDate = shiftBusinessDate(date, +1)
   const isToday = date === today
   const canGoNext = date < today
 
-  // The label reads "Today · Wednesday, July 22" on today and
-  // "Wednesday, July 22" (no eyebrow) on any other day. Extra
-  // "N days ago" hint appears on older dates so the manager
-  // doesn't have to count backwards.
   const daysDelta = Math.round(
     (Date.UTC(
       ...(today.split('-').map(Number) as [number, number, number]),
@@ -236,55 +243,149 @@ function DayNav({
     daysDelta === 0 ? t('Today', 'Hoy')
       : daysDelta === 1 ? t('Yesterday', 'Ayer')
         : daysDelta > 1 ? `${daysDelta} ${t('days ago', 'días atrás')}`
-          : null // future — not reachable via arrows, only via URL fiddling
+          : null
 
-  const arrowCls =
-    'inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors'
-  const arrowDisabledCls =
-    'inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-100 bg-gray-50/60 text-gray-300 cursor-not-allowed'
+  // ---- Swipe navigation ----
+  // Track the touch start point and, on release, decide whether the
+  // gesture was a horizontal swipe worth acting on. Vertical motion
+  // above a ratio bails so the page can still scroll normally.
+  const touchStartX = useRef<number | null>(null)
+  const touchStartY = useRef<number | null>(null)
+
+  const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    touchStartX.current = e.touches[0].clientX
+    touchStartY.current = e.touches[0].clientY
+  }
+  const onTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    const startX = touchStartX.current
+    const startY = touchStartY.current
+    touchStartX.current = null
+    touchStartY.current = null
+    if (startX === null || startY === null) return
+    const dx = e.changedTouches[0].clientX - startX
+    const dy = e.changedTouches[0].clientY - startY
+    if (Math.abs(dx) < SWIPE_THRESHOLD_PX) return           // too short
+    if (Math.abs(dy) > Math.abs(dx) * 0.7) return           // too vertical
+    if (dx < 0) {
+      // Swipe left → move forward in time. Guard against browsing
+      // past today so URL fiddling is the only way to see the future.
+      if (canGoNext) router.push(`/sales?date=${nextDate}`)
+    } else {
+      router.push(`/sales?date=${prevDate}`)
+    }
+  }
+
+  // ---- Calendar picker via native <input type="date"> ----
+  // On iPad this opens the iOS date roulette; on desktop it opens
+  // the browser's native date picker. Max is clamped to today so
+  // the picker itself disables future dates.
+  const onPickDate = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.value
+    if (!picked || !/^\d{4}-\d{2}-\d{2}$/.test(picked)) return
+    if (picked === date) return
+    router.push(`/sales?date=${picked}`)
+  }
+
+  const arrowGhost =
+    'inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors'
+  const arrowGhostDisabled =
+    'inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-200 cursor-not-allowed'
 
   return (
-    <div className="rounded-xl border border-gray-200/80 bg-white px-4 py-2.5 flex items-center justify-between gap-3">
-      <Link
-        href={`/sales?date=${prevDate}`}
-        className={arrowCls}
-        aria-label={t('Previous day', 'Día anterior')}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-      </Link>
+    <div
+      // touch-pan-y: still allow vertical scrolling; we only steal
+      // horizontal gestures. Prevents the swipe listener from
+      // hijacking scroll intent.
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+      className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 sm:px-6 py-5 select-none touch-pan-y"
+    >
+      {/* Row 1 — arrows + date-with-picker on the left; source chip
+          on the right. Everything vertically centered so long
+          restaurant names + chip stay tidy on wrap. */}
+      <div className="flex items-center justify-between gap-4 mb-5">
+        <div className="flex items-center gap-1 min-w-0">
+          <Link href={`/sales?date=${prevDate}`} className={arrowGhost} aria-label={t('Previous day', 'Día anterior')}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+          </Link>
+          {canGoNext ? (
+            <Link href={`/sales?date=${nextDate}`} className={arrowGhost} aria-label={t('Next day', 'Día siguiente')}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            </Link>
+          ) : (
+            <span className={arrowGhostDisabled} aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            </span>
+          )}
 
-      <div className="flex-1 min-w-0 text-center">
-        <p className="text-[13px] font-semibold text-gray-900 truncate">
-          {fmtBusinessDate(date, locale)}
-        </p>
-        {relative && (
-          <p className="text-[11px] text-gray-500 mt-0.5">
-            {relative}
-            {!isToday && (
-              <>
-                <span className="text-gray-300 mx-1.5">·</span>
-                <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
-                  {t('Jump to today', 'Ir a hoy')}
-                </Link>
-              </>
+          {/* Date label wraps a hidden native date input; tapping
+              anywhere on the label opens the browser/iOS picker.
+              Jump-to-today link sits OUTSIDE the label so it isn't
+              part of the picker's click target. */}
+          <div className="ml-2 min-w-0 flex items-baseline gap-2 flex-wrap">
+            <label className="relative cursor-pointer group">
+              <span className="text-[19px] leading-none font-semibold tracking-tight text-gray-900 group-hover:text-gray-700 transition-colors">
+                {fmtBusinessDate(date, locale)}
+              </span>
+              <input
+                type="date"
+                value={date}
+                max={today}
+                onChange={onPickDate}
+                aria-label={t('Pick a date', 'Elegir una fecha')}
+                className="absolute inset-0 opacity-0 cursor-pointer"
+              />
+            </label>
+            {relative && (
+              <span className="text-[12px] text-gray-500">
+                {relative}
+                {!isToday && (
+                  <>
+                    <span className="text-gray-300 mx-1.5">·</span>
+                    <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
+                      {t('Jump to today', 'Ir a hoy')}
+                    </Link>
+                  </>
+                )}
+              </span>
             )}
-          </p>
-        )}
+          </div>
+        </div>
+
+        <SourceChip operatingMode={operatingMode} t={t} />
       </div>
 
-      {canGoNext ? (
-        <Link
-          href={`/sales?date=${nextDate}`}
-          className={arrowCls}
-          aria-label={t('Next day', 'Día siguiente')}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
-        </Link>
-      ) : (
-        <span className={arrowDisabledCls} aria-hidden="true">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+      {/* Row 2 — hero sales total. Tabular mono numerals so digits
+          have consistent width regardless of the value. */}
+      <p className={`text-[44px] sm:text-[52px] leading-none font-mono tabular-nums font-semibold tracking-tight ${
+        salesTotal > 0 ? 'text-gray-900' : 'text-gray-300'
+      }`}>
+        {fmtMoney(salesTotal)}
+        <span className="text-[14px] text-gray-400 font-medium ml-2 align-top mt-2 inline-block">USD</span>
+      </p>
+
+      {/* Row 3 — quiet inline metrics. Voids segment tints amber
+          only when > 0 so a zero-void day reads calmly. */}
+      <p className="mt-2.5 text-[13px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span>
+          <span className="font-semibold text-gray-800 tabular-nums">{orderCount}</span>{' '}
+          {orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')}
         </span>
-      )}
+        <span className="text-gray-300">·</span>
+        <span>
+          <span className="font-semibold text-gray-800 tabular-nums">{fmtMoney(avgTicket)}</span>{' '}
+          {t('avg ticket', 'ticket promedio')}
+        </span>
+        {voidCount > 0 && (
+          <>
+            <span className="text-gray-300">·</span>
+            <span className="text-amber-700">
+              <span className="font-semibold tabular-nums">{voidCount}</span>{' '}
+              {voidCount === 1 ? t('voided', 'anulada') : t('voided', 'anuladas')}
+            </span>
+          </>
+        )}
+      </p>
     </div>
   )
 }
@@ -331,80 +432,35 @@ export default function SalesClient({
   const voidCount = voidedOrders.length
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
-  const subtitle = operatingMode === 'external_pos'
-    ? t('Imported orders from your connected POS.', 'Órdenes importadas desde tu POS conectado.')
-    : operatingMode === 'native_pos'
-      ? t('Native sales from the in-app POS.', 'Ventas nativas desde el POS de la app.')
-      : t('Recent orders for review.', 'Órdenes recientes para revisar.')
-
   return (
     <div className="max-w-[1200px]">
+      {/* ================================================================ */}
+      {/* HERO CARD — single bordered surface that owns the date nav,     */}
+      {/* the sales total, and the inline metric strip. Supports          */}
+      {/* horizontal swipe to move days (touch handlers on the card)      */}
+      {/* and tap-on-date to open a native calendar picker for jumping    */}
+      {/* to a specific day.                                              */}
+      {/* ================================================================ */}
+      <section className="mb-6">
+        <HeroDayCard
+          date={date}
+          today={today}
+          lang={lang}
+          t={t}
+          operatingMode={operatingMode}
+          salesTotal={salesTotal}
+          orderCount={orderCount}
+          avgTicket={avgTicket}
+          voidCount={voidCount}
+        />
+      </section>
 
       {/* ================================================================ */}
-      {/* 1. HEADER                                                        */}
-      {/* ================================================================ */}
-      <div className="mb-7 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Sales', 'Ventas')}</h1>
-          <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
-        </div>
-        <SourceChip operatingMode={operatingMode} t={t} />
-      </div>
-
-      {/* ================================================================ */}
-      {/* 2. ACTIVITY                                                      */}
+      {/* FEED — free-scroll list of the day's orders. Day-scoped so the  */}
+      {/* browser scroll is the pager. Empty state sits inside the        */}
+      {/* card on light days.                                             */}
       {/* ================================================================ */}
       <section>
-        {/* ----- Day navigator -----
-            Prev / current-day / next arrows sitting above the stats
-            strip. The whole page is scoped to one calendar day (in
-            restaurant timezone); this is how the manager walks
-            through history. Server owns the date via ?date search
-            param — arrows are Next.js Links that swap the URL and
-            trigger a fresh render. Next arrow is disabled when the
-            displayed day is already today (no browsing the future). */}
-        <div className="mb-4">
-          <DayNav date={date} today={today} lang={lang} t={t} />
-        </div>
-
-        {/* ----- Sales snapshot strip -----
-            Four sales-focused cells: Sales total / Orders / Average
-            ticket / Voids. Reads as a quick commercial summary, not
-            as table metadata. Average ticket = sales total ÷ orders
-            (completed only). Voids cell tints amber when non-zero
-            so the eye lands there first without an extra alert. */}
-        <div className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-          <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-gray-100">
-            <LedgerStat
-              label={t('Sales total', 'Total de ventas')}
-              value={fmtMoney(salesTotal)}
-              hint={t('completed in view', 'completadas en vista')}
-            />
-            <LedgerStat
-              label={t('Orders', 'Órdenes')}
-              value={`${orderCount}`}
-              hint={orderCount === 1 ? t('completed order', 'orden completada') : t('completed orders', 'órdenes completadas')}
-            />
-            <LedgerStat
-              label={t('Average ticket', 'Ticket promedio')}
-              value={fmtMoney(avgTicket)}
-              hint={orderCount === 0 ? t('no completed orders', 'sin órdenes completadas') : t('per completed order', 'por orden completada')}
-            />
-            <LedgerStat
-              label={t('Voids', 'Anulaciones')}
-              value={`${voidCount}`}
-              hint={voidCount === 0 ? t('none', 'ninguna') : t('in current view', 'en la vista actual')}
-              tone={voidCount > 0 ? 'warn' : 'neutral'}
-            />
-          </div>
-        </div>
-
-        {/* Orders card — free-scroll list of the day's orders. No
-            pagination (the day is bounded so the browser scroll IS
-            the pager) and no fixed height (card grows with the
-            content, empty state sits in a comfortable box on light
-            days). Rows separated by hairlines inside a single
-            calmly-bordered surface. */}
         <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
           {orders.length === 0 ? (
             <EmptyLedger t={t} isToday={date === today} />
@@ -920,34 +976,4 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
   )
 }
 
-// ================================================================
-// LedgerStat — the ledger-scope summary cell used in the page's
-// orientation strip. Same family as the drawer stat cell but with
-// a `hint` line underneath the value (the orientation strip is
-// horizontal and the cells need to declare scope, not just label).
-// `tone="warn"` tints the value red — used by the Voided cell so
-// the eye lands on it first when there are voids to inspect.
-// ================================================================
-function LedgerStat({
-  label,
-  value,
-  hint,
-  tone = 'neutral',
-}: {
-  label: string
-  value: string
-  hint: string
-  tone?: 'neutral' | 'warn'
-}) {
-  const valueColor = tone === 'warn' ? 'text-red-700' : 'text-gray-900'
-  return (
-    <div className="px-5 py-3.5">
-      <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-        {label}
-      </p>
-      <p className={`mt-1 text-[17px] font-bold font-mono tabular-nums ${valueColor}`}>{value}</p>
-      <p className="mt-0.5 text-[10px] text-gray-400">{hint}</p>
-    </div>
-  )
-}
 

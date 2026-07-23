@@ -154,20 +154,56 @@ export interface ParsedWebhookEvent {
 }
 
 /** Poynt's webhook envelope shape isn't fully specified in the
- *  docs we have; historically it carries { eventType, resourceId
- *  or entityId, businessId or entityBusinessId, links }. Walk
- *  the common variants defensively. */
+ *  docs; empirically it varies by event type and by whether the
+ *  payload was minted by the Cloud API vs the Terminal SDK.
+ *  Common variants seen in the wild:
+ *
+ *    { eventType, resourceId,  businessId }
+ *    { eventType, entityId,    entityBusinessId }
+ *    { type,      id,          businessId }
+ *    { event,     data: { id, businessId }, ... }
+ *    { eventType, resource: { id, businessId } }
+ *
+ *  Walk all of them. Nested `data` / `resource` win when a
+ *  top-level field is missing so a payload that carries the
+ *  order under `data.id` still resolves. */
 export function parseWebhookPayload(json: unknown): ParsedWebhookEvent {
   if (!json || typeof json !== 'object') {
     return { businessId: null, resourceId: null, eventType: null }
   }
   const o = json as Record<string, unknown>
-  const eventType = str(o.eventType) ?? str(o.type) ?? str(o.event)
+  const data = (isRecord(o.data) ? o.data : null) as Record<string, unknown> | null
+  const resource = (isRecord(o.resource) ? o.resource : null) as Record<string, unknown> | null
+  const entity = (isRecord(o.entity) ? o.entity : null) as Record<string, unknown> | null
+
+  const eventType =
+    str(o.eventType) ?? str(o.type) ?? str(o.event) ?? str(o.eventName)
+
   const businessId =
-    str(o.businessId) ?? str(o.entityBusinessId) ?? str(o.merchantBusinessId)
+    str(o.businessId)
+    ?? str(o.entityBusinessId)
+    ?? str(o.merchantBusinessId)
+    ?? str(data?.businessId)
+    ?? str(resource?.businessId)
+    ?? str(entity?.businessId)
+
+  // resourceId can be several things depending on eventType — an
+  // order id, transaction id, entity id. Prefer the most specific.
   const resourceId =
-    str(o.resourceId) ?? str(o.entityId) ?? str(o.orderId)
+    str(o.resourceId)
+    ?? str(o.entityId)
+    ?? str(o.orderId)
+    ?? str(o.id)
+    ?? str(data?.id)
+    ?? str(data?.orderId)
+    ?? str(resource?.id)
+    ?? str(entity?.id)
+
   return { businessId, resourceId, eventType }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
 }
 
 function str(v: unknown): string | null {

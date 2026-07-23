@@ -46,14 +46,41 @@ import { ingestSinglePoyntOrder } from '@/lib/godaddy/ingest'
 // createHmac in the shape we need; pin to Node.
 export const runtime = 'nodejs'
 
+// Snapshot of every header on the incoming request, minus anything
+// Authorization-shaped so we don't dump credentials into logs. Used
+// for diagnosis when a webhook drops silently — the exact header
+// name Poynt uses for its signature has been a moving target.
+function snapshotHeaders(req: NextRequest): Record<string, string> {
+  const out: Record<string, string> = {}
+  req.headers.forEach((value, key) => {
+    const k = key.toLowerCase()
+    if (k === 'authorization' || k.includes('cookie') || k.includes('token')) return
+    out[k] = value.length > 200 ? value.slice(0, 200) + '…' : value
+  })
+  return out
+}
+
 export async function POST(req: NextRequest) {
   const rawBody = await req.text()
+  // Truncated body for diagnostic logs. Kept small enough not to
+  // blow up log volume but big enough to see the envelope shape.
+  const bodySnippet = rawBody.length > 800 ? rawBody.slice(0, 800) + '…' : rawBody
+  const headerSnapshot = snapshotHeaders(req)
+
+  console.info('[godaddy/webhooks] hit', {
+    contentLength: rawBody.length,
+    contentType: req.headers.get('content-type'),
+    headerKeys: Object.keys(headerSnapshot),
+  })
 
   let json: unknown = null
   try {
     json = JSON.parse(rawBody)
   } catch {
-    console.warn('[godaddy/webhooks] unparseable body')
+    console.warn('[godaddy/webhooks] DROP: unparseable body', {
+      body: bodySnippet,
+      headers: headerSnapshot,
+    })
     return NextResponse.json({ ok: true }, { status: 200 })
   }
 
@@ -62,20 +89,30 @@ export async function POST(req: NextRequest) {
     eventType: parsed.eventType,
     hasBusinessId: !!parsed.businessId,
     hasResourceId: !!parsed.resourceId,
+    businessIdSample: parsed.businessId?.slice(0, 8),
   })
 
   if (!parsed.businessId || !parsed.resourceId || !parsed.eventType) {
-    console.warn('[godaddy/webhooks] payload missing required fields', parsed)
+    console.warn('[godaddy/webhooks] DROP: payload missing required fields', {
+      parsed,
+      body: bodySnippet,
+      headers: headerSnapshot,
+    })
     return NextResponse.json({ ok: true }, { status: 200 })
   }
 
   const conn = await findByBusinessId(parsed.businessId)
   if (!conn) {
-    console.warn('[godaddy/webhooks] no linked restaurant for businessId', parsed.businessId)
+    console.warn('[godaddy/webhooks] DROP: no linked restaurant for businessId', {
+      businessId: parsed.businessId,
+      body: bodySnippet,
+    })
     return NextResponse.json({ ok: true }, { status: 200 })
   }
   if (!conn.webhookSecret) {
-    console.warn('[godaddy/webhooks] merchant has no webhook_secret on file — registration likely failed at install; dropping event')
+    console.warn('[godaddy/webhooks] DROP: merchant has no webhook_secret on file — registration likely failed at install', {
+      restaurantId: conn.restaurantId,
+    })
     return NextResponse.json({ ok: true }, { status: 200 })
   }
 
@@ -93,9 +130,15 @@ export async function POST(req: NextRequest) {
     secret: conn.webhookSecret,
   })
   if (!valid) {
-    console.warn('[godaddy/webhooks] signature mismatch — dropped', {
+    // Signature mismatch — could be a wrong header name (Poynt sends
+    // under a name we don't check), a wrong algorithm (SHA256 instead
+    // of SHA1), or a stale secret from a re-register. Log the header
+    // snapshot so next time we can spot the actual name.
+    console.warn('[godaddy/webhooks] DROP: signature mismatch', {
       hasHeader: !!sigHeader,
-      sample: sigHeader?.slice(0, 20),
+      headerSample: sigHeader?.slice(0, 20),
+      headers: headerSnapshot,
+      body: bodySnippet,
     })
     // 200 deliberately — see contract comment above.
     return NextResponse.json({ ok: true }, { status: 200 })

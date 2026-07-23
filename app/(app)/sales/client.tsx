@@ -218,11 +218,10 @@ function fmtBusinessDate(iso: string, locale: string): string {
 const SWIPE_THRESHOLD_PX = 55
 
 function HeroDayCard({
-  date, today, lang, t, operatingMode,
+  date, today, lang, t,
   salesTotal, orderCount, avgTicket, voidCount,
 }: {
   date: string; today: string; lang: Lang; t: T
-  operatingMode: OperatingMode
   salesTotal: number; orderCount: number; avgTicket: number; voidCount: number
 }) {
   const router = useRouter()
@@ -286,73 +285,48 @@ function HeroDayCard({
     router.push(`/sales?date=${picked}`)
   }
 
-  const arrowGhost =
-    'inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors'
-  const arrowGhostDisabled =
-    'inline-flex items-center justify-center w-8 h-8 rounded-full text-gray-200 cursor-not-allowed'
-
   return (
     <div
       // touch-pan-y: still allow vertical scrolling; we only steal
-      // horizontal gestures. Prevents the swipe listener from
-      // hijacking scroll intent.
+      // horizontal gestures. w-fit + inline-block so the card only
+      // wraps its content, not the full available width.
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
-      className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-5 sm:px-6 py-5 select-none touch-pan-y"
+      className="inline-block max-w-full rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-8 py-6 select-none touch-pan-y text-center"
     >
-      {/* Row 1 — arrows + date-with-picker on the left; source chip
-          on the right. Everything vertically centered so long
-          restaurant names + chip stay tidy on wrap. */}
-      <div className="flex items-center justify-between gap-4 mb-5">
-        <div className="flex items-center gap-1 min-w-0">
-          <Link href={`/sales?date=${prevDate}`} className={arrowGhost} aria-label={t('Previous day', 'Día anterior')}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
-          </Link>
-          {canGoNext ? (
-            <Link href={`/sales?date=${nextDate}`} className={arrowGhost} aria-label={t('Next day', 'Día siguiente')}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
-            </Link>
-          ) : (
-            <span className={arrowGhostDisabled} aria-hidden="true">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
-            </span>
-          )}
-
-          {/* Date label wraps a hidden native date input; tapping
-              anywhere on the label opens the browser/iOS picker.
-              Jump-to-today link sits OUTSIDE the label so it isn't
-              part of the picker's click target. */}
-          <div className="ml-2 min-w-0 flex items-baseline gap-2 flex-wrap">
-            <label className="relative cursor-pointer group">
-              <span className="text-[19px] leading-none font-semibold tracking-tight text-gray-900 group-hover:text-gray-700 transition-colors">
-                {fmtBusinessDate(date, locale)}
-              </span>
-              <input
-                type="date"
-                value={date}
-                max={today}
-                onChange={onPickDate}
-                aria-label={t('Pick a date', 'Elegir una fecha')}
-                className="absolute inset-0 opacity-0 cursor-pointer"
-              />
-            </label>
-            {relative && (
-              <span className="text-[12px] text-gray-500">
-                {relative}
-                {!isToday && (
-                  <>
-                    <span className="text-gray-300 mx-1.5">·</span>
-                    <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
-                      {t('Jump to today', 'Ir a hoy')}
-                    </Link>
-                  </>
-                )}
-              </span>
+      {/* Row 1 — date on top, centered over the big number.
+          Tap the date to open the native date picker (input
+          layered under the label at opacity 0). Jump-to-today
+          link sits outside the label so it isn't part of the
+          picker's click target. Day navigation is swipe-only —
+          arrows removed per pilot request. */}
+      <div className="mb-3 flex items-baseline justify-center gap-2 flex-wrap">
+        <label className="relative cursor-pointer group">
+          <span className="text-[15px] leading-none font-semibold tracking-tight text-gray-900 group-hover:text-gray-700 transition-colors">
+            {fmtBusinessDate(date, locale)}
+          </span>
+          <input
+            type="date"
+            value={date}
+            max={today}
+            onChange={onPickDate}
+            aria-label={t('Pick a date', 'Elegir una fecha')}
+            className="absolute inset-0 opacity-0 cursor-pointer"
+          />
+        </label>
+        {relative && (
+          <span className="text-[12px] text-gray-500">
+            {relative}
+            {!isToday && (
+              <>
+                <span className="text-gray-300 mx-1.5">·</span>
+                <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
+                  {t('Jump to today', 'Ir a hoy')}
+                </Link>
+              </>
             )}
-          </div>
-        </div>
-
-        <SourceChip operatingMode={operatingMode} t={t} />
+          </span>
+        )}
       </div>
 
       {/* Row 2 — hero sales total. Tabular mono numerals so digits
@@ -366,7 +340,7 @@ function HeroDayCard({
 
       {/* Row 3 — quiet inline metrics. Voids segment tints amber
           only when > 0 so a zero-void day reads calmly. */}
-      <p className="mt-2.5 text-[13px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <p className="mt-3 text-[13px] text-gray-500 flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
         <span>
           <span className="font-semibold text-gray-800 tabular-nums">{orderCount}</span>{' '}
           {orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')}
@@ -435,19 +409,22 @@ export default function SalesClient({
   return (
     <div className="max-w-[1200px]">
       {/* ================================================================ */}
-      {/* HERO CARD — single bordered surface that owns the date nav,     */}
-      {/* the sales total, and the inline metric strip. Supports          */}
-      {/* horizontal swipe to move days (touch handlers on the card)      */}
-      {/* and tap-on-date to open a native calendar picker for jumping    */}
-      {/* to a specific day.                                              */}
+      {/* HERO CARD — compact bordered card that owns the date nav +      */}
+      {/* sales total + inline metrics. Sized to content (not full        */}
+      {/* width) and left-aligned in the page. Day navigation is         */}
+      {/* swipe-only; tap the date to open a native calendar picker.    */}
+      {/* Source chip lives above the card as a quiet page-context      */}
+      {/* pill so the card stays focused on the day's numbers.           */}
       {/* ================================================================ */}
       <section className="mb-6">
+        <div className="mb-3 flex justify-end">
+          <SourceChip operatingMode={operatingMode} t={t} />
+        </div>
         <HeroDayCard
           date={date}
           today={today}
           lang={lang}
           t={t}
-          operatingMode={operatingMode}
           salesTotal={salesTotal}
           orderCount={orderCount}
           avgTicket={avgTicket}

@@ -218,10 +218,13 @@ export async function runSyncForRestaurant(
         //     but haven't propagated to the /orders list get pulled
         //     via GET /orders/{id} (which is authoritative and
         //     immediate). Capped so a big first-run backlog doesn't
-        //     blow the function timeout.
+        //     blow the function timeout. Cap raised from 20 → 50
+        //     after the pilot merchant reported 4/8 sales still
+        //     missing on a 15-min tick — a bigger drain each pass
+        //     shortens the window a stranded order sits invisible.
         try {
           const rec = await reconcileOrdersFromTransactions({
-            supabase, restaurantId, transactions: pullTx.transactions, cap: 20,
+            supabase, restaurantId, transactions: pullTx.transactions, cap: 50,
           })
           if (rec.considered > 0) merged.notes.push(...rec.notes)
         } catch (err) {

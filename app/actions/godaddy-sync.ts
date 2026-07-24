@@ -33,7 +33,7 @@
 
 import { getAuthContext } from '@/lib/auth'
 import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, backfillOrdersFromApi, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, backfillOrdersFromApi, reconcileOrdersFromTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -66,6 +66,18 @@ const PRODUCTS_STALE_MS = 24 * 60 * 60 * 1000
 // enrichment beyond this window flows through the per-order
 // backfill pass instead.
 const TRANSACTIONS_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+
+// Overlap window for /orders incremental sync. Instead of asking
+// Poynt for "orders strictly after our newest known order", we
+// walk back 30 minutes and let DB dedupe skip anything we already
+// have. This absorbs any read-side lag on Poynt's `/orders` list
+// (an order closed at T on the terminal may not become queryable
+// until T + N seconds) — with a strict +1s bump we'd advance past
+// slow-visible orders and never fetch them via the /orders leg.
+// 30 min is generous but bounded — even a busy merchant returns
+// only a few dozen orders in that window; dedupe is a cheap
+// SELECT on an indexed column.
+const ORDERS_OVERLAP_MS = 30 * 60 * 1000
 
 export async function syncGodaddyOrders(): Promise<SyncResult> {
   const { context: ctx, error: authError } = await getAuthContext()
@@ -144,8 +156,12 @@ export async function runSyncForRestaurant(
     }
 
     // Incremental startAt for /orders — highest created_at we
-    // already have from Poynt for this restaurant. +1s so we don't
-    // refetch the exact same order on the boundary.
+    // already have from Poynt for this restaurant, walked BACK
+    // 30 minutes so any orders that were slow to become queryable
+    // on Poynt's side still get picked up on the next tick. DB
+    // dedupe (unique on external_id) skips anything we already
+    // have; the added fetch cost per tick is a few dozen orders
+    // even for a busy merchant.
     const { data: latestRow } = await supabase
       .from('orders')
       .select('created_at')
@@ -156,8 +172,8 @@ export async function runSyncForRestaurant(
       .maybeSingle()
     let startAt: string | undefined
     if (latestRow?.created_at) {
-      const bumpedMs = new Date(latestRow.created_at as string).getTime() + 1000
-      startAt = new Date(bumpedMs).toISOString()
+      const overlapped = new Date(latestRow.created_at as string).getTime() - ORDERS_OVERLAP_MS
+      startAt = new Date(overlapped).toISOString()
     }
 
     // 1. /orders — online + Order-shaped POS sales.
@@ -196,10 +212,28 @@ export async function runSyncForRestaurant(
         })
         mergeIn(merged, r)
 
-        // 3. Enrich linked orders with card brand + last-4 pulled
-        //    from the transactions that reference them. Only fills
-        //    fields that are currently missing, so it's a cheap
-        //    no-op on subsequent syncs.
+        // 3a. Reconcile any orders that /transactions references
+        //     but /orders LIST hasn't returned to us yet. This is
+        //     the fix for Poynt's read-side lag: sales that closed
+        //     but haven't propagated to the /orders list get pulled
+        //     via GET /orders/{id} (which is authoritative and
+        //     immediate). Capped so a big first-run backlog doesn't
+        //     blow the function timeout.
+        try {
+          const rec = await reconcileOrdersFromTransactions({
+            supabase, restaurantId, transactions: pullTx.transactions, cap: 20,
+          })
+          if (rec.considered > 0) merged.notes.push(...rec.notes)
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          console.error('[godaddy/sync] reconcile leg threw', err)
+          merged.notes.push(`reconcile leg threw: ${msg}`)
+        }
+
+        // 3b. Enrich linked orders with card brand + last-4 pulled
+        //     from the transactions that reference them. Only fills
+        //     fields that are currently missing, so it's a cheap
+        //     no-op on subsequent syncs.
         try {
           const en = await enrichOrdersFromTransactions({
             supabase, restaurantId, transactions: pullTx.transactions,

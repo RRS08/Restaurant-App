@@ -440,6 +440,108 @@ export async function enrichOrdersFromTransactions(args: {
 }
 
 // ================================================================
+// Reconcile missing orders from linked transactions
+// ================================================================
+//
+// Poynt's /orders LIST endpoint has an intermittent read-side lag
+// — sometimes an order closes on the terminal and doesn't show up
+// via /orders for minutes to hours. Meanwhile the payment
+// transaction for that order IS queryable via /transactions right
+// away (with a `orderId` reference). Since normalizePoyntTransaction
+// deliberately skips linked transactions (to avoid duplicating
+// what /orders should provide), those sales would be lost until
+// /orders finally catches up.
+//
+// This pass closes the gap: for each transaction with an orderId
+// whose linked order isn't in our DB, fetch the order individually
+// via GET /orders/{id} (which is authoritative and immediate,
+// unlike the LIST endpoint) and ingest it through the normal
+// pipeline. Capped per invocation to stay inside Vercel's function
+// timeout; the backlog drains over successive cron ticks.
+
+export async function reconcileOrdersFromTransactions(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  transactions: PoyntTransaction[]
+  /** Max GET /orders/{id} calls this invocation. Each is one
+   *  Poynt API request + one ingest write. */
+  cap?: number
+}): Promise<{ reconciled: number; considered: number; notes: string[] }> {
+  const { supabase, restaurantId, transactions } = args
+  const cap = args.cap ?? 20
+  const notes: string[] = []
+
+  // Extract distinct Poynt orderIds referenced by CAPTURED
+  // transactions in the batch. Skip voids/refunds (they'd point
+  // at an already-ingested order or nothing meaningful).
+  const referencedOrderIds = new Set<string>()
+  for (const t of transactions) {
+    const status = (t.status ?? '').toUpperCase()
+    if (status !== 'CAPTURED') continue
+    const linked =
+      safeIdStr(t.orderId)
+      || safeIdStr((t.references ?? []).find((r) => {
+        const type = ((r.type ?? '') + ' ' + (r.customType ?? '')).toUpperCase()
+        return type.includes('ORDER')
+      })?.id)
+    if (linked) referencedOrderIds.add(linked)
+  }
+
+  if (referencedOrderIds.size === 0) return { reconciled: 0, considered: 0, notes }
+
+  // Which of those are missing from our DB? One IN query resolves
+  // it in a single roundtrip regardless of the transaction count.
+  const referencedList = [...referencedOrderIds]
+  const { data: existing } = await supabase
+    .from('orders')
+    .select('external_id')
+    .eq('restaurant_id', restaurantId)
+    .in('external_provider', ['godaddy_pos', 'godaddy_online'])
+    .in('external_id', referencedList)
+
+  const haveIds = new Set((existing ?? []).map((r) => r.external_id as string))
+  const missing = referencedList.filter((id) => !haveIds.has(id))
+  if (missing.length === 0) return { reconciled: 0, considered: 0, notes }
+
+  // Fetch and ingest up to `cap` missing orders. Newest-first
+  // isn't easy without a per-transaction createdAt lookup, so we
+  // just take the first N in Set-iteration order. Since the
+  // /transactions leg already fetches 3 days of transactions
+  // sorted by Poynt's default ordering, this tends to hit newer
+  // orders first anyway.
+  const toFetch = missing.slice(0, cap)
+  let reconciled = 0
+  const noteBuf: string[] = []
+
+  for (const orderId of toFetch) {
+    const res = await fetchSinglePoyntOrder({ restaurantId, orderId })
+    if ('error' in res) {
+      if (noteBuf.length < 3) noteBuf.push(`${orderId.slice(0, 8)}: ${res.error.slice(0, 80)}`)
+      continue
+    }
+    // Ingest through the shared batch path — it handles
+    // normalization + dedupe + line items + inventory + audit.
+    const ing = await ingestPoyntOrders({
+      supabase, restaurantId, raw: [res.order],
+    })
+    if (ing.ordersInserted > 0) reconciled++
+    else if (ing.error && noteBuf.length < 3) noteBuf.push(`${orderId.slice(0, 8)}: ${ing.error}`)
+  }
+
+  if (noteBuf.length > 0) notes.push(...noteBuf)
+  console.info('[godaddy/reconcile] pass', {
+    referencedInBatch: referencedOrderIds.size,
+    missingFromDb: missing.length,
+    fetched: toFetch.length,
+    reconciled,
+  })
+  notes.push(
+    `Reconcile: ${referencedOrderIds.size} tx-linked orders → ${missing.length} missing → ${toFetch.length} fetched → ${reconciled} newly ingested.`,
+  )
+  return { reconciled, considered: toFetch.length, notes }
+}
+
+// ================================================================
 // Per-order backfill via GET /orders/{id}
 // ================================================================
 //

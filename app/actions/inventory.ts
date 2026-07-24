@@ -288,27 +288,103 @@ export async function deleteInventoryItem(formData: FormData): Promise<{ error: 
   const locAuthErr = await requireLocResult(ctx.restaurantId, item.location_id)
   if (locAuthErr) return { error: locAuthErr }
 
-  // Check for dependencies
-  const [{ count: rc }, { count: ic }, { count: it }] = await Promise.all([
-    ctx.supabase.from('recipe_components').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
-    ctx.supabase.from('inventory_counts').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
-    ctx.supabase.from('inventory_transactions').select('id', { count: 'exact', head: true }).eq('inventory_item_id', itemId),
-  ])
+  // Only recipe_components blocks deletion. Deleting an item that's
+  // part of an active recipe would silently break that recipe (menu
+  // items would lose one of their ingredient links). Counts + past
+  // transactions cascade cleanly via the FK and are just historical
+  // record — the manager isn't losing anything they care about when
+  // they explicitly asked to purge the item.
+  const { count: rc } = await ctx.supabase
+    .from('recipe_components')
+    .select('id', { count: 'exact', head: true })
+    .eq('inventory_item_id', itemId)
 
-  const deps = (rc ?? 0) + (ic ?? 0) + (it ?? 0)
-
-  if (deps > 0) {
-    const parts: string[] = []
-    if ((rc ?? 0) > 0) parts.push(`${rc} recipe${(rc ?? 0) > 1 ? 's' : ''}`)
-    if ((ic ?? 0) > 0) parts.push(`${ic} count${(ic ?? 0) > 1 ? 's' : ''}`)
-    if ((it ?? 0) > 0) parts.push(`${it} transaction${(it ?? 0) > 1 ? 's' : ''}`)
-    return { error: `Cannot delete — linked to ${parts.join(', ')}. Archive instead.` }
+  if ((rc ?? 0) > 0) {
+    return {
+      error: `Cannot delete — linked to ${rc} recipe${(rc ?? 0) > 1 ? 's' : ''}. Unlink the recipe first, or archive instead.`,
+    }
   }
 
+  // ON DELETE CASCADE on inventory_counts, inventory_transactions,
+  // and restock_orders means the row removal below also wipes any
+  // historical count / transaction / order rows for this item.
   await ctx.supabase.from('inventory_items').delete().eq('id', itemId)
   revalidatePath('/inventory')
   revalidatePath('/web/inventory')
   return undefined
+}
+
+// ================================================================
+// updateInventoryItem — edit the identity fields on an existing
+// item. Name + unit_of_measure only; threshold has its own action
+// (updateThreshold) with a lighter access-check surface used by
+// the inline threshold editor.
+//
+// Name changes go through the same normalize + duplicate-guard
+// path as create so a rename can't collide with another active
+// item at the same location.
+// ================================================================
+export async function updateInventoryItem(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  const itemId = ((formData.get('item_id') as string) ?? '').trim()
+  if (!itemId) return { error: 'No item specified.' }
+
+  const nameRaw = ((formData.get('name') as string) ?? '').trim()
+  const unitRaw = ((formData.get('unit_of_measure') as string) ?? '').trim()
+  if (!nameRaw) return { error: 'Name is required.' }
+  if (!unitRaw) return { error: 'Unit of measure is required.' }
+
+  const displayName = normalizeDisplayName(nameRaw)
+  const nameKey = normalizeNameKey(displayName)
+
+  const { data: current } = await ctx.supabase
+    .from('inventory_items')
+    .select('location_id, name')
+    .eq('id', itemId)
+    .single()
+  if (!current) return { error: 'Item not found.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, current.location_id)
+  if (locAuthErr) return { error: locAuthErr }
+
+  // Duplicate-name guard, scoped to same location + active items,
+  // matching createInventoryItem. Skip the check when the name
+  // hasn't changed — that avoids a false collision against the
+  // row we're updating.
+  const currentKey = normalizeNameKey((current.name as string) ?? '')
+  if (nameKey !== currentKey) {
+    const { data: existingItems } = await ctx.supabase
+      .from('inventory_items')
+      .select('id, name')
+      .eq('restaurant_id', ctx.restaurantId)
+      .eq('location_id', current.location_id)
+      .eq('active', true)
+      .neq('id', itemId)
+    const collision = (existingItems ?? []).find(
+      (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
+    )
+    if (collision) {
+      return {
+        error: `Another inventory item is already named ${normalizeDisplayName((collision.name as string) ?? '')}.`,
+      }
+    }
+  }
+
+  const { error } = await ctx.supabase
+    .from('inventory_items')
+    .update({ name: displayName, unit_of_measure: unitRaw })
+    .eq('id', itemId)
+  if (error) return { error: formatError('inventory item', error) }
+
+  await logAudit(ctx, current.location_id, 'update_inventory_item', 'inventory_items', itemId, {
+    name: displayName, unit_of_measure: unitRaw,
+  })
+  revalidatePath('/inventory')
+  revalidatePath('/web/inventory')
+  return { ok: true }
 }
 
 // ================================================================

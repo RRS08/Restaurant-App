@@ -15,6 +15,7 @@ import {
   updateThreshold,
   archiveInventoryItem,
   deleteInventoryItem,
+  updateInventoryItem,
   createInventoryCount,
   createInventoryItem,
   quickAddToOrder,
@@ -3692,10 +3693,10 @@ function ItemDestructiveSection({ item, t }: { item: Item; t: T }) {
 
         <span className="text-gray-200">·</span>
 
-        {item.hasDependencies ? (
+        {item.recipeLinks > 0 ? (
           <span
             className="text-[11px] text-gray-300"
-            title={t('Has linked recipes, counts, or transactions. Archive instead.', 'Tiene recetas, conteos o movimientos vinculados. Archivar en su lugar.')}
+            title={t('Linked to a recipe. Unlink from the recipe first, or archive instead.', 'Vinculado a una receta. Desvincula de la receta primero, o archiva en su lugar.')}
           >
             {t('Delete unavailable', 'Eliminación no disponible')}
           </span>
@@ -3720,11 +3721,11 @@ function ItemDestructiveSection({ item, t }: { item: Item; t: T }) {
         <p className="mt-2 text-[11px] text-amber-700 leading-relaxed">{archiveState.error}</p>
       )}
 
-      {confirmDelete && !item.hasDependencies && (
+      {confirmDelete && item.recipeLinks === 0 && (
         <div className="mt-2.5 rounded-lg border border-red-200 bg-red-50/60 p-3">
           <p className="text-xs font-semibold text-red-900">{t('Delete', '¿Eliminar')} {item.name}?</p>
           <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
-            {t('This is permanent. Use Archive if you might restore it later.', 'Esto es permanente. Usa Archivar si podrías restaurarlo después.')}
+            {t('This is permanent. Any past counts and stock transactions for this item will also be removed. Use Archive if you might restore it later.', 'Esto es permanente. Cualquier conteo y movimiento de stock anterior para este artículo también se eliminará. Usa Archivar si podrías restaurarlo después.')}
           </p>
           <div className="mt-2.5 flex items-center gap-2">
             <button
@@ -3783,6 +3784,45 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
   const [thresholdSaving, setThresholdSaving] = useState(false)
   const [thresholdSaved, setThresholdSaved] = useState(false)
   const [thresholdEditing, setThresholdEditing] = useState(false)
+
+  // ---- Identity edit (name + unit_of_measure) ----
+  // Toggled from the header; opens a small form below the header
+  // so the user can rename an item and change its unit without
+  // leaving the drawer. Optimistic dirty state gates Save.
+  const [identityEditing, setIdentityEditing] = useState(false)
+  const [nameDraft, setNameDraft] = useState(item.name)
+  const [unitDraft, setUnitDraft] = useState(item.unitOfMeasure)
+  const [identitySaving, setIdentitySaving] = useState(false)
+  const [identityError, setIdentityError] = useState<string | null>(null)
+  // Reset drafts whenever the drawer opens on a different item, or
+  // when the parent prop refreshes with the saved values.
+  useEffect(() => {
+    setNameDraft(item.name)
+    setUnitDraft(item.unitOfMeasure)
+    setIdentityEditing(false)
+    setIdentityError(null)
+  }, [item.id, item.name, item.unitOfMeasure])
+  const identityDirty =
+    nameDraft.trim().length > 0 &&
+    unitDraft.trim().length > 0 &&
+    (nameDraft.trim() !== item.name || unitDraft.trim() !== item.unitOfMeasure)
+  const saveIdentity = async () => {
+    if (!identityDirty || identitySaving) return
+    setIdentitySaving(true)
+    setIdentityError(null)
+    const fd = new FormData()
+    fd.set('item_id', item.id)
+    fd.set('name', nameDraft.trim())
+    fd.set('unit_of_measure', unitDraft.trim())
+    const r = await updateInventoryItem(fd)
+    setIdentitySaving(false)
+    if ('error' in r) {
+      setIdentityError(r.error)
+      return
+    }
+    setIdentityEditing(false)
+    // Parent will re-render with the new prop values via revalidate.
+  }
 
   // Count form (uses existing createInventoryCount server action)
   const [countState, countAction, countPending] = useActionState(createInventoryCount, null)
@@ -3876,7 +3916,18 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
         <header className="flex-shrink-0 border-b border-gray-100 px-6 py-5 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-400">{t('Inventory item', 'Artículo de inventario')}</p>
-            <h2 className="mt-1 text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
+            <div className="mt-1 flex items-baseline gap-2">
+              <h2 className="text-lg font-semibold tracking-tight text-gray-900 leading-tight truncate">{item.name}</h2>
+              {!identityEditing && (
+                <button
+                  type="button"
+                  onClick={() => setIdentityEditing(true)}
+                  className="text-[10px] font-semibold text-gray-500 hover:text-gray-900 flex-shrink-0"
+                >
+                  {t('Edit', 'Editar')}
+                </button>
+              )}
+            </div>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
               <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${st.color}`}>
                 <span className={`w-1 h-1 rounded-full ${st.dot}`} />
@@ -3889,6 +3940,65 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
                 {typeLabel}
               </span>
             </div>
+
+            {/* Inline identity editor. Opens under the header when
+                the owner hits Edit; two fields (name + unit) with
+                Save/Cancel. Optimistic dirty check keeps Save
+                disabled until something actually changed. */}
+            {identityEditing && (
+              <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50/60 p-3 space-y-2">
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 block mb-1">
+                    {t('Name', 'Nombre')}
+                  </label>
+                  <input
+                    type="text"
+                    value={nameDraft}
+                    onChange={(e) => setNameDraft(e.target.value)}
+                    className="w-full text-sm rounded-md border border-gray-300 bg-white px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-gray-400"
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 block mb-1">
+                    {t('Unit of measure', 'Unidad de medida')}
+                  </label>
+                  <input
+                    type="text"
+                    value={unitDraft}
+                    onChange={(e) => setUnitDraft(e.target.value)}
+                    placeholder="units, kg, lbs, oz, liters…"
+                    className="w-full text-sm rounded-md border border-gray-300 bg-white px-2 py-1.5 font-mono focus:outline-none focus:ring-2 focus:ring-gray-400"
+                  />
+                </div>
+                {identityError && (
+                  <p className="text-[11px] text-red-600">{identityError}</p>
+                )}
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={saveIdentity}
+                    disabled={!identityDirty || identitySaving}
+                    className="h-8 rounded-md bg-gray-900 px-3 text-xs font-semibold text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                  >
+                    {identitySaving ? t('Saving…', 'Guardando…') : t('Save', 'Guardar')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNameDraft(item.name)
+                      setUnitDraft(item.unitOfMeasure)
+                      setIdentityError(null)
+                      setIdentityEditing(false)
+                    }}
+                    disabled={identitySaving}
+                    className="text-[11px] text-gray-500 hover:text-gray-700 disabled:opacity-60"
+                  >
+                    {t('Cancel', 'Cancelar')}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
           <button
             type="button"

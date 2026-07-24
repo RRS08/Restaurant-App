@@ -130,9 +130,9 @@ export default async function AppLayout({
   }
 
   // ---- Fetch display data for the sidebar ----
-  // We run these two queries at the same time using Promise.all.
+  // We run these three queries at the same time using Promise.all.
   // This is faster than running them one after another.
-  const [{ data: profile }, { data: restaurant }, operatingMode] = await Promise.all([
+  const [{ data: profile }, { data: restaurant }, operatingMode, { data: setupState }] = await Promise.all([
     supabase
       .from('profiles')
       .select('full_name')
@@ -144,7 +144,19 @@ export default async function AppLayout({
       .eq('id', userRole.restaurant_id)
       .single(),
     getOperatingMode(supabase, userRole.restaurant_id),
+    // native_pos_enabled controls whether the sidebar shows the
+    // /pos link for an external_pos restaurant. Set via Settings
+    // → Activate local POS toggle. Small extra query — column
+    // sits on the same row we already read elsewhere, but doing
+    // a dedicated select keeps this layout stable if the readiness
+    // shape changes.
+    supabase
+      .from('restaurant_setup_state')
+      .select('native_pos_enabled')
+      .eq('restaurant_id', userRole.restaurant_id)
+      .maybeSingle(),
   ])
+  const nativePosEnabled = Boolean(setupState?.native_pos_enabled)
 
   // Dev accounts override mode-based gating so the testing workflow
   // can see both Native POS and External POS surfaces regardless of
@@ -174,6 +186,7 @@ export default async function AppLayout({
             userFullName={profile?.full_name ?? null}
             userEmail={user.email ?? ''}
             operatingMode={operatingMode}
+            nativePosEnabled={nativePosEnabled}
             isDev={isDev}
             lang={lang}
           />

@@ -28,6 +28,7 @@ import { isPlaidConfigured } from '@/lib/plaid/client'
 
 import BusinessCard from './business-card'
 import OperationsCard from './operations-card'
+import NativePosToggleCard from './native-pos-toggle-card'
 import IntegrationsCard from './integrations-card'
 import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
@@ -275,6 +276,16 @@ export default async function SettingsPage() {
             role={role}
           />
           {readiness && <OperationsCard lang={lang} readiness={readiness} />}
+          {/* Owner-only opt-in to expose the in-app POS in the sidebar
+              while operating_mode is still 'external_pos'. Native-POS
+              merchants already have the link; showing this card would
+              be redundant for them. */}
+          {isOwner && readiness && operatingMode === 'external_pos' && (
+            <NativePosToggleCard
+              lang={lang}
+              initialEnabled={readiness.nativePosEnabled}
+            />
+          )}
         </div>
 
         {(isOwner && restaurantId) && (

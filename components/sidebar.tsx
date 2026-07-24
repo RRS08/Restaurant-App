@@ -74,6 +74,11 @@ interface SidebarProps {
    *  in-app POS; External POS users ring up sales in Square/Clover
    *  and don't need our POS surface at all. */
   operatingMode: 'native_pos' | 'external_pos' | null
+  /** Owner opt-in to expose the in-app POS while operating_mode is
+   *  still 'external_pos' — set via Settings → Activate local POS.
+   *  Lets a merchant trial the native POS alongside an existing
+   *  external terminal without flipping their source of truth. */
+  nativePosEnabled: boolean
   /** Dev override — when true, every link is shown regardless of
    *  mode so the testing workflow can hit both surfaces. */
   isDev: boolean
@@ -82,7 +87,7 @@ interface SidebarProps {
 }
 
 export default function Sidebar({
-  restaurantName, userFullName, userEmail, operatingMode, isDev, lang,
+  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang,
 }: SidebarProps) {
   const t = makeT(lang)
   // Tablet overlay close handler — pulled from AppShell's React
@@ -96,13 +101,15 @@ export default function Sidebar({
   // Visibility filter:
   //   • `dev: true` items render for dev accounts only. The page
   //     itself is server-side guarded; this is a convenience.
-  //   • POS link hides for external_pos restaurants (their selling
-  //     happens in Square/Clover). Dev accounts still see it so the
-  //     testing workflow can hit both surfaces.
+  //   • POS link hides for external_pos restaurants unless the
+  //     owner has explicitly opted in via Settings → Activate
+  //     local POS (nativePosEnabled=true) to trial the in-app
+  //     POS alongside their external terminal. Dev accounts
+  //     always see it so the testing workflow can hit both.
   const visibleNavItems = navItems.filter((item) => {
     if (item.dev && !isDev) return false
     if (isDev) return true
-    if (item.href === '/pos' && operatingMode === 'external_pos') return false
+    if (item.href === '/pos' && operatingMode === 'external_pos' && !nativePosEnabled) return false
     return true
   })
   // usePathname() returns the current URL path, e.g. "/dashboard"

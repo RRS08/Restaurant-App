@@ -43,6 +43,11 @@ export type PillarKey = typeof PILLAR_KEYS[number]
 export interface ReadinessSnapshot {
   restaurantId: string
   operatingMode: OperatingMode
+  /** Owner-opt-in flag: when true, unlock the in-app POS surface
+   *  even for restaurants whose operatingMode is 'external_pos'.
+   *  Lets a merchant trial the native POS alongside their existing
+   *  external POS without flipping their source of truth. */
+  nativePosEnabled: boolean
   devBypassAll: boolean
   devPillarOverrides: Partial<Record<PillarKey, PillarState>>
 
@@ -92,7 +97,7 @@ export async function computeReadiness(
     { data: bankAccounts },
   ] = await Promise.all([
     supabase.from('restaurant_setup_state')
-      .select('operating_mode, inventory_activated_at, dev_bypass_all, dev_pillar_overrides')
+      .select('operating_mode, inventory_activated_at, dev_bypass_all, dev_pillar_overrides, native_pos_enabled')
       .eq('restaurant_id', restaurantId)
       .maybeSingle(),
     supabase.from('menu_categories').select('id').limit(1000),
@@ -284,6 +289,7 @@ export async function computeReadiness(
   return {
     restaurantId,
     operatingMode,
+    nativePosEnabled: Boolean(setup?.native_pos_enabled),
     devBypassAll,
     devPillarOverrides,
     pillars: finalPillars,

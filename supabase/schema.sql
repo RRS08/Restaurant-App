@@ -1222,6 +1222,10 @@ create table if not exists public.restaurant_setup_state (
 alter table public.restaurant_setup_state add column if not exists dev_bypass_all       boolean not null default false;
 alter table public.restaurant_setup_state add column if not exists dev_pillar_overrides jsonb;
 
+-- Owner-opt-in flag to unlock the in-app POS while operating_mode
+-- is still 'external_pos'. See migration 2026-07-23-native-pos-alongside.sql.
+alter table public.restaurant_setup_state add column if not exists native_pos_enabled boolean not null default false;
+
 create index if not exists restaurant_setup_state_restaurant_idx
   on public.restaurant_setup_state (restaurant_id);
 

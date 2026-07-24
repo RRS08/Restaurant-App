@@ -53,7 +53,20 @@ function fmt(d: string) { return new Date(d).toLocaleTimeString('en-US', { hour:
 function fmtMonthDay(d: string | Date, lang: Lang = 'en') {
   return new Date(d).toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { month: 'short', day: 'numeric' })
 }
-function hL(h: number) { return h === 0 ? '12a' : h === 12 ? '12p' : h < 12 ? `${h}a` : `${h-12}p` }
+// Human-readable hour label for block times. Blocks store hours
+// as 0-24 integers; this renders them with an AM/PM suffix so
+// the schedule column header and drawer subtitles read the way
+// people talk about shifts ("9 AM–5 PM" not "9a–5p" or "9–17").
+function hL(h: number) {
+  if (h === 0 || h === 24) return '12 AM'
+  if (h === 12) return '12 PM'
+  return h < 12 ? `${h} AM` : `${h - 12} PM`
+}
+// 24-hour options for the block start/end pickers. Rendered as
+// AM/PM labels but the underlying value stays a 0-24 int so the
+// server action + DB column don't need to change.
+const HOUR_OPTIONS: Array<{ value: number; label: string }> =
+  Array.from({ length: 25 }, (_, h) => ({ value: h, label: hL(h) }))
 function toLocal(d: Date) { const p = (n: number) => n.toString().padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}` }
 
 // ----------------------------------------------------------------
@@ -1825,36 +1838,36 @@ function AddBlockDrawer({ lang, isUnified, defaultArea, onClose }: {
 
           <div className="grid grid-cols-2 gap-3">
             <Field label={t('Start hour', 'Hora de inicio')} htmlFor="ab-start" t={t}>
-              <input
+              <select
                 id="ab-start"
                 name="default_start_hour"
-                type="number"
-                min={0}
-                max={24}
-                step={1}
                 required
                 value={startHour}
                 onChange={(e) => setStartHour(Number(e.target.value))}
                 className={`${fieldInputClass} font-mono tabular-nums`}
-              />
+              >
+                {HOUR_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </Field>
             <Field label={t('End hour', 'Hora de fin')} htmlFor="ab-end" t={t}>
-              <input
+              <select
                 id="ab-end"
                 name="default_end_hour"
-                type="number"
-                min={0}
-                max={24}
-                step={1}
                 required
                 value={endHour}
                 onChange={(e) => setEndHour(Number(e.target.value))}
                 className={`${fieldInputClass} font-mono tabular-nums`}
-              />
+              >
+                {HOUR_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </Field>
           </div>
           <p className="text-[10.5px] text-gray-400 leading-relaxed">
-            {t('24-hour format. These pre-fill drag-drop assignments — times can be tweaked per shift.', 'Formato de 24 horas. Estos pre-rellenan las asignaciones de arrastrar y soltar — los tiempos se pueden ajustar por turno.')}
+            {t('These pre-fill drag-drop assignments — times can be tweaked per shift.', 'Estos pre-rellenan las asignaciones de arrastrar y soltar — los tiempos se pueden ajustar por turno.')}
           </p>
 
           {state?.error && (
@@ -1946,30 +1959,30 @@ function EditBlockDrawer({ lang, section, shiftCount, onClose }: {
 
           <div className="grid grid-cols-2 gap-3">
             <Field label={t('Start hour', 'Hora de inicio')} htmlFor="eb-start" t={t}>
-              <input
+              <select
                 id="eb-start"
                 name="default_start_hour"
-                type="number"
-                min={0}
-                max={24}
-                step={1}
                 required
                 defaultValue={section.defaultStartHour}
                 className={`${fieldInputClass} font-mono tabular-nums`}
-              />
+              >
+                {HOUR_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </Field>
             <Field label={t('End hour', 'Hora de fin')} htmlFor="eb-end" t={t}>
-              <input
+              <select
                 id="eb-end"
                 name="default_end_hour"
-                type="number"
-                min={0}
-                max={24}
-                step={1}
                 required
                 defaultValue={section.defaultEndHour}
                 className={`${fieldInputClass} font-mono tabular-nums`}
-              />
+              >
+                {HOUR_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </Field>
           </div>
 

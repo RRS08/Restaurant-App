@@ -56,11 +56,14 @@ function fmtMonthDay(d: string | Date, lang: Lang = 'en') {
 // Human-readable hour label for block times. Blocks store hours
 // as 0-24 integers; this renders them with an AM/PM suffix so
 // the schedule column header and drawer subtitles read the way
-// people talk about shifts ("9 AM–5 PM" not "9a–5p" or "9–17").
+// people talk about shifts ("9AM–5PM"). No space between the
+// number and AM/PM — the schedule row uses `font-mono` and a
+// regular space renders as a full monospace character width,
+// leaving a visually large gap.
 function hL(h: number) {
-  if (h === 0 || h === 24) return '12 AM'
-  if (h === 12) return '12 PM'
-  return h < 12 ? `${h} AM` : `${h - 12} PM`
+  if (h === 0 || h === 24) return '12AM'
+  if (h === 12) return '12PM'
+  return h < 12 ? `${h}AM` : `${h - 12}PM`
 }
 // 24-hour options for the block start/end pickers. Rendered as
 // AM/PM labels but the underlying value stays a 0-24 int so the

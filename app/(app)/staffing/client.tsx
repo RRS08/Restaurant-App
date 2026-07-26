@@ -510,6 +510,74 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     startTransition(async () => { await quickAssignShift(empId, sectionId, dayIso) })
   }
 
+  // ---- Timeline drop ----
+  // Timeline rows aren't scoped to a block, so we default the created
+  // shift to the first available block for the active house. If the
+  // restaurant has no blocks yet, quickAssignShift falls back to a
+  // 9-5 slot server-side. This keeps drag-drop working end-to-end
+  // regardless of setup state — no forced "define a block first."
+  const handleTimelineDrop = (e: DragEvent, dayIdx: number) => {
+    e.preventDefault(); setDragOver(null)
+    const empId = e.dataTransfer.getData('text/plain')
+    if (!empId) return
+    const dayIso = weekDays[dayIdx].toISOString()
+    const fallbackSectionId = houseSections[0]?.id ?? ''
+    startTransition(async () => { await quickAssignShift(empId, fallbackSectionId, dayIso) })
+  }
+
+  // ---- Timeline time range ----
+  // Range spans from the earliest opening to the latest closing across
+  // sections + shifts in the current view, with 1 hour of padding on
+  // each side (capped 0-24). Falls back to a sensible 8am-10pm window
+  // when the restaurant has neither blocks nor shifts yet.
+  const timeRange = (() => {
+    let minH = 24
+    let maxH = 0
+    for (const s of houseSections) {
+      if (s.defaultStartHour < minH) minH = s.defaultStartHour
+      if (s.defaultEndHour > maxH) maxH = s.defaultEndHour
+    }
+    for (const sh of weekShifts) {
+      const start = new Date(sh.startTime)
+      const end = new Date(sh.endTime)
+      const startH = start.getHours() + start.getMinutes() / 60
+      const endH = end.getHours() + end.getMinutes() / 60
+      if (startH < minH) minH = Math.floor(startH)
+      if (endH > maxH) maxH = Math.ceil(endH)
+    }
+    if (minH >= maxH) { minH = 8; maxH = 22 }
+    minH = Math.max(0, minH - 1)
+    maxH = Math.min(24, maxH + 1)
+    return { startHour: minH, endHour: maxH, spanMinutes: (maxH - minH) * 60 }
+  })()
+
+  // Position a shift as a percentage of the timeline row. Shifts that
+  // extend outside the current range clamp to the edges (defensive —
+  // shouldn't happen given the range is derived from them).
+  const shiftPosition = (shift: Shift): { leftPct: number; widthPct: number } => {
+    const dayStart = new Date(shift.startTime)
+    dayStart.setHours(0, 0, 0, 0)
+    const startMs = new Date(shift.startTime).getTime()
+    const endMs = new Date(shift.endTime).getTime()
+    const rangeStartMs = dayStart.getTime() + timeRange.startHour * 60 * 60 * 1000
+    const startMin = Math.max(0, (startMs - rangeStartMs) / 60000)
+    const endMin = Math.min(timeRange.spanMinutes, (endMs - rangeStartMs) / 60000)
+    const leftPct = (startMin / timeRange.spanMinutes) * 100
+    const widthPct = Math.max(2, ((endMin - startMin) / timeRange.spanMinutes) * 100)
+    return { leftPct, widthPct }
+  }
+
+  // Hour tick labels for the header row. E.g. "11a", "12p", "1p".
+  const hourTicks = Array.from(
+    { length: timeRange.endHour - timeRange.startHour },
+    (_, i) => timeRange.startHour + i,
+  )
+  const fmtHourTick = (h: number): string => {
+    if (h === 0 || h === 24) return '12a'
+    if (h === 12) return '12p'
+    return h < 12 ? `${h}a` : `${h - 12}p`
+  }
+
   // Unified mode reuses the blue accent but never exposes the FOH/BOH toggle.
   // `color` keys the only intentional theming axis on the page — blue for
   // FOH/unified, amber for BOH. Every other surface is gray-scale so the
@@ -600,17 +668,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     return m
   }, [shifts])
 
-  // ----------------------------------------------------------------
-  // Custom shifts = shifts whose section_id is NULL. They surface
-  // on a dedicated "Custom" lane below the regular blocks. In split
-  // mode we filter by role to keep custom shifts inside the active
-  // house view; unified shows all of them.
-  // ----------------------------------------------------------------
-  const customShifts = weekShifts.filter((s) => {
-    if (s.sectionId !== null) return false
-    if (isUnified) return true
-    return activeHouse === 'foh' ? isFohRole(s.role) : !isFohRole(s.role)
-  })
+  // Custom-shifts lane was removed with the block-grid layout. The
+  // timeline board positions every shift by its start/end time, so
+  // section_id=null shifts (one-offs or orphans from a deleted
+  // block) render alongside the rest — no separate lane needed.
   const subtitle = isUnified
     ? t('Plan the week and track labor coverage.', 'Planifica la semana y monitorea la cobertura de personal.')
     : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
@@ -759,234 +820,173 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           </span>
         </div>
 
-        {/* Day headers */}
-        <div className="grid grid-cols-[110px_repeat(7,1fr)] min-w-[820px] lg:min-w-0 border-b border-gray-100 bg-gray-50/40">
-          <div className="px-3 py-2.5 border-r border-gray-100">
-            <p className="text-[11px] font-medium text-gray-500">{t('Block', 'Bloque')}</p>
-          </div>
-          {weekDays.map((day, i) => {
-            const isToday = sameDay(day, new Date())
-            return (
-              <div
-                key={i}
-                className={`px-1 py-2.5 text-center border-l border-gray-100 ${isToday ? `${tone.soft} ${tone.todayTop} -mt-[2px]` : ''}`}
-              >
-                <p className={`text-[11px] font-medium ${isToday ? tone.todayText : 'text-gray-500'}`}>{DAYS[i]}</p>
-                <p className={`text-sm font-semibold font-mono tabular-nums ${isToday ? tone.todayText : 'text-gray-900'}`}>{day.getDate()}</p>
+        {/* ================================================================ */}
+        {/* Timeline board — rows are days, columns are hours. Each shift    */}
+        {/* renders as a positioned bar on its day row, one bar per row      */}
+        {/* stacked vertically (order: earliest start first). This replaces  */}
+        {/* the prior block-grid layout — blocks still exist as data (for    */}
+        {/* default shift times on drag-drop / new-shift drawer) but the     */}
+        {/* board no longer visually organizes by block. Reads at-a-glance   */}
+        {/* like an operational Gantt: coverage gaps show as whitespace,     */}
+        {/* overlaps as vertically stacked bars in the same time window.    */}
+        {/* ================================================================ */}
+
+        {/* Timeline header — hour ticks running from timeRange.startHour to
+            timeRange.endHour. Sidebar column stays empty; day sidebars
+            below use the same 140px width for column alignment. */}
+        <div className="flex min-w-[820px] lg:min-w-0 border-b border-gray-100 bg-gray-50/40">
+          <div className="w-[140px] flex-shrink-0 border-r border-gray-100" />
+          <div className="flex-1 flex relative">
+            {hourTicks.map((h, i) => (
+              <div key={h} className="flex-1 border-l border-gray-100 first:border-l-0 px-1.5 py-2">
+                <p className="text-[10px] text-gray-500 font-mono tabular-nums">{fmtHourTick(h)}</p>
               </div>
-            )
-          })}
+            ))}
+          </div>
         </div>
 
-        {/* Shift block rows */}
-        {houseSections.length === 0 && (
-          <div className="p-12 text-center">
-            <p className="text-sm font-medium text-gray-700">{t('No shift blocks defined yet', 'Aún no hay bloques de turno definidos')}</p>
-            <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
-              {isUnified
-                ? t('Define a few starter blocks to begin scheduling — Opening, Mid, Closing.', 'Define algunos bloques iniciales para comenzar a programar — Apertura, Medio, Cierre.')
-                : t('Define starter blocks for this house to begin scheduling — they show up as drop targets here.', 'Define bloques iniciales para esta área para comenzar a programar — aparecen como destinos aquí.')}
-            </p>
-          </div>
-        )}
-
-        {(() => {
-          // ----------------------------------------------------------------
-          // Single shift-block row — the shared rendering primitive every
-          // branch (by_team / by_role, FOH / BOH / unified) flows through.
-          // Polish here lands everywhere; branching above only decides how
-          // these rows are grouped.
-          // ----------------------------------------------------------------
-          const renderSectionRow = (section: Section) => (
-            <div key={section.id} className="grid grid-cols-[110px_repeat(7,1fr)] min-w-[820px] lg:min-w-0 border-b border-gray-200 last:border-b-0">
-              {/* Lane label — clickable to open the edit-block drawer.
-                  Sits on a faint gray band so the lane reads as a
-                  deliberate schedule lane, not just a row of cells.
-                  Resting state stays calm; the hover treatment is
-                  strong enough to flag the cell as editable. */}
-              <button
-                type="button"
-                onClick={() => setDrawer({
-                  mode: 'edit-block',
-                  section,
-                  shiftCount: shiftsBySection.get(section.id) ?? 0,
-                })}
-                className="text-left px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80 cursor-pointer transition-all hover:bg-gray-100 hover:ring-1 hover:ring-inset hover:ring-gray-400"
-                aria-label={t(`Edit block ${section.name}`, `Editar bloque ${section.name}`)}
-              >
-                <p className="text-[12px] font-bold text-gray-900 leading-tight truncate tracking-tight">{section.name}</p>
-                <p className="text-[10px] text-gray-500 mt-0.5 font-mono tabular-nums">
-                  {hL(section.defaultStartHour)}–{hL(section.defaultEndHour)}
-                </p>
-              </button>
-              {weekDays.map((day, dayIdx) => {
-                const cellKey = `${section.id}-${dayIdx}`
-                const isToday = sameDay(day, new Date())
-                // Sort cell shifts by role index then name so cards
-                // inside a block mirror the bench's role ordering.
-                const cellShifts = weekShifts
-                  .filter((s) => s.sectionId === section.id && sameDay(new Date(s.startTime), day))
-                  .sort((a, b) => {
-                    const ai = roleSortIndex(a.role, activeHouse)
-                    const bi = roleSortIndex(b.role, activeHouse)
-                    if (ai !== bi) return ai - bi
-                    return a.employeeName.localeCompare(b.employeeName)
-                  })
-                const isOver = dragOver === cellKey
-                const isEmpty = cellShifts.length === 0
-                return (
-                  <div
-                    key={dayIdx}
-                    onDragOver={(e) => { e.preventDefault(); setDragOver(cellKey) }}
-                    onDragLeave={() => setDragOver(null)}
-                    onDrop={(e) => handleDrop(e, dayIdx, section.id)}
-                    className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 transition-colors relative ${
-                      isOver
-                        ? `${tone.softerHover} ${tone.dropRing}`
-                        : isToday
-                          ? tone.columnTint
-                          : ''
-                    }`}
-                  >
-                    {/* Drop-hint — only renders mid-drag over an empty
-                        cell. Suppresses on cells that already hold
-                        shifts (the shift cards themselves are the
-                        affordance there) and on rest of the grid so
-                        the schedule stays calm. */}
-                    {isOver && isEmpty && (
-                      <p className={`text-[10px] font-medium text-center pointer-events-none ${tone.dropHint}`}>
-                        {t('Drop shift here', 'Soltar turno aquí')}
-                      </p>
-                    )}
-                    {cellShifts.map((shift) => {
-                      const r = roleTone(shift.role, roleColors)
-                      return (
-                        <button
-                          key={shift.id}
-                          type="button"
-                          onClick={() => setDrawer({ mode: 'edit', shift })}
-                          className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
-                        >
-                          {/* Role identity — thin left accent bar in the
-                              role color. Card itself stays white so shifts
-                              read clearly against the lane row background. */}
-                          <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${r.dot}`} aria-hidden />
-                          <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
-                            {shift.employeeName}
-                          </span>
-                          {/* Role text — same role tone for visual cohesion. */}
-                          <span className="flex items-center gap-1 leading-[12px] min-w-0">
-                            <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
-                            <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                            <span className="text-[10px] text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0">
-                              {fmt(shift.startTime)}–{fmt(shift.endTime)}
-                            </span>
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )
-              })}
-            </div>
+        {/* Day rows */}
+        {weekDays.map((day, dayIdx) => {
+          const dayShifts = weekShifts
+            .filter((s) => sameDay(new Date(s.startTime), day))
+            .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+          const dayHours = dayShifts.reduce(
+            (sum, s) =>
+              sum + (new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 3_600_000,
+            0,
+          )
+          const isToday = sameDay(day, new Date())
+          const dropKey = `day-${dayIdx}`
+          const isOver = dragOver === dropKey
+          const barHeight = 28
+          const barGap = 4
+          const rowPaddingY = 8
+          const dayRowMinHeight = Math.max(
+            60,
+            dayShifts.length * (barHeight + barGap) + rowPaddingY * 2,
           )
 
-          // Team-based: flat list of shift-block rows, no role grouping.
-          if (!isByRole) return houseSections.map(renderSectionRow)
+          // Opening / closing summary for the sidebar. Same 12-hour
+          // "12p-9p" shape used elsewhere. Shown only when the day
+          // has at least one shift; otherwise the sidebar stays quiet.
+          const firstShift = dayShifts[0]
+          const lastShift = dayShifts[dayShifts.length - 1]
+          const openLabel = firstShift ? fmt(firstShift.startTime) : null
+          const closeLabel = lastShift ? fmt(lastShift.endTime) : null
 
-          // Role-based: group rows by their role so the manager sees
-          //   Manager
-          //     Opening
-          //     Closing
-          //   Cashier
-          //     Opening
-          //     Closing
-          // The group header is an eyebrow band, restrained to match
-          // the section/eyebrow language from Finance.
-          const groups = new Map<string, Section[]>()
-          for (const s of houseSections) {
-            const key = s.role || 'General'
-            if (!groups.has(key)) groups.set(key, [])
-            groups.get(key)!.push(s)
-          }
-          // Only render the role-group eyebrow when there is more
-          // than one group to separate; a single "General" bucket
-          // would just be noise floating between the header and the
-          // first row of cells.
-          const groupEntries = [...groups.entries()]
-          return groupEntries.map(([role, group]) => (
-            <div key={role}>
-              {groupEntries.length > 1 && (
-                <div className="border-b border-gray-100 px-3 py-1.5">
-                  <p className="text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">{role}</p>
-                </div>
-              )}
-              {group.map(renderSectionRow)}
-            </div>
-          ))
-        })()}
+          return (
+            <div
+              key={dayIdx}
+              onDragOver={(e) => { e.preventDefault(); setDragOver(dropKey) }}
+              onDragLeave={() => setDragOver(null)}
+              onDrop={(e) => handleTimelineDrop(e, dayIdx)}
+              className={`flex min-w-[820px] lg:min-w-0 border-b border-gray-100 last:border-b-0 transition-colors ${
+                isOver ? `${tone.softerHover} ${tone.dropRing}` : ''
+              }`}
+            >
+              {/* Day sidebar — day/date + shift count / opening / hours.
+                  Sits on a subtle band so the sidebar reads as a
+                  deliberate lane, matching the density of the old
+                  block label. Today gets the house-tone soft tint. */}
+              <div
+                className={`w-[140px] flex-shrink-0 border-r border-gray-100 px-3 py-3 ${
+                  isToday ? tone.soft : 'bg-gray-50/40'
+                }`}
+              >
+                <p className={`text-[13px] font-semibold leading-tight ${
+                  isToday ? tone.todayText : 'text-gray-900'
+                }`}>
+                  {DAYS[dayIdx]} {day.getDate()}
+                </p>
+                {dayShifts.length > 0 ? (
+                  <p className="mt-1 text-[10px] text-gray-500 font-mono tabular-nums leading-tight">
+                    {openLabel}–{closeLabel}
+                    <span className="text-gray-300 mx-1">·</span>
+                    {formatHours(dayHours)}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[10px] text-gray-400 font-mono tabular-nums leading-tight uppercase tracking-wider">
+                    {t('no shifts', 'sin turnos')}
+                  </p>
+                )}
+              </div>
 
-        {/* ============================================================ */}
-        {/* CUSTOM LANE — surfaces shifts whose section_id is NULL.       */}
-        {/* These are one-offs created via "+ Shift", or shifts that      */}
-        {/* used to live under a block the manager has since deleted     */}
-        {/* (ON DELETE SET NULL preserves them). Renders only when        */}
-        {/* there's something to show, so it never adds visual noise to  */}
-        {/* a schedule that's strictly using default blocks.             */}
-        {/* Branch behavior: customShifts is already filtered by house   */}
-        {/* via the role-bucket lookup, so FOH/BOH/unified all see the   */}
-        {/* right subset.                                                 */}
-        {/* ============================================================ */}
-        {customShifts.length > 0 && (
-          <div className="grid grid-cols-[110px_repeat(7,1fr)] min-w-[820px] lg:min-w-0 border-t border-gray-200">
-            <div className="px-3 py-3 flex flex-col justify-center border-r border-gray-200 bg-gray-50/80">
-              <p className="text-[12px] font-bold text-gray-700 leading-tight tracking-tight">{t('Custom', 'Personalizado')}</p>
-              <p className="text-[10px] text-gray-500 mt-0.5">{t('One-off shifts', 'Turnos únicos')}</p>
-            </div>
-            {weekDays.map((day, dayIdx) => {
-              const isToday = sameDay(day, new Date())
-              const cellShifts = customShifts
-                .filter((s) => sameDay(new Date(s.startTime), day))
-                .sort((a, b) => {
-                  const ai = roleSortIndex(a.role, activeHouse)
-                  const bi = roleSortIndex(b.role, activeHouse)
-                  if (ai !== bi) return ai - bi
-                  return a.employeeName.localeCompare(b.employeeName)
-                })
-              return (
-                <div
-                  key={dayIdx}
-                  className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 ${isToday ? tone.columnTint : ''}`}
-                >
-                  {cellShifts.map((shift) => {
-                    const r = roleTone(shift.role, roleColors)
-                    return (
-                      <button
-                        key={shift.id}
-                        type="button"
-                        onClick={() => setDrawer({ mode: 'edit', shift })}
-                        className="w-full text-left rounded-md h-[44px] flex flex-col justify-center gap-[2px] bg-white border border-gray-200/90 pl-3 pr-2 py-0 cursor-pointer transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)] relative overflow-hidden"
-                      >
-                        {/* Role-colored accent bar — matches the board cards above. */}
-                        <span className={`absolute left-0 top-0 bottom-0 w-[2px] ${r.dot}`} aria-hidden />
-                        <span className="block text-[12px] font-semibold text-gray-900 leading-[14px] truncate">
-                          {shift.employeeName}
-                        </span>
-                        <span className="flex items-center gap-1 leading-[12px] min-w-0">
-                          <span className={`text-[10px] font-medium truncate ${r.text}`}>{shift.role}</span>
-                          <span className="text-gray-300 text-[10px] flex-shrink-0">·</span>
-                          <span className="text-[10px] text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0">
-                            {fmt(shift.startTime)}–{fmt(shift.endTime)}
+              {/* Timeline area — relative container. Faint hour
+                  gridlines behind, shift bars positioned absolutely. */}
+              <div
+                className="flex-1 relative"
+                style={{ minHeight: dayRowMinHeight }}
+              >
+                {/* Hour gridlines */}
+                {hourTicks.map((_, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-0 bottom-0 border-l border-gray-100 first:border-l-0"
+                    style={{ left: `${(i / hourTicks.length) * 100}%` }}
+                    aria-hidden
+                  />
+                ))}
+
+                {/* Drop hint — only on empty rows mid-drag. */}
+                {isOver && dayShifts.length === 0 && (
+                  <p className={`text-[10px] font-medium text-center pointer-events-none absolute inset-0 flex items-center justify-center ${tone.dropHint}`}>
+                    {t('Drop shift here', 'Soltar turno aquí')}
+                  </p>
+                )}
+
+                {/* Empty state (quiet, non-blocking). */}
+                {!isOver && dayShifts.length === 0 && (
+                  <p className="text-[10px] text-gray-300 text-center pointer-events-none absolute inset-0 flex items-center justify-center">
+                    {t('No shifts scheduled', 'Sin turnos programados')}
+                  </p>
+                )}
+
+                {/* Shift bars — one per row, positioned horizontally
+                    by start/end time. Colored left stripe carries the
+                    role identity; name + role + time + hours render
+                    inline. Click opens the edit drawer. */}
+                {dayShifts.map((shift, i) => {
+                  const { leftPct, widthPct } = shiftPosition(shift)
+                  const r = roleTone(shift.role, roleColors)
+                  const hrs =
+                    (new Date(shift.endTime).getTime() - new Date(shift.startTime).getTime()) /
+                    3_600_000
+                  return (
+                    <button
+                      key={shift.id}
+                      type="button"
+                      onClick={() => setDrawer({ mode: 'edit', shift })}
+                      className="absolute rounded-md bg-white border border-gray-200/90 text-left overflow-hidden transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+                      style={{
+                        left: `${leftPct}%`,
+                        width: `${widthPct}%`,
+                        top: `${rowPaddingY + i * (barHeight + barGap)}px`,
+                        height: `${barHeight}px`,
+                      }}
+                    >
+                      <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${r.dot}`} aria-hidden />
+                      <div className="pl-2 pr-2 flex items-center justify-between gap-2 h-full">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="text-[11px] font-semibold text-gray-900 truncate">
+                            {shift.employeeName}
                           </span>
-                        </span>
-                      </button>
-                    )
-                  })}
-                </div>
-              )
-            })}
-          </div>
-        )}
+                          <span className={`text-[10px] font-medium truncate ${r.text}`}>
+                            {shift.role}
+                          </span>
+                        </div>
+                        <div className="flex-shrink-0 flex items-center gap-1.5 text-[10px] text-gray-500 font-mono tabular-nums">
+                          <span>{fmt(shift.startTime)}–{fmt(shift.endTime)}</span>
+                          <span className="text-gray-300">·</span>
+                          <span>{formatHours(hrs)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })}
       </section>
 
       {/* ================================================================ */}

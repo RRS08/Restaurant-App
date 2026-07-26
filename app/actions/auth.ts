@@ -185,6 +185,49 @@ export async function requestPasswordReset(
 }
 
 // ----------------------------------------------------------------
+// completeAuthCodeExchange — click-through step for email links.
+//
+// Called by the /auth/callback confirmation page when the user
+// hits "Continue." We deliberately do NOT exchange on GET (the
+// route was previously a bare redirect that did the exchange
+// server-side), because link scanners like Outlook Safe Links
+// prefetch the URL to check for phishing — that prefetch
+// consumed the one-time code before the real user could click,
+// leaving them with an "invalid link" error the moment they
+// tapped the email.
+//
+// Requiring a user gesture (form submit / button click) makes
+// bots stop but keeps the flow one-click for humans.
+//
+// PKCE is on by default in @supabase/ssr — the exchange still
+// requires the code_verifier cookie set at reset-request time,
+// so the exchange only succeeds inside the browser session that
+// asked for the reset. That's the real defense; the click gate
+// just stops the code from being CONSUMED by a bot who couldn't
+// have succeeded anyway.
+// ----------------------------------------------------------------
+export async function completeAuthCodeExchange(formData: FormData): Promise<void> {
+  const code = ((formData.get('code') as string) ?? '').trim()
+  const nextRaw = ((formData.get('next') as string) ?? '/reset-password').trim()
+  // Only allow app-internal `next` targets so a tampered link
+  // can't redirect the freshly-authed user to an external site.
+  const next = nextRaw.startsWith('/') ? nextRaw : '/reset-password'
+
+  if (!code) redirect('/forgot-password?error=invalid')
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.exchangeCodeForSession(code)
+  if (error) {
+    // Same failure modes as before: link already used, expired, or
+    // tampered with. Send them back to /forgot-password so they can
+    // start over cleanly.
+    redirect('/forgot-password?error=expired')
+  }
+
+  redirect(next)
+}
+
+// ----------------------------------------------------------------
 // RESET PASSWORD
 //
 // Writes a new password for the currently signed-in user. The user

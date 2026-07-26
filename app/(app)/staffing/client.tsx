@@ -821,6 +821,51 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         </div>
 
         {/* ================================================================ */}
+        {/* Summary strip — SCHEDULED (hours + shifts) and OPEN DAYS         */}
+        {/* (days-with-shifts / 7). Skipping LABOR COST + alerts for now    */}
+        {/* since they'd need real hourly-rate + threshold data plumbing.   */}
+        {/* Cards use the same editorial calm as the mockup — small        */}
+        {/* uppercase label, large mono number, quiet secondary metadata.  */}
+        {/* ================================================================ */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 bg-gray-50/30">
+          <div className="px-5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              {t('Scheduled', 'Programado')}
+            </p>
+            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
+              {formatHours(totalHoursThisWeek)}
+              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
+                / {totalShiftsThisWeek} {totalShiftsThisWeek === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
+              </span>
+            </p>
+          </div>
+          <div className="px-5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              {t('Open days', 'Días abiertos')}
+            </p>
+            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
+              {coveredDays}
+              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
+                {coveredDays === 7
+                  ? t('all covered', 'todos cubiertos')
+                  : `${t('of', 'de')} 7`}
+              </span>
+            </p>
+          </div>
+          <div className="hidden sm:block px-5 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+              {t('People', 'Personas')}
+            </p>
+            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
+              {new Set(weekShifts.map((s) => s.employeeId).filter(Boolean)).size}
+              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
+                {t('scheduled', 'programadas')}
+              </span>
+            </p>
+          </div>
+        </div>
+
+        {/* ================================================================ */}
         {/* Timeline board — rows are days, columns are hours. Each shift    */}
         {/* renders as a positioned bar on its day row, one bar per row      */}
         {/* stacked vertically (order: earliest start first). This replaces  */}
@@ -884,29 +929,29 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                 isOver ? `${tone.softerHover} ${tone.dropRing}` : ''
               }`}
             >
-              {/* Day sidebar — day/date + shift count / opening / hours.
-                  Sits on a subtle band so the sidebar reads as a
-                  deliberate lane, matching the density of the old
-                  block label. Today gets the house-tone soft tint. */}
+              {/* Day sidebar — minimal: day + date bold, meta line
+                  quiet mono. No background band on regular days;
+                  today gets the house-tone soft tint so it stands
+                  out. Matches the mockup's editorial calm. */}
               <div
-                className={`w-[140px] flex-shrink-0 border-r border-gray-100 px-3 py-3 ${
-                  isToday ? tone.soft : 'bg-gray-50/40'
+                className={`w-[100px] flex-shrink-0 border-r border-gray-100 px-4 py-3 ${
+                  isToday ? tone.soft : ''
                 }`}
               >
-                <p className={`text-[13px] font-semibold leading-tight ${
+                <p className={`text-[12px] font-semibold leading-tight ${
                   isToday ? tone.todayText : 'text-gray-900'
                 }`}>
                   {DAYS[dayIdx]} {day.getDate()}
                 </p>
                 {dayShifts.length > 0 ? (
-                  <p className="mt-1 text-[10px] text-gray-500 font-mono tabular-nums leading-tight">
+                  <p className="mt-1 text-[10px] text-gray-400 font-mono tabular-nums leading-tight uppercase tracking-wider">
                     {openLabel}–{closeLabel}
-                    <span className="text-gray-300 mx-1">·</span>
-                    {formatHours(dayHours)}
+                    <span className="mx-1">·</span>
+                    {formatHours(dayHours).toUpperCase()}
                   </p>
                 ) : (
-                  <p className="mt-1 text-[10px] text-gray-400 font-mono tabular-nums leading-tight uppercase tracking-wider">
-                    {t('no shifts', 'sin turnos')}
+                  <p className="mt-1 text-[10px] text-gray-300 font-mono tabular-nums leading-tight uppercase tracking-wider">
+                    {t('closed', 'cerrado')}
                   </p>
                 )}
               </div>
@@ -942,21 +987,28 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                 )}
 
                 {/* Shift bars — one per row, positioned horizontally
-                    by start/end time. Colored left stripe carries the
-                    role identity; name + role + time + hours render
-                    inline. Click opens the edit drawer. */}
+                    by start/end time. Full role-tinted background
+                    (extracted from r.chip) with a thicker left
+                    stripe for identity. No border — the tint is the
+                    edge. Name in gray-900, role in role-color, time
+                    in gray-500 to keep readability against the tint. */}
                 {dayShifts.map((shift, i) => {
                   const { leftPct, widthPct } = shiftPosition(shift)
                   const r = roleTone(shift.role, roleColors)
                   const hrs =
                     (new Date(shift.endTime).getTime() - new Date(shift.startTime).getTime()) /
                     3_600_000
+                  // r.chip is like 'bg-purple-50 text-purple-700' — we
+                  // only want the bg-* class to tint the bar. Extract
+                  // it so the role-tint doesn't fight our per-span text
+                  // color overrides.
+                  const bgTint = r.chip.split(' ').find((c) => c.startsWith('bg-')) ?? ''
                   return (
                     <button
                       key={shift.id}
                       type="button"
                       onClick={() => setDrawer({ mode: 'edit', shift })}
-                      className="absolute rounded-md bg-white border border-gray-200/90 text-left overflow-hidden transition-all hover:border-gray-300 hover:shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+                      className={`absolute rounded-md text-left overflow-hidden transition-all hover:brightness-95 ${bgTint}`}
                       style={{
                         left: `${leftPct}%`,
                         width: `${widthPct}%`,
@@ -965,7 +1017,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                       }}
                     >
                       <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${r.dot}`} aria-hidden />
-                      <div className="pl-2 pr-2 flex items-center justify-between gap-2 h-full">
+                      <div className="pl-2.5 pr-2.5 flex items-center justify-between gap-3 h-full">
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="text-[11px] font-semibold text-gray-900 truncate">
                             {shift.employeeName}
@@ -976,7 +1028,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                         </div>
                         <div className="flex-shrink-0 flex items-center gap-1.5 text-[10px] text-gray-500 font-mono tabular-nums">
                           <span>{fmt(shift.startTime)}–{fmt(shift.endTime)}</span>
-                          <span className="text-gray-300">·</span>
+                          <span className="text-gray-400">·</span>
                           <span>{formatHours(hrs)}</span>
                         </div>
                       </div>

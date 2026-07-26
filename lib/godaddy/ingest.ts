@@ -826,8 +826,31 @@ export function normalizePoyntOrder(o: PoyntOrder, notes: string[]): NormalizedO
       .filter(Boolean) as NormalizedOrder['lineItems']
 
     if (lineItems.length === 0) {
-      notes.push(`Order ${externalId} had no resolvable line items — skipped.`)
-      return null
+      // Terminal / quick / custom-amount sales come back from
+      // Poynt with a real total but no items[] (see api.ts:337
+      // note). Dropping them silently was losing 1–3 sales/day at
+      // the pilot. Synthesize one placeholder line so the sale
+      // lands in the ledger — mirrors the transaction path's
+      // fallback at normalizePoyntTransaction. Zero-total orders
+      // (empty carts, drafts) still drop; there's nothing to book.
+      //
+      // Reusing the fixed externalItemId 'terminal-charge' lets
+      // the placeholder-menu-item path create one row on first
+      // sight and reuse it on subsequent syncs, instead of
+      // spawning a new synthetic item per sale.
+      if (totalAmount > 0) {
+        lineItems.push({
+          externalItemId: 'terminal-charge',
+          itemName: 'In-person sale',
+          quantity: 1,
+          unitPrice: totalAmount,
+          totalPrice: totalAmount,
+        })
+        notes.push(`Order ${externalId} had no line items — synthesized one from total ($${totalAmount.toFixed(2)}).`)
+      } else {
+        notes.push(`Order ${externalId} had no resolvable line items and no positive total — skipped.`)
+        return null
+      }
     }
 
     // Payment leg — lift card details off the first captured

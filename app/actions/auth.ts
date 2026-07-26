@@ -13,8 +13,23 @@
 // ----------------------------------------------------------------
 
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { validateAndConsumeInviteCode } from './invites'
+
+// Long-lived cookie the marketing page reads to detect returning
+// visitors and promote "Log in" over "Sign up." Set on any
+// successful signup / login. Not sensitive — just a boolean hint —
+// so httpOnly is false so future client-side needs can read it too
+// if needed. 1-year expiry.
+async function markReturningVisitor(): Promise<void> {
+  const c = await cookies()
+  c.set('checked_returning', '1', {
+    path: '/',
+    maxAge: 60 * 60 * 24 * 365,
+    sameSite: 'lax',
+  })
+}
 
 // ----------------------------------------------------------------
 // SIGN UP
@@ -77,6 +92,10 @@ export async function signup(
     return { error: error.message }
   }
 
+  // Mark this device as "has an account here" so the marketing
+  // page's next visit promotes Log in over Sign up.
+  await markReturningVisitor()
+
   // Signup succeeded. Send the user to onboarding to create their restaurant.
   // redirect() throws a special exception — it does NOT return a value,
   // so nothing after it will run.
@@ -109,6 +128,10 @@ export async function login(
     // for wrong email or password.
     return { error: error.message }
   }
+
+  // Mark this device as "has an account here" so the marketing
+  // page's next visit promotes Log in over Sign up.
+  await markReturningVisitor()
 
   // Login succeeded. Redirect to the dashboard.
   // The (app)/layout.tsx will check if they have a restaurant.

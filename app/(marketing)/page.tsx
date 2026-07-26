@@ -23,6 +23,7 @@ import DemoForm from '@/components/marketing/demo-form'
 import ProblemCards from '@/components/marketing/problem-cards'
 import LanguageToggle from '@/components/marketing/language-toggle'
 import TestimonialsCarousel from '@/components/marketing/testimonials-carousel'
+import { createClient } from '@/lib/supabase/server'
 
 type Lang = 'en' | 'es'
 
@@ -81,6 +82,39 @@ const popIn = (delay: number): CSSProperties => ({
 
 export default async function MarketingPage() {
   const lang = await resolveLanguage()
+
+  // ---- Auth-aware nav CTA ----
+  //
+  // Three states drive which button the visitor sees at the top-right:
+  //
+  //   1. Currently signed in       → "Open app →"   (→ /dashboard)
+  //   2. Signed in here before     → "Log in"       (→ /login)
+  //   3. Never signed in (default) → "Sign up"      (→ /signup)
+  //
+  // State 2 is detected via the `checked_returning` cookie, which
+  // signin + signup set on any successful auth. Cookie is long-lived
+  // (1 year) so returning devices feel personal. When cookie is
+  // absent, we fall back to Sign up as the primary CTA — the classic
+  // acquisition path.
+  //
+  // Auth check uses createClient() rather than the admin path since
+  // we want the visitor's own session, not a bypass. Failure to
+  // read is treated as "not signed in" (never throws in the marketing
+  // page).
+  let authState: 'active' | 'returning' | 'new' = 'new'
+  try {
+    const supabase = await createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      authState = 'active'
+    } else {
+      const c = await cookies()
+      if (c.get('checked_returning')?.value === '1') authState = 'returning'
+    }
+  } catch {
+    // Never let auth resolution crash the marketing page.
+    authState = 'new'
+  }
   // Translation helper. First arg is English (default fallback).
   // Second arg is Spanish — if omitted, the English string is used
   // in both languages. Lets us roll out translations incrementally
@@ -530,7 +564,28 @@ export default async function MarketingPage() {
             <a className="mk-nav-deep" href="#why" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('The Difference', 'La Diferencia')}</a>
             <a className="mk-nav-deep" href="#trust" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Our Commitment', 'Nuestro Compromiso')}</a>
             <a href="#book" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Book a demo', 'Pide una demo')}</a>
-            <Link className="mk-nav-cta" href="/signup" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>{t('Sign up', 'Crear cuenta')}</Link>
+
+            {/* Auth CTAs — pair of link+button whose roles swap based
+                on authState. Secondary link is always visible so a
+                returning visitor sees Log in AND a new visitor still
+                has clear access to Sign up. */}
+            {authState === 'active' ? (
+              // Signed in right now → single "Open app" CTA, no
+              // secondary link (there's nothing else to offer).
+              <Link className="mk-nav-cta" href="/dashboard" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>
+                {t('Open app', 'Abrir app')} <span style={mono({ marginLeft: 4 })}>&rarr;</span>
+              </Link>
+            ) : authState === 'returning' ? (
+              <>
+                <Link href="/signup" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Sign up', 'Crear cuenta')}</Link>
+                <Link className="mk-nav-cta" href="/login" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>{t('Log in', 'Iniciar sesión')}</Link>
+              </>
+            ) : (
+              <>
+                <Link href="/login" style={{ fontSize: 14, color: '#52525B', textDecoration: 'none' }}>{t('Log in', 'Iniciar sesión')}</Link>
+                <Link className="mk-nav-cta" href="/signup" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>{t('Sign up', 'Crear cuenta')}</Link>
+              </>
+            )}
           </div>
         </div>
       </nav>
@@ -547,7 +602,17 @@ export default async function MarketingPage() {
             <h1 style={{ fontSize: 'clamp(38px,5.4vw,66px)', lineHeight: 0.98, letterSpacing: '-2.2px', fontWeight: 700, margin: '22px 0 0', ...enter(120) }}>{t('Run the whole place from the counter you’re already standing at.', 'Maneja todo tu lugar desde el mostrador donde ya estás parado.')}</h1>
             <p className="mk-hero-p" style={{ fontSize: 19, lineHeight: 1.55, color: '#52525B', maxWidth: 500, margin: '24px 0 0', ...enter(260) }}>{t('Checked is the operating system independent restaurants and retail shops have been waiting for — POS, inventory, staffing, finance, and analytics on one screen, one bill, and the tablet you already own. One ring moves your stock, cash, and books at the same time.', 'Checked es el sistema operativo que restaurantes y tiendas independientes estaban esperando — POS, inventario, personal, finanzas y analíticas en una sola pantalla, una sola cuenta, y la tableta que ya tienes. Una venta mueve tu inventario, tu dinero y tus libros al mismo tiempo.')}</p>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 30, ...enter(400) }}>
-              <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
+              {/* Hero primary CTA — same tri-state as the nav so the
+                  hero button matches the visitor's actual next step:
+                  open the app if they're already in, log in if
+                  they've been here before, sign up otherwise. */}
+              {authState === 'active' ? (
+                <Link className="mk-hero-cta" href="/dashboard" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Open app', 'Abrir app')} <span style={mono()}>&rarr;</span></Link>
+              ) : authState === 'returning' ? (
+                <Link className="mk-hero-cta" href="/login" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Log in', 'Iniciar sesión')} <span style={mono()}>&rarr;</span></Link>
+              ) : (
+                <Link className="mk-hero-cta" href="/signup" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Get started', 'Empezar')} <span style={mono()}>&rarr;</span></Link>
+              )}
               <a className="mk-hero-cta" href="#book" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: 'transparent', color: '#18181B', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 22px', borderRadius: 11, border: '1px solid #D8D8D4' }}>{t('Book a demo', 'Pide una demo')}</a>
             </div>
             <div className="mk-hero-signals" style={mono({ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 26, fontSize: 12.5, color: '#6B6B70', ...enter(540) })}>

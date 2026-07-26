@@ -62,8 +62,27 @@ jobs:
           # -sS  = silent but show errors
           # --fail-with-body = non-zero exit on 4xx/5xx while still printing the body
           # -w   = extra stats line after the body so we log the response time + status
-          curl -sS --fail-with-body \
+          # -o   = capture body to a temp file so we can assert on it
+          # NOTE: no -L. If the endpoint 3xx-redirects (e.g. because
+          #   proxy.ts starts bouncing machine routes to /login
+          #   again), the workflow should FAIL loud rather than
+          #   silently follow the redirect and report success.
+          RESPONSE_FILE=$(mktemp)
+          HTTP_STATUS=$(curl -sS --fail-with-body \
             -H "Authorization: Bearer $CRON_SECRET" \
             -H "Accept: application/json" \
-            -w "\n---\nstatus=%{http_code} time=%{time_total}s\n" \
-            "$SITE_URL/api/cron/godaddy-sync"
+            -o "$RESPONSE_FILE" \
+            -w "%{http_code}" \
+            "$SITE_URL/api/cron/godaddy-sync")
+          echo "---"
+          cat "$RESPONSE_FILE"
+          echo ""
+          echo "---"
+          echo "status=$HTTP_STATUS"
+          # Explicit 200 check — catches the 3xx-redirect trap where
+          # --fail-with-body treats a redirect as success and reports
+          # a healthy exit code even though the sync never ran.
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::Expected HTTP 200 from cron endpoint, got $HTTP_STATUS"
+            exit 1
+          fi

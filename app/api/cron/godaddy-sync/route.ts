@@ -1,20 +1,18 @@
 // ----------------------------------------------------------------
 // GET /api/cron/godaddy-sync
 //
-// Vercel Cron entry point. Runs on the schedule declared in
-// vercel.json ("*/15 * * * *" = every 15 minutes) and iterates
-// every restaurant that has an active GoDaddy Poynt connection,
-// firing runSyncForRestaurant on each. That helper is
-// incremental — it starts from the newest order it already has
-// and only fetches newer — so repeated 15-min cron runs don't
-// re-work data already in the DB.
+// Sync poker for every merchant with an active GoDaddy Poynt
+// connection. Called on a schedule by an external cron (currently
+// GitHub Actions, .github/workflows/godaddy-sync.yml, */15 min).
+// Vercel's built-in cron is not used — the Hobby plan caps
+// vercel.json crons to once per day. When the project moves to
+// Pro, this route can also be scheduled via vercel.json without
+// changing the handler.
 //
-// Auth model (Vercel Cron contract):
-//   Vercel signs cron requests with `Authorization: Bearer
-//   {CRON_SECRET}`. The env var is auto-populated by Vercel when
-//   a project uses crons; we verify against it here. If someone
-//   hits the URL from outside Vercel (curl, browser, whatever)
-//   the header won't match and we 401.
+// Auth model: caller signs the request with
+// `Authorization: Bearer {CRON_SECRET}`. Anything without that
+// header 401s. The env var is set in Vercel Production + used
+// by the GitHub Actions workflow via secrets.CRON_SECRET.
 //
 // Belt & suspenders on runtime + timing:
 //   • runtime: 'nodejs' — needs Node built-ins (crypto for the
@@ -23,7 +21,8 @@
 //     shouldn't exceed this, but on a Hobby plan the platform
 //     default is 10s which would time out. Every merchant's
 //     work is wrapped in try/catch so one slow shop doesn't
-//     starve the rest.
+//     starve the rest. Hobby's ceiling still wins over this
+//     value until the project moves to Pro.
 // ----------------------------------------------------------------
 
 import { NextResponse, type NextRequest } from 'next/server'

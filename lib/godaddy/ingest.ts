@@ -468,7 +468,9 @@ export async function reconcileOrdersFromTransactions(args: {
   cap?: number
 }): Promise<{ reconciled: number; considered: number; notes: string[] }> {
   const { supabase, restaurantId, transactions } = args
-  const cap = args.cap ?? 20
+  // Default matches the caller in godaddy-sync.ts (was 20 by mistake,
+  // out of sync with the comment on the caller side that said 50).
+  const cap = args.cap ?? 50
   const notes: string[] = []
 
   // Extract distinct Poynt orderIds referenced by CAPTURED

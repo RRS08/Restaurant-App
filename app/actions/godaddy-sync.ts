@@ -79,6 +79,16 @@ const TRANSACTIONS_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 // SELECT on an indexed column.
 const ORDERS_OVERLAP_MS = 30 * 60 * 1000
 
+// Wide /orders sweep: re-list the last 24h at most hourly.
+// Recovers sales that appeared in Poynt's LIST after the
+// incremental cursor had already moved past them (Poynt's LIST
+// endpoint has documented "minutes-to-hours" read lag on some
+// sales). DB dedupe absorbs the ~all-overlap most ticks; ticks
+// that recover a laggy sale earn their keep. Every 4 cron ticks
+// at 15 min = every hour.
+const WIDE_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000
+const WIDE_SWEEP_STALE_MS  = 60 * 60 * 1000
+
 export async function syncGodaddyOrders(): Promise<SyncResult> {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { ...EMPTY, error: authError ?? 'Authentication error.' }
@@ -193,6 +203,38 @@ export async function runSyncForRestaurant(
       merged.notes.push(`/orders leg threw: ${msg}`)
     }
 
+    // 1b. Wide /orders sweep — safety net for Poynt's read-side lag.
+    //     The incremental leg above uses `startAt = latest - 30 min`;
+    //     any sale that appears in Poynt's LIST more than 30 min after
+    //     it closed permanently escapes that cursor (since our next
+    //     tick will start from an even newer high-water mark). This
+    //     leg re-lists the last 24h at most once per hour so laggy
+    //     sales get recovered. DB dedupe absorbs the overlap so ticks
+    //     that don't discover anything cost only the API roundtrip.
+    const wideSweepDueMs = lease.lastWideSweepAt
+      ? Date.now() - new Date(lease.lastWideSweepAt).getTime()
+      : Infinity
+    if (wideSweepDueMs >= WIDE_SWEEP_STALE_MS) {
+      const wideStartAt = new Date(Date.now() - WIDE_SWEEP_WINDOW_MS).toISOString()
+      try {
+        const pullWide = await fetchPoyntOrders({ restaurantId, maxOrders: 1000, startAt: wideStartAt })
+        if ('error' in pullWide) {
+          merged.notes.push(`Wide sweep fetch failed: ${pullWide.error}`)
+        } else {
+          const r = await ingestPoyntOrders({ supabase, restaurantId, raw: pullWide.orders })
+          mergeIn(merged, r)
+          if (r.ordersInserted > 0) {
+            merged.notes.push(`Wide sweep recovered ${r.ordersInserted} laggy order${r.ordersInserted === 1 ? '' : 's'}.`)
+          }
+          await stampWideSweep(supabase, restaurantId)
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[godaddy/sync] wide sweep threw', err)
+        merged.notes.push(`wide sweep threw: ${msg}`)
+      }
+    }
+
     // 2. /transactions — terminal charges + linked-transaction
     //    enrichment. 3-day rolling window instead of the 30-day
     //    default — enough to catch delayed captures + refunds
@@ -288,6 +330,7 @@ interface LeaseResult {
   acquired: boolean
   heldUntil: string | null
   lastProductsSyncedAt: string | null
+  lastWideSweepAt: string | null
 }
 
 /** Atomically claim the sync lease for this restaurant.
@@ -310,7 +353,7 @@ async function acquireSyncLease(
     .update({ sync_locked_until: leaseUntil })
     .eq('restaurant_id', restaurantId)
     .or(`sync_locked_until.is.null,sync_locked_until.lt.${nowIso}`)
-    .select('sync_locked_until, last_products_synced_at')
+    .select('sync_locked_until, last_products_synced_at, last_wide_sweep_at')
 
   const rows = data ?? []
   if (rows.length === 0) {
@@ -326,6 +369,7 @@ async function acquireSyncLease(
       acquired: false,
       heldUntil: (held?.sync_locked_until as string | null) ?? null,
       lastProductsSyncedAt: null,
+      lastWideSweepAt: null,
     }
   }
 
@@ -333,6 +377,7 @@ async function acquireSyncLease(
     acquired: true,
     heldUntil: leaseUntil,
     lastProductsSyncedAt: (rows[0].last_products_synced_at as string | null) ?? null,
+    lastWideSweepAt: (rows[0].last_wide_sweep_at as string | null) ?? null,
   }
 }
 
@@ -353,6 +398,16 @@ async function stampProductsSynced(
   await supabase
     .from('godaddy_poynt_tokens')
     .update({ last_products_synced_at: new Date().toISOString() })
+    .eq('restaurant_id', restaurantId)
+}
+
+async function stampWideSweep(
+  supabase: SupabaseClient,
+  restaurantId: string,
+): Promise<void> {
+  await supabase
+    .from('godaddy_poynt_tokens')
+    .update({ last_wide_sweep_at: new Date().toISOString() })
     .eq('restaurant_id', restaurantId)
 }
 

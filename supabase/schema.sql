@@ -130,6 +130,11 @@ alter table public.godaddy_poynt_tokens enable row level security;
 -- Backfill for existing databases (columns added post-launch).
 alter table public.godaddy_poynt_tokens add column if not exists sync_locked_until       timestamptz;
 alter table public.godaddy_poynt_tokens add column if not exists last_products_synced_at timestamptz;
+-- Wide /orders sweep cursor — the incremental leg would otherwise
+-- permanently skip sales that appear in Poynt's LIST endpoint
+-- with more than 30 min of read lag. Wide sweep re-lists last 24h
+-- at most hourly to catch stragglers; DB dedupe absorbs overlap.
+alter table public.godaddy_poynt_tokens add column if not exists last_wide_sweep_at      timestamptz;
 
 -- Diagnostic audit trail for every inbound webhook hit.
 -- See migration 2026-07-22-webhook-events.sql for the full

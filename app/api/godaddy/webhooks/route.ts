@@ -57,6 +57,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 // Vercel edge runtime doesn't expose crypto's timingSafeEqual /
 // createHmac in the shape we need; pin to Node.
 export const runtime = 'nodejs'
+// Ask for the full function budget so `after()` (which does the
+// heavy work — Poynt fetch + ingest + audit) has room to finish
+// after we ack the 200. Hobby caps this to ~10s regardless of
+// what we set here, so this is primarily forward-looking for a
+// Pro upgrade; on Hobby the ceiling is still Hobby's ceiling.
+export const maxDuration = 60
 
 // Snapshot of every header on the incoming request, minus anything
 // Authorization-shaped so we don't dump credentials into logs. Used

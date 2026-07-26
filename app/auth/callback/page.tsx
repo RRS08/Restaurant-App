@@ -1,18 +1,17 @@
 // ----------------------------------------------------------------
-// /auth/callback  — click-through confirmation for email links.
+// /auth/callback  — auto-exchange landing for email links.
 //
 // Landing target for any Supabase email magic link (password reset
 // today; signup / magic-link signin later). Instead of exchanging
-// the one-time `code` for a session on GET — which link scanners
-// like Outlook Safe Links consume before the human can click —
-// we render a small "Continue" screen and only exchange when the
-// user hits the button. Bots don't click buttons.
+// the one-time `code` on plain GET — which link scanners like
+// Outlook Safe Links consume via prefetch before the human clicks
+// — we render a tiny "Continuing…" page whose form auto-submits
+// via a client-side island. Real browsers run the JS and hit the
+// exchange action within ~300 ms; scanners that only prefetch
+// (no JS) never trigger it, leaving the token alive.
 //
-// PKCE remains the real defense: the code_verifier cookie was set
-// in the browser that requested the reset, so even a bot that
-// clicks Continue can't complete the exchange from a different
-// context. The click gate just stops the code from being
-// invalidated by a bot who couldn't have succeeded anyway.
+// JS-disabled users still see the plain button as a fallback so
+// the flow degrades cleanly.
 // ----------------------------------------------------------------
 
 import { redirect } from 'next/navigation'
@@ -21,6 +20,7 @@ import { getLang } from '@/lib/i18n-server'
 import { makeT } from '@/lib/i18n'
 import { BrandLockup } from '@/components/brand'
 import { completeAuthCodeExchange } from '@/app/actions/auth'
+import AutoSubmit from './auto-submit'
 
 interface Props {
   searchParams?: Promise<{
@@ -53,41 +53,45 @@ export default async function AuthCallbackPage({ searchParams }: Props) {
     redirect('/forgot-password?error=invalid')
   }
 
+  const formId = 'auth-callback-form'
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm">
+      <div className="w-full max-w-sm text-center">
 
-        <div className="mb-8 text-center">
+        <div className="mb-8">
           <Link href="/" className="inline-flex">
             <BrandLockup size="md" variant="solid" />
           </Link>
-          <h1 className="mt-6 text-2xl font-bold text-gray-900 tracking-tight">
-            {t('Confirm your reset link', 'Confirma tu enlace')}
+          <h1 className="mt-6 text-lg font-semibold text-gray-900 tracking-tight">
+            {t('Continuing…', 'Continuando…')}
           </h1>
-          <p className="mt-1 text-sm text-gray-500 leading-relaxed">
-            {t(
-              'Tap Continue to reset your password. This extra step keeps automatic email scanners from invalidating your link before you can use it.',
-              'Toca Continuar para restablecer tu contraseña. Este paso extra evita que los escáneres automáticos de correo invaliden tu enlace antes de que puedas usarlo.',
-            )}
+          <p className="mt-1 text-sm text-gray-500">
+            {t('Confirming your reset link.', 'Confirmando tu enlace.')}
           </p>
         </div>
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
-          <form action={completeAuthCodeExchange} className="space-y-4">
-            <input type="hidden" name="code" value={code} />
-            <input type="hidden" name="next" value={next} />
+        {/* Form is auto-submitted by the AutoSubmit client island
+            on mount. The button below is a fallback for the tiny
+            slice of users who have JS disabled — they see it and
+            can tap it manually. Everyone else sees "Continuing…"
+            for ~300 ms before the redirect. */}
+        <form id={formId} action={completeAuthCodeExchange} className="space-y-4">
+          <input type="hidden" name="code" value={code} />
+          <input type="hidden" name="next" value={next} />
+          <noscript>
             <button
               type="submit"
               className="w-full rounded-lg bg-[#18181B] px-4 py-2.5 text-sm font-semibold text-[#FAF9F6] hover:bg-black transition-colors"
             >
               {t('Continue', 'Continuar')}
             </button>
-          </form>
-        </div>
+          </noscript>
+        </form>
+        <AutoSubmit formId={formId} />
 
-        <p className="mt-6 text-center text-xs text-gray-500">
-          {t('Didn’t request this?', '¿No solicitaste esto?')}{' '}
-          <Link href="/login" className="text-blue-600 hover:text-blue-700 font-medium">
+        <p className="mt-6 text-center text-xs text-gray-400">
+          <Link href="/login" className="hover:text-gray-600 transition-colors">
             {t('Back to sign in', 'Volver a iniciar sesión')}
           </Link>
         </p>

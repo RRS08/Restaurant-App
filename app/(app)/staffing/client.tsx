@@ -1,8 +1,12 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   quickAssignShift,
+  copyPreviousWeek,
+  updateShiftTimes,
+  deleteShiftById,
   createEmployee,
   updateEmployee,
   archiveEmployee,
@@ -17,6 +21,7 @@ import {
 } from '@/app/actions/staffing'
 import { normalizeNameKey } from '@/lib/strings/names'
 import { makeT, type Lang } from '@/lib/i18n'
+import StaffingCalendar, { type CalShift, type CalEmployee } from './staffing-calendar'
 
 type T = (en: string, es?: string) => string
 
@@ -464,6 +469,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [, startTransition] = useTransition()
+  const router = useRouter()
 
   const weekDays = getWeekDays(weekStart)
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7)
@@ -510,74 +516,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     startTransition(async () => { await quickAssignShift(empId, sectionId, dayIso) })
   }
 
-  // ---- Timeline drop ----
-  // Timeline rows aren't scoped to a block, so we default the created
-  // shift to the first available block for the active house. If the
-  // restaurant has no blocks yet, quickAssignShift falls back to a
-  // 9-5 slot server-side. This keeps drag-drop working end-to-end
-  // regardless of setup state — no forced "define a block first."
-  const handleTimelineDrop = (e: DragEvent, dayIdx: number) => {
-    e.preventDefault(); setDragOver(null)
-    const empId = e.dataTransfer.getData('text/plain')
-    if (!empId) return
-    const dayIso = weekDays[dayIdx].toISOString()
-    const fallbackSectionId = houseSections[0]?.id ?? ''
-    startTransition(async () => { await quickAssignShift(empId, fallbackSectionId, dayIso) })
-  }
-
-  // ---- Timeline time range ----
-  // Range spans from the earliest opening to the latest closing across
-  // sections + shifts in the current view, with 1 hour of padding on
-  // each side (capped 0-24). Falls back to a sensible 8am-10pm window
-  // when the restaurant has neither blocks nor shifts yet.
-  const timeRange = (() => {
-    let minH = 24
-    let maxH = 0
-    for (const s of houseSections) {
-      if (s.defaultStartHour < minH) minH = s.defaultStartHour
-      if (s.defaultEndHour > maxH) maxH = s.defaultEndHour
-    }
-    for (const sh of weekShifts) {
-      const start = new Date(sh.startTime)
-      const end = new Date(sh.endTime)
-      const startH = start.getHours() + start.getMinutes() / 60
-      const endH = end.getHours() + end.getMinutes() / 60
-      if (startH < minH) minH = Math.floor(startH)
-      if (endH > maxH) maxH = Math.ceil(endH)
-    }
-    if (minH >= maxH) { minH = 8; maxH = 22 }
-    minH = Math.max(0, minH - 1)
-    maxH = Math.min(24, maxH + 1)
-    return { startHour: minH, endHour: maxH, spanMinutes: (maxH - minH) * 60 }
-  })()
-
-  // Position a shift as a percentage of the timeline row. Shifts that
-  // extend outside the current range clamp to the edges (defensive —
-  // shouldn't happen given the range is derived from them).
-  const shiftPosition = (shift: Shift): { leftPct: number; widthPct: number } => {
-    const dayStart = new Date(shift.startTime)
-    dayStart.setHours(0, 0, 0, 0)
-    const startMs = new Date(shift.startTime).getTime()
-    const endMs = new Date(shift.endTime).getTime()
-    const rangeStartMs = dayStart.getTime() + timeRange.startHour * 60 * 60 * 1000
-    const startMin = Math.max(0, (startMs - rangeStartMs) / 60000)
-    const endMin = Math.min(timeRange.spanMinutes, (endMs - rangeStartMs) / 60000)
-    const leftPct = (startMin / timeRange.spanMinutes) * 100
-    const widthPct = Math.max(2, ((endMin - startMin) / timeRange.spanMinutes) * 100)
-    return { leftPct, widthPct }
-  }
-
-  // Hour tick labels for the header row. E.g. "11a", "12p", "1p".
-  const hourTicks = Array.from(
-    { length: timeRange.endHour - timeRange.startHour },
-    (_, i) => timeRange.startHour + i,
-  )
-  const fmtHourTick = (h: number): string => {
-    if (h === 0 || h === 24) return '12a'
-    if (h === 12) return '12p'
-    return h < 12 ? `${h}a` : `${h - 12}p`
-  }
-
+  // Timeline positioning helpers + drop handler retired with the
+  // in-file timeline board — StaffingCalendar (a sibling client
+  // component) now owns time-axis math, hour ticks, and drag/drop.
+  //
   // Unified mode reuses the blue accent but never exposes the FOH/BOH toggle.
   // `color` keys the only intentional theming axis on the page — blue for
   // FOH/unified, amber for BOH. Every other surface is gray-scale so the
@@ -651,6 +593,28 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
       hoursByEmployee.set(s.employeeId, (hoursByEmployee.get(s.employeeId) ?? 0) + hrs)
     }
   }
+
+  // ---- Adapter shapes for StaffingCalendar --------------------
+  // The new calendar takes a narrower, presentation-focused type.
+  // We filter to the active house (respect FOH/BOH split) and map
+  // to the calendar's expected fields. Bench includes only
+  // employees in the active house.
+  const houseEmployeeIds = new Set(houseEmployees.map((e) => e.id))
+  const calShifts: CalShift[] = weekShifts
+    .filter((s) => houseEmployeeIds.has(s.employeeId))
+    .map((s) => ({
+      id: s.id,
+      employeeId: s.employeeId,
+      employeeName: s.employeeName,
+      role: s.role,
+      startTime: s.startTime,
+      endTime: s.endTime,
+    }))
+  const calBench: CalEmployee[] = houseEmployees.map((e) => ({
+    id: e.id,
+    name: e.name,
+    role: e.role,
+  }))
 
   // ----------------------------------------------------------------
   // Shifts-per-section — used by the edit-block drawer to warn the
@@ -764,13 +728,11 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           >
             {t('+ Shift', '+ Turno')}
           </button>
-          <button
-            type="button"
-            onClick={() => setDrawer({ mode: 'add-block', defaultArea: activeHouse })}
-            className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-          >
-            {t('+ Block', '+ Bloque')}
-          </button>
+          {/* + Block button retired — blocks (shift sections) are no
+              longer a visible concept on the calendar. Existing
+              sections stay in the DB and still surface in the
+              add-shift drawer as a "template" picker, but managers
+              no longer create/edit blocks through this page. */}
           <button
             type="button"
             onClick={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
@@ -782,387 +744,81 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
       </div>
 
       {/* ================================================================ */}
-      {/* 3. SCHEDULE BOARD — the hero. Standard card shell so it shares    */}
-      {/*    visual language with Finance / POS / Sales / Analytics, plus  */}
-      {/*    a header band that announces the surface and surfaces the     */}
-      {/*    week label + shift count without crowding the top toolbar.    */}
+      {/* 3. STAFFING CALENDAR — week timeline + day editor + bench.        */}
+      {/*                                                                    */}
+      {/* Replaces the previous timeline+bench pair. This component owns    */}
+      {/* the entire "look at the week / edit a day / drag from bench"      */}
+      {/* workflow; the outer page keeps the header, house toggle, week     */}
+      {/* nav, and drawers. Every mutation calls back into a handler       */}
+      {/* below that wraps a real server action + router.refresh().        */}
       {/* ================================================================ */}
-      <section className="mb-5 rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-x-auto lg:overflow-hidden">
-        {/* Header band */}
-        <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Schedule', 'Horario')}</h2>
-            <p className="mt-0.5 text-[11px] text-gray-500 truncate">
-              {weekLabel}
-              {houseSections.length > 0 && (
-                <>
-                  <span className="text-gray-300 px-1">·</span>
-                  {houseSections.length} {houseSections.length === 1 ? t('block', 'bloque') : t('blocks', 'bloques')}
-                </>
-              )}
-            </p>
-          </div>
-          {/* Coverage chip — primary operational summary for the week.
-              Structure: "N shifts · Xh · Y covered days" when there is
-              coverage, else "no coverage scheduled" so a blank week
-              reads as intentional rather than just empty. */}
-          <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            {totalShiftsThisWeek} {totalShiftsThisWeek === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
-            <span className="opacity-50">·</span>
-            <span className="font-mono tabular-nums">{formatHours(totalHoursThisWeek)}</span>
-            <span className="opacity-50">·</span>
-            {totalShiftsThisWeek > 0 ? (
-              <span>{coveredDays} {coveredDays === 1 ? t('covered day', 'día cubierto') : t('covered days', 'días cubiertos')}</span>
-            ) : (
-              <span className="font-medium opacity-80">{t('no coverage', 'sin cobertura')}</span>
-            )}
-          </span>
-        </div>
-
-        {/* ================================================================ */}
-        {/* Summary strip — SCHEDULED (hours + shifts) and OPEN DAYS         */}
-        {/* (days-with-shifts / 7). Skipping LABOR COST + alerts for now    */}
-        {/* since they'd need real hourly-rate + threshold data plumbing.   */}
-        {/* Cards use the same editorial calm as the mockup — small        */}
-        {/* uppercase label, large mono number, quiet secondary metadata.  */}
-        {/* ================================================================ */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 divide-x divide-gray-100 border-b border-gray-100 bg-gray-50/30">
-          <div className="px-5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              {t('Scheduled', 'Programado')}
-            </p>
-            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
-              {formatHours(totalHoursThisWeek)}
-              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
-                / {totalShiftsThisWeek} {totalShiftsThisWeek === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
-              </span>
-            </p>
-          </div>
-          <div className="px-5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              {t('Open days', 'Días abiertos')}
-            </p>
-            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
-              {coveredDays}
-              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
-                {coveredDays === 7
-                  ? t('all covered', 'todos cubiertos')
-                  : `${t('of', 'de')} 7`}
-              </span>
-            </p>
-          </div>
-          <div className="hidden sm:block px-5 py-3">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-              {t('People', 'Personas')}
-            </p>
-            <p className="mt-1 text-[20px] font-semibold font-mono tabular-nums text-gray-900 leading-none">
-              {new Set(weekShifts.map((s) => s.employeeId).filter(Boolean)).size}
-              <span className="text-[11px] font-medium text-gray-400 font-sans ml-1.5">
-                {t('scheduled', 'programadas')}
-              </span>
-            </p>
-          </div>
-        </div>
-
-        {/* ================================================================ */}
-        {/* Timeline board — rows are days, columns are hours. Each shift    */}
-        {/* renders as a positioned bar on its day row, one bar per row      */}
-        {/* stacked vertically (order: earliest start first). This replaces  */}
-        {/* the prior block-grid layout — blocks still exist as data (for    */}
-        {/* default shift times on drag-drop / new-shift drawer) but the     */}
-        {/* board no longer visually organizes by block. Reads at-a-glance   */}
-        {/* like an operational Gantt: coverage gaps show as whitespace,     */}
-        {/* overlaps as vertically stacked bars in the same time window.    */}
-        {/* ================================================================ */}
-
-        {/* Timeline header — hour ticks running from timeRange.startHour to
-            timeRange.endHour. Sidebar column stays empty; day sidebars
-            below use the same 140px width for column alignment. */}
-        <div className="flex min-w-[820px] lg:min-w-0 border-b border-gray-100 bg-gray-50/40">
-          <div className="w-[140px] flex-shrink-0 border-r border-gray-100" />
-          <div className="flex-1 flex relative">
-            {hourTicks.map((h, i) => (
-              <div key={h} className="flex-1 border-l border-gray-100 first:border-l-0 px-1.5 py-2">
-                <p className="text-[10px] text-gray-500 font-mono tabular-nums">{fmtHourTick(h)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Day rows */}
-        {weekDays.map((day, dayIdx) => {
-          const dayShifts = weekShifts
-            .filter((s) => sameDay(new Date(s.startTime), day))
-            .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
-          const dayHours = dayShifts.reduce(
-            (sum, s) =>
-              sum + (new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 3_600_000,
-            0,
+      <StaffingCalendar
+        lang={lang}
+        weekStart={weekStart}
+        weekDays={weekDays}
+        activeHouse={activeHouse}
+        isUnified={isUnified}
+        shifts={calShifts}
+        bench={calBench}
+        weeklyHoursByEmployee={hoursByEmployee}
+        roleColors={roleColors}
+        onOpenEditShift={(cs) => {
+          const full = weekShifts.find((s) => s.id === cs.id)
+          if (full) setDrawer({ mode: 'edit', shift: full })
+        }}
+        onAssignToDay={async (employeeId, dayIso) => {
+          const r = await quickAssignShift(employeeId, null, dayIso)
+          router.refresh()
+          return r
+        }}
+        onSetShiftTime={async (shiftId, startIso, endIso) => {
+          const r = await updateShiftTimes(shiftId, startIso, endIso)
+          router.refresh()
+          return r
+        }}
+        onRemoveShift={async (shiftId) => {
+          const r = await deleteShiftById(shiftId)
+          router.refresh()
+          return r
+        }}
+        onRepeatLastWeekForDay={async (dayIso) => {
+          // Reuse copyPreviousWeek scoped to whole week; day-specific
+          // filter is a future refinement. For now this repeats the
+          // previous week's shifts for the whole week (which includes
+          // the requested day). Idempotent — existing rows are skipped.
+          const _ = dayIso
+          const r = await copyPreviousWeek(weekStart.toISOString())
+          router.refresh()
+          return r
+        }}
+        onClearDay={async (dayIso) => {
+          // Delete every shift for the given day + active-house scope.
+          const dayDate = new Date(dayIso)
+          const toDelete = weekShifts.filter((s) =>
+            sameDay(new Date(s.startTime), dayDate),
           )
-          const isToday = sameDay(day, new Date())
-          const dropKey = `day-${dayIdx}`
-          const isOver = dragOver === dropKey
-          const barHeight = 28
-          const barGap = 4
-          const rowPaddingY = 8
-          const dayRowMinHeight = Math.max(
-            60,
-            dayShifts.length * (barHeight + barGap) + rowPaddingY * 2,
-          )
-
-          // Opening / closing summary for the sidebar. Same 12-hour
-          // "12p-9p" shape used elsewhere. Shown only when the day
-          // has at least one shift; otherwise the sidebar stays quiet.
-          const firstShift = dayShifts[0]
-          const lastShift = dayShifts[dayShifts.length - 1]
-          const openLabel = firstShift ? fmt(firstShift.startTime) : null
-          const closeLabel = lastShift ? fmt(lastShift.endTime) : null
-
-          return (
-            <div
-              key={dayIdx}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(dropKey) }}
-              onDragLeave={() => setDragOver(null)}
-              onDrop={(e) => handleTimelineDrop(e, dayIdx)}
-              className={`flex min-w-[820px] lg:min-w-0 border-b border-gray-100 last:border-b-0 transition-colors ${
-                isOver ? `${tone.softerHover} ${tone.dropRing}` : ''
-              }`}
-            >
-              {/* Day sidebar — minimal: day + date bold, meta line
-                  quiet mono. No background band on regular days;
-                  today gets the house-tone soft tint so it stands
-                  out. Matches the mockup's editorial calm. */}
-              <div
-                className={`w-[100px] flex-shrink-0 border-r border-gray-100 px-4 py-3 ${
-                  isToday ? tone.soft : ''
-                }`}
-              >
-                <p className={`text-[12px] font-semibold leading-tight ${
-                  isToday ? tone.todayText : 'text-gray-900'
-                }`}>
-                  {DAYS[dayIdx]} {day.getDate()}
-                </p>
-                {dayShifts.length > 0 ? (
-                  <p className="mt-1 text-[10px] text-gray-400 font-mono tabular-nums leading-tight uppercase tracking-wider">
-                    {openLabel}–{closeLabel}
-                    <span className="mx-1">·</span>
-                    {formatHours(dayHours).toUpperCase()}
-                  </p>
-                ) : (
-                  <p className="mt-1 text-[10px] text-gray-300 font-mono tabular-nums leading-tight uppercase tracking-wider">
-                    {t('closed', 'cerrado')}
-                  </p>
-                )}
-              </div>
-
-              {/* Timeline area — relative container. Faint hour
-                  gridlines behind, shift bars positioned absolutely. */}
-              <div
-                className="flex-1 relative"
-                style={{ minHeight: dayRowMinHeight }}
-              >
-                {/* Hour gridlines */}
-                {hourTicks.map((_, i) => (
-                  <div
-                    key={i}
-                    className="absolute top-0 bottom-0 border-l border-gray-100 first:border-l-0"
-                    style={{ left: `${(i / hourTicks.length) * 100}%` }}
-                    aria-hidden
-                  />
-                ))}
-
-                {/* Drop hint — only on empty rows mid-drag. */}
-                {isOver && dayShifts.length === 0 && (
-                  <p className={`text-[10px] font-medium text-center pointer-events-none absolute inset-0 flex items-center justify-center ${tone.dropHint}`}>
-                    {t('Drop shift here', 'Soltar turno aquí')}
-                  </p>
-                )}
-
-                {/* Empty state (quiet, non-blocking). */}
-                {!isOver && dayShifts.length === 0 && (
-                  <p className="text-[10px] text-gray-300 text-center pointer-events-none absolute inset-0 flex items-center justify-center">
-                    {t('No shifts scheduled', 'Sin turnos programados')}
-                  </p>
-                )}
-
-                {/* Shift bars — one per row, positioned horizontally
-                    by start/end time. Full role-tinted background
-                    (extracted from r.chip) with a thicker left
-                    stripe for identity. No border — the tint is the
-                    edge. Name in gray-900, role in role-color, time
-                    in gray-500 to keep readability against the tint. */}
-                {dayShifts.map((shift, i) => {
-                  const { leftPct, widthPct } = shiftPosition(shift)
-                  const r = roleTone(shift.role, roleColors)
-                  const hrs =
-                    (new Date(shift.endTime).getTime() - new Date(shift.startTime).getTime()) /
-                    3_600_000
-                  // r.chip is like 'bg-purple-50 text-purple-700' — we
-                  // only want the bg-* class to tint the bar. Extract
-                  // it so the role-tint doesn't fight our per-span text
-                  // color overrides.
-                  const bgTint = r.chip.split(' ').find((c) => c.startsWith('bg-')) ?? ''
-                  return (
-                    <button
-                      key={shift.id}
-                      type="button"
-                      onClick={() => setDrawer({ mode: 'edit', shift })}
-                      className={`absolute rounded-md text-left overflow-hidden transition-all hover:brightness-95 ${bgTint}`}
-                      style={{
-                        left: `${leftPct}%`,
-                        width: `${widthPct}%`,
-                        top: `${rowPaddingY + i * (barHeight + barGap)}px`,
-                        height: `${barHeight}px`,
-                      }}
-                    >
-                      <span className={`absolute left-0 top-0 bottom-0 w-[3px] ${r.dot}`} aria-hidden />
-                      <div className="pl-2.5 pr-2.5 flex items-center justify-between gap-3 h-full">
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="text-[11px] font-semibold text-gray-900 truncate">
-                            {shift.employeeName}
-                          </span>
-                          <span className={`text-[10px] font-medium truncate ${r.text}`}>
-                            {shift.role}
-                          </span>
-                        </div>
-                        <div className="flex-shrink-0 flex items-center gap-1.5 text-[10px] text-gray-500 font-mono tabular-nums">
-                          <span>{fmt(shift.startTime)}–{fmt(shift.endTime)}</span>
-                          <span className="text-gray-400">·</span>
-                          <span>{formatHours(hrs)}</span>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })}
-
-        {/* ================================================================ */}
-        {/* Roles legend — footer strip that maps each role to its color    */}
-        {/* dot so a first-time viewer can decode the timeline at a glance.  */}
-        {/* Roles surfaced = configured roles for the active house UNION    */}
-        {/* any roles present in the week's shifts (catches one-offs or    */}
-        {/* legacy roles from before a role rename).                        */}
-        {/* ================================================================ */}
-        {(() => {
-          const configured =
-            isUnified ? [...fohRoles, ...bohRoles]
-              : activeHouse === 'foh' ? fohRoles : bohRoles
-          const scheduled = weekShifts.map((s) => s.role)
-          const seen = new Set<string>()
-          const rolesToShow: string[] = []
-          for (const r of [...configured, ...scheduled]) {
-            const key = r.toLowerCase().trim()
-            if (!key || seen.has(key)) continue
-            seen.add(key)
-            rolesToShow.push(r)
+          for (const s of toDelete) {
+            const r = await deleteShiftById(s.id)
+            if (r && 'error' in r && r.error) return r
           }
-          if (rolesToShow.length === 0) return null
-          return (
-            <div className="border-t border-gray-100 px-6 py-3 flex items-center gap-4 flex-wrap">
-              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
-                {t('Roles', 'Puestos')}
-              </span>
-              <div className="flex items-center gap-x-4 gap-y-1.5 flex-wrap">
-                {rolesToShow.map((r) => {
-                  const tone = roleTone(r, roleColors)
-                  return (
-                    <span key={r} className="inline-flex items-center gap-1.5 text-[11px] text-gray-700">
-                      <span className={`w-2 h-2 rounded-sm ${tone.dot}`} aria-hidden />
-                      {r}
-                    </span>
-                  )
-                })}
-              </div>
-            </div>
-          )
-        })()}
-      </section>
+          router.refresh()
+          return null
+        }}
+        onCopyLastWeek={async () => {
+          const r = await copyPreviousWeek(weekStart.toISOString())
+          router.refresh()
+          return r
+        }}
+        onPrevWeek={() =>
+          setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() - 7); return d })
+        }
+        onNextWeek={() =>
+          setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() + 7); return d })
+        }
+        onToday={() => setWeekStart(getMonday(new Date()))}
+        onSave={() => { router.refresh() }}
+      />
 
-      {/* ================================================================ */}
-      {/* 4. STAFF BENCH — assignment-zone card. Same shell as the board    */}
-      {/*    so the eye reads board + bench as one operational unit.       */}
-      {/*    Identity color stays restrained: a small dot in the header,   */}
-      {/*    a 2px accent bar on each chip — never a full color wash.      */}
-      {/* ================================================================ */}
-      <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-        <div className="border-b border-gray-100 px-6 py-4 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold tracking-tight text-gray-900">
-              {isUnified ? t('Bench', 'Plantilla') : (activeHouse === 'foh' ? t('Bench · Front of House', 'Plantilla · Salón') : t('Bench · Back of House', 'Plantilla · Cocina'))}
-            </h2>
-            <p className="mt-0.5 text-[11px] text-gray-500">{t('Available staff — drag onto a shift block.', 'Personal disponible — arrastra sobre un bloque de turno.')}</p>
-          </div>
-          <span className={`flex-shrink-0 inline-flex items-center gap-1.5 text-[10px] font-semibold px-2.5 py-1 rounded-full ${tone.countChip}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
-            {houseEmployees.length} {t('available', 'disponibles')}
-          </span>
-        </div>
-
-        <div className="p-5">
-          {/* Role color palette — lets the owner assign display
-              colors to each role in the current house. Shows every
-              configured role for the active view; changes save
-              immediately via setRoleColor server action. Hides
-              entirely if no roles exist yet. */}
-          <RoleColorPalette
-            roles={isUnified ? [...fohRoles, ...bohRoles] : (activeHouse === 'foh' ? fohRoles : bohRoles)}
-            t={t}
-          />
-
-          {houseEmployees.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-4 py-8 text-center">
-              <p className="text-sm font-medium text-gray-700">
-                {isUnified
-                  ? t('No team members yet', 'Aún no hay miembros del equipo')
-                  : (activeHouse === 'foh'
-                    ? t('No FOH team members yet', 'Aún no hay miembros del salón')
-                    : t('No BOH team members yet', 'Aún no hay miembros de la cocina'))}
-              </p>
-              <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
-                {t('Add staff to the bench, then drag them onto the board to schedule shifts.', 'Agrega personal a la plantilla, luego arrástralos al tablero para programar turnos.')}
-              </p>
-              <button
-                type="button"
-                onClick={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
-                className={`mt-3 inline-flex items-center text-xs font-semibold ${tone.text} hover:underline`}
-              >
-                {isUnified
-                  ? t('+ Add your first team member', '+ Agregar tu primer miembro del equipo')
-                  : (activeHouse === 'foh'
-                    ? t('+ Add your first FOH team member', '+ Agregar tu primer miembro del salón')
-                    : t('+ Add your first BOH team member', '+ Agregar tu primer miembro de la cocina'))}
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {houseEmployees.map((emp) => {
-                const weekHours = hoursByEmployee.get(emp.id) ?? 0
-                const tier = hoursTier(weekHours)
-                const hoursLabel = formatHours(weekHours)
-                return (
-                  <BenchCard
-                    key={emp.id}
-                    employee={emp}
-                    hoursLabel={hoursLabel}
-                    weekHours={weekHours}
-                    tier={tier}
-                    t={t}
-                    onClick={() => setDrawer({
-                      mode: 'edit-employee',
-                      employee: emp,
-                      house: activeHouse,
-                    })}
-                  />
-                )
-              })}
-            </div>
-          )}
-        </div>
-      </section>
 
       {/* ---- DRAWERS ----
           Every page-level workflow funnels into one of these drawers.

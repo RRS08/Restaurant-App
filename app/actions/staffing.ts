@@ -321,7 +321,16 @@ export async function deleteShiftSection(
 // Quick assign — drag-and-drop creates a shift instantly
 // ----------------------------------------------------------------
 export async function quickAssignShift(
-  employeeId: string, sectionId: string, dayIso: string
+  employeeId: string,
+  sectionId: string | null,
+  dayIso: string,
+  // Optional explicit times (used by the new staffing calendar's
+  // Day view, which drops onto a specific day without a block).
+  // When absent + sectionId given, we use the section's defaults.
+  // When absent + no section, we fall back to 9-5 as a starter
+  // slot the user can edit via "Set shift time".
+  startHour?: number,
+  endHour?: number,
 ) {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { error: authError ?? 'Auth error.' }
@@ -335,24 +344,171 @@ export async function quickAssignShift(
     .from('employees').select('role').eq('id', employeeId).single()
   if (!employee) return { error: 'Employee not found.' }
 
-  const { data: section } = await ctx.supabase
-    .from('shift_sections').select('default_start_hour, default_end_hour').eq('id', sectionId).single()
-  if (!section) return { error: 'Section not found.' }
+  // Resolve start/end hours: explicit params > section defaults > 9-5.
+  let sh = startHour ?? 9
+  let eh = endHour ?? 17
+  let resolvedSectionId: string | null = null
+  if (sectionId) {
+    const { data: section } = await ctx.supabase
+      .from('shift_sections')
+      .select('default_start_hour, default_end_hour')
+      .eq('id', sectionId)
+      .single()
+    if (section) {
+      sh = section.default_start_hour
+      eh = section.default_end_hour
+      resolvedSectionId = sectionId
+    }
+  }
 
   const day = new Date(dayIso)
-  const start = new Date(day); start.setHours(section.default_start_hour, 0, 0, 0)
+  const start = new Date(day); start.setHours(sh, 0, 0, 0)
   const end = new Date(day)
-  if (section.default_end_hour <= section.default_start_hour) end.setDate(end.getDate() + 1)
-  end.setHours(section.default_end_hour, 0, 0, 0)
+  if (eh <= sh) end.setDate(end.getDate() + 1)
+  end.setHours(eh, 0, 0, 0)
 
   const { error } = await ctx.supabase.from('shifts').insert({
     restaurant_id: ctx.restaurantId, location_id: locationId,
-    employee_id: employeeId, section_id: sectionId,
+    employee_id: employeeId, section_id: resolvedSectionId,
     role: employee.role,
     start_time: start.toISOString(), end_time: end.toISOString(),
   })
 
   if (error) return { error: error.message }
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return null
+}
+
+// ----------------------------------------------------------------
+// copyPreviousWeek — duplicate the previous week's shifts +7 days.
+//
+// Called from the new staffing calendar's "Copy last week" button.
+// Reads every shift whose start_time lands in the week BEFORE
+// currentWeekStartIso, shifts each by +7 days, and inserts. Skips
+// employees that are no longer active + skips shifts that already
+// exist in the target week for the same employee+start (idempotent).
+// ----------------------------------------------------------------
+export async function copyPreviousWeek(
+  currentWeekStartIso: string,
+): Promise<{ copied: number; skipped: number } | { error: string }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+  if (ctx.role !== 'owner' && ctx.role !== 'manager') {
+    return { error: 'Only the owner or a manager can copy a week.' }
+  }
+
+  const { locationId } = await resolveLocationId(ctx)
+  if (!locationId) return { error: 'No location.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const currentWeekStart = new Date(currentWeekStartIso)
+  const prevWeekStart = new Date(currentWeekStart); prevWeekStart.setDate(prevWeekStart.getDate() - 7)
+  const currentWeekEnd = new Date(currentWeekStart); currentWeekEnd.setDate(currentWeekEnd.getDate() + 7)
+
+  // Fetch previous week + current week's shifts (need current
+  // for dedupe). Also fetch active employees to skip inactive ones.
+  const [prevRes, currRes, empRes] = await Promise.all([
+    ctx.supabase.from('shifts')
+      .select('employee_id, section_id, role, start_time, end_time, notes')
+      .eq('location_id', locationId)
+      .gte('start_time', prevWeekStart.toISOString())
+      .lt('start_time', currentWeekStart.toISOString()),
+    ctx.supabase.from('shifts')
+      .select('employee_id, start_time')
+      .eq('location_id', locationId)
+      .gte('start_time', currentWeekStart.toISOString())
+      .lt('start_time', currentWeekEnd.toISOString()),
+    ctx.supabase.from('employees').select('id').eq('active', true),
+  ])
+  if (prevRes.error) return { error: `Previous week fetch: ${prevRes.error.message}` }
+
+  const activeIds = new Set((empRes.data ?? []).map((e) => e.id as string))
+  const existing = new Set(
+    (currRes.data ?? []).map((s) => `${s.employee_id}|${new Date(s.start_time as string).getTime()}`),
+  )
+
+  const rows: Array<{
+    restaurant_id: string; location_id: string; employee_id: string
+    section_id: string | null; role: string
+    start_time: string; end_time: string; notes: string | null
+  }> = []
+  let skipped = 0
+  for (const s of prevRes.data ?? []) {
+    const employeeId = s.employee_id as string
+    if (!activeIds.has(employeeId)) { skipped++; continue }
+    const newStart = new Date(s.start_time as string); newStart.setDate(newStart.getDate() + 7)
+    const newEnd = new Date(s.end_time as string); newEnd.setDate(newEnd.getDate() + 7)
+    const dedupeKey = `${employeeId}|${newStart.getTime()}`
+    if (existing.has(dedupeKey)) { skipped++; continue }
+    rows.push({
+      restaurant_id: ctx.restaurantId, location_id: locationId,
+      employee_id: employeeId, section_id: (s.section_id as string | null) ?? null,
+      role: s.role as string,
+      start_time: newStart.toISOString(), end_time: newEnd.toISOString(),
+      notes: (s.notes as string | null) ?? null,
+    })
+  }
+
+  if (rows.length > 0) {
+    const { error } = await ctx.supabase.from('shifts').insert(rows)
+    if (error) return { error: error.message }
+  }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { copied: rows.length, skipped }
+}
+
+// ----------------------------------------------------------------
+// updateShiftTimes — thin helper for the day-view "Set shift time"
+// affordance. Only touches start/end; leaves employee, section, and
+// notes alone. Owner or matching-location manager may call.
+// ----------------------------------------------------------------
+export async function updateShiftTimes(
+  shiftId: string,
+  startIso: string,
+  endIso: string,
+): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  const { data: shift } = await ctx.supabase
+    .from('shifts').select('location_id').eq('id', shiftId).single()
+  if (!shift) return { error: 'Shift not found.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, shift.location_id as string)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase
+    .from('shifts')
+    .update({ start_time: startIso, end_time: endIso })
+    .eq('id', shiftId)
+  if (error) return { error: error.message }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return null
+}
+
+// ----------------------------------------------------------------
+// deleteShiftById — non-formData delete used by the day view's
+// per-row remove (×). The existing deleteShift(formData) helper
+// still exists for form callers.
+// ----------------------------------------------------------------
+export async function deleteShiftById(shiftId: string): Promise<{ error: string } | null> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  const { data: shift } = await ctx.supabase
+    .from('shifts').select('location_id').eq('id', shiftId).single()
+  if (!shift) return { error: 'Shift not found.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, shift.location_id as string)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const { error } = await ctx.supabase.from('shifts').delete().eq('id', shiftId)
+  if (error) return { error: error.message }
+
   revalidatePath('/staffing')
   revalidatePath('/web/staffing')
   return null

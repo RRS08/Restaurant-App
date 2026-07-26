@@ -563,15 +563,10 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               }
               return (
                 <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>
+                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
                       {t('ROLES', 'PUESTOS')}
                     </span>
-                    <span style={{ fontSize: 11, color: FAINT }}>
-                      {t('Tap to change color · click + to add', 'Toca para cambiar color · pulsa + para añadir')}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                     {roles.map((r) => {
                       const tone = roleToneFor(r, roleColors)
                       const isOpen = openRolePicker?.toLowerCase() === r.toLowerCase()

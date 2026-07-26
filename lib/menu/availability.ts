@@ -167,11 +167,14 @@ function projectFromRecipe(
 export function computeAvailability(input: AvailabilityInput): AvailabilityResult {
   const { active, recipe, override, inventoryActive, stockByInventoryItemId } = input
 
-  // Projection is computed up-front so it remains visible regardless
-  // of override state. UI surfaces use this as the audit-truth.
-  const raw: RawProjection = inventoryActive
-    ? projectFromRecipe(recipe, stockByInventoryItemId)
-    : { count: 0, state: 'unavailable_to_project', bottleneckId: null }
+  // Projection is a pure READ from recipe + stock — no side effects.
+  // Always run it when we have the data. The activation flag ONLY
+  // gates auto_disabled (a sellability decision), not projection
+  // itself. Withholding the calculated count until activation was
+  // over-strict — merchants with real counts and recipes want to
+  // see "can produce N" as soon as they've counted, without also
+  // having to commit to depletion tracking.
+  const raw: RawProjection = projectFromRecipe(recipe, stockByInventoryItemId)
 
   const projectedCount = raw.state === 'unavailable_to_project' ? null : raw.count
   const projectionState = raw.state
@@ -196,9 +199,13 @@ export function computeAvailability(input: AvailabilityInput): AvailabilityResul
   }
 
   // Auto-disable ONLY when projection is a definite 'out' on a mapped
-  // item with active inventory tracking. `unavailable_to_project`
-  // never auto-disables — we don't punish honest unknowns.
-  if (projectionState === 'out') {
+  // item AND inventory tracking is activated. `unavailable_to_project`
+  // never auto-disables — we don't punish honest unknowns. And when
+  // inventory hasn't been activated yet, we show the projected count
+  // for informational purposes but don't yank items off the POS from
+  // stale counts alone; auto-disable is a real side effect that
+  // deserves the explicit activation gesture.
+  if (projectionState === 'out' && inventoryActive) {
     return { projectedCount, projectionState, effectiveSellability: 'auto_disabled', bottleneckInventoryItemId }
   }
 

@@ -573,7 +573,7 @@ export default async function MarketingPage() {
               // Signed in right now → single "Open app" CTA, no
               // secondary link (there's nothing else to offer).
               <Link className="mk-nav-cta" href="/dashboard" style={{ background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 14, fontWeight: 600, padding: '9px 17px', borderRadius: 9 }}>
-                {t('Open app', 'Abrir app')} <span style={mono({ marginLeft: 4 })}>&rarr;</span>
+                {t('Open app', 'Abrir app')}
               </Link>
             ) : authState === 'returning' ? (
               <>
@@ -607,7 +607,7 @@ export default async function MarketingPage() {
                   open the app if they're already in, log in if
                   they've been here before, sign up otherwise. */}
               {authState === 'active' ? (
-                <Link className="mk-hero-cta" href="/dashboard" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Open app', 'Abrir app')} <span style={mono()}>&rarr;</span></Link>
+                <Link className="mk-hero-cta" href="/dashboard" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Open app', 'Abrir app')}</Link>
               ) : authState === 'returning' ? (
                 <Link className="mk-hero-cta" href="/login" style={{ display: 'inline-flex', alignItems: 'center', gap: 9, background: '#18181B', color: '#FAF9F6', textDecoration: 'none', fontSize: 16, fontWeight: 600, padding: '15px 26px', borderRadius: 11 }}>{t('Log in', 'Iniciar sesión')} <span style={mono()}>&rarr;</span></Link>
               ) : (

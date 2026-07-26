@@ -118,7 +118,7 @@ export default function AppShell({
           className={`
             fixed inset-y-0 left-0 z-40 transition-transform duration-200 ease-out
             ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-            xl:static xl:translate-x-0 xl:transition-none
+            xl:sticky xl:top-0 xl:h-screen xl:translate-x-0 xl:transition-none xl:self-start
           `}
         >
           {sidebar}
@@ -136,8 +136,12 @@ export default function AppShell({
         )}
 
         {/* Main content. Extra top padding only on tablet so the
-            fixed menu button doesn't visually overlap page chrome. */}
-        <main className="flex-1 overflow-y-auto p-8 max-xl:pt-16">
+            fixed menu button doesn't visually overlap page chrome.
+            No `overflow-y-auto` — the WINDOW is the scroll container
+            so the sidebar's `sticky top-0` (see wrapper above) can
+            pin properly. If main had its own scroll, sticky would
+            no-op because the window would never scroll. */}
+        <main className="flex-1 p-8 max-xl:pt-16">
           {children}
         </main>
 

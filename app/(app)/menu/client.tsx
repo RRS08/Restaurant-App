@@ -1685,6 +1685,25 @@ function ItemCard({
           </span>
         )}
       </div>
+
+      {/* Projected-count line — quiet secondary metadata that shows
+          how many units the recipe can produce against current
+          inventory ("6 in stock"). Rendered only when the projection
+          is definite (mapped item, inventory activated, all
+          ingredients have stock). Healthy items now show the number
+          instead of hiding it — pilot merchant asked for visibility
+          on every mapped item, not just low/out. Skips when the
+          right-side status badge already carries a count
+          ("Low · 3 left") to avoid duplication. */}
+      {item.projectedCount !== null
+        && item.projectionState !== 'unavailable_to_project'
+        && !(status?.label.startsWith(t('Low', 'Bajo')) || status?.label.startsWith('Low'))
+        && !(status?.label.startsWith(t('Out', 'Agotado')) || status?.label.startsWith('Out'))
+        && (
+          <p className="mt-1 text-[10.5px] font-mono tabular-nums text-gray-500">
+            {item.projectedCount} {t('in stock', 'en stock')}
+          </p>
+        )}
     </div>
   )
 }
@@ -2181,6 +2200,31 @@ function ItemDrawer({
                   <span className="font-medium text-gray-700">
                     {item.bottleneckInventoryItemName}
                   </span>
+                </p>
+              )}
+
+            {/* Projected-count stat — concrete number based on recipe
+                × current stock. Only renders when the projection is
+                definite (mapped item, inventory activated, all
+                ingredients tracked). Sits alongside the pills so a
+                Healthy item shows "Can produce: 42" instead of just
+                a green pill; a Low item echoes the number that's
+                already in the pill; an Out item shows a clear 0.
+                Complements the smaller line on the card. */}
+            {item.active
+              && item.projectedCount !== null
+              && item.projectionState !== 'unavailable_to_project' && (
+                <p className="text-[11px] text-gray-500 leading-relaxed">
+                  {t('Can produce', 'Puede producir')}{' '}
+                  <span className={`font-mono tabular-nums font-semibold ${
+                    item.projectedCount === 0 ? 'text-red-700'
+                      : item.projectionState === 'low' ? 'text-amber-700'
+                        : 'text-gray-800'
+                  }`}>
+                    {item.projectedCount}
+                  </span>{' '}
+                  {item.projectedCount === 1 ? t('unit', 'unidad') : t('units', 'unidades')}{' '}
+                  <span className="text-gray-400">{t('from current stock', 'con el stock actual')}</span>
                 </p>
               )}
           </div>

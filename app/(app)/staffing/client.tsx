@@ -1039,6 +1039,47 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
             </div>
           )
         })}
+
+        {/* ================================================================ */}
+        {/* Roles legend — footer strip that maps each role to its color    */}
+        {/* dot so a first-time viewer can decode the timeline at a glance.  */}
+        {/* Roles surfaced = configured roles for the active house UNION    */}
+        {/* any roles present in the week's shifts (catches one-offs or    */}
+        {/* legacy roles from before a role rename).                        */}
+        {/* ================================================================ */}
+        {(() => {
+          const configured =
+            isUnified ? [...fohRoles, ...bohRoles]
+              : activeHouse === 'foh' ? fohRoles : bohRoles
+          const scheduled = weekShifts.map((s) => s.role)
+          const seen = new Set<string>()
+          const rolesToShow: string[] = []
+          for (const r of [...configured, ...scheduled]) {
+            const key = r.toLowerCase().trim()
+            if (!key || seen.has(key)) continue
+            seen.add(key)
+            rolesToShow.push(r)
+          }
+          if (rolesToShow.length === 0) return null
+          return (
+            <div className="border-t border-gray-100 px-6 py-3 flex items-center gap-4 flex-wrap">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+                {t('Roles', 'Puestos')}
+              </span>
+              <div className="flex items-center gap-x-4 gap-y-1.5 flex-wrap">
+                {rolesToShow.map((r) => {
+                  const tone = roleTone(r, roleColors)
+                  return (
+                    <span key={r} className="inline-flex items-center gap-1.5 text-[11px] text-gray-700">
+                      <span className={`w-2 h-2 rounded-sm ${tone.dot}`} aria-hidden />
+                      {r}
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
       </section>
 
       {/* ================================================================ */}

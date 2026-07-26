@@ -474,20 +474,59 @@ export async function reconcileOrdersFromTransactions(args: {
   // Extract distinct Poynt orderIds referenced by CAPTURED
   // transactions in the batch. Skip voids/refunds (they'd point
   // at an already-ingested order or nothing meaningful).
+  //
+  // ID-quality filter: /orders/{id} only accepts Poynt's UUID
+  // form. Some transactions carry the merchant's own custom
+  // order id in `t.orderId` (e.g. `Order_Fv…`) — Poynt returns
+  // 400 INVALID_PARAMETER for those. Prefer an explicit
+  // POYNT_ORDER reference (guaranteed UUID) and only fall back
+  // to `t.orderId` when it's UUID-shaped. Non-UUID IDs are
+  // dropped so we don't burn API slots on 100%-fail fetches.
+  const UUID_RE =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  const isUuid = (s: string) => UUID_RE.test(s)
+
   const referencedOrderIds = new Set<string>()
+  let skippedNonUuid = 0
   for (const t of transactions) {
     const status = (t.status ?? '').toUpperCase()
     if (status !== 'CAPTURED') continue
-    const linked =
-      safeIdStr(t.orderId)
-      || safeIdStr((t.references ?? []).find((r) => {
+
+    // First-choice: an explicit POYNT_ORDER reference in references[].
+    // These are always the Poynt-side UUID.
+    const poyntOrderRef = (t.references ?? []).find((r) => {
+      const type = (r.type ?? '').toUpperCase()
+      return type === 'POYNT_ORDER'
+    })
+    let linked = safeIdStr(poyntOrderRef?.id)
+
+    // Fallback: top-level orderId, but only if UUID-shaped.
+    if (!linked) {
+      const candidate = safeIdStr(t.orderId)
+      if (candidate) {
+        if (isUuid(candidate)) linked = candidate
+        else skippedNonUuid++
+      }
+    }
+    // Last resort: any references[] entry with an ORDER-ish type.
+    if (!linked) {
+      const orderIsh = (t.references ?? []).find((r) => {
         const type = ((r.type ?? '') + ' ' + (r.customType ?? '')).toUpperCase()
         return type.includes('ORDER')
-      })?.id)
-    if (linked) referencedOrderIds.add(linked)
+      })
+      const candidate = safeIdStr(orderIsh?.id)
+      if (candidate && isUuid(candidate)) linked = candidate
+    }
+
+    if (linked && isUuid(linked)) referencedOrderIds.add(linked)
   }
 
-  if (referencedOrderIds.size === 0) return { reconciled: 0, considered: 0, notes }
+  if (referencedOrderIds.size === 0) {
+    if (skippedNonUuid > 0) {
+      notes.push(`Reconcile: skipped ${skippedNonUuid} tx with non-UUID orderIds (Poynt would 400).`)
+    }
+    return { reconciled: 0, considered: 0, notes }
+  }
 
   // Which of those are missing from our DB? One IN query resolves
   // it in a single roundtrip regardless of the transaction count.
@@ -511,12 +550,23 @@ export async function reconcileOrdersFromTransactions(args: {
   // orders first anyway.
   const toFetch = missing.slice(0, cap)
   let reconciled = 0
-  const noteBuf: string[] = []
+  let fetchFailed = 0
+  let ingestFailed = 0
+  const errorSamples: string[] = []
+  const seenErrors = new Set<string>()
 
   for (const orderId of toFetch) {
     const res = await fetchSinglePoyntOrder({ restaurantId, orderId })
     if ('error' in res) {
-      if (noteBuf.length < 3) noteBuf.push(`${orderId.slice(0, 8)}: ${res.error.slice(0, 80)}`)
+      fetchFailed++
+      // Dedupe error samples by first line so 50 identical 400s
+      // collapse to one bullet with a count instead of spamming
+      // the notes list.
+      const key = res.error.slice(0, 40)
+      if (!seenErrors.has(key) && errorSamples.length < 3) {
+        seenErrors.add(key)
+        errorSamples.push(`${orderId.slice(0, 8)}: ${res.error.slice(0, 80)}`)
+      }
       continue
     }
     // Ingest through the shared batch path — it handles
@@ -524,11 +574,28 @@ export async function reconcileOrdersFromTransactions(args: {
     const ing = await ingestPoyntOrders({
       supabase, restaurantId, raw: [res.order],
     })
-    if (ing.ordersInserted > 0) reconciled++
-    else if (ing.error && noteBuf.length < 3) noteBuf.push(`${orderId.slice(0, 8)}: ${ing.error}`)
+    if (ing.ordersInserted > 0) {
+      reconciled++
+    } else if (ing.error) {
+      ingestFailed++
+      const key = ing.error.slice(0, 40)
+      if (!seenErrors.has(key) && errorSamples.length < 3) {
+        seenErrors.add(key)
+        errorSamples.push(`${orderId.slice(0, 8)}: ${ing.error}`)
+      }
+    }
   }
 
-  if (noteBuf.length > 0) notes.push(...noteBuf)
+  if (skippedNonUuid > 0) {
+    notes.push(`Reconcile: skipped ${skippedNonUuid} tx with non-UUID orderIds.`)
+  }
+  if (fetchFailed > 0) {
+    notes.push(`Reconcile: ${fetchFailed}/${toFetch.length} fetches failed (Poynt API errors).`)
+  }
+  if (ingestFailed > 0) {
+    notes.push(`Reconcile: ${ingestFailed} orders fetched OK but ingest rejected.`)
+  }
+  notes.push(...errorSamples)
   console.info('[godaddy/reconcile] pass', {
     referencedInBatch: referencedOrderIds.size,
     missingFromDb: missing.length,

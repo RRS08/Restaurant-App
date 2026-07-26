@@ -1302,6 +1302,24 @@ create unique index if not exists menu_items_external_unique
   on public.menu_items (restaurant_id, external_provider, external_id)
   where external_provider is not null and external_id is not null;
 
+-- Proper unique CONSTRAINT (not just a partial index) so PostgREST's
+-- onConflict can target it. See migration 2026-07-26-menu-items-
+-- external-constraint.sql for the full rationale — partial indexes
+-- can't be used as ON CONFLICT targets, which was silently breaking
+-- every ingestPoyntProducts upsert.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'menu_items_external_unique_constraint'
+      and conrelid = 'public.menu_items'::regclass
+  ) then
+    alter table public.menu_items
+      add constraint menu_items_external_unique_constraint
+      unique (restaurant_id, external_provider, external_id);
+  end if;
+end $$;
+
 -- Imported order dedupe MUST include location_id. Providers can re-use
 -- the same external order id across stores (Square, Toast, Clover all
 -- scope order ids per store). Deduping only on (restaurant, provider,

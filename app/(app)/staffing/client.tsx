@@ -817,6 +817,22 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         }
         onToday={() => setWeekStart(getMonday(new Date()))}
         onSave={() => { router.refresh() }}
+        onSetRoleColor={async (role, colorSlug) => {
+          const fd = new FormData()
+          fd.set('role', role)
+          fd.set('color', colorSlug ?? '')
+          const r = await setRoleColor(fd)
+          router.refresh()
+          return r
+        }}
+        onAddRole={async (name) => {
+          const fd = new FormData()
+          fd.set('area', activeHouse)
+          fd.set('role', name)
+          const r = await addStaffingRole(null, fd)
+          router.refresh()
+          return r
+        }}
       />
 
 

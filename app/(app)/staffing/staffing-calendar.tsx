@@ -141,12 +141,23 @@ export interface StaffingCalendarProps {
   onNextWeek: () => void
   onToday: () => void
   onSave: () => void  // no-op label today; becomes Publish later
+  // Role legend actions — the color slug is one of ROLE_TONES's
+  // keys (see below). Passing null clears the override so the
+  // role falls back to the auto-color regex.
+  onSetRoleColor: (role: string, colorSlug: string | null) => Promise<ActionResult>
+  onAddRole: (name: string) => Promise<ActionResult>
 }
 
 type ActionResult =
   | null
   | void
-  | { error?: string; copied?: number; skipped?: number }
+  | { error?: string; copied?: number; skipped?: number; ok?: true }
+
+// Public list of picker options — one per ROLE_TONES entry.
+const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
+  'purple', 'teal', 'rose', 'slate', 'emerald', 'zinc',
+  'stone', 'red', 'lime', 'violet', 'amber', 'sky', 'gray',
+]
 
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
@@ -154,6 +165,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
+    onSetRoleColor, onAddRole,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -170,6 +182,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [, startTransition] = useTransition()
   const [savedFlash, setSavedFlash] = useState(false)
   const [copyMsg, setCopyMsg] = useState<string | null>(null)
+  // Legend UI state: which role's palette is open, and the inline
+  // "add role" input's visibility + value.
+  const [openRolePicker, setOpenRolePicker] = useState<string | null>(null)
+  const [addingRole, setAddingRole] = useState(false)
+  const [newRoleName, setNewRoleName] = useState('')
 
   // ---- Time axis — dynamic min/max ± 1.5h padding, capped 0–24 --
   const axis = useMemo(() => {
@@ -460,6 +477,15 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   </div>
                 )
               }
+              // Consistent day-row footprint. Every day gets at least
+              // WEEK_DAY_MIN_H so a light day doesn't look cramped
+              // against a stacked one. Rows expand naturally when the
+              // day's shifts exceed that floor.
+              const barH = 22
+              const barGap = 4
+              const contentH = list.length * barH + Math.max(0, list.length - 1) * barGap
+              const WEEK_DAY_MIN_H = 84
+              const dayRowH = Math.max(WEEK_DAY_MIN_H, contentH + 16)
               return (
                 <div
                   key={idx}
@@ -470,26 +496,36 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     display: 'flex',
                     borderBottom: `1px solid ${LINE}`,
                     background: isOver ? '#EFF6FF' : isToday ? '#F7FAFF' : undefined,
+                    minHeight: dayRowH,
                   }}
                 >
                   <div style={{
                     width: 132, flex: '0 0 132px', borderRight: `1px solid ${LINE}`,
-                    padding: '4px 12px',
+                    padding: '10px 12px',
                     borderLeft: isToday ? `3px solid ${SIGNAL}` : undefined,
                     marginLeft: isToday ? -3 : undefined,
                   }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: isToday ? SIGNAL : INK }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: isToday ? SIGNAL : INK }}>
                       {d.toLocaleDateString(dateLocale, { weekday: 'short' })} {d.getDate()}
                     </div>
-                    <div style={{ fontFamily: MONO, fontSize: 9, color: isToday ? SIGNAL : MUTED, whiteSpace: 'nowrap' }}>
+                    <div style={{ fontFamily: MONO, fontSize: 10, color: isToday ? SIGNAL : MUTED, whiteSpace: 'nowrap', marginTop: 2 }}>
+                      {list.length} {list.length === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
+                      <span style={{ color: FAINT, margin: '0 4px' }}>·</span>
                       {fmtH(dayHours).toUpperCase()}
                     </div>
                   </div>
-                  <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '2px 0' }}>
+                  <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '8px 0' }}>
                     {openBand(open, isToday)}
                     {list.map((s, i) => (
-                      <div key={s.id} style={{ position: 'relative', height: 16, marginBottom: i === list.length - 1 ? 0 : 1 }}>
-                        {renderShiftBar(s)}
+                      <div
+                        key={s.id}
+                        style={{
+                          position: 'relative',
+                          height: barH,
+                          marginBottom: i === list.length - 1 ? 0 : barGap,
+                        }}
+                      >
+                        {renderShiftBar(s, barH)}
                       </div>
                     ))}
                   </div>
@@ -497,28 +533,191 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               )
             })}
 
-            {/* Legend */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 14px', background: SURFACE, flexWrap: 'wrap' }}>
-              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>{t('ROLES', 'PUESTOS')}</span>
-              {(() => {
-                const seen = new Set<string>()
-                const roles: string[] = []
-                for (const s of shifts) {
-                  const k = s.role.toLowerCase()
-                  if (seen.has(k)) continue
-                  seen.add(k); roles.push(s.role)
+            {/* Roles legend — clickable chips. Click a role to open
+                a color palette + settings popover; click "+ Add role"
+                to inline-add. Bigger than the prior legend so it
+                doubles as the management surface for role identity. */}
+            {(() => {
+              // Roles in the legend = union of (bench roles + scheduled
+              // roles). Bench roles ensure a newly-added role shows
+              // even before it's scheduled anywhere.
+              const seen = new Set<string>()
+              const roles: string[] = []
+              for (const src of [bench.map((p) => p.role), shifts.map((s) => s.role)]) {
+                for (const r of src) {
+                  const k = r.toLowerCase().trim()
+                  if (!k || seen.has(k)) continue
+                  seen.add(k); roles.push(r)
                 }
-                return roles.map((r) => {
-                  const tone = roleToneFor(r, roleColors)
-                  return (
-                    <span key={r} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#3F3F46' }}>
-                      <span style={{ width: 7, height: 7, borderRadius: 2, background: tone.accent }} />
-                      {r}
+              }
+              return (
+                <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>
+                      {t('ROLES', 'PUESTOS')}
                     </span>
-                  )
-                })
-              })()}
-            </div>
+                    <span style={{ fontSize: 11, color: FAINT }}>
+                      {t('Tap to change color · click + to add', 'Toca para cambiar color · pulsa + para añadir')}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                    {roles.map((r) => {
+                      const tone = roleToneFor(r, roleColors)
+                      const isOpen = openRolePicker?.toLowerCase() === r.toLowerCase()
+                      return (
+                        <div key={r} style={{ position: 'relative' }}>
+                          <button
+                            type="button"
+                            onClick={() => setOpenRolePicker(isOpen ? null : r)}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 8,
+                              border: `1px solid ${isOpen ? INK : LINE}`,
+                              borderRadius: 8, padding: '6px 12px',
+                              background: '#fff', font: 'inherit', fontSize: 12, fontWeight: 500,
+                              color: '#3F3F46', cursor: 'pointer',
+                            }}
+                          >
+                            <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
+                            {r}
+                          </button>
+                          {isOpen && (
+                            <div style={{
+                              position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 40,
+                              background: '#fff', border: `1px solid ${LINE}`, borderRadius: 10,
+                              padding: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.08)',
+                              minWidth: 220,
+                            }}>
+                              <p style={{ margin: 0, fontSize: 11, fontWeight: 600, color: '#3F3F46' }}>
+                                {t('Color for', 'Color para')} {r}
+                              </p>
+                              <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+                                {ROLE_TONE_SLUGS.map((slug) => {
+                                  const swatch = ROLE_TONES[slug]
+                                  const active = roleColors[r.toLowerCase()] === slug
+                                  return (
+                                    <button
+                                      key={slug}
+                                      type="button"
+                                      onClick={() => {
+                                        startTransition(async () => {
+                                          await onSetRoleColor(r, slug)
+                                          setOpenRolePicker(null)
+                                        })
+                                      }}
+                                      title={slug}
+                                      style={{
+                                        width: 22, height: 22, borderRadius: 6,
+                                        background: swatch.accent,
+                                        border: active ? `2px solid ${INK}` : `1px solid ${LINE}`,
+                                        cursor: 'pointer', padding: 0,
+                                      }}
+                                    />
+                                  )
+                                })}
+                              </div>
+                              <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    startTransition(async () => {
+                                      await onSetRoleColor(r, null)
+                                      setOpenRolePicker(null)
+                                    })
+                                  }}
+                                  style={{
+                                    background: 'transparent', border: 0, font: 'inherit',
+                                    fontSize: 11, color: MUTED, cursor: 'pointer', padding: 0,
+                                  }}
+                                >
+                                  {t('Reset to auto', 'Volver a automático')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenRolePicker(null)}
+                                  style={{
+                                    background: 'transparent', border: 0, font: 'inherit',
+                                    fontSize: 11, color: '#3F3F46', cursor: 'pointer', padding: 0,
+                                  }}
+                                >
+                                  {t('Close', 'Cerrar')}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {/* + Add role affordance */}
+                    {addingRole ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          const trimmed = newRoleName.trim()
+                          if (!trimmed) { setAddingRole(false); return }
+                          startTransition(async () => {
+                            const r = await onAddRole(trimmed)
+                            setNewRoleName('')
+                            setAddingRole(false)
+                            // Show inline error if the action returned one
+                            if (r && typeof r === 'object' && 'error' in r && r.error) {
+                              // Fall through — parent-level toast is on caller's roadmap
+                              console.warn('[staffing-calendar] addRole error', r.error)
+                            }
+                          })
+                        }}
+                        style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+                      >
+                        <input
+                          autoFocus
+                          value={newRoleName}
+                          onChange={(e) => setNewRoleName(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Escape') { setAddingRole(false); setNewRoleName('') } }}
+                          placeholder={t('e.g. Cashier', 'p.ej. Cajero')}
+                          style={{
+                            border: `1px solid ${INK}`, borderRadius: 8, padding: '6px 10px',
+                            font: 'inherit', fontSize: 12, minWidth: 160,
+                          }}
+                        />
+                        <button
+                          type="submit"
+                          style={{
+                            border: 0, background: INK, color: PAPER,
+                            borderRadius: 8, padding: '6px 12px',
+                            font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                          }}
+                        >
+                          {t('Add', 'Añadir')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setAddingRole(false); setNewRoleName('') }}
+                          style={{
+                            background: 'transparent', border: 0, font: 'inherit',
+                            fontSize: 11, color: MUTED, cursor: 'pointer',
+                          }}
+                        >
+                          {t('Cancel', 'Cancelar')}
+                        </button>
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setAddingRole(true)}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 12px',
+                          background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
+                          color: MUTED, cursor: 'pointer',
+                        }}
+                      >
+                        + {t('Add role', 'Añadir puesto')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         ) : (
           <>

@@ -1,17 +1,18 @@
 // ----------------------------------------------------------------
-// /auth/callback  — auto-exchange landing for email links.
+// /auth/callback  — auto-exchange landing for email links that
+// still need a session established BEFORE the destination page
+// runs (invite acceptance today; other confirm flows later).
 //
-// Landing target for any Supabase email magic link (password reset
-// today; signup / magic-link signin later). Instead of exchanging
-// the one-time `code` on plain GET — which link scanners like
-// Outlook Safe Links consume via prefetch before the human clicks
-// — we render a tiny "Continuing…" page whose form auto-submits
-// via a client-side island. Real browsers run the JS and hit the
-// exchange action within ~300 ms; scanners that only prefetch
-// (no JS) never trigger it, leaving the token alive.
+// Password reset no longer routes through here — it lands on
+// /reset-password directly and folds the exchange into the
+// form submit, giving a clean "tap email → land on reset form"
+// UX with zero intermediate page.
 //
-// JS-disabled users still see the plain button as a fallback so
-// the flow degrades cleanly.
+// For the remaining consumers (invites), we still need a
+// session live before the destination page's logic runs, so
+// this page renders a tiny "Continuing…" surface and auto-
+// submits via a client island. Link scanners without JS never
+// trigger the exchange; real browsers redirect in ~300 ms.
 // ----------------------------------------------------------------
 
 import { redirect } from 'next/navigation'
@@ -36,29 +37,18 @@ export default async function AuthCallbackPage({ searchParams }: Props) {
   const t = makeT(lang)
   const sp = (await searchParams) ?? {}
 
-  // Supabase can redirect back with an error param when the link
-  // was malformed / expired before we even try to exchange. Bounce
-  // to /forgot-password so the user can start over cleanly.
-  if (sp.error) {
-    redirect('/forgot-password?error=expired')
-  }
+  if (sp.error) redirect('/login?reset=invalid')
 
   const code = (sp.code ?? '').trim()
-  const next = (sp.next ?? '/reset-password').trim()
+  const next = (sp.next ?? '/dashboard').trim()
 
-  // No code = bookmark, stale link, or someone typed /auth/callback
-  // into the URL bar. Send them back to /forgot-password rather
-  // than showing a broken confirm screen.
-  if (!code) {
-    redirect('/forgot-password?error=invalid')
-  }
+  if (!code) redirect('/login?reset=invalid')
 
   const formId = 'auth-callback-form'
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
       <div className="w-full max-w-sm text-center">
-
         <div className="mb-8">
           <Link href="/" className="inline-flex">
             <BrandLockup size="md" variant="solid" />
@@ -67,15 +57,10 @@ export default async function AuthCallbackPage({ searchParams }: Props) {
             {t('Continuing…', 'Continuando…')}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
-            {t('Confirming your reset link.', 'Confirmando tu enlace.')}
+            {t('One moment.', 'Un momento.')}
           </p>
         </div>
 
-        {/* Form is auto-submitted by the AutoSubmit client island
-            on mount. The button below is a fallback for the tiny
-            slice of users who have JS disabled — they see it and
-            can tap it manually. Everyone else sees "Continuing…"
-            for ~300 ms before the redirect. */}
         <form id={formId} action={completeAuthCodeExchange} className="space-y-4">
           <input type="hidden" name="code" value={code} />
           <input type="hidden" name="next" value={next} />

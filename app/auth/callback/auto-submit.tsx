@@ -4,23 +4,22 @@
 // AutoSubmit — invisible client island that submits the callback
 // form as soon as the page mounts in a real browser.
 //
-// Combined with the server-side form on /auth/callback, this
-// eliminates the visible "Continue" click while still keeping
-// scanner-safety: link scanners like Outlook Safe Links don't
-// run JS on prefetch, so useEffect never fires for them and the
-// token stays intact for the real user.
+// Password reset no longer routes through /auth/callback (that
+// flow lands directly on /reset-password and does the code
+// exchange on form submit). The remaining consumer is the
+// invite acceptance flow (see app/actions/team.ts), which still
+// needs a session established before /auth/accept-invite runs.
 //
-// Small window (~300 ms) where the "Continuing…" copy is visible
-// before the redirect. Users on JS-disabled browsers see the
-// fallback button that stays in the form.
+// Link scanners like Outlook Safe Links don't run JS on prefetch,
+// so useEffect never fires for them and the token stays intact
+// for the real user's tap.
 // ----------------------------------------------------------------
 
 import { useEffect, useRef } from 'react'
 
 export default function AutoSubmit({ formId }: { formId: string }) {
-  // A ref-less guard so double-mount in strict mode doesn't submit twice.
-  // The server action redirects anyway, but avoiding a second POST is
-  // cheap insurance against any unexpected re-execution.
+  // Guard against strict-mode double-mount submitting twice; the
+  // server action redirects on success anyway.
   const submitted = useRef(false)
 
   useEffect(() => {

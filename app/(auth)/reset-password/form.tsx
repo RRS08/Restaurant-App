@@ -16,7 +16,7 @@ import { resetPassword } from '@/app/actions/auth'
 import { BrandLockup } from '@/components/brand'
 import { makeT, type Lang } from '@/lib/i18n'
 
-export default function ResetPasswordForm({ lang }: { lang: Lang }) {
+export default function ResetPasswordForm({ lang, code }: { lang: Lang; code: string | null }) {
   const t = makeT(lang)
   const [state, action, pending] = useActionState(resetPassword, null)
 
@@ -38,6 +38,11 @@ export default function ResetPasswordForm({ lang }: { lang: Lang }) {
 
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
           <form action={action} className="space-y-5">
+            {/* Auth code from the email link, passed through to the
+                server action so it can exchange for a session as
+                part of the same submit that sets the new password.
+                Absent when the user got here already signed in. */}
+            {code && <input type="hidden" name="code" value={code} />}
 
             <div>
               <label

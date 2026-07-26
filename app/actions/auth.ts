@@ -167,8 +167,17 @@ export async function requestPasswordReset(
   // Build the absolute URL Supabase will redirect to from the
   // reset email. NEXT_PUBLIC_SITE_URL must be set in production;
   // we fall back to localhost for dev.
+  //
+  // We route STRAIGHT to /reset-password now (was going through
+  // /auth/callback first). That intermediate page was a scanner-
+  // safety hop, but it flashed a "Continuing…" screen on every
+  // reset. The new architecture — no intermediate, code exchange
+  // folded into the reset-password form submit — gives a clean
+  // "tap email → land on reset form" experience with the same
+  // scanner protection: the token isn't consumed until the user
+  // actually types a password and hits Save.
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'
-  const redirectTo = `${siteUrl}/auth/callback?next=/reset-password`
+  const redirectTo = `${siteUrl}/reset-password`
 
   const { error } = await supabase.auth.resetPasswordForEmail(email, {
     redirectTo,
@@ -208,20 +217,19 @@ export async function requestPasswordReset(
 // ----------------------------------------------------------------
 export async function completeAuthCodeExchange(formData: FormData): Promise<void> {
   const code = ((formData.get('code') as string) ?? '').trim()
-  const nextRaw = ((formData.get('next') as string) ?? '/reset-password').trim()
+  const nextRaw = ((formData.get('next') as string) ?? '/dashboard').trim()
   // Only allow app-internal `next` targets so a tampered link
   // can't redirect the freshly-authed user to an external site.
-  const next = nextRaw.startsWith('/') ? nextRaw : '/reset-password'
+  const next = nextRaw.startsWith('/') ? nextRaw : '/dashboard'
 
-  if (!code) redirect('/forgot-password?error=invalid')
+  if (!code) redirect('/login?reset=invalid')
 
   const supabase = await createClient()
   const { error } = await supabase.auth.exchangeCodeForSession(code)
   if (error) {
-    // Same failure modes as before: link already used, expired, or
-    // tampered with. Send them back to /forgot-password so they can
-    // start over cleanly.
-    redirect('/forgot-password?error=expired')
+    // Link already used, expired, or tampered. Bounce them to
+    // /login with a hint so they know to try again.
+    redirect('/login?reset=invalid')
   }
 
   redirect(next)
@@ -247,22 +255,39 @@ export async function resetPassword(
 
   const password = formData.get('password') as string
   const confirm = formData.get('confirm') as string
+  // Reset links now land STRAIGHT on /reset-password with the
+  // Supabase auth code as a query param — the form carries it
+  // through as a hidden input. When present, we exchange for a
+  // session first (which is what the old /auth/callback did),
+  // then run updateUser. When absent, we assume the user is
+  // already signed in (e.g. Settings → change password) and
+  // updateUser runs against the existing session.
+  //
+  // Doing the exchange HERE — on form submit, a user gesture —
+  // means link scanners like Outlook Safe Links can prefetch
+  // /reset-password all they want without consuming the token.
+  // The token is only spent when the human types + submits.
+  const code = ((formData.get('code') as string) ?? '').trim()
 
   if (!password || !confirm) {
     return { error: 'Enter and confirm your new password.' }
   }
-
   if (password.length < 8) {
     return { error: 'Password must be at least 8 characters.' }
   }
-
   if (password !== confirm) {
     return { error: 'The two passwords don’t match.' }
   }
 
-  // Confirm the link actually delivered a session before letting
-  // someone write to auth.users. Otherwise updateUser would error
-  // anyway, but the message would be less friendly.
+  if (code) {
+    const { error: exchangeErr } = await supabase.auth.exchangeCodeForSession(code)
+    if (exchangeErr) {
+      return { error: 'Your reset link expired or was already used. Request a new one.' }
+    }
+  }
+
+  // Confirm we actually have a session — either from the code
+  // exchange above or from a prior signed-in state.
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) {
     return { error: 'Your reset link expired. Request a new one.' }

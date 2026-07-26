@@ -20,7 +20,7 @@ export default async function StaffingPage() {
 
   const { data: config } = await supabase
     .from('staffing_config')
-    .select('restaurant_id, house_model, scheduling_style, foh_roles, boh_roles')
+    .select('restaurant_id, house_model, scheduling_style, foh_roles, boh_roles, role_colors')
     .maybeSingle()
 
   // ----------------------------------------------------------------
@@ -252,6 +252,11 @@ export default async function StaffingPage() {
   const houseModel = config?.house_model === 'unified' ? 'unified' : 'split'
   const schedulingStyle = config?.scheduling_style === 'by_role' ? 'by_role' : 'by_team'
 
+  // Owner-picked color overrides per role (normalized_role_key →
+  // color slug). Empty object if not set. Client's roleTone()
+  // consults this before falling back to the auto-color regex.
+  const roleColors = (config?.role_colors as Record<string, string> | null) ?? {}
+
   return (
     <StaffingClient
       lang={lang}
@@ -260,6 +265,7 @@ export default async function StaffingPage() {
       schedulingStyle={schedulingStyle}
       fohRoles={fohRoles}
       bohRoles={bohRoles}
+      roleColors={roleColors}
       employees={(employees ?? []).map((e) => ({
         id: e.id, name: e.name, role: e.role, primaryLocationId: e.primary_location_id,
       }))}

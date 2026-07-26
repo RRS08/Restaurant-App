@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
 import {
   quickAssignShift,
   createEmployee,
@@ -10,10 +10,12 @@ import {
   updateShift,
   deleteShift,
   addStaffingRole,
+  setRoleColor,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
 } from '@/app/actions/staffing'
+import { normalizeNameKey } from '@/lib/strings/names'
 import { makeT, type Lang } from '@/lib/i18n'
 
 type T = (en: string, es?: string) => string
@@ -44,6 +46,11 @@ interface Props {
   houseModel: 'split' | 'unified'
   schedulingStyle: 'by_role' | 'by_team'
   fohRoles: string[]; bohRoles: string[]
+  /** Owner-picked color overrides per role. Keys are normalized
+   *  role names (lowercase, trimmed), values are color slugs from
+   *  ROLE_COLOR_PALETTE. Consulted by roleTone() before the auto-
+   *  color regex. Empty object when no overrides exist yet. */
+  roleColors: Record<string, string>
 }
 
 function getMonday(d: Date) { const date = new Date(d); const day = date.getDay(); date.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); date.setHours(0,0,0,0); return date }
@@ -150,9 +157,72 @@ const ROLE_MAP: Array<{ test: RegExp; tone: RoleTone }> = [
   // Expo — violet, distinct from server's purple by tone bias.
   { test: /expo|pass/,             tone: { text: 'text-violet-700',  chip: 'bg-violet-50 text-violet-700',   dot: 'bg-violet-500'  } },
 ]
-function roleTone(role: string): RoleTone {
+// Owner-picked palette. Slugs here MUST match the VALID_ROLE_COLORS
+// set in app/actions/staffing.ts — they're the storage form. When
+// changing this list, update both sides.
+const ROLE_COLOR_PALETTE = [
+  'purple', 'teal', 'rose', 'slate', 'emerald',
+  'zinc', 'stone', 'red', 'lime', 'violet',
+  'amber', 'sky', 'gray',
+] as const
+type RoleColorSlug = typeof ROLE_COLOR_PALETTE[number]
+
+const COLOR_TONES: Record<RoleColorSlug, RoleTone> = {
+  purple:  { text: 'text-purple-700',  chip: 'bg-purple-50 text-purple-700',   dot: 'bg-purple-500'  },
+  teal:    { text: 'text-teal-700',    chip: 'bg-teal-50 text-teal-700',       dot: 'bg-teal-500'    },
+  rose:    { text: 'text-rose-700',    chip: 'bg-rose-50 text-rose-700',       dot: 'bg-rose-500'    },
+  slate:   { text: 'text-slate-700',   chip: 'bg-slate-100 text-slate-700',    dot: 'bg-slate-500'   },
+  emerald: { text: 'text-emerald-700', chip: 'bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
+  zinc:    { text: 'text-zinc-800',    chip: 'bg-zinc-100 text-zinc-800',      dot: 'bg-zinc-700'    },
+  stone:   { text: 'text-stone-700',   chip: 'bg-stone-100 text-stone-700',    dot: 'bg-stone-500'   },
+  red:     { text: 'text-red-700',     chip: 'bg-red-50 text-red-700',         dot: 'bg-red-500'     },
+  lime:    { text: 'text-lime-700',    chip: 'bg-lime-50 text-lime-700',       dot: 'bg-lime-500'    },
+  violet:  { text: 'text-violet-700',  chip: 'bg-violet-50 text-violet-700',   dot: 'bg-violet-500'  },
+  amber:   { text: 'text-amber-800',   chip: 'bg-amber-50 text-amber-800',     dot: 'bg-amber-500'   },
+  sky:     { text: 'text-sky-700',     chip: 'bg-sky-50 text-sky-700',         dot: 'bg-sky-500'     },
+  gray:    { text: 'text-gray-600',    chip: 'bg-gray-100 text-gray-700',      dot: 'bg-gray-400'    },
+}
+
+// Human-readable label for each color, for the palette picker.
+const COLOR_LABELS: Record<RoleColorSlug, { en: string; es: string }> = {
+  purple:  { en: 'Purple',  es: 'Morado'  },
+  teal:    { en: 'Teal',    es: 'Turquesa'},
+  rose:    { en: 'Rose',    es: 'Rosa'    },
+  slate:   { en: 'Slate',   es: 'Pizarra' },
+  emerald: { en: 'Emerald', es: 'Esmeralda'},
+  zinc:    { en: 'Charcoal',es: 'Carbón'  },
+  stone:   { en: 'Stone',   es: 'Piedra'  },
+  red:     { en: 'Red',     es: 'Rojo'    },
+  lime:    { en: 'Lime',    es: 'Lima'    },
+  violet:  { en: 'Violet',  es: 'Violeta' },
+  amber:   { en: 'Amber',   es: 'Ámbar'   },
+  sky:     { en: 'Sky',     es: 'Cielo'   },
+  gray:    { en: 'Gray',    es: 'Gris'    },
+}
+
+// Context carries the owner's saved role→color map so any component
+// rendering a role chip can pick up the override without prop-drilling
+// through 5+ layers. Default is empty (regex fallback for everyone).
+const RoleColorsContext = createContext<Record<string, string>>({})
+
+/** Resolve a role's visual tone.
+ *
+ *  Precedence:
+ *    1. Owner override (RoleColorsContext / passed map)
+ *    2. Auto-color regex (ROLE_MAP)
+ *    3. Gray fallback
+ *
+ *  The colorMap param is optional so this stays callable from
+ *  non-React contexts if needed. React components normally read
+ *  the context via useContext(RoleColorsContext) and pass it in. */
+function roleTone(role: string, colorMap?: Record<string, string>): RoleTone {
+  const key = normalizeNameKey(role ?? '')
+  if (!key) return ROLE_GRAY
+  if (colorMap && colorMap[key]) {
+    const t = COLOR_TONES[colorMap[key] as RoleColorSlug]
+    if (t) return t
+  }
   const r = (role ?? '').toLowerCase().trim()
-  if (!r) return ROLE_GRAY
   for (const m of ROLE_MAP) {
     if (m.test.test(r)) return m.tone
   }
@@ -248,7 +318,123 @@ function HoursIndicator({ hours, tier, t }: { hours: number; tier: HoursTier; t:
 }
 
 
-export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles }: Props) {
+// ----------------------------------------------------------------
+// RoleColorPalette — compact strip that lists every role currently
+// configured for the visible house and lets the owner assign a
+// display color to each. Sits above the bench so the manager can
+// eyeball the current mapping and change it without opening any
+// drawer.
+//
+// Each chip shows the role name, a dot in the current color, and
+// opens a small popover with the full palette when clicked. Auto
+// (regex) color falls back to a gray dot with a subtle border so
+// it reads as "no override set."
+// ----------------------------------------------------------------
+function RoleColorPalette({ roles, t }: { roles: string[]; t: T }) {
+  const roleColors = useContext(RoleColorsContext)
+  const [openRole, setOpenRole] = useState<string | null>(null)
+  const [pending, startTransition] = useTransition()
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Click-outside handler — close the open popover whenever the
+  // user taps outside the palette container.
+  useEffect(() => {
+    if (!openRole) return
+    const onDoc = (e: MouseEvent) => {
+      if (!containerRef.current) return
+      if (!containerRef.current.contains(e.target as Node)) setOpenRole(null)
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [openRole])
+
+  if (roles.length === 0) return null
+
+  const pick = (role: string, slug: RoleColorSlug | '') => {
+    const fd = new FormData()
+    fd.set('role', role)
+    fd.set('color', slug)
+    startTransition(async () => {
+      await setRoleColor(fd)
+      setOpenRole(null)
+    })
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2 mb-3 flex items-center gap-3 flex-wrap"
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-gray-500 flex-shrink-0">
+        {t('Role colors', 'Colores de puesto')}
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {roles.map((role) => {
+          const key = normalizeNameKey(role)
+          const currentSlug = roleColors[key] as RoleColorSlug | undefined
+          const tone = roleTone(role, roleColors)
+          const isOpen = openRole === role
+          return (
+            <div key={role} className="relative">
+              <button
+                type="button"
+                onClick={() => setOpenRole(isOpen ? null : role)}
+                disabled={pending}
+                className={`inline-flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium hover:border-gray-300 transition-colors disabled:opacity-60 ${tone.text}`}
+                aria-label={t(`Change color for ${role}`, `Cambiar color para ${role}`)}
+                aria-haspopup="true"
+                aria-expanded={isOpen}
+              >
+                <span className={`w-2 h-2 rounded-full ${tone.dot}`} />
+                {role}
+              </button>
+              {isOpen && (
+                <div
+                  className="absolute z-30 mt-1 left-0 min-w-[220px] rounded-lg border border-gray-200 bg-white shadow-lg p-2"
+                  role="listbox"
+                  aria-label={t(`Colors for ${role}`, `Colores para ${role}`)}
+                >
+                  <div className="grid grid-cols-6 gap-1.5">
+                    {ROLE_COLOR_PALETTE.map((slug) => {
+                      const active = currentSlug === slug
+                      const swatchTone = COLOR_TONES[slug]
+                      return (
+                        <button
+                          key={slug}
+                          type="button"
+                          onClick={() => pick(role, slug)}
+                          disabled={pending}
+                          title={COLOR_LABELS[slug].en}
+                          aria-label={COLOR_LABELS[slug].en}
+                          aria-selected={active}
+                          className={`h-6 w-6 rounded-full flex items-center justify-center transition-transform hover:scale-110 disabled:opacity-60 ${active ? 'ring-2 ring-offset-1 ring-gray-900' : ''}`}
+                        >
+                          <span className={`h-4 w-4 rounded-full ${swatchTone.dot}`} />
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {currentSlug && (
+                    <button
+                      type="button"
+                      onClick={() => pick(role, '')}
+                      disabled={pending}
+                      className="mt-2 w-full text-[10px] font-medium text-gray-500 hover:text-gray-900 py-1 disabled:opacity-60"
+                    >
+                      {t('Reset to auto', 'Restablecer a auto')}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors }: Props) {
   const t = makeT(lang)
   const DAYS = localizedDays(t)
   const isUnified = houseModel === 'unified'
@@ -430,6 +616,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
 
   return (
+    <RoleColorsContext.Provider value={roleColors}>
     <div className="max-w-[1400px]">
 
       {/* ================================================================ */}
@@ -672,7 +859,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                       </p>
                     )}
                     {cellShifts.map((shift) => {
-                      const r = roleTone(shift.role)
+                      const r = roleTone(shift.role, roleColors)
                       return (
                         <button
                           key={shift.id}
@@ -772,7 +959,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
                   className={`min-h-[56px] p-1.5 flex flex-col items-stretch justify-start gap-1 border-l border-gray-100 ${isToday ? tone.columnTint : ''}`}
                 >
                   {cellShifts.map((shift) => {
-                    const r = roleTone(shift.role)
+                    const r = roleTone(shift.role, roleColors)
                     return (
                       <button
                         key={shift.id}
@@ -823,6 +1010,16 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         </div>
 
         <div className="p-5">
+          {/* Role color palette — lets the owner assign display
+              colors to each role in the current house. Shows every
+              configured role for the active view; changes save
+              immediately via setRoleColor server action. Hides
+              entirely if no roles exist yet. */}
+          <RoleColorPalette
+            roles={isUnified ? [...fohRoles, ...bohRoles] : (activeHouse === 'foh' ? fohRoles : bohRoles)}
+            t={t}
+          />
+
           {houseEmployees.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 px-4 py-8 text-center">
               <p className="text-sm font-medium text-gray-700">
@@ -928,6 +1125,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         />
       )}
     </div>
+    </RoleColorsContext.Provider>
   )
 }
 
@@ -942,6 +1140,7 @@ function EditDrawer({ lang, shift, employees, sections: _sections, onClose }: {
   lang: Lang; shift: Shift; employees: Employee[]; sections: Section[]; onClose: () => void
 }) {
   const t = makeT(lang)
+  const roleColors = useContext(RoleColorsContext)
   const [eState, eAction, ePending] = useActionState(updateShift, null)
   const [dState, dAction, dPending] = useActionState(deleteShift, null)
   useAutoCloseOnSuccess(ePending, eState, onClose)
@@ -968,7 +1167,7 @@ function EditDrawer({ lang, shift, employees, sections: _sections, onClose }: {
         <input type="hidden" name="shift_id" value={shift.id} />
         <DrawerBody>
           {(() => {
-            const role = roleTone(shift.role)
+            const role = roleTone(shift.role, roleColors)
             const startMs = new Date(shift.startTime).getTime()
             const endMs = new Date(shift.endTime).getTime()
             const hrs = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
@@ -1111,7 +1310,8 @@ function BenchCard({
   onClick: () => void
 }) {
   const draggingRef = useRef(false)
-  const role = roleTone(employee.role)
+  const roleColors = useContext(RoleColorsContext)
+  const role = roleTone(employee.role, roleColors)
 
   return (
     <div
@@ -1172,6 +1372,7 @@ function EditEmployeeDrawer({ lang, employee, isUnified, house, roles, weekHours
   onClose: () => void
 }) {
   const t = makeT(lang)
+  const roleColors = useContext(RoleColorsContext)
   const [state, action, pending] = useActionState(updateEmployee, null)
   const [archState, archAction, archPending] = useActionState(archiveEmployee, null)
   const [confirmArchive, setConfirmArchive] = useState(false)
@@ -1179,7 +1380,7 @@ function EditEmployeeDrawer({ lang, employee, isUnified, house, roles, weekHours
   useAutoCloseOnSuccess(archPending, archState, onClose)
 
   const eyebrow = isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
-  const role = roleTone(employee.role)
+  const role = roleTone(employee.role, roleColors)
 
   // The role select needs to include the employee's CURRENT role
   // even if it's no longer in the active house's role list (e.g.
@@ -2100,6 +2301,7 @@ function AddCustomShiftDrawer({
   onClose: () => void
 }) {
   const t = makeT(lang)
+  const roleColors = useContext(RoleColorsContext)
   const [state, action, pending] = useActionState(createShift, null)
   useAutoCloseOnSuccess(pending, state, onClose)
 
@@ -2165,7 +2367,7 @@ function AddCustomShiftDrawer({
   // preview card stays in lockstep with the form fields.
   const previewMs = new Date(composedEnd).getTime() - new Date(composedStart).getTime()
   const previewHrs = Number.isFinite(previewMs) && previewMs > 0 ? previewMs / (1000 * 60 * 60) : 0
-  const previewRole = selectedEmployee ? roleTone(selectedEmployee.role) : null
+  const previewRole = selectedEmployee ? roleTone(selectedEmployee.role, roleColors) : null
 
   return (
     <DrawerShell

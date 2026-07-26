@@ -19,6 +19,60 @@ async function requireLocResult(restaurantId: string, locationId: string): Promi
 }
 
 // ----------------------------------------------------------------
+// Set the display color for a role. Stored in staffing_config.role_colors
+// (JSONB map: normalized_role_key → color slug). roleTone() on the client
+// prefers this over the auto-color regex, so a custom role like "cashier"
+// can carry the owner's chosen tone without editing the regex table.
+//
+// Empty / null color clears the override (falls back to regex → gray).
+// Owner-only, same guard as other structure writes.
+// ----------------------------------------------------------------
+const VALID_ROLE_COLORS = new Set([
+  'purple', 'teal', 'rose', 'slate', 'emerald',
+  'zinc', 'stone', 'red', 'lime', 'violet',
+  'amber', 'sky', 'gray',
+])
+
+export async function setRoleColor(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can change role colors.' }
+
+  const rawRole = ((formData.get('role') as string) ?? '').trim()
+  const roleKey = normalizeNameKey(rawRole)
+  if (!roleKey) return { error: 'Role name is required.' }
+
+  const rawColor = ((formData.get('color') as string) ?? '').trim().toLowerCase()
+  // Empty string is the sentinel for "clear override"; anything else must
+  // be in the palette so we don't stash garbage into the JSONB map.
+  if (rawColor && !VALID_ROLE_COLORS.has(rawColor)) {
+    return { error: 'Not a valid color.' }
+  }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('role_colors')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  const current = (config?.role_colors as Record<string, string> | null) ?? {}
+  const next = { ...current }
+  if (rawColor) next[roleKey] = rawColor
+  else delete next[roleKey]
+
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    { restaurant_id: ctx.restaurantId, role_colors: next },
+    { onConflict: 'restaurant_id' },
+  )
+  if (error) return { error: formatError('role color', error) }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
 // Fallback: manager forgot a role during onboarding and wants to
 // add one on the fly for the current house. Appends (dedup) to the
 // staffing_config role array for that area.

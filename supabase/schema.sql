@@ -570,6 +570,10 @@ create table public.staffing_config (
 alter table public.staffing_config add column if not exists foh_roles text[] not null default '{}';
 alter table public.staffing_config add column if not exists boh_roles text[] not null default '{}';
 
+-- Owner-picked color per role, overrides the auto-color regex.
+-- See migration 2026-07-23-role-colors.sql.
+alter table public.staffing_config add column if not exists role_colors jsonb not null default '{}'::jsonb;
+
 
 -- ----------------------------------------------------------------
 -- shifts: planned work blocks on the schedule

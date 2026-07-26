@@ -15,6 +15,7 @@ import {
   deleteShift,
   addStaffingRole,
   setRoleColor,
+  setRoleWage,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
@@ -56,6 +57,10 @@ interface Props {
    *  ROLE_COLOR_PALETTE. Consulted by roleTone() before the auto-
    *  color regex. Empty object when no overrides exist yet. */
   roleColors: Record<string, string>
+  /** Per-role hourly wage. Keys are normalized role names, values
+   *  are dollars/hour. Introduced 2026-07-26; will feed labor-cost
+   *  surfaces once those land. Empty object when no wages set. */
+  roleWages: Record<string, number>
 }
 
 function getMonday(d: Date) { const date = new Date(d); const day = date.getDay(); date.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); date.setHours(0,0,0,0); return date }
@@ -439,7 +444,7 @@ function RoleColorPalette({ roles, t }: { roles: string[]; t: T }) {
   )
 }
 
-export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors }: Props) {
+export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors, roleWages }: Props) {
   const t = makeT(lang)
   const DAYS = localizedDays(t)
   const isUnified = houseModel === 'unified'
@@ -825,6 +830,14 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           router.refresh()
           return r
         }}
+        onSetRoleWage={async (role, wage) => {
+          const fd = new FormData()
+          fd.set('role', role)
+          fd.set('wage', wage === null ? '' : String(wage))
+          const r = await setRoleWage(fd)
+          router.refresh()
+          return r
+        }}
         onAddRole={async (name) => {
           const fd = new FormData()
           fd.set('area', activeHouse)
@@ -833,6 +846,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           router.refresh()
           return r
         }}
+        roleWages={roleWages}
       />
 
 

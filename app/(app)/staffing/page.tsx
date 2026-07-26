@@ -20,7 +20,7 @@ export default async function StaffingPage() {
 
   const { data: config } = await supabase
     .from('staffing_config')
-    .select('restaurant_id, house_model, scheduling_style, foh_roles, boh_roles, role_colors')
+    .select('restaurant_id, house_model, scheduling_style, foh_roles, boh_roles, role_colors, role_wages')
     .maybeSingle()
 
   // ----------------------------------------------------------------
@@ -256,6 +256,10 @@ export default async function StaffingPage() {
   // color slug). Empty object if not set. Client's roleTone()
   // consults this before falling back to the auto-color regex.
   const roleColors = (config?.role_colors as Record<string, string> | null) ?? {}
+  // Per-role hourly wages (normalized_role_key → hourly rate).
+  // Introduced 2026-07-26; empty object if not set. Displayed +
+  // edited in the staffing calendar's roles legend popover.
+  const roleWages = (config?.role_wages as Record<string, number> | null) ?? {}
 
   return (
     <StaffingClient
@@ -266,6 +270,7 @@ export default async function StaffingPage() {
       fohRoles={fohRoles}
       bohRoles={bohRoles}
       roleColors={roleColors}
+      roleWages={roleWages}
       employees={(employees ?? []).map((e) => ({
         id: e.id, name: e.name, role: e.role, primaryLocationId: e.primary_location_id,
       }))}

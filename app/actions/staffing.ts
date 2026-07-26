@@ -73,6 +73,62 @@ export async function setRoleColor(
 }
 
 // ----------------------------------------------------------------
+// setRoleWage — per-role hourly wage. Stored on staffing_config.
+// role_wages as a normalized-key → number map (empty string
+// sentinel clears the entry). Owner-only.
+//
+// Wages moved from per-employee to per-role in 2026-07-26; the
+// old employees.hourly_rate column stays as an override slot
+// once labor-cost surfaces land. This action only mutates the
+// per-role map.
+// ----------------------------------------------------------------
+export async function setRoleWage(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can change role wages.' }
+
+  const rawRole = ((formData.get('role') as string) ?? '').trim()
+  const roleKey = normalizeNameKey(rawRole)
+  if (!roleKey) return { error: 'Role name is required.' }
+
+  const rawWage = ((formData.get('wage') as string) ?? '').trim()
+  // Empty string is the sentinel for "clear override." A supplied
+  // value must be a non-negative finite number; anything else is
+  // a user error we surface rather than store garbage.
+  let parsed: number | null = null
+  if (rawWage !== '') {
+    parsed = parseFloat(rawWage)
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return { error: 'Wage must be 0 or more.' }
+    }
+    // Two decimals of precision is plenty for hourly rates.
+    parsed = Math.round(parsed * 100) / 100
+  }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('role_wages')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  const current = (config?.role_wages as Record<string, number> | null) ?? {}
+  const next = { ...current }
+  if (parsed !== null) next[roleKey] = parsed
+  else delete next[roleKey]
+
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    { restaurant_id: ctx.restaurantId, role_wages: next },
+    { onConflict: 'restaurant_id' },
+  )
+  if (error) return { error: formatError('role wage', error) }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
 // Fallback: manager forgot a role during onboarding and wants to
 // add one on the fly for the current house. Appends (dedup) to the
 // staffing_config role array for that area.

@@ -579,6 +579,12 @@ alter table public.staffing_config add column if not exists boh_roles text[] not
 -- See migration 2026-07-23-role-colors.sql.
 alter table public.staffing_config add column if not exists role_colors jsonb not null default '{}'::jsonb;
 
+-- Per-role hourly wage map. Overrides / precedes per-employee
+-- hourly_rate for the labor-cost surfaces. Normalized-role-key
+-- JSONB, e.g. {"cashier": 17.5, "server": 18.0}. See migration
+-- 2026-07-26-role-wages.sql for the rationale.
+alter table public.staffing_config add column if not exists role_wages jsonb not null default '{}'::jsonb;
+
 
 -- ----------------------------------------------------------------
 -- shifts: planned work blocks on the schedule

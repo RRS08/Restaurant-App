@@ -125,6 +125,9 @@ export interface StaffingCalendarProps {
   bench: CalEmployee[]            // employees already filtered to activeHouse
   weeklyHoursByEmployee: Map<string, number>  // for bench card labels
   roleColors: Record<string, string>          // slug map from staffing_config
+  // Per-role hourly wage (normalized-key → dollars/hour). Displayed
+  // + edited inline in the legend popover; empty for no override.
+  roleWages: Record<string, number>
 
   // Actions — parent wraps server calls + revalidation. Return
   // shape is deliberately wide so the callsite can return any
@@ -145,6 +148,9 @@ export interface StaffingCalendarProps {
   // keys (see below). Passing null clears the override so the
   // role falls back to the auto-color regex.
   onSetRoleColor: (role: string, colorSlug: string | null) => Promise<ActionResult>
+  // Wage setter — number sets, null clears the override. Empty
+  // string in the input == clear (falls back to no wage).
+  onSetRoleWage: (role: string, wage: number | null) => Promise<ActionResult>
   onAddRole: (name: string) => Promise<ActionResult>
 }
 
@@ -161,11 +167,11 @@ const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
 
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
-    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors,
+    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, roleWages,
     onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
-    onSetRoleColor, onAddRole,
+    onSetRoleColor, onSetRoleWage, onAddRole,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -187,6 +193,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [openRolePicker, setOpenRolePicker] = useState<string | null>(null)
   const [addingRole, setAddingRole] = useState(false)
   const [newRoleName, setNewRoleName] = useState('')
+  // Draft wage per role while the popover input is open. Keyed by
+  // normalized role name; cleared when the popover closes so it
+  // re-hydrates from roleWages on next open. Empty string is a
+  // meaningful value (clears the override on save).
+  const [wageDrafts, setWageDrafts] = useState<Record<string, string>>({})
 
   // ---- Time axis — dynamic min/max ± 1.5h padding, capped 0–24 --
   const axis = useMemo(() => {
@@ -564,6 +575,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     {roles.map((r) => {
                       const tone = roleToneFor(r, roleColors)
                       const isOpen = openRolePicker?.toLowerCase() === r.toLowerCase()
+                      const wage = roleWages[r.toLowerCase().trim()]
                       return (
                         <div key={r} style={{ position: 'relative' }}>
                           <button
@@ -579,6 +591,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                           >
                             <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
                             {r}
+                            {wage != null && (
+                              <span style={{ fontFamily: MONO, fontSize: 10, color: MUTED, borderLeft: `1px solid ${LINE}`, paddingLeft: 8 }}>
+                                ${wage.toFixed(2)}/hr
+                              </span>
+                            )}
                           </button>
                           {isOpen && (
                             <div style={{
@@ -615,6 +632,63 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                                   )
                                 })}
                               </div>
+                              {/* Wage (per role, not per person) — Enter to save.
+                                  Empty string clears the override on save. */}
+                              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${LINE_SOFT}` }}>
+                                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#3F3F46', marginBottom: 6 }}>
+                                  {t('Hourly wage', 'Salario por hora')}
+                                </label>
+                                <form
+                                  onSubmit={(e) => {
+                                    e.preventDefault()
+                                    const key = r.toLowerCase().trim()
+                                    const raw = (wageDrafts[key] ?? String(roleWages[key] ?? '')).trim()
+                                    const parsed = raw === '' ? null : Number(raw)
+                                    if (parsed !== null && (!isFinite(parsed) || parsed < 0)) return
+                                    startTransition(async () => {
+                                      await onSetRoleWage(r, parsed)
+                                      setWageDrafts((prev) => {
+                                        const next = { ...prev }; delete next[key]; return next
+                                      })
+                                      setOpenRolePicker(null)
+                                    })
+                                  }}
+                                  style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                                >
+                                  <span style={{ fontFamily: MONO, fontSize: 12, color: MUTED }}>$</span>
+                                  <input
+                                    type="number"
+                                    inputMode="decimal"
+                                    min={0}
+                                    step={0.25}
+                                    value={wageDrafts[r.toLowerCase().trim()] ?? (roleWages[r.toLowerCase().trim()] != null ? String(roleWages[r.toLowerCase().trim()]) : '')}
+                                    onChange={(e) => {
+                                      const key = r.toLowerCase().trim()
+                                      setWageDrafts((prev) => ({ ...prev, [key]: e.target.value }))
+                                    }}
+                                    placeholder="0.00"
+                                    style={{
+                                      flex: 1, border: `1px solid ${LINE}`, borderRadius: 6,
+                                      padding: '4px 8px', font: 'inherit', fontSize: 12, fontFamily: MONO,
+                                      minWidth: 0,
+                                    }}
+                                  />
+                                  <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT, whiteSpace: 'nowrap' }}>/ hr</span>
+                                  <button
+                                    type="submit"
+                                    style={{
+                                      border: 0, background: INK, color: PAPER,
+                                      borderRadius: 6, padding: '4px 10px',
+                                      font: 'inherit', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                                    }}
+                                  >
+                                    {t('Save', 'Guardar')}
+                                  </button>
+                                </form>
+                                <p style={{ margin: '6px 0 0', fontSize: 10, color: FAINT }}>
+                                  {t('Applies to everyone with this role. Leave blank to unset.', 'Se aplica a todos con este puesto. Deja vacío para quitar.')}
+                                </p>
+                              </div>
                               <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                                 <button
                                   type="button"
@@ -633,7 +707,13 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => setOpenRolePicker(null)}
+                                  onClick={() => {
+                                    // Drop any in-flight draft on close.
+                                    setWageDrafts((prev) => {
+                                      const next = { ...prev }; delete next[r.toLowerCase().trim()]; return next
+                                    })
+                                    setOpenRolePicker(null)
+                                  }}
                                   style={{
                                     background: 'transparent', border: 0, font: 'inherit',
                                     fontSize: 11, color: '#3F3F46', cursor: 'pointer', padding: 0,

@@ -120,12 +120,10 @@ export default function Sidebar({
   const displayName = userFullName ?? userEmail
 
   return (
-    // Brand cream (#FAF9F6) matches the marketing site's canvas so
-    // the app shell reads as continuous with the landing surface.
     // h-full lets the sticky wrapper in AppShell own the height —
     // was min-h-screen, which made the aside grow with the page and
     // scroll out of view when main content overflowed.
-    <aside className="w-60 h-full bg-[#FAF9F6] border-r border-hairline flex flex-col">
+    <aside className="w-60 h-full bg-white border-r border-hairline flex flex-col">
 
       {/* Top: product mark + tenant identity */}
       <div className="px-4 py-4 border-b border-hairline flex items-center justify-between gap-2">

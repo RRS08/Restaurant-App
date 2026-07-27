@@ -418,6 +418,143 @@ export async function moveStaffingRole(
 }
 
 // ----------------------------------------------------------------
+// reorderStaffingRoles — persist a manual role order for one house.
+// The client sends the ordered array of role names it wants for the
+// area; we replace the stored list with that exact order.
+//
+// Guardrail: the submitted list must be a permutation of the
+// currently-stored list (same normalized keys, no adds, no drops).
+// Add/drop happens through addStaffingRole / deleteStaffingRole, not
+// through the reorder gesture — silent adds would let a dropped-into
+// bench card sneak a new role in.
+// ----------------------------------------------------------------
+export async function reorderStaffingRoles(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can reorder roles.' }
+
+  const area = formData.get('area') as 'foh' | 'boh'
+  const rawOrder = ((formData.get('order') as string) ?? '').trim()
+  if (area !== 'foh' && area !== 'boh') return { error: 'Invalid house.' }
+  if (!rawOrder) return { error: 'Order is required.' }
+
+  let ordered: string[]
+  try {
+    const parsed = JSON.parse(rawOrder)
+    if (!Array.isArray(parsed) || !parsed.every((r) => typeof r === 'string')) {
+      return { error: 'Order must be a JSON array of role names.' }
+    }
+    ordered = parsed
+  } catch {
+    return { error: 'Order must be JSON.' }
+  }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('foh_roles, boh_roles')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!config) return { error: 'Staffing not configured yet.' }
+
+  const column = area === 'foh' ? 'foh_roles' : 'boh_roles'
+  const current: string[] = (config as unknown as Record<string, string[]>)[column] ?? []
+  const currentKeys = new Set(current.map((r) => normalizeNameKey(r)))
+  const orderedKeys = ordered.map((r) => normalizeNameKey(r))
+
+  // Same-set check — sizes match AND every submitted key exists in
+  // the stored set. Prevents silent adds via reorder, and catches
+  // stale client state that would drop a role.
+  if (orderedKeys.length !== current.length || !orderedKeys.every((k) => currentKeys.has(k))) {
+    return { error: 'Role list changed — refresh and try again.' }
+  }
+
+  // Preserve stored display casing — map each submitted role back
+  // to the current stored form via normalized key.
+  const currentByKey = new Map(current.map((r) => [normalizeNameKey(r), r]))
+  const nextList = orderedKeys.map((k) => currentByKey.get(k)!).filter(Boolean)
+
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    { restaurant_id: ctx.restaurantId, [column]: nextList },
+    { onConflict: 'restaurant_id' },
+  )
+  if (error) return { error: formatError('role reorder', error) }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
+// reorderEmployees — persist a manual bench order.
+//
+// Client sends the ordered array of employee ids; server writes
+// sort_order = 10 * index for each. Gap-of-10 leaves room for
+// later in-between inserts without a full renumber. Anyone not
+// in the submitted list keeps their existing sort_order (a
+// caller only reorders the current-house bench, and other houses'
+// employees shouldn't get disturbed).
+//
+// Guardrails:
+//   • every id must belong to this restaurant
+//   • RLS is authoritative but we filter on restaurant_id anyway
+//     so a tampered request can't touch another restaurant's rows
+// ----------------------------------------------------------------
+export async function reorderEmployees(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner' && ctx.role !== 'manager') {
+    return { error: 'Only the owner or a manager can reorder the bench.' }
+  }
+
+  const rawOrder = ((formData.get('order') as string) ?? '').trim()
+  if (!rawOrder) return { error: 'Order is required.' }
+
+  let orderedIds: string[]
+  try {
+    const parsed = JSON.parse(rawOrder)
+    if (!Array.isArray(parsed) || !parsed.every((r) => typeof r === 'string')) {
+      return { error: 'Order must be a JSON array of employee ids.' }
+    }
+    orderedIds = parsed
+  } catch {
+    return { error: 'Order must be JSON.' }
+  }
+  if (orderedIds.length === 0) return { ok: true }
+
+  // Membership check — every id must belong to this restaurant.
+  const { data: existing } = await ctx.supabase
+    .from('employees')
+    .select('id')
+    .eq('restaurant_id', ctx.restaurantId)
+    .in('id', orderedIds)
+  const existingIds = new Set((existing ?? []).map((r) => r.id))
+  if (existingIds.size !== orderedIds.length) {
+    return { error: 'Some employees were not found. Refresh and try again.' }
+  }
+
+  // Batch update — one .update per row is fine at bench sizes
+  // (single-digit up to low double-digit employees). If this ever
+  // scales past ~50 we'd switch to a single UPSERT with (id,
+  // sort_order) rows.
+  for (let i = 0; i < orderedIds.length; i++) {
+    const { error } = await ctx.supabase
+      .from('employees')
+      .update({ sort_order: (i + 1) * 10 })
+      .eq('id', orderedIds[i])
+      .eq('restaurant_id', ctx.restaurantId)
+    if (error) return { error: formatError('bench reorder', error) }
+  }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
 // Shift sections (a.k.a. shift blocks) — CRUD.
 //
 // Sections are the rows on the schedule board. They drive lane

@@ -173,6 +173,11 @@ export interface StaffingCalendarProps {
   // add-employee drawer, mirrors onOpenAddRole for the roles
   // legend.
   onOpenAddEmployee: () => void
+  // Manual reorder — same drag gesture as scheduling; the drop
+  // target decides intent (day = schedule, bench card = reorder,
+  // role chip = reorder). Parent handles persistence + refresh.
+  onReorderBench: (orderedIds: string[]) => Promise<ActionResult>
+  onReorderRoles: (orderedRoles: string[]) => Promise<ActionResult>
 }
 
 type ActionResult =
@@ -193,6 +198,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
+    onReorderBench, onReorderRoles,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -211,6 +217,15 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [copyMsg, setCopyMsg] = useState<string | null>(null)
   // Role editing moved to a parent-owned drawer — no legend-local
   // state needed anymore.
+
+  // Reorder state — one drag source at a time. `benchDragId` is
+  // the employee id being dragged (nulled on drop / dragend);
+  // `roleDrag` is the role name. Kept in local state (not refs)
+  // so the source card can dim while the drag is in flight.
+  const [benchDragId, setBenchDragId] = useState<string | null>(null)
+  const [benchDropTargetId, setBenchDropTargetId] = useState<string | null>(null)
+  const [roleDrag, setRoleDrag] = useState<string | null>(null)
+  const [roleDropTarget, setRoleDropTarget] = useState<string | null>(null)
 
   // ---- Time axis — dynamic min/max ± 1.5h padding, capped 0–24 --
   const axis = useMemo(() => {
@@ -585,18 +600,74 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     </span>
                     {roles.map((r) => {
                       const tone = roleToneFor(r, roleColors)
+                      const key = r.toLowerCase().trim()
+                      const isDragging = roleDrag?.toLowerCase().trim() === key
+                      const isDropTarget = roleDropTarget?.toLowerCase().trim() === key
+                        && roleDrag !== null
+                        && roleDrag.toLowerCase().trim() !== key
                       return (
                         <button
                           key={r}
                           type="button"
-                          onClick={() => onEditRole(r)}
-                          title={t('Edit role', 'Editar puesto')}
+                          draggable
+                          onDragStart={(e) => {
+                            e.dataTransfer.effectAllowed = 'move'
+                            e.dataTransfer.setData('text/plain', r)
+                            setRoleDrag(r)
+                          }}
+                          onDragEnd={() => { setRoleDrag(null); setRoleDropTarget(null) }}
+                          onDragOver={(e) => {
+                            if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setRoleDropTarget(r)
+                          }}
+                          onDragLeave={(e) => {
+                            if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                            if (roleDropTarget?.toLowerCase().trim() === key) setRoleDropTarget(null)
+                          }}
+                          onDrop={(e) => {
+                            if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
+                            e.preventDefault()
+                            e.stopPropagation()
+                            // Reorder only the CONFIGURED roles list —
+                            // the legend shows configured ∪ bench ∪
+                            // shifts, but sort_order lives on the
+                            // staffing_config array. If either role
+                            // in the swap isn't configured for this
+                            // house, silently no-op (the drawer can
+                            // add it first).
+                            const configured = houseRoles
+                            const fromIdx = configured.findIndex((x) => x.toLowerCase().trim() === roleDrag.toLowerCase().trim())
+                            const toIdx = configured.findIndex((x) => x.toLowerCase().trim() === key)
+                            if (fromIdx < 0 || toIdx < 0) {
+                              setRoleDrag(null); setRoleDropTarget(null)
+                              return
+                            }
+                            const next = [...configured]
+                            const [moved] = next.splice(fromIdx, 1)
+                            next.splice(toIdx, 0, moved)
+                            setRoleDrag(null); setRoleDropTarget(null)
+                            startTransition(() => { onReorderRoles(next) })
+                          }}
+                          onClick={() => {
+                            // A drag-drop that fires within a few px
+                            // of the start location still counts as a
+                            // click. If we're mid-drag (source set),
+                            // skip the click.
+                            if (roleDrag) return
+                            onEditRole(r)
+                          }}
+                          title={t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')}
                           style={{
                             display: 'inline-flex', alignItems: 'center', gap: 8,
-                            border: `1px solid ${LINE}`,
+                            border: `1px solid ${isDropTarget ? INK : LINE}`,
                             borderRadius: 8, padding: '6px 12px',
-                            background: '#fff', font: 'inherit', fontSize: 12, fontWeight: 500,
-                            color: '#3F3F46', cursor: 'pointer',
+                            background: isDropTarget ? '#EFF6FF' : '#fff',
+                            font: 'inherit', fontSize: 12, fontWeight: 500,
+                            color: '#3F3F46', cursor: 'grab',
+                            opacity: isDragging ? 0.4 : 1,
+                            transition: 'background 120ms, border-color 120ms',
                           }}
                         >
                           <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
@@ -790,26 +861,66 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           {benchWithAssigned.map((p) => {
             const tone = roleToneFor(p.role, roleColors)
             const hrs = weeklyHoursByEmployee.get(p.id) ?? 0
+            const isDragging = benchDragId === p.id
+            const isDropTarget = benchDropTargetId === p.id && benchDragId !== null && benchDragId !== p.id
+            const fadedAssigned = p.assigned && view === 'day'
             return (
               <div
                 key={p.id}
                 draggable
                 onDragStart={(e) => {
+                  // Same drag serves two intents: dropped on a day
+                  // = schedule; dropped on another bench card =
+                  // reorder. The drop target decides.
                   e.dataTransfer.effectAllowed = 'move'
                   e.dataTransfer.setData('text/plain', p.id)
                   setDragging(p)
+                  setBenchDragId(p.id)
                 }}
-                onDragEnd={() => { setDragging(null); setDragOverDay(null) }}
+                onDragEnd={() => {
+                  setDragging(null); setDragOverDay(null)
+                  setBenchDragId(null); setBenchDropTargetId(null)
+                }}
+                onDragOver={(e) => {
+                  if (!benchDragId || benchDragId === p.id) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  setBenchDropTargetId(p.id)
+                }}
+                onDragLeave={(e) => {
+                  // Only clear when the cursor actually leaves the
+                  // card (not just when it enters a child element).
+                  if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                  if (benchDropTargetId === p.id) setBenchDropTargetId(null)
+                }}
+                onDrop={(e) => {
+                  if (!benchDragId || benchDragId === p.id) return
+                  e.preventDefault()
+                  e.stopPropagation()
+                  // Compute the new order: remove the dragged id
+                  // and splice it in before the target's index.
+                  const currentIds = benchWithAssigned.map((x) => x.id)
+                  const fromIdx = currentIds.indexOf(benchDragId)
+                  const toIdx = currentIds.indexOf(p.id)
+                  if (fromIdx < 0 || toIdx < 0) return
+                  const next = [...currentIds]
+                  const [moved] = next.splice(fromIdx, 1)
+                  const insertAt = fromIdx < toIdx ? toIdx : toIdx
+                  next.splice(insertAt, 0, moved)
+                  setBenchDragId(null); setBenchDropTargetId(null); setDragging(null)
+                  startTransition(() => { onReorderBench(next) })
+                }}
                 onClick={() => onOpenEmployee(p.id)}
-                title={t('Open employee', 'Abrir empleado')}
+                title={t('Open employee · drag to reorder or schedule', 'Abrir empleado · arrastra para reordenar o programar')}
                 style={{
                   minWidth: 172,
-                  border: `1px solid ${LINE}`,
+                  border: `1px solid ${isDropTarget ? INK : LINE}`,
                   borderLeft: `3px solid ${tone.accent}`,
                   borderRadius: 8, padding: '7px 10px',
-                  background: p.assigned && view === 'day' ? SURFACE : '#fff',
-                  opacity: p.assigned && view === 'day' ? 0.6 : 1,
+                  background: isDropTarget ? '#EFF6FF' : (fadedAssigned ? SURFACE : '#fff'),
+                  opacity: isDragging ? 0.4 : (fadedAssigned ? 0.6 : 1),
                   cursor: 'grab',
+                  transition: 'background 120ms, border-color 120ms',
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>

@@ -126,7 +126,7 @@ export default async function StaffingPage() {
     { data: sectionsData },
     { data: locations },
   ] = await Promise.all([
-    supabase.from('employees').select('id, name, role, primary_location_id, trained_roles, employment, availability').eq('active', true).order('name'),
+    supabase.from('employees').select('id, name, role, primary_location_id, trained_roles, employment, availability, sort_order').eq('active', true).order('sort_order').order('name'),
     supabase.from('shifts').select('id, location_id, employee_id, section_id, role, start_time, end_time, notes, employees ( name )').order('start_time'),
     supabase.from('shift_sections').select('id, name, role, area, default_start_hour, default_end_hour, sort_order').order('sort_order'),
     supabase.from('locations').select('id, name').order('created_at', { ascending: true }),
@@ -283,6 +283,9 @@ export default async function StaffingPage() {
           if (Array.isArray(raw) && raw.length === 7) return raw.map((v) => v !== false)
           return [true, true, true, true, true, true, true]
         })(),
+        // sort_order = 0 means "no manual preference" — the client's
+        // fallback sort (role priority + name) takes over.
+        sortOrder: typeof e.sort_order === 'number' ? e.sort_order : 0,
       }))}
       shifts={(shifts ?? []).map((s) => ({
         id: s.id, locationId: s.location_id, employeeId: s.employee_id,

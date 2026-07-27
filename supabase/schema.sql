@@ -535,6 +535,9 @@ create table public.employees (
   availability        jsonb   not null default '[true,true,true,true,true,true,true]'::jsonb,
   hourly_rate         numeric(10,2),
   active              boolean not null default true,
+  -- Manual bench order. 0 = "no preference" (client falls back
+  -- to role priority + name). reorderEmployees writes 10 * idx.
+  sort_order          integer not null default 0,
   created_at          timestamptz not null default now(),
   constraint employees_employment_check
     check (employment in ('part_time', 'full_time'))

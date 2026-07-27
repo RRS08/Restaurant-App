@@ -18,6 +18,8 @@ import {
   setRoleWage,
   renameStaffingRole,
   deleteStaffingRole,
+  reorderStaffingRoles,
+  reorderEmployees,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
@@ -58,6 +60,9 @@ interface Employee {
   trainedRoles: string[]
   employment: 'part_time' | 'full_time'
   availability: boolean[] // Mon..Sun, length 7 guaranteed by the adapter.
+  // Manual bench order. 0 = no preference; sort falls back to
+  // (role priority, name) when everyone shares that value.
+  sortOrder: number
 }
 interface Section { id: string; name: string; role: string; area: 'foh' | 'boh'; defaultStartHour: number; defaultEndHour: number; sortOrder: number }
 interface Shift {
@@ -517,15 +522,25 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   const houseEmployeesRaw = isUnified
     ? locEmployees
     : locEmployees.filter((e) => activeHouse === 'foh' ? isFohRole(e.role) : !isFohRole(e.role))
-  // Bench display order — by role priority, then by employee name.
-  // No grouped sections; the bench stays one continuous grid but
-  // people of the same role naturally line up next to each other.
+  // Bench display order. Precedence:
+  //   1. sort_order (manual reorder wins when > 0)
+  //   2. role priority (auto-clusters by role)
+  //   3. role name (tie-break same-priority roles)
+  //   4. employee name (final tie-break)
+  // sort_order = 0 for everyone means "no manual preference" and
+  // the auto sort takes over.
   const houseEmployees = [...houseEmployeesRaw].sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) {
+      // Zero sort_order should sink to the bottom of the manual
+      // list — but only when *some* rows have been reordered. If
+      // everyone is 0, fall through to the auto sort.
+      if (a.sortOrder === 0) return 1
+      if (b.sortOrder === 0) return -1
+      return a.sortOrder - b.sortOrder
+    }
     const aIdx = roleSortIndex(a.role, activeHouse)
     const bIdx = roleSortIndex(b.role, activeHouse)
     if (aIdx !== bIdx) return aIdx - bIdx
-    // Tie-break by exact role string so two roles that share an
-    // index (e.g. "Server" and "Head Server") still cluster.
     if (a.role.toLowerCase() !== b.role.toLowerCase()) {
       return a.role.localeCompare(b.role)
     }
@@ -578,6 +593,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     dropHint:    color === 'blue' ? 'text-blue-600'           : 'text-amber-600',
     countChip:   color === 'blue' ? 'bg-blue-50 text-blue-700': 'bg-amber-50 text-amber-700',
   }
+
+  const subtitle = isUnified
+    ? t('Plan the week and track labor coverage.', 'Planifica la semana y monitorea la cobertura de personal.')
+    : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
 
   const houseWeekShifts = weekShifts.filter(
     (s) => houseSections.some((sec) => sec.id === s.sectionId)
@@ -670,12 +689,13 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     <div className="max-w-[1400px]">
 
       {/* ================================================================ */}
-      {/* 1. HEADER BAND — title only. The subtitle line has been retired  */}
-      {/*    on this page; the calendar itself carries the operational     */}
-      {/*    context (week, coverage counts).                              */}
+      {/* 1. HEADER BAND — title + one-line subtitle. Controls live on the  */}
+      {/*    strip below so they read as a unified workflow row instead of  */}
+      {/*    being torn between top-right and a separate house line.       */}
       {/* ================================================================ */}
       <div className="mb-5">
         <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Staffing', 'Personal')}</h1>
+        <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
       </div>
 
       {/* ================================================================ */}
@@ -824,6 +844,21 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           setDrawer({ mode: 'edit-employee', employee: emp, house: empHouse })
         }}
         onOpenAddEmployee={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
+        onReorderBench={async (orderedIds) => {
+          const fd = new FormData()
+          fd.set('order', JSON.stringify(orderedIds))
+          const r = await reorderEmployees(fd)
+          router.refresh()
+          return r
+        }}
+        onReorderRoles={async (orderedRoles) => {
+          const fd = new FormData()
+          fd.set('area', activeHouse)
+          fd.set('order', JSON.stringify(orderedRoles))
+          const r = await reorderStaffingRoles(fd)
+          router.refresh()
+          return r
+        }}
       />
 
 

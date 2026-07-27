@@ -600,9 +600,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       // First tick sits right against the gutter's
                       // right border — nudge it 6px so the label
                       // has some breathing room from the divider.
-                      // Last tick pulls back so it doesn't overflow.
+                      // Last tick pulls back its own width AND an
+                      // extra 6px so it doesn't touch the card's
+                      // right edge either.
                       paddingLeft: i === 0 ? 6 : 0,
-                      transform: i === TICKS.length - 1 ? 'translateX(-100%)' : undefined,
+                      transform: i === TICKS.length - 1 ? 'translateX(calc(-100% - 6px))' : undefined,
                       fontFamily: MONO, fontSize: 9, color: MUTED,
                     }}
                   >

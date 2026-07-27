@@ -18,7 +18,6 @@ import {
   setRoleWage,
   renameStaffingRole,
   deleteStaffingRole,
-  moveStaffingRole,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
@@ -30,6 +29,7 @@ import StaffingCalendar, {
   type CalEmployee,
   ROLE_TONES,
   ROLE_TONE_SLUGS,
+  resolveRoleToneSlug,
 } from './staffing-calendar'
 
 type T = (en: string, es?: string) => string
@@ -912,6 +912,8 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           area={drawer.area}
           isUnified={isUnified}
           employees={employees}
+          hoursByEmployee={hoursByEmployee}
+          allRoles={[...fohRoles, ...bohRoles]}
           roleColors={roleColors}
           roleWages={roleWages}
           onClose={() => setDrawer(null)}
@@ -2311,30 +2313,44 @@ function AddCustomShiftDrawer({
 }
 
 // ----------------------------------------------------------------
-// EditRoleDrawer — the single editor surface for a staffing role.
-// Opened by clicking any chip in the roles legend (edit mode) or
-// the "+ Add role" button (create mode). Replaces the old inline
-// color popover + inline add input.
+// EditRoleDrawer — Claude Design layout. Right-side sheet, inline
+// styles to match the staffing calendar's ink/paper palette. One
+// surface for everything about a role: rename via the title input,
+// pick color (with clash warning when another role already owns
+// the swatch), set hourly wage, review assigned staff, delete with
+// a two-step confirm.
 //
-// Fields:
-//   • Name — required. Renaming propagates to shifts + employees.
-//   • House placement (FOH / BOH) — hidden in unified mode.
-//   • Color — one of ROLE_TONE_SLUGS. Empty = auto (falls back to
-//     regex → gray).
-//   • Hourly wage — per-role, feeds labor cost. Blank clears.
-//   • Assigned staff — read-only list; each row is a link to that
-//     employee's own drawer (parent handles that later; today the
-//     row is a static preview).
+// Data seams:
+//   • ROLE_TONE_SLUGS + ROLE_TONES — the app's palette (drives
+//     both the swatch grid and every roleTone lookup elsewhere).
+//   • resolveRoleToneSlug — used to compute which slug every OTHER
+//     role effectively resolves to (owner override → auto-rule),
+//     so the clash banner fires on real conflicts, not just
+//     explicit picks.
+//   • hoursByEmployee — for the "24h" tag on assigned rows.
+//   • allRoles — union of foh_roles + boh_roles from staffing_config;
+//     needed for clash detection since a role might be color-picked
+//     even before it has any staff.
 //
-// Delete is available in edit mode but blocked server-side when
-// any active employee or upcoming shift still uses the role.
+// Server pipeline (Save):
+//   1. add (create) or rename (edit)   — renameStaffingRole
+//   2. move house (edit + area change) — moveStaffingRole
+//   3. color                           — setRoleColor
+//   4. wage                            — setRoleWage
+// Each step short-circuits on error so we never half-save a role.
+//
+// House picker deliberately removed — the design doesn't include
+// one and 99% of edits stay in-house. The moveStaffingRole action
+// remains available for a future "move to other house" affordance.
 // ----------------------------------------------------------------
-function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, roleWages, onClose }: {
+function EditRoleDrawer({ lang, role, area, isUnified, employees, hoursByEmployee, allRoles, roleColors, roleWages, onClose }: {
   lang: Lang
   role: string | null
   area: 'foh' | 'boh'
   isUnified: boolean
   employees: Employee[]
+  hoursByEmployee: Map<string, number>
+  allRoles: string[]
   roleColors: Record<string, string>
   roleWages: Record<string, number>
   onClose: () => void
@@ -2347,12 +2363,23 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
   const currentWage = originalKey ? (roleWages[originalKey] ?? null) : null
 
   const [name, setName] = useState(role ?? '')
-  const [pickedArea, setPickedArea] = useState<'foh' | 'boh'>(area)
   const [color, setColor] = useState<string>(currentColor)
   const [wage, setWage] = useState<string>(currentWage != null ? String(currentWage) : '')
+  const [gridOpen, setGridOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+
+  // ---- Palette design constants (inline; mirrors staffing-calendar) ----
+  const INK = '#18181B'
+  const PAPER = '#FAF9F6'
+  const LINE = '#E7E6E2'
+  const LINE_SOFT = '#F0EFEB'
+  const MUTED = '#6B6B70'
+  const FAINT = '#A1A1A6'
+  const SURFACE = '#FAFAF9'
+  const DANGER = '#B91C1C'
+  const MONO = "'Geist Mono', ui-monospace, monospace"
 
   // Staff assigned to this role — normalized-key compare so casing
   // doesn't cause a false miss.
@@ -2360,26 +2387,35 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
     if (!isEdit || !originalKey) return []
     return employees.filter((e) => normalizeNameKey(e.role ?? '') === originalKey)
   }, [isEdit, originalKey, employees])
+  const count = assigned.length
 
-  const eyebrow = isUnified
-    ? t('Team', 'Equipo')
-    : (pickedArea === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
-  const title = isEdit
-    ? t(`Edit role`, `Editar puesto`)
-    : t('New role', 'Nuevo puesto')
-  const subtitle = isEdit
-    ? t(`Name, color, wage — all apply to everyone under this role.`, `Nombre, color, salario — se aplican a todos con este puesto.`)
-    : t(`Add a role to ${eyebrow.toLowerCase()}. Fill in the details, then Save.`, `Añade un puesto a ${eyebrow.toLowerCase()}. Completa los detalles y guarda.`)
+  // Clash map: slug → the *other* role that already lands on that
+  // color. Owner overrides + auto-rules both feed in (so picking
+  // 'purple' warns even if 'Server' only landed there via the
+  // auto rule). Excludes the current role from the map.
+  const usedMap = useMemo(() => {
+    const map: Record<string, string> = {}
+    for (const r of allRoles) {
+      const k = normalizeNameKey(r)
+      if (!k || k === originalKey) continue
+      const slug = resolveRoleToneSlug(r, roleColors)
+      if (!(slug in map)) map[slug] = r
+    }
+    return map
+  }, [allRoles, originalKey, roleColors])
 
-  // Single Save handler — batches every mutation in order:
-  //   1. add (create-mode only) or rename (edit-mode + name changed)
-  //   2. move (edit-mode + area changed)
-  //   3. color (always, both create + edit)
-  //   4. wage (always)
-  // Each step short-circuits on error so we never leave the config
-  // half-mutated visible to the user (they see the first failure).
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
+  const activeTone = color ? ROLE_TONES[color] : null
+  const hex = activeTone?.accent ?? null
+  const clash = color ? (usedMap[color] ?? null) : null
+
+  const houseLabel = isUnified
+    ? t('TEAM', 'EQUIPO')
+    : (area === 'foh' ? t('FRONT OF HOUSE', 'SALÓN') : t('BACK OF HOUSE', 'COCINA'))
+  const eyebrowText = `${houseLabel} · ${isEdit ? t('EDIT ROLE', 'EDITAR PUESTO') : t('NEW ROLE', 'NUEVO PUESTO')}`
+
+  // Single Save handler — batches mutations in order. See the
+  // component header for the full pipeline + short-circuit rule.
+  async function handleSave() {
     setBusy(true)
     setErr(null)
     const trimmed = name.trim()
@@ -2387,17 +2423,13 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
     const newKey = normalizeNameKey(trimmed)
 
     try {
-      // Step 1 — create or rename
-      let effectiveRoleName = trimmed
       if (!isEdit) {
         const fd = new FormData()
-        fd.set('area', pickedArea)
+        fd.set('area', area)
         fd.set('role', trimmed)
         const r = await addStaffingRole(null, fd)
         if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
       } else if (originalKey !== newKey || (role ?? '') !== trimmed) {
-        // Rename lives in the ORIGINAL area (the server rejects if
-        // it can't find the role there). Area moves come next.
         const fd = new FormData()
         fd.set('area', area)
         fd.set('oldName', role!)
@@ -2406,29 +2438,17 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
         if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
       }
 
-      // Step 2 — move between houses (edit-mode only)
-      if (isEdit && !isUnified && pickedArea !== area) {
-        const fd = new FormData()
-        fd.set('role', effectiveRoleName)
-        fd.set('from', area)
-        fd.set('to', pickedArea)
-        const r = await moveStaffingRole(fd)
-        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
-      }
-
-      // Step 3 — color. Blank = clear override.
       {
         const fd = new FormData()
-        fd.set('role', effectiveRoleName)
+        fd.set('role', trimmed)
         fd.set('color', color)
         const r = await setRoleColor(fd)
         if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
       }
 
-      // Step 4 — wage. Blank = clear.
       {
         const fd = new FormData()
-        fd.set('role', effectiveRoleName)
+        fd.set('role', trimmed)
         fd.set('wage', wage.trim())
         const r = await setRoleWage(fd)
         if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
@@ -2451,7 +2471,7 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
       fd.set('area', area)
       fd.set('role', role!)
       const r = await deleteStaffingRole(fd)
-      if ('error' in r && r.error) { setErr(r.error); setBusy(false); setConfirmDelete(false); return }
+      if ('error' in r && r.error) { setErr(r.error); setBusy(false); setConfirming(false); return }
       router.refresh()
       onClose()
     } catch (caught) {
@@ -2460,173 +2480,353 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, ro
     }
   }
 
+  const labelStyle: React.CSSProperties = { fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }
+  const eyebrowStyle: React.CSSProperties = { fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT }
+  const helpStyle: React.CSSProperties = { margin: '8px 0 0', fontSize: 12, color: FAINT }
+  const affixStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', padding: '0 12px',
+    background: SURFACE, fontFamily: MONO, fontSize: 13, color: MUTED,
+  }
+  const firstAssignedName = assigned[0]?.name ?? t('Example shift', 'Turno de ejemplo')
+
   return (
-    <DrawerShell
-      eyebrow={eyebrow}
-      title={title}
-      subtitle={subtitle}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
+    <div
+      style={{
+        position: 'fixed', inset: 0, display: 'flex', justifyContent: 'flex-end',
+        zIndex: 50, fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+      }}
+      role="dialog"
+      aria-label={eyebrowText}
     >
-      <form onSubmit={handleSave} className="flex-1 flex flex-col min-h-0">
-        <DrawerBody>
-          <Field label={t('Role name', 'Nombre del puesto')} htmlFor="er-name" t={t}>
-            <input
-              id="er-name"
-              type="text"
-              required
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('e.g. Cashier', 'p.ej. Cajero')}
-              className={fieldInputClass}
-            />
-          </Field>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
 
-          {!isUnified && (
-            <Field label={t('House', 'Casa')} t={t}>
-              <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setPickedArea('foh')}
-                  className={`px-4 py-2 text-xs font-semibold ${pickedArea === 'foh' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                >
-                  {t('Front of House', 'Salón')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPickedArea('boh')}
-                  className={`px-4 py-2 text-xs font-semibold border-l border-gray-200 ${pickedArea === 'boh' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
-                >
-                  {t('Back of House', 'Cocina')}
-                </button>
+      <div
+        style={{
+          position: 'relative',
+          width: 456, maxWidth: '100%', flex: '0 0 456px',
+          height: '100vh', background: '#fff',
+          borderLeft: `1px solid ${LINE}`,
+          boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* header */}
+        <div style={{ padding: '22px 28px 18px', borderBottom: `1px solid ${LINE}` }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+            <div>
+              <div style={eyebrowStyle}>{eyebrowText}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
+                <span style={{
+                  width: 10, height: 10, borderRadius: 3, flex: '0 0 auto',
+                  background: hex ?? FAINT,
+                }} />
+                <input
+                  aria-label={t('Role name', 'Nombre del puesto')}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  autoFocus
+                  placeholder={t('e.g. Cashier', 'p.ej. Cajero')}
+                  style={{
+                    border: '1px solid transparent', borderRadius: 8,
+                    background: 'transparent', padding: '4px 8px', marginLeft: -8,
+                    fontFamily: 'inherit', fontSize: 21, fontWeight: 700,
+                    letterSpacing: '-0.03em', color: INK, width: 260, outline: 'none',
+                  }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = LINE }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = 'transparent' }}
+                />
               </div>
-            </Field>
-          )}
-
-          <Field label={t('Color', 'Color')} t={t} hint={t('Leave unset to pick automatically.', 'Sin selección se elige automático.')}>
-            <div className="flex flex-wrap gap-2">
-              {ROLE_TONE_SLUGS.map((slug) => {
-                const swatch = ROLE_TONES[slug]
-                const active = color === slug
-                return (
-                  <button
-                    key={slug}
-                    type="button"
-                    onClick={() => setColor(active ? '' : slug)}
-                    title={slug}
-                    className="rounded-md transition"
-                    style={{
-                      width: 28, height: 28, borderRadius: 8,
-                      background: swatch.accent,
-                      border: active ? '2px solid #18181B' : '1px solid #E5E7EB',
-                      cursor: 'pointer',
-                    }}
-                  />
-                )
-              })}
-              {color && (
-                <button
-                  type="button"
-                  onClick={() => setColor('')}
-                  className="text-[11px] text-gray-500 hover:text-gray-700 self-center"
-                >
-                  {t('Reset to auto', 'Volver a automático')}
-                </button>
-              )}
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: FAINT }}>
+                {t('Click the name to rename.', 'Toca el nombre para renombrar.')}
+              </p>
             </div>
-          </Field>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('Close', 'Cerrar')}
+              style={{
+                border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+                width: 32, height: 32, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', font: 'inherit', fontSize: 15, color: MUTED,
+                cursor: 'pointer', flex: '0 0 auto',
+              }}
+            >
+              ×
+            </button>
+          </div>
+        </div>
 
-          <Field label={t('Hourly wage', 'Salario por hora')} htmlFor="er-wage" optional t={t}
-            hint={t('Applies to everyone under this role. Individual overrides can come later.', 'Se aplica a todos con este puesto. Ajustes individuales pueden ir después.')}>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
+        {/* body */}
+        <div
+          style={{
+            flex: 1, minHeight: 0, overflowY: 'auto',
+            padding: '22px 28px 28px',
+            display: 'flex', flexDirection: 'column', gap: 24,
+          }}
+        >
+          {/* live preview */}
+          <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, background: SURFACE, padding: '10px 12px' }}>
+            <div style={{ ...eyebrowStyle, marginBottom: 7 }}>{t('ON THE CALENDAR', 'EN EL CALENDARIO')}</div>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 10, height: 34,
+              borderRadius: 7, padding: '0 10px', overflow: 'hidden',
+              background: hex ? `${hex}1A` : '#F4F4F5',
+              border: `1px solid ${hex ? `${hex}33` : LINE}`,
+              borderLeft: `4px solid ${hex ?? FAINT}`,
+            }}>
+              <span style={{ fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{firstAssignedName}</span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: '#71717A', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                12:00p–8:00p · 8h
+              </span>
+            </div>
+          </div>
+
+          {/* color */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 9 }}>
+              <label style={labelStyle}>{t('Color', 'Color')}</label>
+              <button
+                type="button"
+                onClick={() => setColor('')}
+                style={{
+                  border: 0, background: 'transparent', padding: 0, font: 'inherit',
+                  fontSize: 12, color: MUTED, cursor: 'pointer',
+                  textDecoration: 'underline', textUnderlineOffset: 3,
+                }}
+              >
+                {t('Reset to auto', 'Volver a automático')}
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setGridOpen((v) => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                border: `1px solid ${LINE}`, background: '#fff',
+                borderRadius: 9, padding: '8px 12px',
+                font: 'inherit', cursor: 'pointer', width: '100%', textAlign: 'left',
+              }}
+            >
+              <span style={{
+                width: 20, height: 20, borderRadius: 6, flex: '0 0 auto',
+                border: '1px solid rgba(24,24,27,0.10)',
+                background: hex ?? 'repeating-linear-gradient(45deg,#E7E6E2,#E7E6E2 4px,#fff 4px,#fff 8px)',
+              }} />
+              <span style={{ fontSize: 14, color: INK, textTransform: 'capitalize' }}>
+                {color ? color : t('Auto', 'Automático')}
+              </span>
+              <span style={{ marginLeft: 'auto', fontSize: 12, color: MUTED }}>
+                {gridOpen ? t('Close', 'Cerrar') : t('Change', 'Cambiar')}
+              </span>
+            </button>
+
+            {gridOpen && (
+              <div style={{ marginTop: 10, border: `1px solid ${LINE}`, borderRadius: 10, padding: 12, background: SURFACE }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 8 }}>
+                  {ROLE_TONE_SLUGS.map((slug) => {
+                    const swatch = ROLE_TONES[slug]
+                    const taken = usedMap[slug]
+                    const active = slug === color
+                    return (
+                      <button
+                        key={slug}
+                        type="button"
+                        title={taken ? `${slug} — ${t('in use by', 'usado por')} ${taken}` : slug}
+                        aria-label={taken ? `${slug} — ${t('in use by', 'usado por')} ${taken}` : slug}
+                        onClick={() => { setColor(slug); setGridOpen(false) }}
+                        style={{
+                          height: 30, borderRadius: 8, background: swatch.accent,
+                          cursor: 'pointer', padding: 0,
+                          border: active ? '2px solid #fff' : '1px solid rgba(24,24,27,0.10)',
+                          boxShadow: active ? `0 0 0 2px ${INK}` : undefined,
+                          opacity: !active && taken ? 0.45 : 1,
+                        }}
+                      />
+                    )
+                  })}
+                </div>
+                <p style={{ margin: '10px 0 0', fontSize: 11, color: FAINT }}>
+                  {t('Dimmed colors are already assigned to another role.', 'Los colores atenuados ya están asignados a otro puesto.')}
+                </p>
+              </div>
+            )}
+
+            {clash && (
+              <div style={{
+                marginTop: 10, display: 'flex', alignItems: 'flex-start', gap: 9,
+                border: '1px solid #FDE68A', background: '#FFFBEB',
+                borderRadius: 9, padding: '9px 11px',
+              }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#D97706', marginTop: 5, flex: '0 0 auto' }} />
+                <span style={{ fontSize: 12, lineHeight: 1.5, color: '#B45309' }}>
+                  {t('Also used by', 'También usado por')} {clash} — {t('two roles sharing a color makes the calendar harder to read.', 'dos puestos con el mismo color dificultan la lectura del calendario.')}
+                </span>
+              </div>
+            )}
+
+            <p style={{ margin: '10px 0 0', fontSize: 12, color: FAINT }}>
+              {color
+                ? `${color} · ${t('used on every shift block for this role.', 'usado en cada bloque de turno para este puesto.')}`
+                : t('Left unset — Checked picks a color automatically.', 'Sin selección — Checked elige un color automáticamente.')}
+            </p>
+          </div>
+
+          {/* wage */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 7 }}>
+              <label style={labelStyle}>{t('Hourly wage', 'Salario por hora')}</label>
+              <span style={{ fontSize: 12, color: FAINT }}>{t('Optional', 'Opcional')}</span>
+            </div>
+            <div style={{
+              display: 'flex', alignItems: 'stretch',
+              border: `1px solid ${LINE}`, borderRadius: 9, overflow: 'hidden', background: '#fff',
+            }}>
+              <span style={{ ...affixStyle, borderRight: `1px solid ${LINE}` }}>$</span>
               <input
-                id="er-wage"
-                type="number"
-                min="0"
-                step="0.25"
-                inputMode="decimal"
                 value={wage}
                 onChange={(e) => setWage(e.target.value)}
+                inputMode="decimal"
                 placeholder="0.00"
-                className={`${fieldInputClass} pl-7`}
+                style={{
+                  flex: 1, minWidth: 0, border: 0, padding: '10px 12px',
+                  fontFamily: MONO, fontSize: 14, color: INK, background: '#fff', outline: 'none',
+                }}
               />
+              <span style={{ ...affixStyle, borderLeft: `1px solid ${LINE}`, fontSize: 11, letterSpacing: '0.1em', color: FAINT }}>
+                / HR
+              </span>
             </div>
-          </Field>
+            <p style={{ ...helpStyle, lineHeight: 1.5 }}>
+              {t('Applies to everyone under this role. Individual overrides come later.', 'Se aplica a todos con este puesto. Ajustes individuales pueden ir después.')}
+            </p>
+          </div>
 
+          {/* assigned */}
           {isEdit && (
             <div>
-              <SectionLabel>{t('Assigned to this role', 'Asignados a este puesto')}</SectionLabel>
-              {assigned.length === 0 ? (
-                <p className="text-xs text-gray-500">
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 9 }}>
+                <span style={{ ...eyebrowStyle, color: MUTED }}>{t('ASSIGNED', 'ASIGNADOS')}</span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>
+                  {count} {count === 1 ? t('PERSON', 'PERSONA') : t('PEOPLE', 'PERSONAS')}
+                </span>
+              </div>
+              {count === 0 ? (
+                <p style={{ fontSize: 12, color: FAINT, margin: 0 }}>
                   {t('No one is currently assigned. This role will be selectable when adding an employee.', 'Nadie está asignado actualmente. Este puesto se podrá elegir al añadir un empleado.')}
                 </p>
               ) : (
-                <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
-                  {assigned.map((e) => (
-                    <li key={e.id} className="flex items-center justify-between px-3 py-2 bg-white">
-                      <span className="text-sm text-gray-900">{e.name}</span>
-                      <span className="text-[11px] text-gray-400">{e.role}</span>
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+                    {assigned.map((p, i) => {
+                      const hrs = hoursByEmployee.get(p.id) ?? 0
+                      return (
+                        <div
+                          key={p.id}
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 11,
+                            padding: '10px 12px',
+                            borderBottom: i === count - 1 ? undefined : `1px solid ${LINE_SOFT}`,
+                          }}
+                        >
+                          <span style={{ width: 8, height: 8, borderRadius: '50%', flex: '0 0 auto', background: hex ?? FAINT }} />
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{p.name}</div>
+                            <div style={{ fontSize: 11, color: FAINT }}>{p.role}</div>
+                          </div>
+                          <span style={{ fontFamily: MONO, fontSize: 11, color: '#71717A' }}>
+                            {hrs % 1 ? hrs.toFixed(1) : String(hrs)}h
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p style={{ margin: '9px 0 0', fontSize: 12, color: FAINT }}>
+                    {t('Changing the color here updates', 'Cambiar el color aquí actualiza')}{' '}
+                    {count === 1 ? t('them', 'a esa persona') : t('all of them', 'a todos ellos')}{' '}
+                    {t('across the schedule.', 'en todo el calendario.')}
+                  </p>
+                </>
               )}
             </div>
           )}
 
           {err && (
-            <p className="text-xs text-red-600">{err}</p>
+            <p style={{ margin: 0, fontSize: 12, color: DANGER }}>{err}</p>
           )}
-        </DrawerBody>
+        </div>
 
-        <DrawerFooter>
-          <div className="flex flex-col gap-2">
-            <button
-              type="submit"
-              disabled={busy}
-              className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {busy ? t('Saving…', 'Guardando…') : isEdit ? t('Save changes', 'Guardar cambios') : t('Add role', 'Añadir puesto')}
-            </button>
-
-            {isEdit && (
-              confirmDelete ? (
-                <div className="flex items-center gap-2 pt-1">
-                  <span className="flex-1 text-[11px] text-red-700">
-                    {assigned.length > 0
-                      ? t('Reassign the staff above first.', 'Reasigna primero al personal de arriba.')
-                      : t('Delete this role?', '¿Eliminar este puesto?')}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDelete(false)}
-                    className="h-8 rounded-md border border-gray-200 px-3 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
-                  >
-                    {t('Cancel', 'Cancelar')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDelete}
-                    disabled={busy || assigned.length > 0}
-                    className="h-8 rounded-md bg-red-600 px-3 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {busy ? t('Deleting…', 'Eliminando…') : t('Delete', 'Eliminar')}
-                  </button>
-                </div>
-              ) : (
+        {/* footer */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, padding: '16px 28px',
+          display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+        }}>
+          {confirming ? (
+            <>
+              <span style={{ marginRight: 'auto', fontSize: 12, lineHeight: 1.4, color: DANGER, maxWidth: 210 }}>
+                {t('Delete', 'Eliminar')} {name}? {count} {count === 1
+                  ? t('person loses their role.', 'persona pierde su puesto.')
+                  : t('people lose their role.', 'personas pierden su puesto.')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                style={{
+                  border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9,
+                  padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 500,
+                  color: '#3F3F46', cursor: 'pointer',
+                }}
+              >
+                {t('Keep role', 'Conservar')}
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={busy}
+                style={{
+                  border: 0, background: DANGER, color: '#fff', borderRadius: 9,
+                  padding: '11px 18px', font: 'inherit', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? t('Deleting…', 'Eliminando…') : t('Delete', 'Eliminar')}
+              </button>
+            </>
+          ) : (
+            <>
+              {isEdit ? (
                 <button
                   type="button"
-                  onClick={() => setConfirmDelete(true)}
-                  className="text-[11px] text-red-600 hover:text-red-700 self-start"
+                  onClick={() => setConfirming(true)}
+                  style={{
+                    marginRight: 'auto', border: 0, background: 'transparent',
+                    padding: '8px 0', font: 'inherit', fontSize: 13, fontWeight: 500,
+                    color: DANGER, cursor: 'pointer',
+                  }}
                 >
                   {t('Delete role', 'Eliminar puesto')}
                 </button>
-              )
-            )}
-          </div>
-        </DrawerFooter>
-      </form>
-    </DrawerShell>
+              ) : (
+                <span style={{ marginRight: 'auto' }} />
+              )}
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={busy}
+                style={{
+                  border: 0, background: INK, color: PAPER, borderRadius: 9,
+                  padding: '11px 22px', font: 'inherit', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy
+                  ? t('Saving…', 'Guardando…')
+                  : isEdit ? t('Save changes', 'Guardar cambios') : t('Add role', 'Añadir puesto')}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }

@@ -79,15 +79,24 @@ const ROLE_AUTO_RULES: Array<{ test: RegExp; tone: keyof typeof ROLE_TONES }> = 
   { test: /expo|pass/,             tone: 'violet'  },
 ]
 function roleToneFor(role: string, overrides: Record<string, string>): Tone {
+  const slug = resolveRoleToneSlug(role, overrides)
+  return ROLE_TONES[slug] ?? ROLE_GRAY
+}
+
+// resolveRoleToneSlug — the tone selection logic, exposed as a
+// slug (not a Tone) so the role-editor drawer can build a
+// "which color does every OTHER role effectively use" map for
+// the clash warning. Owner overrides win → auto-rule match →
+// 'gray' fallback.
+export function resolveRoleToneSlug(role: string, overrides: Record<string, string>): string {
   const r = (role ?? '').toLowerCase().trim()
-  if (!r) return ROLE_GRAY
-  const key = r
-  const overrideSlug = overrides[key]
-  if (overrideSlug && ROLE_TONES[overrideSlug]) return ROLE_TONES[overrideSlug]
+  if (!r) return 'gray'
+  const overrideSlug = overrides[r]
+  if (overrideSlug && ROLE_TONES[overrideSlug]) return overrideSlug
   for (const rule of ROLE_AUTO_RULES) {
-    if (rule.test.test(r)) return ROLE_TONES[rule.tone]
+    if (rule.test.test(r)) return rule.tone as string
   }
-  return ROLE_GRAY
+  return 'gray'
 }
 
 // ---- Time helpers ----------------------------------------------

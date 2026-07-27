@@ -816,18 +816,34 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               )}
 
               {(dayHours[dayIndex]?.closed ?? true) ? (
-                // Closed-day panel — dashed border, muted copy.
-                // Nothing to schedule; the manager needs to open
-                // this day via the Week view's hours drawer first.
-                <div style={{
-                  border: `1px dashed ${LINE}`, borderRadius: 10,
-                  padding: 28, textAlign: 'center', background: SURFACE,
-                }}>
+                // Closed-day panel — tappable to open the hours
+                // drawer for this day, matching the Week view's
+                // day-cell gesture. No more "go to Week view first"
+                // detour: click here and set hours in place.
+                <button
+                  type="button"
+                  onClick={() => onEditDayHours(dayIndex)}
+                  style={{
+                    width: '100%',
+                    border: `1px dashed ${LINE}`, borderRadius: 10,
+                    padding: 28, textAlign: 'center', background: SURFACE,
+                    font: 'inherit', cursor: 'pointer',
+                    transition: 'background 120ms, border-color 120ms',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#F4F4F2'
+                    e.currentTarget.style.borderColor = '#D6D5D1'
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = SURFACE
+                    e.currentTarget.style.borderColor = LINE
+                  }}
+                >
                   <div style={{ fontSize: 13, fontWeight: 600, color: MUTED }}>{t('Closed', 'Cerrado')}</div>
                   <div style={{ fontSize: 12, color: FAINT, marginTop: 2 }}>
-                    {t('No trading hours — nothing to staff. Open this day from Week view.', 'Sin horas de servicio — nada que programar. Abre este día desde la vista Semana.')}
+                    {t('No trading hours yet — tap to set opening hours.', 'Sin horas de servicio aún — toca para definir el horario.')}
                   </div>
-                </div>
+                </button>
               ) : (
                 <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
                   {/* Ruler */}

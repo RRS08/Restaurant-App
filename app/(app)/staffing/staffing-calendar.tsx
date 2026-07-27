@@ -604,9 +604,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     style={{
                       width: 132, flex: '0 0 132px',
                       borderRight: `1px solid ${LINE}`,
-                      borderTop: 0, borderBottom: 0,
-                      borderLeft: isToday ? `3px solid ${SIGNAL}` : 'none',
-                      marginLeft: isToday ? -3 : 0,
+                      borderTop: 0, borderBottom: 0, borderLeft: 0,
+                      // Today marker paints as an inset shadow on
+                      // the left — no layout impact so the cell's
+                      // content sits at exactly the same X as every
+                      // other day.
+                      boxShadow: isToday ? `inset 3px 0 0 ${SIGNAL}` : 'none',
                       background: 'transparent',
                       color: hoursForDay.closed ? FAINT : INK,
                       padding: '10px 12px',

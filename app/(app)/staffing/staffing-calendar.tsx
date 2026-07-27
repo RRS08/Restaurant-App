@@ -793,139 +793,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               )
             })}
 
-            {/* Roles legend — clickable chips. Click a role to open
-                a color palette + settings popover; click "+ Add role"
-                to inline-add. Bigger than the prior legend so it
-                doubles as the management surface for role identity. */}
-            {(() => {
-              // Roles in the legend = union of (configured house roles
-              // + bench roles + scheduled roles). houseRoles comes
-              // first so configured-but-unassigned roles are visible
-              // (previously they hid until someone was tagged, which
-              // let phantom onboarding-seed roles like "Barista" lurk
-              // in the DB with no way to see or delete them).
-              const seen = new Set<string>()
-              const roles: string[] = []
-              for (const src of [houseRoles, bench.map((p) => p.role), shifts.map((s) => s.role)]) {
-                for (const r of src) {
-                  const k = r.toLowerCase().trim()
-                  if (!k || seen.has(k)) continue
-                  seen.add(k); roles.push(r)
-                }
-              }
-              return (
-                <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
-                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
-                      {t('ROLES', 'PUESTOS')}
-                    </span>
-                    {roles.map((r) => {
-                      const tone = roleToneFor(r, roleColors)
-                      const key = r.toLowerCase().trim()
-                      const isDragging = roleDrag?.toLowerCase().trim() === key
-                      const isDropTarget = roleDropTarget?.toLowerCase().trim() === key
-                        && roleDrag !== null
-                        && roleDrag.toLowerCase().trim() !== key
-                      return (
-                        <button
-                          key={r}
-                          type="button"
-                          draggable
-                          onDragStart={(e) => {
-                            e.dataTransfer.effectAllowed = 'move'
-                            e.dataTransfer.setData('text/plain', r)
-                            setRoleDrag(r)
-                          }}
-                          onDragEnd={() => { setRoleDrag(null); setRoleDropTarget(null) }}
-                          onDragOver={(e) => {
-                            if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
-                            e.preventDefault()
-                            e.stopPropagation()
-                            setRoleDropTarget(r)
-                          }}
-                          onDragLeave={(e) => {
-                            if (e.currentTarget.contains(e.relatedTarget as Node)) return
-                            if (roleDropTarget?.toLowerCase().trim() === key) setRoleDropTarget(null)
-                          }}
-                          onDrop={(e) => {
-                            if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
-                            e.preventDefault()
-                            e.stopPropagation()
-                            // Reorder only the CONFIGURED roles list —
-                            // the legend shows configured ∪ bench ∪
-                            // shifts, but sort_order lives on the
-                            // staffing_config array. If either role
-                            // in the swap isn't configured for this
-                            // house, silently no-op (the drawer can
-                            // add it first).
-                            const configured = houseRoles
-                            const fromIdx = configured.findIndex((x) => x.toLowerCase().trim() === roleDrag.toLowerCase().trim())
-                            const toIdx = configured.findIndex((x) => x.toLowerCase().trim() === key)
-                            if (fromIdx < 0 || toIdx < 0) {
-                              setRoleDrag(null); setRoleDropTarget(null)
-                              return
-                            }
-                            const next = [...configured]
-                            const [moved] = next.splice(fromIdx, 1)
-                            next.splice(toIdx, 0, moved)
-                            setRoleDrag(null); setRoleDropTarget(null)
-                            startTransition(() => { onReorderRoles(next) })
-                          }}
-                          onClick={() => {
-                            // A drag-drop that fires within a few px
-                            // of the start location still counts as a
-                            // click. If we're mid-drag (source set),
-                            // skip the click.
-                            if (roleDrag) return
-                            onEditRole(r)
-                          }}
-                          title={t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: 8,
-                            border: `1px solid ${isDropTarget ? INK : LINE}`,
-                            borderRadius: 8, padding: '6px 12px',
-                            background: isDropTarget ? '#EFF6FF' : '#fff',
-                            font: 'inherit', fontSize: 12, fontWeight: 500,
-                            color: '#3F3F46', cursor: 'grab',
-                            opacity: isDragging ? 0.4 : 1,
-                            transition: 'background 120ms, border-color 120ms',
-                          }}
-                        >
-                          <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
-                          {r}
-                        </button>
-                      )
-                    })}
-
-                    <button
-                      type="button"
-                      onClick={onOpenAddRole}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6,
-                        border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 12px',
-                        background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
-                        color: MUTED, cursor: 'pointer',
-                      }}
-                    >
-                      + {t('Add role', 'Añadir puesto')}
-                    </button>
-                    {/* Shading legend — sits on the right side of the
-                        roles row so a first-time viewer can decode
-                        the solid vs. dashed bands on each day. */}
-                    <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
-                        <span style={{ width: 16, height: 10, borderRadius: 2, background: '#F4F4F2', border: '1px solid #D6D5D1' }} />
-                        {t('Open', 'Abierto')}
-                      </span>
-                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
-                        <span style={{ width: 16, height: 10, borderRadius: 2, background: '#FCFCFB', border: `1px dashed ${LINE}` }} />
-                        {t('Setup & close-down', 'Preparación y cierre')}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-              )
-            })()}
+            {/* Roles legend was here — extracted below the ternary
+                so both Day and Week render it in the same spot. */}
           </div>
         ) : (
           <>
@@ -1134,6 +1003,121 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
             </div>
           </>
         )}
+
+        {/* Roles legend — shared across Day + Week views. Clickable
+            chips; drag to reorder; "+ Add role" opens the drawer.
+            Kept inside the calendar card so it sits between the
+            timeline and the bench regardless of which view is
+            active. */}
+        {(() => {
+          const seen = new Set<string>()
+          const roles: string[] = []
+          for (const src of [houseRoles, bench.map((p) => p.role), shifts.map((s) => s.role)]) {
+            for (const r of src) {
+              const k = r.toLowerCase().trim()
+              if (!k || seen.has(k)) continue
+              seen.add(k); roles.push(r)
+            }
+          }
+          return (
+            <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
+                  {t('ROLES', 'PUESTOS')}
+                </span>
+                {roles.map((r) => {
+                  const tone = roleToneFor(r, roleColors)
+                  const key = r.toLowerCase().trim()
+                  const isDragging = roleDrag?.toLowerCase().trim() === key
+                  const isDropTarget = roleDropTarget?.toLowerCase().trim() === key
+                    && roleDrag !== null
+                    && roleDrag.toLowerCase().trim() !== key
+                  return (
+                    <button
+                      key={r}
+                      type="button"
+                      draggable
+                      onDragStart={(e) => {
+                        e.dataTransfer.effectAllowed = 'move'
+                        e.dataTransfer.setData('text/plain', r)
+                        setRoleDrag(r)
+                      }}
+                      onDragEnd={() => { setRoleDrag(null); setRoleDropTarget(null) }}
+                      onDragOver={(e) => {
+                        if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        setRoleDropTarget(r)
+                      }}
+                      onDragLeave={(e) => {
+                        if (e.currentTarget.contains(e.relatedTarget as Node)) return
+                        if (roleDropTarget?.toLowerCase().trim() === key) setRoleDropTarget(null)
+                      }}
+                      onDrop={(e) => {
+                        if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        const configured = houseRoles
+                        const fromIdx = configured.findIndex((x) => x.toLowerCase().trim() === roleDrag.toLowerCase().trim())
+                        const toIdx = configured.findIndex((x) => x.toLowerCase().trim() === key)
+                        if (fromIdx < 0 || toIdx < 0) {
+                          setRoleDrag(null); setRoleDropTarget(null)
+                          return
+                        }
+                        const next = [...configured]
+                        const [moved] = next.splice(fromIdx, 1)
+                        next.splice(toIdx, 0, moved)
+                        setRoleDrag(null); setRoleDropTarget(null)
+                        startTransition(() => { onReorderRoles(next) })
+                      }}
+                      onClick={() => {
+                        if (roleDrag) return
+                        onEditRole(r)
+                      }}
+                      title={t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: 8,
+                        border: `1px solid ${isDropTarget ? INK : LINE}`,
+                        borderRadius: 8, padding: '6px 12px',
+                        background: isDropTarget ? '#EFF6FF' : '#fff',
+                        font: 'inherit', fontSize: 12, fontWeight: 500,
+                        color: '#3F3F46', cursor: 'grab',
+                        opacity: isDragging ? 0.4 : 1,
+                        transition: 'background 120ms, border-color 120ms',
+                      }}
+                    >
+                      <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
+                      {r}
+                    </button>
+                  )
+                })}
+
+                <button
+                  type="button"
+                  onClick={onOpenAddRole}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 12px',
+                    background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
+                    color: MUTED, cursor: 'pointer',
+                  }}
+                >
+                  + {t('Add role', 'Añadir puesto')}
+                </button>
+                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
+                    <span style={{ width: 16, height: 10, borderRadius: 2, background: '#F4F4F2', border: '1px solid #D6D5D1' }} />
+                    {t('Open', 'Abierto')}
+                  </span>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
+                    <span style={{ width: 16, height: 10, borderRadius: 2, background: '#FCFCFB', border: `1px dashed ${LINE}` }} />
+                    {t('Setup & close-down', 'Preparación y cierre')}
+                  </span>
+                </span>
+              </div>
+            </div>
+          )
+        })()}
       </div>
 
       {/* Bench */}

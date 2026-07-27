@@ -275,8 +275,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   // (adding a shift doesn't reshape the columns). Fallback to
   // 10a–10p when every day is closed / uninitialized so the empty
   // state still renders a sensible ruler.
-  const AXIS_PRE = 90   // minutes of setup-time before opening
-  const AXIS_POST = 90  // minutes of close-down after closing
+  // Wiggle room around trading hours, in minutes. 60m each side
+  // per the manager's ask — was 90m; 60m keeps the axis tight to
+  // the actual open/close so shift bars have more room.
+  const AXIS_PRE = 60
+  const AXIS_POST = 60
   const axis = useMemo(() => {
     const openDays = dayHours.filter((h) => !h.closed)
     let minMin: number, maxMin: number

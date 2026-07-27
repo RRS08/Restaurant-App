@@ -3378,9 +3378,10 @@ function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
 
   // ---- Design constants — mirror the calendar's shading window
   //      + step size. Kept local so a future tweak here doesn't
-  //      accidentally shift the calendar's math.
-  const PRE = 90
-  const POST = 90
+  //      accidentally shift the calendar's math. 60m wiggle each
+  //      side matches AXIS_PRE / AXIS_POST in staffing-calendar.
+  const PRE = 60
+  const POST = 60
   const STEP = 30
 
   const [closed, setClosed] = useState(initialHours.closed)
@@ -3569,7 +3570,7 @@ function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
                   <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{fmtShort(winEnd)}</span>
                 </div>
                 <p style={{ margin: '10px 0 0', fontSize: 12, lineHeight: 1.5, color: MUTED }}>
-                  {t('Shifts can start 1h 30m before opening and run 1h 30m past closing, for setup and close-down.', 'Los turnos pueden empezar 1h 30m antes de la apertura y terminar 1h 30m después del cierre, para preparación y limpieza.')}
+                  {t('Shifts can start an hour before opening and run an hour past closing, for setup and close-down.', 'Los turnos pueden empezar una hora antes de la apertura y terminar una hora después del cierre, para preparación y limpieza.')}
                 </p>
               </div>
             </>
@@ -3671,8 +3672,10 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
   const DANGER = '#B91C1C'
   const MONO = "'Geist Mono', ui-monospace, monospace"
 
-  const PRE = 90
-  const POST = 90
+  // 60m wiggle each side matches the calendar's AXIS_PRE / AXIS_POST
+  // so the drawer's clamp range agrees with the axis width.
+  const PRE = 60
+  const POST = 60
   const STEP = 30
 
   const day = new Date(dayIso)

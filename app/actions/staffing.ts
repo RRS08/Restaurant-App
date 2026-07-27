@@ -629,8 +629,19 @@ export async function quickAssignShift(
   if (locAuthErr) return { error: locAuthErr }
 
   const { data: employee } = await ctx.supabase
-    .from('employees').select('role').eq('id', employeeId).single()
+    .from('employees').select('role, name, availability').eq('id', employeeId).single()
   if (!employee) return { error: 'Employee not found.' }
+
+  // Availability guard — Mon..Sun (index 0..6). JS getDay() is
+  // Sun=0..Sat=6, so we remap. If the day is flagged false, the
+  // shift is rejected up front rather than silently created.
+  const dayCheck = new Date(dayIso)
+  const jsDow = dayCheck.getDay()
+  const monIdx = jsDow === 0 ? 6 : jsDow - 1
+  const availability = employee.availability
+  if (Array.isArray(availability) && availability.length === 7 && availability[monIdx] === false) {
+    return { error: `${employee.name ?? 'This employee'} isn’t available that day.` }
+  }
 
   // Resolve start/end hours: explicit params > section defaults > 9-5.
   let sh = startHour ?? 9
@@ -913,6 +924,55 @@ export async function updateEmployee(
     return { error: 'Hourly rate must be 0 or more.' }
   }
 
+  // ---- 2026-07-26 employee-profile extensions ----
+  // trained_roles: JSON array of role display strings. We strip
+  // any that collide with the primary role (redundant to store the
+  // primary twice) and dedupe by normalized key.
+  const trainedRolesRaw = (formData.get('trained_roles') as string) ?? ''
+  let trainedRoles: string[] = []
+  if (trainedRolesRaw) {
+    try {
+      const parsed = JSON.parse(trainedRolesRaw)
+      if (Array.isArray(parsed)) {
+        const seen = new Set<string>([normalizeNameKey(role)])
+        for (const r of parsed) {
+          if (typeof r !== 'string') continue
+          const clean = normalizeDisplayName(r)
+          const k = normalizeNameKey(r)
+          if (!clean || !k || seen.has(k)) continue
+          seen.add(k)
+          trainedRoles.push(clean)
+        }
+      }
+    } catch {
+      return { error: 'Trained roles must be a JSON array of role names.' }
+    }
+  }
+
+  // employment: 'part_time' | 'full_time'. Anything else is a
+  // client bug — reject rather than silently coerce.
+  const employmentRaw = ((formData.get('employment') as string) ?? '').trim().toLowerCase()
+  const employment = employmentRaw === 'full_time' ? 'full_time' : 'part_time'
+  if (employmentRaw && employmentRaw !== 'part_time' && employmentRaw !== 'full_time') {
+    return { error: 'Employment must be part_time or full_time.' }
+  }
+
+  // availability: 7-boolean array Mon..Sun. Missing = leave the
+  // stored value untouched.
+  const availabilityRaw = (formData.get('availability') as string) ?? ''
+  let availabilityUpdate: boolean[] | undefined
+  if (availabilityRaw) {
+    try {
+      const parsed = JSON.parse(availabilityRaw)
+      if (!Array.isArray(parsed) || parsed.length !== 7) {
+        return { error: 'Availability must be a 7-element array.' }
+      }
+      availabilityUpdate = parsed.map((v) => v !== false)
+    } catch {
+      return { error: 'Availability must be a JSON boolean array.' }
+    }
+  }
+
   // Duplicate guard — same shape as create. Exclude the current
   // employee so renaming to the same normalized form (e.g. "john
   // garcia" → "John Garcia") isn't blocked by itself.
@@ -931,9 +991,16 @@ export async function updateEmployee(
     }
   }
 
+  const updatePayload: Record<string, unknown> = {
+    name, role, hourly_rate: hourlyRate,
+    trained_roles: trainedRoles,
+    employment,
+  }
+  if (availabilityUpdate) updatePayload.availability = availabilityUpdate
+
   const { error } = await ctx.supabase
     .from('employees')
-    .update({ name, role, hourly_rate: hourlyRate })
+    .update(updatePayload)
     .eq('id', employeeId)
     .eq('restaurant_id', ctx.restaurantId)
 
@@ -1055,11 +1122,38 @@ export async function updateShift(
   const locAuthErr = await requireLocResult(ctx.restaurantId, shiftRow.location_id)
   if (locAuthErr) return { error: locAuthErr }
 
-  const { data: employee } = await ctx.supabase.from('employees').select('role').eq('id', employeeId).single()
+  const { data: employee } = await ctx.supabase
+    .from('employees')
+    .select('role, trained_roles')
+    .eq('id', employeeId)
+    .single()
   if (!employee) return { error: 'Employee not found.' }
 
+  // Optional role override (shift edit drawer's role picker).
+  // Must be either the employee's primary role or one of their
+  // trained roles — anything else is a client-side tampering
+  // attempt, not a valid selection.
+  const rawRoleOverride = ((formData.get('role') as string) ?? '').trim()
+  let resolvedRole = employee.role as string
+  if (rawRoleOverride) {
+    const wantKey = normalizeNameKey(rawRoleOverride)
+    const primaryKey = normalizeNameKey(employee.role ?? '')
+    const trainedList = (Array.isArray(employee.trained_roles) ? employee.trained_roles : []) as string[]
+    const trainedKeys = trainedList.map((r) => normalizeNameKey(r))
+    if (wantKey === primaryKey) {
+      resolvedRole = employee.role as string
+    } else if (trainedKeys.includes(wantKey)) {
+      // Pull the display form back off the trained_roles list to
+      // preserve whatever casing the manager stored.
+      const idx = trainedKeys.indexOf(wantKey)
+      resolvedRole = trainedList[idx]
+    } else {
+      return { error: `Role “${rawRoleOverride}” isn’t in the employee’s primary or trained set.` }
+    }
+  }
+
   const { error } = await ctx.supabase.from('shifts').update({
-    employee_id: employeeId, role: employee.role, start_time: startTime, end_time: endTime, notes,
+    employee_id: employeeId, role: resolvedRole, start_time: startTime, end_time: endTime, notes,
   }).eq('id', shiftId)
 
   if (error) return { error: formatError('shift', error) }

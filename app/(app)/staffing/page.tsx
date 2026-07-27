@@ -126,7 +126,7 @@ export default async function StaffingPage() {
     { data: sectionsData },
     { data: locations },
   ] = await Promise.all([
-    supabase.from('employees').select('id, name, role, primary_location_id').eq('active', true).order('name'),
+    supabase.from('employees').select('id, name, role, primary_location_id, trained_roles, employment, availability').eq('active', true).order('name'),
     supabase.from('shifts').select('id, location_id, employee_id, section_id, role, start_time, end_time, notes, employees ( name )').order('start_time'),
     supabase.from('shift_sections').select('id, name, role, area, default_start_hour, default_end_hour, sort_order').order('sort_order'),
     supabase.from('locations').select('id, name').order('created_at', { ascending: true }),
@@ -273,6 +273,16 @@ export default async function StaffingPage() {
       roleWages={roleWages}
       employees={(employees ?? []).map((e) => ({
         id: e.id, name: e.name, role: e.role, primaryLocationId: e.primary_location_id,
+        trainedRoles: Array.isArray(e.trained_roles) ? (e.trained_roles as string[]) : [],
+        employment: (e.employment === 'full_time' ? 'full_time' : 'part_time') as 'part_time' | 'full_time',
+        // 7-element boolean array Mon..Sun. Guard against malformed
+        // JSON with a shape-check + all-true fallback so a stale row
+        // never lands us with a shorter array that indexes out.
+        availability: (() => {
+          const raw = e.availability
+          if (Array.isArray(raw) && raw.length === 7) return raw.map((v) => v !== false)
+          return [true, true, true, true, true, true, true]
+        })(),
       }))}
       shifts={(shifts ?? []).map((s) => ({
         id: s.id, locationId: s.location_id, employeeId: s.employee_id,

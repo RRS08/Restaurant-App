@@ -48,7 +48,17 @@ function localizedDays(t: T): string[] {
   ]
 }
 
-interface Employee { id: string; name: string; role: string; primaryLocationId: string }
+interface Employee {
+  id: string
+  name: string
+  role: string
+  primaryLocationId: string
+  // 2026-07-26 employee-profile additions. All three have safe
+  // defaults in the DB + adapter so pre-migration rows still work.
+  trainedRoles: string[]
+  employment: 'part_time' | 'full_time'
+  availability: boolean[] // Mon..Sun, length 7 guaranteed by the adapter.
+}
 interface Section { id: string; name: string; role: string; area: 'foh' | 'boh'; defaultStartHour: number; defaultEndHour: number; sortOrder: number }
 interface Shift {
   id: string; locationId: string; employeeId: string; sectionId: string | null
@@ -715,33 +725,9 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Week navigation */}
-          <div className="inline-flex rounded-lg border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() - 7); return d })}
-              className="px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-              aria-label={t('Previous week', 'Semana anterior')}
-            >‹</button>
-            <button
-              type="button"
-              onClick={() => setWeekStart(getMonday(new Date()))}
-              className="px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 border-x border-gray-200/80 transition-colors"
-            >{t('Today', 'Hoy')}</button>
-            <button
-              type="button"
-              onClick={() => setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() + 7); return d })}
-              className="px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-              aria-label={t('Next week', 'Próxima semana')}
-            >›</button>
-          </div>
-
-          {/* Top-level "+ Shift" and "+ Employee" retired — Add-shift
-              is now covered by drag-drop from the bench onto a day;
-              Add-employee lives inside the bench card as "+ Add
-              employee" alongside the "+ Add role" affordance. */}
-        </div>
+        {/* Top-level week nav retired — the staffing calendar has
+            its own ‹ Today › cluster that does the same thing;
+            keeping it there only meant two controls for one job. */}
       </div>
 
       {/* ================================================================ */}
@@ -865,8 +851,12 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           employee={drawer.employee}
           isUnified={isUnified}
           house={drawer.house}
-          roles={isUnified ? fohRoles : (drawer.house === 'foh' ? fohRoles : bohRoles)}
+          allRoles={[...fohRoles, ...bohRoles]}
+          houseRoles={isUnified ? fohRoles : (drawer.house === 'foh' ? fohRoles : bohRoles)}
           weekHours={hoursByEmployee.get(drawer.employee.id) ?? 0}
+          weekShifts={weekShifts.filter((s) => s.employeeId === drawer.employee.id)}
+          roleColors={roleColors}
+          roleWages={roleWages}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -986,6 +976,44 @@ function EditDrawer({ lang, shift, employees, sections: _sections, onClose }: {
               {employees.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.role}</option>)}
             </select>
           </Field>
+
+          {(() => {
+            // Role override picker — offers the shift's current role
+            // as the default plus every trained role the employee
+            // carries. If they've only got one option, the picker
+            // still renders (single-option select) so the UI stays
+            // consistent. Server validates the pick against the
+            // employee's primary + trained set so a tampered form
+            // can't slip an arbitrary role through.
+            const emp = employees.find((e) => e.id === shift.employeeId)
+            const primary = emp?.role ?? shift.role
+            const trained = emp?.trainedRoles ?? []
+            const options: string[] = []
+            const seen = new Set<string>()
+            for (const r of [primary, ...trained]) {
+              const k = r.toLowerCase().trim()
+              if (!k || seen.has(k)) continue
+              seen.add(k); options.push(r)
+            }
+            return (
+              <Field label={t('Role', 'Puesto')} htmlFor="es-role" t={t}
+                hint={trained.length === 0
+                  ? t('This employee has only a primary role. Train them on more roles from their drawer.', 'Este empleado solo tiene un puesto principal. Entrénalo en más puestos desde su ficha.')
+                  : undefined}
+              >
+                <select
+                  id="es-role"
+                  name="role"
+                  defaultValue={shift.role}
+                  className={fieldInputClass}
+                >
+                  {options.map((r) => (
+                    <option key={r} value={r}>{r}{r.toLowerCase() === primary.toLowerCase() ? ` · ${t('primary', 'principal')}` : ''}</option>
+                  ))}
+                </select>
+              </Field>
+            )
+          })()}
 
           <Field label={t('Start', 'Inicio')} htmlFor="es-start" t={t}>
             <input
@@ -1151,189 +1179,528 @@ function BenchCard({
 // footer as a destructive secondary action — soft delete only;
 // historical shifts stay intact.
 // ----------------------------------------------------------------
-function EditEmployeeDrawer({ lang, employee, isUnified, house, roles, weekHours, onClose }: {
+function EditEmployeeDrawer({ lang, employee, isUnified, house, allRoles, houseRoles, weekHours, weekShifts, roleColors, roleWages, onClose }: {
   lang: Lang
   employee: Employee
   isUnified: boolean
   house: 'foh' | 'boh'
-  roles: string[]
+  // Every role across FOH + BOH — the "Roles" pill row shows every
+  // one so a Cashier can be trained on a BOH role too. Colors +
+  // ordering come from ROLE_TONES via resolveRoleToneSlug.
+  allRoles: string[]
+  // Roles filtered to the employee's own house. Used only when the
+  // primary role needs a fallback (e.g. a role was deleted after
+  // they were hired) so we can offer a valid replacement pick.
+  houseRoles: string[]
   weekHours: number
+  weekShifts: Shift[]
+  roleColors: Record<string, string>
+  roleWages: Record<string, number>
   onClose: () => void
 }) {
   const t = makeT(lang)
-  const roleColors = useContext(RoleColorsContext)
-  const [state, action, pending] = useActionState(updateEmployee, null)
-  const [archState, archAction, archPending] = useActionState(archiveEmployee, null)
-  const [confirmArchive, setConfirmArchive] = useState(false)
-  useAutoCloseOnSuccess(pending, state, onClose)
-  useAutoCloseOnSuccess(archPending, archState, onClose)
+  const router = useRouter()
 
-  const eyebrow = isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
-  const role = roleTone(employee.role, roleColors)
+  // ---- Palette (mirrors staffing-calendar + role drawer) ----
+  const INK = '#18181B'
+  const PAPER = '#FAF9F6'
+  const LINE = '#E7E6E2'
+  const LINE_SOFT = '#F0EFEB'
+  const MUTED = '#6B6B70'
+  const FAINT = '#A1A1A6'
+  const SURFACE = '#FAFAF9'
+  const DANGER = '#B91C1C'
+  const MONO = "'Geist Mono', ui-monospace, monospace"
 
-  // The role select needs to include the employee's CURRENT role
-  // even if it's no longer in the active house's role list (e.g.
-  // the manager removed that role from staffing config). Otherwise
-  // the dropdown would silently change the role on save.
-  const roleOptions = roles.includes(employee.role)
-    ? roles
-    : [employee.role, ...roles]
+  const [name, setName] = useState(employee.name)
+  const [primaryRole, setPrimaryRole] = useState(employee.role)
+  const [trained, setTrained] = useState<string[]>(employee.trainedRoles ?? [])
+  const [employment, setEmployment] = useState<'part_time' | 'full_time'>(employee.employment ?? 'part_time')
+  const [days, setDays] = useState<boolean[]>(
+    Array.isArray(employee.availability) && employee.availability.length === 7
+      ? employee.availability
+      : [true, true, true, true, true, true, true],
+  )
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [confirming, setConfirming] = useState(false)
 
-  // Hourly rate isn't sent back from the page (Employee type omits
-  // it for size), so we leave the field empty and treat empty-on-
-  // submit as "no change" via the optional handling on the action.
-  // To make the UX honest, the placeholder hints at the unknown.
+  const firstName = name.split(' ')[0] || name
+
+  // Role pill list = allRoles ∪ {primaryRole} (in case the primary
+  // role was orphaned by a delete), keyed by normalized name.
+  const rolePills = useMemo(() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const src of [allRoles, [primaryRole], trained]) {
+      for (const r of src) {
+        const k = normalizeNameKey(r ?? '')
+        if (!k || seen.has(k)) continue
+        seen.add(k); out.push(r)
+      }
+    }
+    return out
+  }, [allRoles, primaryRole, trained])
+
+  // Estimated pay = weekly hours × wage for the primary role.
+  // Falls back to 0 if the primary role has no configured wage yet.
+  const primaryKey = normalizeNameKey(primaryRole)
+  const primaryWage = roleWages[primaryKey] ?? 0
+  const estPay = weekHours * primaryWage
+
+  // Next upcoming shift for this employee — earliest start_time
+  // from now. Undefined when nothing's scheduled ahead.
+  const nextShift = useMemo(() => {
+    const nowMs = Date.now()
+    const future = weekShifts
+      .filter((s) => new Date(s.startTime).getTime() >= nowMs)
+      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+    return future[0]
+  }, [weekShifts])
+  const moreThisWeek = Math.max(0, weekShifts.filter((s) => new Date(s.startTime).getTime() >= Date.now()).length - 1)
+
+  // Click a role pill: promote to primary if already trained, or
+  // train if not. Primary stays put (× on the pill removes it from
+  // trained). Old primary demotes to trained when swapped.
+  function clickRolePill(r: string) {
+    const k = normalizeNameKey(r)
+    if (k === primaryKey) return
+    const trainedKeys = trained.map((x) => normalizeNameKey(x))
+    if (trainedKeys.includes(k)) {
+      const oldPrimary = primaryRole
+      setTrained(trained.filter((x) => normalizeNameKey(x) !== k).concat(oldPrimary))
+      setPrimaryRole(r)
+    } else {
+      setTrained([...trained, r])
+    }
+  }
+  function untrainRole(r: string) {
+    const k = normalizeNameKey(r)
+    setTrained(trained.filter((x) => normalizeNameKey(x) !== k))
+  }
+  function toggleDay(i: number) {
+    setDays(days.map((v, j) => (j === i ? !v : v)))
+  }
+
+  async function handleSave() {
+    setBusy(true); setErr(null)
+    const trimmed = name.trim()
+    if (!trimmed) { setErr(t('Name is required.', 'El nombre es obligatorio.')); setBusy(false); return }
+    if (!primaryRole) { setErr(t('Primary role is required.', 'El puesto principal es obligatorio.')); setBusy(false); return }
+
+    try {
+      const fd = new FormData()
+      fd.set('employee_id', employee.id)
+      fd.set('name', trimmed)
+      fd.set('role', primaryRole)
+      fd.set('trained_roles', JSON.stringify(trained))
+      fd.set('employment', employment)
+      fd.set('availability', JSON.stringify(days))
+      const r = await updateEmployee(null, fd)
+      if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  async function handleArchive() {
+    setBusy(true); setErr(null)
+    try {
+      const fd = new FormData()
+      fd.set('employee_id', employee.id)
+      const r = await archiveEmployee(null, fd)
+      if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); setConfirming(false); return }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  const eyebrowLabel = isUnified
+    ? t('TEAM', 'EQUIPO')
+    : (house === 'foh' ? t('FRONT OF HOUSE', 'SALÓN') : t('BACK OF HOUSE', 'COCINA'))
+  const eyebrowText = `${eyebrowLabel} · ${t('EMPLOYEE', 'EMPLEADO')}`
+
+  const primaryHex = ROLE_TONES[resolveRoleToneSlug(primaryRole, roleColors)]?.accent ?? '#A1A1A6'
+  const openDays = days.filter(Boolean).length
+  const shiftCount = weekShifts.length
+
+  const labelStyle: React.CSSProperties = { fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }
+  const eyebrowStyle: React.CSSProperties = { fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: MUTED }
+  const hintStyle: React.CSSProperties = { margin: '8px 0 0', fontSize: 12, lineHeight: 1.5, color: FAINT }
+  const sectionStyle: React.CSSProperties = { marginBottom: 20 }
+  const seg = (active: boolean, first: boolean): React.CSSProperties => ({
+    flex: 1, border: 0,
+    borderLeft: first ? undefined : `1px solid ${LINE}`,
+    padding: '9px 10px', font: 'inherit', fontSize: 13, cursor: 'pointer',
+    background: active ? INK : '#fff', color: active ? PAPER : '#52525B',
+    fontWeight: active ? 600 : 500,
+  })
+  const DAY_LABELS = [
+    t('Mon', 'Lun'), t('Tue', 'Mar'), t('Wed', 'Mié'),
+    t('Thu', 'Jue'), t('Fri', 'Vie'), t('Sat', 'Sáb'), t('Sun', 'Dom'),
+  ]
+
+  const rolesHint = trained.length > 0
+    ? t(
+        `On the bench they show as ${primaryRole} and can be scheduled as ${trained.join(' or ')} too.`,
+        `En la plantilla aparece como ${primaryRole} y también puede ser programado como ${trained.join(' o ')}.`,
+      )
+    : t(
+        `On the bench they show as ${primaryRole} only. Tap another role to train them on it.`,
+        `En la plantilla aparece como ${primaryRole} solamente. Toca otro puesto para entrenarlo.`,
+      )
+
+  // Format helpers for the stats grid + next-shift card.
+  const fmtHrs = (h: number) => (h % 1 ? h.toFixed(1) : String(h)) + 'h'
+  const fmtPay = (n: number) => `$${(Math.round(n * 100) / 100).toFixed(n < 10 ? 2 : 0)}`
+  const nextShiftLabel = nextShift ? (() => {
+    const d = new Date(nextShift.startTime)
+    return d.toLocaleDateString(lang === 'es' ? 'es-ES' : 'en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+  })() : ''
+  const nextShiftTime = nextShift
+    ? `${fmt(nextShift.startTime)}–${fmt(nextShift.endTime)}`
+    : ''
+  const nextShiftHours = nextShift ? (() => {
+    const start = new Date(nextShift.startTime).getTime()
+    const end = new Date(nextShift.endTime).getTime()
+    const hrs = end > start ? (end - start) / 3600000 : 0
+    return fmtHrs(hrs)
+  })() : ''
 
   return (
-    <DrawerShell
-      eyebrow={eyebrow}
-      title={t(`Manage ${employee.name}`, `Administrar ${employee.name}`)}
-      subtitle={t('Edit role, pay, and employee status.', 'Editar puesto, pago y estado del empleado.')}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
+    <div
+      style={{
+        position: 'fixed', inset: 0, display: 'flex', justifyContent: 'flex-end',
+        zIndex: 50, fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+      }}
+      role="dialog"
+      aria-label={`${eyebrowText}: ${name}`}
     >
-      <form action={action} className="flex-1 flex flex-col min-h-0">
-        <input type="hidden" name="employee_id" value={employee.id} />
-        <DrawerBody>
-          {/* Top summary — quick context strip so the drawer reads as
-              "this person's record" before any field. Role uses the
-              shared role tone; hours come from the schedule view the
-              parent maintains. */}
-          <SummaryCard
-            entries={[
-              { label: t('Role', 'Puesto'), value: (
-                <span className="inline-flex items-center gap-1.5">
-                  <span className={`w-1.5 h-1.5 rounded-full ${role.dot}`} aria-hidden />
-                  <span className={role.text}>{employee.role}</span>
-                </span>
-              ) },
-              { label: t('Scheduled', 'Programado'), value: formatHours(weekHours) + t(' this week', ' esta semana') },
-              { label: t('House', 'Área'), value: isUnified ? t('Team', 'Equipo') : (house === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')) },
-              { label: t('Status', 'Estado'), value: t('Active', 'Activo') },
-            ]}
-          />
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
 
-          <SectionLabel>{t('Profile', 'Perfil')}</SectionLabel>
-
-          <Field label={t('Name', 'Nombre')} htmlFor="ee-name" t={t}>
-            <input
-              id="ee-name"
-              name="name"
-              type="text"
-              required
-              defaultValue={employee.name}
-              className={fieldInputClass}
-            />
-          </Field>
-
-          <Field label={t('Role', 'Puesto')} htmlFor="ee-role" t={t}>
-            {roles.length === 0 ? (
-              <p className="text-xs text-amber-700">
-                {t('No roles defined for this house yet. Add one from Add employee first.', 'Aún no hay puestos definidos para esta área. Agrega uno desde Agregar empleado primero.')}
-              </p>
-            ) : (
-              <select
-                id="ee-role"
-                name="role"
-                required
-                defaultValue={employee.role}
-                className={fieldInputClass}
-              >
-                {roleOptions.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-            )}
-          </Field>
-
-          <Field
-            label={t('Hourly rate', 'Tarifa por hora')}
-            htmlFor="ee-rate"
-            optional
-            t={t}
-            hint={t('Leave blank to clear. Drives scheduled-labor estimates in Finance.', 'Deja en blanco para borrar. Determina los estimados de mano de obra programada en Finanzas.')}
-          >
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
-              <input
-                id="ee-rate"
-                name="hourly_rate"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                className={`${fieldInputClass} pl-7`}
-              />
-            </div>
-          </Field>
-
-          {/* Inline archive confirm — same pattern the EditBlock
-              drawer uses, lives in the body so the consequence has
-              room to breathe. */}
-          {confirmArchive && (
-            <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
-              <p className="text-xs font-semibold text-red-900">{t(`Archive ${employee.name}?`, `¿Archivar a ${employee.name}?`)}</p>
-              <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
-                {t(
-                  "They'll be removed from the bench. Historical shifts stay intact and can't be edited until the employee is restored.",
-                  "Será removido de la plantilla. Los turnos históricos permanecen intactos y no se pueden editar hasta que el empleado sea restaurado."
-                )}
-              </p>
-              {/* Sibling form keeps us out of nested-form territory;
-                  the confirm button binds via `form="..."`. */}
-              <form id="staffing-archive-employee" action={archAction}>
-                <input type="hidden" name="employee_id" value={employee.id} />
-              </form>
-              <div className="mt-2.5 flex items-center gap-2">
-                <button
-                  form="staffing-archive-employee"
-                  type="submit"
-                  disabled={archPending}
-                  className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
-                >
-                  {archPending ? t('Archiving…', 'Archivando…') : t('Confirm archive', 'Confirmar archivar')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmArchive(false)}
-                  className="text-[11px] text-gray-500 hover:text-gray-700"
-                >
-                  {t('Cancel', 'Cancelar')}
-                </button>
+      <div
+        style={{
+          position: 'relative',
+          width: 456, maxWidth: '100%', flex: '0 0 456px',
+          height: '100vh', background: '#fff',
+          borderLeft: `1px solid ${LINE}`,
+          boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* header */}
+        <div style={{ padding: '22px 28px 18px', borderBottom: `1px solid ${LINE}` }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ ...eyebrowStyle, color: FAINT }}>{eyebrowText}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
+                <span style={{ width: 10, height: 10, borderRadius: 3, flex: '0 0 auto', background: primaryHex }} />
+                <input
+                  aria-label={t('Employee name', 'Nombre del empleado')}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  style={{
+                    border: '1px solid transparent', borderRadius: 8, background: 'transparent',
+                    padding: '4px 8px', marginLeft: -8,
+                    fontFamily: 'inherit', fontSize: 21, fontWeight: 700,
+                    letterSpacing: '-0.03em', color: INK, width: 260, outline: 'none',
+                  }}
+                  onFocus={(e) => { e.currentTarget.style.borderColor = LINE }}
+                  onBlur={(e) => { e.currentTarget.style.borderColor = 'transparent' }}
+                />
               </div>
-              {archState?.error && (
-                <p className="mt-1.5 text-[11px] text-red-700">{archState.error}</p>
-              )}
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: FAINT }}>
+                {t('Click the name to rename.', 'Toca el nombre para renombrar.')}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('Close', 'Cerrar')}
+              style={{
+                border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+                width: 32, height: 32, display: 'flex', alignItems: 'center',
+                justifyContent: 'center', font: 'inherit', fontSize: 15, color: MUTED,
+                cursor: 'pointer', flex: '0 0 auto',
+              }}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+
+        {/* body */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 28px 24px', display: 'block' }}>
+          {/* stats grid */}
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1,
+            background: LINE, border: `1px solid ${LINE}`,
+            borderRadius: 10, overflow: 'hidden', marginBottom: 20,
+          }}>
+            <div style={{ background: SURFACE, padding: '10px 12px' }}>
+              <div style={{ ...eyebrowStyle, color: FAINT }}>{t('SCHEDULED', 'PROGRAMADO')}</div>
+              <div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, marginTop: 3 }}>
+                {fmtHrs(weekHours)}
+              </div>
+              <div style={{ fontSize: 11, color: FAINT }}>
+                {t('this week', 'esta semana')} · {shiftCount} {shiftCount === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
+              </div>
+            </div>
+            <div style={{ background: SURFACE, padding: '10px 12px' }}>
+              <div style={{ ...eyebrowStyle, color: FAINT }}>{t('EST. PAY', 'PAGO EST.')}</div>
+              <div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, marginTop: 3 }}>
+                {primaryWage > 0 ? fmtPay(estPay) : '—'}
+              </div>
+              <div style={{ fontSize: 11, color: FAINT }}>
+                {primaryWage > 0
+                  ? t(`at the ${primaryRole} rate`, `a la tarifa de ${primaryRole}`)
+                  : t('set a wage on the role', 'define un salario en el puesto')}
+              </div>
+            </div>
+          </div>
+
+          {/* roles — merged primary + trained */}
+          <div style={sectionStyle}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 7 }}>
+              <label style={labelStyle}>{t('Roles', 'Puestos')}</label>
+              <span style={{ fontSize: 12, color: FAINT }}>
+                {trained.length > 0
+                  ? `${trained.length} ${trained.length === 1 ? t('trained role', 'puesto entrenado') : t('trained roles', 'puestos entrenados')}`
+                  : t('No trained roles yet', 'Sin puestos entrenados aún')}
+              </span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {rolePills.map((r) => {
+                const k = normalizeNameKey(r)
+                const isPrimary = k === primaryKey
+                const isTrained = trained.some((x) => normalizeNameKey(x) === k)
+                const hex = ROLE_TONES[resolveRoleToneSlug(r, roleColors)]?.accent ?? '#A1A1A6'
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => clickRolePill(r)}
+                    title={isPrimary
+                      ? t(`${r} — primary role`, `${r} — puesto principal`)
+                      : isTrained
+                        ? t(`${r} — trained · tap to make primary`, `${r} — entrenado · toca para hacerlo principal`)
+                        : t(`${r} — tap to train`, `${r} — toca para entrenar`)}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 7,
+                      borderRadius: 999, padding: '5px 11px',
+                      font: 'inherit', fontSize: 12, cursor: 'pointer',
+                      border: isPrimary
+                        ? `1px solid ${INK}`
+                        : isTrained
+                          ? '1px solid #D6D5D1'
+                          : `1px dashed ${LINE}`,
+                      background: isPrimary ? INK : isTrained ? '#fff' : SURFACE,
+                      color: isPrimary ? PAPER : isTrained ? INK : FAINT,
+                      fontWeight: isPrimary || isTrained ? 600 : 400,
+                    }}
+                  >
+                    <span style={{
+                      width: 8, height: 8, borderRadius: 2, flex: '0 0 auto',
+                      background: isPrimary || isTrained ? hex : '#D6D5D1',
+                    }} />
+                    {r}
+                    {isPrimary && (
+                      <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '0.12em', opacity: 0.7 }}>
+                        {t('PRIMARY', 'PRINCIPAL')}
+                      </span>
+                    )}
+                    {!isPrimary && isTrained && (
+                      <span
+                        role="button"
+                        aria-label={t('Untrain role', 'Quitar entrenamiento')}
+                        title={t('Remove trained role', 'Quitar puesto entrenado')}
+                        onClick={(e) => { e.stopPropagation(); untrainRole(r) }}
+                        style={{
+                          marginLeft: 1, marginRight: -3,
+                          width: 16, height: 16, display: 'inline-flex',
+                          alignItems: 'center', justifyContent: 'center',
+                          borderRadius: '50%', color: FAINT,
+                          fontSize: 12, lineHeight: 1, cursor: 'pointer',
+                        }}
+                      >
+                        ×
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+            <p style={hintStyle}>{rolesHint}</p>
+            {/* Bail-out hint when the primary role isn't in the house
+                role list — offers a clean replacement path. */}
+            {!houseRoles.some((r) => normalizeNameKey(r) === primaryKey) && houseRoles.length > 0 && (
+              <p style={{ ...hintStyle, color: '#B45309' }}>
+                {t(`“${primaryRole}” isn’t configured for this house. Pick another role above to keep the schedule clean.`, `“${primaryRole}” no está configurado para esta casa. Elige otro puesto arriba para mantener el calendario limpio.`)}
+              </p>
+            )}
+          </div>
+
+          {/* employment */}
+          <div style={sectionStyle}>
+            <label style={{ ...labelStyle, display: 'block', marginBottom: 7 }}>{t('Employment', 'Empleo')}</label>
+            <div style={{ display: 'flex', border: `1px solid ${LINE}`, borderRadius: 9, overflow: 'hidden' }}>
+              <button type="button" onClick={() => setEmployment('part_time')} style={seg(employment === 'part_time', true)}>
+                {t('Part-time', 'Medio tiempo')}
+              </button>
+              <button type="button" onClick={() => setEmployment('full_time')} style={seg(employment === 'full_time', false)}>
+                {t('Full-time', 'Tiempo completo')}
+              </button>
+            </div>
+            <p style={hintStyle}>
+              {employment === 'full_time'
+                ? t('Flagged for overtime above 40h a week.', 'Marcado para tiempo extra por encima de 40h semanales.')
+                : t('Warns when scheduled above 28h a week.', 'Advierte al programar por encima de 28h semanales.')}
+            </p>
+          </div>
+
+          {/* availability */}
+          <div style={sectionStyle}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 9 }}>
+              <label style={labelStyle}>{t('Availability', 'Disponibilidad')}</label>
+              <span style={{ fontSize: 12, color: FAINT }}>
+                {openDays} {t('of 7 days available', 'de 7 días disponible')}
+              </span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 6 }}>
+              {DAY_LABELS.map((d, i) => {
+                const on = days[i]
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => toggleDay(i)}
+                    style={{
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      height: 34, borderRadius: 8, font: 'inherit', fontSize: 12,
+                      cursor: 'pointer',
+                      border: on ? '1px solid #D6D5D1' : `1px dashed ${LINE}`,
+                      background: on ? '#fff' : SURFACE,
+                      color: on ? INK : '#C4C4C7',
+                      fontWeight: on ? 600 : 400,
+                    }}
+                  >
+                    {d}
+                  </button>
+                )
+              })}
+            </div>
+            <p style={{ ...hintStyle, marginTop: 9 }}>
+              {t(`On unavailable days ${firstName} can’t be scheduled — the server rejects the drop.`, `En días no disponibles ${firstName} no puede ser programado — el servidor rechaza el drop.`)}
+            </p>
+          </div>
+
+          {/* next shift */}
+          {nextShift && (
+            <div style={sectionStyle}>
+              <div style={{ ...eyebrowStyle, marginBottom: 9 }}>{t('NEXT SHIFT', 'PRÓXIMO TURNO')}</div>
+              <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '11px 12px' }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{nextShiftLabel}</div>
+                    <div style={{ fontFamily: MONO, fontSize: 12, color: MUTED, marginTop: 2 }}>{nextShiftTime}</div>
+                    {moreThisWeek > 0 && (
+                      <div style={{ fontSize: 12, color: FAINT, marginTop: 3 }}>
+                        {moreThisWeek} {moreThisWeek === 1
+                          ? t('more shift this week', 'turno más esta semana')
+                          : t('more shifts this week', 'turnos más esta semana')}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right' }}>
+                    <div style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600 }}>{nextShiftHours}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end', marginTop: 3 }}>
+                      <span style={{
+                        width: 8, height: 8, borderRadius: 2, flex: '0 0 auto',
+                        background: ROLE_TONES[resolveRoleToneSlug(nextShift.role, roleColors)]?.accent ?? '#A1A1A6',
+                      }} />
+                      <span style={{ fontSize: 11, color: MUTED }}>{nextShift.role}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
-          {state?.error && (
-            <p className="text-xs text-red-600">{state.error}</p>
+          {err && (
+            <p style={{ margin: 0, fontSize: 12, color: DANGER }}>{err}</p>
           )}
-        </DrawerBody>
+        </div>
 
-        <DrawerFooter>
-          <div className="flex items-center justify-between gap-3">
-            {!confirmArchive ? (
+        {/* footer */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, padding: '16px 28px',
+          display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+        }}>
+          {confirming ? (
+            <>
+              <span style={{ marginRight: 'auto', fontSize: 12, lineHeight: 1.4, color: DANGER, maxWidth: 200 }}>
+                {t(`Archive ${firstName}? Historical shifts stay intact.`, `¿Archivar a ${firstName}? Los turnos históricos permanecen intactos.`)}
+              </span>
               <button
                 type="button"
-                onClick={() => setConfirmArchive(true)}
-                className="text-xs font-medium text-red-600 hover:text-red-700"
+                onClick={() => setConfirming(false)}
+                style={{
+                  border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9,
+                  padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 500,
+                  color: '#3F3F46', cursor: 'pointer',
+                }}
+              >
+                {t('Keep employee', 'Conservar')}
+              </button>
+              <button
+                type="button"
+                onClick={handleArchive}
+                disabled={busy}
+                style={{
+                  border: 0, background: DANGER, color: '#fff', borderRadius: 9,
+                  padding: '11px 18px', font: 'inherit', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? t('Archiving…', 'Archivando…') : t('Archive', 'Archivar')}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                style={{
+                  marginRight: 'auto', border: 0, background: 'transparent',
+                  padding: '8px 0', font: 'inherit', fontSize: 13, fontWeight: 500,
+                  color: DANGER, cursor: 'pointer',
+                }}
               >
                 {t('Archive employee', 'Archivar empleado')}
               </button>
-            ) : (
-              <span className="text-[11px] text-gray-400">{t('Confirm above', 'Confirma arriba')}</span>
-            )}
-            <button
-              type="submit"
-              disabled={pending}
-              className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {pending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
-            </button>
-          </div>
-        </DrawerFooter>
-      </form>
-    </DrawerShell>
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={busy}
+                style={{
+                  border: 0, background: INK, color: PAPER, borderRadius: 9,
+                  padding: '11px 22px', font: 'inherit', fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 

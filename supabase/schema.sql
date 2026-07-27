@@ -525,9 +525,19 @@ create table public.employees (
   primary_location_id uuid not null references public.locations(id) on delete cascade,
   name                text not null,
   role                text not null,
+  -- Extra roles this person is trained on. Stored as a jsonb
+  -- array of display strings; comparison uses normalized keys.
+  trained_roles       jsonb   not null default '[]'::jsonb,
+  -- 'part_time' | 'full_time'. Guarded by employees_employment_check.
+  employment          text    not null default 'part_time',
+  -- 7-boolean array Mon..Sun. quickAssignShift consults this to
+  -- block assigning someone to an unavailable day.
+  availability        jsonb   not null default '[true,true,true,true,true,true,true]'::jsonb,
   hourly_rate         numeric(10,2),
   active              boolean not null default true,
-  created_at          timestamptz not null default now()
+  created_at          timestamptz not null default now(),
+  constraint employees_employment_check
+    check (employment in ('part_time', 'full_time'))
 );
 
 

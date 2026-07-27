@@ -665,22 +665,17 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   // timeline board positions every shift by its start/end time, so
   // section_id=null shifts (one-offs or orphans from a deleted
   // block) render alongside the rest — no separate lane needed.
-  const subtitle = isUnified
-    ? t('Plan the week and track labor coverage.', 'Planifica la semana y monitorea la cobertura de personal.')
-    : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
-
   return (
     <RoleColorsContext.Provider value={roleColors}>
     <div className="max-w-[1400px]">
 
       {/* ================================================================ */}
-      {/* 1. HEADER BAND — title + one-line subtitle. Controls live on the  */}
-      {/*    strip below so they read as a unified workflow row instead of  */}
-      {/*    being torn between top-right and a separate house line.       */}
+      {/* 1. HEADER BAND — title only. The subtitle line has been retired  */}
+      {/*    on this page; the calendar itself carries the operational     */}
+      {/*    context (week, coverage counts).                              */}
       {/* ================================================================ */}
       <div className="mb-5">
         <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Staffing', 'Personal')}</h1>
-        <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
       </div>
 
       {/* ================================================================ */}

@@ -570,10 +570,17 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
         {view === 'week' ? (
           <div style={{ minWidth: 900 }}>
-            {/* Hour ruler — gutter now carries a DAY · HOURS
-                eyebrow to match the Day-view STAFF label. Keeps
-                the two views' ruler bars visually parallel. */}
-            <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}`, background: SURFACE, position: 'sticky', top: 41, zIndex: 2 }}>
+            {/* Hour ruler — gutter carries a DAY · HOURS eyebrow
+                to match the Day-view STAFF label. Explicit borderTop
+                so the ruler reads as its own strip separated from
+                the header above (was blending into the header
+                because both were surface-toned). */}
+            <div style={{
+              display: 'flex',
+              borderTop: `1px solid ${LINE}`,
+              borderBottom: `1px solid ${LINE}`,
+              background: SURFACE, position: 'sticky', top: 41, zIndex: 2,
+            }}>
               <div style={{
                 width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`,
                 padding: '0 12px', display: 'flex', alignItems: 'center',
@@ -583,8 +590,22 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 </span>
               </div>
               <div style={{ position: 'relative', height: 18, flex: 1, minWidth: 0 }}>
-                {TICKS.map((tick) => (
-                  <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 4, fontFamily: MONO, fontSize: 9, color: MUTED }}>
+                {TICKS.map((tick, i) => (
+                  <span
+                    key={tick.hour}
+                    style={{
+                      position: 'absolute',
+                      left: `${tick.left}%`,
+                      top: 4,
+                      // First tick sits right against the gutter's
+                      // right border — nudge it 6px so the label
+                      // has some breathing room from the divider.
+                      // Last tick pulls back so it doesn't overflow.
+                      paddingLeft: i === 0 ? 6 : 0,
+                      transform: i === TICKS.length - 1 ? 'translateX(-100%)' : undefined,
+                      fontFamily: MONO, fontSize: 9, color: MUTED,
+                    }}
+                  >
                     {fmtHourShort(tick.hour)}
                   </span>
                 ))}

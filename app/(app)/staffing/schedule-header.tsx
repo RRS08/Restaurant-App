@@ -285,10 +285,14 @@ export default function ScheduleHeader({
             style={{
               border: 0, background: INK, color: PAPER, borderRadius: 10, height: 34,
               padding: '0 16px', font: 'inherit', fontSize: 13, fontWeight: 600,
-              opacity: dirty ? 1 : 0.45, cursor: dirty ? 'pointer' : 'default',
+              // Always alive + ink per manager's ask — the dirty
+              // opacity/label split is deferred until a real
+              // staged-changes flow lands. The chip beside the
+              // title still narrates state.
+              cursor: 'pointer',
             }}
           >
-            {dirty ? t('Publish changes', 'Publicar cambios') : t('Published', 'Publicado')}
+            {t('Publish', 'Publicar')}
           </button>
         </div>
       </div>

@@ -164,6 +164,15 @@ export interface StaffingCalendarProps {
   // been retired in favor of the drawer's single editor surface.
   onEditRole: (role: string) => void
   onOpenAddRole: () => void
+  // Bench card click → open that employee's drawer (used to be
+  // a "click = assign to today" gesture; the drawer wins because
+  // drag-drop already covers the assign case and the drawer is
+  // where every other employee action lives).
+  onOpenEmployee: (employeeId: string) => void
+  // Bench footer "+ Add employee" affordance — parent opens the
+  // add-employee drawer, mirrors onOpenAddRole for the roles
+  // legend.
+  onOpenAddEmployee: () => void
 }
 
 type ActionResult =
@@ -183,7 +192,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
-    onEditRole, onOpenAddRole,
+    onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -767,12 +776,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
       {/* Bench */}
       <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '10px 14px', borderBottom: `1px solid ${LINE}` }}>
-          <div>
-            <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Bench', 'Plantilla')}</div>
-            <div style={{ fontSize: 12, color: MUTED, marginTop: 1 }}>
-              {t('Available staff — drag onto a day to schedule.', 'Personal disponible — arrastra a un día para programar.')}
-            </div>
-          </div>
+          <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Bench', 'Plantilla')}</div>
           <span style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
             background: '#EFF6FF', color: SIGNAL, borderRadius: 999,
@@ -782,12 +786,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
             {benchWithAssigned.filter((p) => !p.assigned).length} {t('available', 'disponible')}
           </span>
         </div>
-        <div style={{ padding: '12px 14px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {benchWithAssigned.length === 0 ? (
-            <p style={{ fontSize: 12, color: FAINT, margin: '6px 0' }}>
-              {t('No employees yet — add one from the toolbar above.', 'Sin empleados aún — añade uno desde la barra superior.')}
-            </p>
-          ) : benchWithAssigned.map((p) => {
+        <div style={{ padding: '12px 14px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {benchWithAssigned.map((p) => {
             const tone = roleToneFor(p.role, roleColors)
             const hrs = weeklyHoursByEmployee.get(p.id) ?? 0
             return (
@@ -800,14 +800,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   setDragging(p)
                 }}
                 onDragEnd={() => { setDragging(null); setDragOverDay(null) }}
-                onClick={() => {
-                  // Click on bench in day view = add to today (day view's dayIndex)
-                  if (view === 'day') {
-                    startTransition(() => {
-                      onAssignToDay(p.id, day.toISOString())
-                    })
-                  }
-                }}
+                onClick={() => onOpenEmployee(p.id)}
+                title={t('Open employee', 'Abrir empleado')}
                 style={{
                   minWidth: 172,
                   border: `1px solid ${LINE}`,
@@ -826,6 +820,23 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               </div>
             )
           })}
+
+          {/* + Add employee — mirrors the "+ Add role" affordance in
+              the roles legend. Empty state fallback: when there's
+              no one on the bench yet, this is the only thing shown
+              so the manager has an obvious next step. */}
+          <button
+            type="button"
+            onClick={onOpenAddEmployee}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              border: `1px dashed ${LINE}`, borderRadius: 8, padding: '7px 12px',
+              background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
+              color: MUTED, cursor: 'pointer',
+            }}
+          >
+            + {t('Add employee', 'Añadir empleado')}
+          </button>
         </div>
       </div>
     </div>

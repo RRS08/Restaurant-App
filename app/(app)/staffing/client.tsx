@@ -737,28 +737,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
             >›</button>
           </div>
 
-          {/* Workflow actions — three operational entry points, in
-              order of how often a manager reaches for them: assign a
-              one-off shift > add a recurring block > onboard a person. */}
-          <button
-            type="button"
-            onClick={() => setDrawer({ mode: 'add-shift', defaultDay: null })}
-            className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-          >
-            {t('+ Shift', '+ Turno')}
-          </button>
-          {/* + Block button retired — blocks (shift sections) are no
-              longer a visible concept on the calendar. Existing
-              sections stay in the DB and still surface in the
-              add-shift drawer as a "template" picker, but managers
-              no longer create/edit blocks through this page. */}
-          <button
-            type="button"
-            onClick={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
-            className="inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-          >
-            {t('+ Employee', '+ Empleado')}
-          </button>
+          {/* Top-level "+ Shift" and "+ Employee" retired — Add-shift
+              is now covered by drag-drop from the bench onto a day;
+              Add-employee lives inside the bench card as "+ Add
+              employee" alongside the "+ Add role" affordance. */}
         </div>
       </div>
 
@@ -850,6 +832,17 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           setDrawer({ mode: 'role-drawer', role, area })
         }}
         onOpenAddRole={() => setDrawer({ mode: 'role-drawer', role: null, area: activeHouse })}
+        onOpenEmployee={(employeeId) => {
+          const emp = employees.find((e) => e.id === employeeId)
+          if (!emp) return
+          // Which house does this employee belong to? Same isFohRole
+          // logic the bench filter uses — keeps the drawer's house
+          // eyebrow honest even when the current view is toggled to
+          // the other side.
+          const empHouse: 'foh' | 'boh' = isUnified ? 'foh' : (isFohRole(emp.role) ? 'foh' : 'boh')
+          setDrawer({ mode: 'edit-employee', employee: emp, house: empHouse })
+        }}
+        onOpenAddEmployee={() => setDrawer({ mode: 'add-employee', house: activeHouse })}
       />
 
 

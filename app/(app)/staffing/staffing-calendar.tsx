@@ -43,6 +43,10 @@ export interface CalEmployee {
   id: string
   name: string
   role: string
+  // Mon..Sun booleans. Optional so pre-migration adapter code
+  // doesn't need to be updated in lock-step. Day-view bench
+  // hides anyone flagged false for the visible day.
+  availability?: boolean[]
 }
 
 // ---- Role tone helper (mirrors client.tsx's roleTone) ----------
@@ -154,7 +158,14 @@ export interface StaffingCalendarProps {
   // action result verbatim; the component only ever reads
   // `.error` and `.copied` off successful results.
   onOpenEditShift: (shift: CalShift) => void
-  onAssignToDay: (employeeId: string, dayIso: string, startHour?: number, endHour?: number) => Promise<ActionResult>
+  // Bench card dropped onto a day (open days only) → parent
+  // opens the shift drawer in "create-locked" mode with the
+  // person pre-filled. Was the instant-create path; now hands
+  // off to the drawer for explicit confirmation.
+  onDropOnDay: (employeeId: string, dayIso: string) => void
+  // "+ Add shift" ghost clicked on an open day → parent opens
+  // the drawer in "create-blank" mode (person picker shown).
+  onAddShiftForDay: (dayIso: string) => void
   onSetShiftTime: (shiftId: string, startIso: string, endIso: string) => Promise<ActionResult>
   onRemoveShift: (shiftId: string) => Promise<ActionResult>
   onRepeatLastWeekForDay: (dayIso: string) => Promise<ActionResult>
@@ -219,7 +230,7 @@ export const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
     lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, houseRoles,
-    onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
+    onOpenEditShift, onDropOnDay, onAddShiftForDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
@@ -252,6 +263,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [benchDropTargetId, setBenchDropTargetId] = useState<string | null>(null)
   const [roleDrag, setRoleDrag] = useState<string | null>(null)
   const [roleDropTarget, setRoleDropTarget] = useState<string | null>(null)
+  // Which day is showing the "+ Add shift" ghost right now.
+  // Set on mouse-enter of an open day's track; cleared on
+  // mouse-leave. Bench drag also lights it up so the manager
+  // sees exactly where the drop will land.
+  const [hoverAddDay, setHoverAddDay] = useState<number | null>(null)
 
   // ---- Time axis — driven by business hours + 90m PRE/POST -----
   // Previously we derived from min/max shift time; now the hours
@@ -334,19 +350,36 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const dayTotalH = dayShifts.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
   const dayLongLabel = day.toLocaleDateString(dateLocale, { weekday: 'long', month: 'long', day: 'numeric' })
 
-  const benchWithAssigned = useMemo(
-    () => bench.map((p) => ({ ...p, assigned: dayShifts.some((s) => s.employeeId === p.id) })),
-    [bench, dayShifts],
-  )
+  // benchWithAssigned drives what shows in the bench card grid.
+  // In Day view we additionally hide anyone marked unavailable
+  // for the selected day — the server would reject them anyway
+  // and showing them just baits a rejected drop. Week view
+  // keeps everyone so a manager can plan across the week.
+  const benchWithAssigned = useMemo(() => {
+    const jsDow = day.getDay()
+    const monIdx = jsDow === 0 ? 6 : jsDow - 1
+    return bench
+      .filter((p) => {
+        if (view !== 'day') return true
+        const av = p.availability
+        if (!Array.isArray(av) || av.length !== 7) return true
+        return av[monIdx] !== false
+      })
+      .map((p) => ({ ...p, assigned: dayShifts.some((s) => s.employeeId === p.id) }))
+  }, [bench, dayShifts, view, day])
 
   // ---- Handlers -------------------------------------------------
+  // Bench-drop no longer creates instantly — hand off to the
+  // parent which opens the shift drawer with the person locked
+  // and times pre-set to the day's open→close. Closed days
+  // silently refuse the drop; the drawer would just error later.
   const handleDayDrop = (idx: number) => {
     if (!dragging) return
     const emp = dragging
-    setDragging(null); setDragOverDay(null)
-    startTransition(() => {
-      onAssignToDay(emp.id, weekDays[idx].toISOString())
-    })
+    setDragging(null); setDragOverDay(null); setHoverAddDay(null)
+    const h = dayHours[idx]
+    if (!h || h.closed) return
+    onDropOnDay(emp.id, weekDays[idx].toISOString())
   }
   const handleSetShiftTime = (shift: CalShift) => {
     // Default set = fill the day's inferred open hours, or 9–5 if empty.
@@ -453,7 +486,13 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     return (
       <button
         type="button"
-        onClick={() => onOpenEditShift(s)}
+        onClick={(e) => {
+          // Stop the click from bubbling to the day-row track,
+          // which would fire onAddShiftForDay and open a NEW-
+          // shift drawer on top of the edit intent.
+          e.stopPropagation()
+          onOpenEditShift(s)
+        }}
         style={{
           position: 'absolute', left: `${left}%`, width: `${width}%`, height,
           borderRadius: height > 20 ? 7 : 4,
@@ -628,15 +667,36 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       {hoursLine}
                     </span>
                   </button>
-                  <div style={{
-                    position: 'relative', flex: 1, minWidth: 0,
-                    padding: renderedList.length === 0 ? 0 : '8px 0',
-                    // Clip anything positioned outside the axis so
-                    // stray off-hours bars can't push the row edge
-                    // past the vertical divider (which is what was
-                    // making Sat/Sun look wider than Mon–Fri).
-                    overflow: 'hidden',
-                  }}>
+                  <div
+                    onMouseEnter={() => {
+                      // Only open days invite an "+ Add shift" gesture.
+                      // Closed days ignore hover so the empty copy
+                      // stays the primary CTA (tap to change hours).
+                      if (!hoursForDay.closed) setHoverAddDay(idx)
+                    }}
+                    onMouseLeave={() => {
+                      // Don't clear during a bench drag — the ghost
+                      // should stay lit while the drop preview shows.
+                      if (!benchDragId && !dragging) setHoverAddDay((v) => (v === idx ? null : v))
+                    }}
+                    onClick={() => {
+                      // Click on the track (not on a placed shift)
+                      // opens the drawer in create-blank mode with
+                      // start/end pre-set to the day's open→close.
+                      if (hoursForDay.closed) return
+                      onAddShiftForDay(weekDays[idx].toISOString())
+                    }}
+                    style={{
+                      position: 'relative', flex: 1, minWidth: 0,
+                      padding: renderedList.length === 0 ? 0 : '8px 0',
+                      // Clip anything positioned outside the axis so
+                      // stray off-hours bars can't push the row edge
+                      // past the vertical divider (which is what was
+                      // making Sat/Sun look wider than Mon–Fri).
+                      overflow: 'hidden',
+                      cursor: hoursForDay.closed ? 'default' : (dragging ? 'copy' : 'pointer'),
+                    }}
+                  >
                     {openBand(open, setup, isToday)}
                     {renderedList.length === 0 ? (
                       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%', paddingLeft: 12 }}>
@@ -645,7 +705,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                             ? t('Drop to schedule', 'Suelta para programar')
                             : hoursForDay.closed
                               ? t('Closed — tap the day to change', 'Cerrado — toca el día para cambiar')
-                              : t('No shifts scheduled', 'Sin turnos programados')}
+                              : hoverAddDay === idx || dragging
+                                ? '' // ghost below takes over
+                                : t('No shifts scheduled', 'Sin turnos programados')}
                         </span>
                       </div>
                     ) : renderedList.map((s, i) => (
@@ -660,6 +722,31 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         {renderShiftBar(s, barH)}
                       </div>
                     ))}
+
+                    {/* + Add shift ghost — covers the full open span.
+                        Fires on hover of an open day, and also when
+                        the manager is dragging a bench card. Click
+                        goes to onAddShiftForDay (drop is handled by
+                        the outer parent's onDrop above). */}
+                    {open && !hoursForDay.closed && (hoverAddDay === idx || (dragging && dragOverDay === idx)) && (
+                      <div style={{
+                        position: 'absolute',
+                        left: `${open.startPct}%`, width: `${open.widthPct}%`,
+                        top: renderedList.length === 0 ? '50%' : undefined,
+                        bottom: renderedList.length === 0 ? undefined : 8,
+                        transform: renderedList.length === 0 ? 'translateY(-50%)' : undefined,
+                        height: 26, borderRadius: 6,
+                        background: '#EFF6FF', border: '1px dashed #93C5FD',
+                        display: 'flex', alignItems: 'center', padding: '0 9px',
+                        pointerEvents: 'none',
+                      }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', whiteSpace: 'nowrap' }}>
+                          {dragging
+                            ? `${t('Drop', 'Soltar')} ${dragging.name.split(' ')[0]} ${t('here', 'aquí')}`
+                            : `+ ${t('Add shift', 'Añadir turno')}`}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )

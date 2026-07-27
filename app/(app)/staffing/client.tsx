@@ -21,6 +21,7 @@ import {
   reorderStaffingRoles,
   reorderEmployees,
   setBusinessHours,
+  createShiftFromDrawer,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
@@ -69,6 +70,8 @@ interface Section { id: string; name: string; role: string; area: 'foh' | 'boh';
 interface Shift {
   id: string; locationId: string; employeeId: string; sectionId: string | null
   employeeName: string; role: string; startTime: string; endTime: string; notes: string | null
+  // Unpaid break in minutes. Default 0 for pre-migration rows.
+  breakMinutes: number
 }
 // Business hours row shapes (as the client sees them, camelCase).
 // Times are minutes from midnight; weekday 0=Mon..6=Sun.
@@ -521,6 +524,16 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         dayIndex: number
         dayIso: string
       }
+    | { mode: 'shift-drawer'
+        // 'blank'  = click the "+ Add shift" ghost on an open day
+        // 'locked' = bench card dropped onto an open day
+        // 'edit'   = click a placed shift bar
+        source: 'blank' | 'locked' | 'edit'
+        dayIso: string
+        dayIndex: number
+        initialEmployeeId?: string
+        initialShift?: Shift
+      }
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [, startTransition] = useTransition()
@@ -719,6 +732,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     id: e.id,
     name: e.name,
     role: e.role,
+    availability: e.availability,
   }))
 
   // ----------------------------------------------------------------
@@ -824,12 +838,36 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         houseRoles={isUnified ? [...fohRoles, ...bohRoles] : (activeHouse === 'foh' ? fohRoles : bohRoles)}
         onOpenEditShift={(cs) => {
           const full = weekShifts.find((s) => s.id === cs.id)
-          if (full) setDrawer({ mode: 'edit', shift: full })
+          if (!full) return
+          // Which day slot on the visible week? Needed so the
+          // drawer knows the day's open/close for step clamps
+          // and duplicate-warning context.
+          const startDate = new Date(full.startTime)
+          const idx = weekDays.findIndex((d) => sameDay(d, startDate))
+          if (idx < 0) return
+          setDrawer({
+            mode: 'shift-drawer', source: 'edit',
+            dayIso: weekDays[idx].toISOString(),
+            dayIndex: idx,
+            initialShift: full,
+            initialEmployeeId: full.employeeId,
+          })
         }}
-        onAssignToDay={async (employeeId, dayIso) => {
-          const r = await quickAssignShift(employeeId, null, dayIso)
-          router.refresh()
-          return r
+        onDropOnDay={(employeeId, dayIso) => {
+          const idx = weekDays.findIndex((d) => d.toISOString() === dayIso)
+          if (idx < 0) return
+          setDrawer({
+            mode: 'shift-drawer', source: 'locked',
+            dayIso, dayIndex: idx, initialEmployeeId: employeeId,
+          })
+        }}
+        onAddShiftForDay={(dayIso) => {
+          const idx = weekDays.findIndex((d) => d.toISOString() === dayIso)
+          if (idx < 0) return
+          setDrawer({
+            mode: 'shift-drawer', source: 'blank',
+            dayIso, dayIndex: idx,
+          })
         }}
         onSetShiftTime={async (shiftId, startIso, endIso) => {
           const r = await updateShiftTimes(shiftId, startIso, endIso)
@@ -930,9 +968,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           The drawer state union at the top of StaffingClient keeps
           this list exhaustive — adding a new flow is a one-line
           render branch here. */}
-      {drawer?.mode === 'edit' && (
-        <EditDrawer lang={lang} shift={drawer.shift} employees={locEmployees} sections={sections} onClose={() => setDrawer(null)} />
-      )}
+      {/* Old shift edit drawer retired — the unified ShiftDrawer
+          (see below, mode: 'shift-drawer') handles create + edit
+          in one surface. Function stays in the file until a
+          separate dead-code sweep. */}
       {drawer?.mode === 'add-employee' && (
         <AddEmployeeDrawer lang={lang} locationId={locationId} house={drawer.house} isUnified={isUnified}
           roles={isUnified ? fohRoles : (drawer.house === 'foh' ? fohRoles : bohRoles)}
@@ -1001,6 +1040,20 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           lang={lang}
           dayIso={drawer.dayIso}
           initialHours={dayHours[drawer.dayIndex]}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+      {drawer?.mode === 'shift-drawer' && (
+        <ShiftDrawer
+          lang={lang}
+          source={drawer.source}
+          dayIso={drawer.dayIso}
+          dayHours={dayHours[drawer.dayIndex]}
+          employees={houseEmployees}
+          weekShifts={weekShifts}
+          roleColors={roleColors}
+          initialEmployeeId={drawer.initialEmployeeId}
+          initialShift={drawer.initialShift}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -3566,6 +3619,523 @@ function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
             }}
           >
             {busy ? t('Saving…', 'Guardando…') : t('Save hours', 'Guardar horario')}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// ShiftDrawer — Claude Design 2026-07-26. Replaces the old
+// EditDrawer for shifts with a unified create/edit surface.
+//
+// Three sources, one drawer:
+//   'blank'  → click the "+ Add shift" ghost on an open day.
+//              Times pre-set to open→close; Who picker shown.
+//   'locked' → drop a bench card onto an open day.
+//              Times pre-set to open→close; person locked.
+//   'edit'   → click a placed shift bar.
+//              Everything prefilled; footer becomes Remove + Save.
+//
+// Times are 30-min steppers clamped to [openMin-90, closeMin+90]
+// (matches the calendar's shift window shading). Break is a
+// three-option pill row (0/30/60); free entry is a future add.
+//
+// Duplicate warning fires when the same person already has a
+// shift on this day — informational only, doesn't block save.
+// Edit mode excludes the shift being edited from the check.
+// ----------------------------------------------------------------
+function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, roleColors, initialEmployeeId, initialShift, onClose }: {
+  lang: Lang
+  source: 'blank' | 'locked' | 'edit'
+  dayIso: string
+  dayHours: DayHours
+  employees: Employee[]
+  weekShifts: Shift[]
+  roleColors: Record<string, string>
+  initialEmployeeId?: string
+  initialShift?: Shift
+  onClose: () => void
+}) {
+  const t = makeT(lang)
+  const router = useRouter()
+
+  // ---- Palette ----
+  const INK = '#18181B'
+  const PAPER = '#FAF9F6'
+  const LINE = '#E7E6E2'
+  const MUTED = '#6B6B70'
+  const FAINT = '#A1A1A6'
+  const SURFACE = '#FAFAF9'
+  const DANGER = '#B91C1C'
+  const MONO = "'Geist Mono', ui-monospace, monospace"
+
+  const PRE = 90
+  const POST = 90
+  const STEP = 30
+
+  const day = new Date(dayIso)
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
+  const dateLong = day.toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric' })
+
+  // Times pre-populated from initial shift (edit) or the day's
+  // open→close (blank / locked). When the day is closed the
+  // drawer still opens with a legal fallback (12p–8p) so the
+  // steppers work, though this path shouldn't normally trigger.
+  const isEdit = source === 'edit'
+  const initialStartMin = isEdit && initialShift
+    ? new Date(initialShift.startTime).getHours() * 60 + new Date(initialShift.startTime).getMinutes()
+    : (dayHours.closed ? 720 : dayHours.openMin)
+  const initialEndMin = isEdit && initialShift
+    ? new Date(initialShift.endTime).getHours() * 60 + new Date(initialShift.endTime).getMinutes()
+    : (dayHours.closed ? 1200 : dayHours.closeMin)
+  const clampMin = (dayHours.closed ? 0 : dayHours.openMin - PRE)
+  const clampMax = (dayHours.closed ? 1440 : dayHours.closeMin + POST)
+
+  const [employeeId, setEmployeeId] = useState(initialEmployeeId ?? '')
+  const [role, setRole] = useState<string>(initialShift?.role ?? '')
+  const [startMin, setStartMin] = useState(initialStartMin)
+  const [endMin, setEndMin] = useState(initialEndMin)
+  const [brk, setBrk] = useState<number>(initialShift?.breakMinutes ?? 30)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const person = employees.find((e) => e.id === employeeId)
+  // 'locked' + 'edit' both show a locked card; 'blank' shows a
+  // picker until the manager picks someone (then the picker
+  // stays visible so they can change their mind).
+  const locked = source === 'locked' || source === 'edit'
+
+  // Working-as options — primary + trained for the selected
+  // person. When a person is first chosen, default role to
+  // their primary so the drawer has a valid pick.
+  const rolePills: string[] = useMemo(() => {
+    if (!person) return []
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const r of [person.role, ...(person.trainedRoles ?? [])]) {
+      const k = normalizeNameKey(r)
+      if (!k || seen.has(k)) continue
+      seen.add(k); out.push(r)
+    }
+    return out
+  }, [person])
+  // Keep role in sync with the picked person — default to their
+  // primary role when the current role isn't in their set.
+  const primaryKey = person ? normalizeNameKey(person.role) : ''
+  const roleKey = normalizeNameKey(role)
+  const roleValid = rolePills.some((r) => normalizeNameKey(r) === roleKey)
+  const effectiveRole = roleValid ? role : (person?.role ?? '')
+
+  // Duplicate detection — same person, same date. Edit mode
+  // ignores the shift being edited so "saving with no change"
+  // doesn't warn about itself.
+  const dupCount = useMemo(() => {
+    if (!person) return 0
+    return weekShifts.filter((s) => {
+      if (s.employeeId !== person.id) return false
+      if (isEdit && initialShift && s.id === initialShift.id) return false
+      return sameDay(new Date(s.startTime), day)
+    }).length
+  }, [weekShifts, person, isEdit, initialShift, day])
+
+  // Outside-trading-hours flag — colors the "Against open hours"
+  // hint amber when the shift spills into setup/close-down.
+  const outsideOpen = !dayHours.closed && (startMin < dayHours.openMin || endMin > dayHours.closeMin)
+  const paidHours = (endMin - startMin - brk) / 60
+
+  const bump = (field: 'start' | 'end', delta: number) => {
+    if (field === 'start') {
+      setStartMin((v) => Math.max(clampMin, Math.min(endMin - STEP, v + delta)))
+    } else {
+      setEndMin((v) => Math.min(clampMax, Math.max(startMin + STEP, v + delta)))
+    }
+  }
+
+  function fmt(m: number) {
+    const h24 = Math.floor(m / 60) % 24
+    const mm = m % 60
+    const h = h24 % 12 === 0 ? 12 : h24 % 12
+    return `${h}:${String(mm).padStart(2, '0')}${h24 < 12 ? 'a' : 'p'}`
+  }
+  function fmtShort(m: number) {
+    const h24 = Math.floor(m / 60) % 24
+    const mm = m % 60
+    const h = h24 % 12 === 0 ? 12 : h24 % 12
+    return `${h}${mm ? ':' + String(mm).padStart(2, '0') : ''}${h24 < 12 ? 'a' : 'p'}`
+  }
+  const dur = (a: number, b: number) => {
+    const n = (b - a) / 60
+    return `${n % 1 ? n.toFixed(1) : n}h`
+  }
+
+  async function handleSave() {
+    if (!person) { setErr(t('Pick someone first.', 'Elige a alguien primero.')); return }
+    setBusy(true); setErr(null)
+    try {
+      if (isEdit && initialShift) {
+        const startDate = new Date(day); startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
+        const endDate = new Date(day); endDate.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0)
+        const fd = new FormData()
+        fd.set('shift_id', initialShift.id)
+        fd.set('employee_id', person.id)
+        fd.set('role', effectiveRole)
+        fd.set('start_time', startDate.toISOString())
+        fd.set('end_time', endDate.toISOString())
+        fd.set('break_minutes', String(brk))
+        const r = await updateShift(null, fd)
+        if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      } else {
+        const fd = new FormData()
+        fd.set('employee_id', person.id)
+        fd.set('day_iso', dayIso)
+        fd.set('start_min', String(startMin))
+        fd.set('end_min', String(endMin))
+        fd.set('role', effectiveRole)
+        fd.set('break_minutes', String(brk))
+        const r = await createShiftFromDrawer(fd)
+        if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  async function handleRemove() {
+    if (!isEdit || !initialShift) return
+    setBusy(true); setErr(null)
+    try {
+      const r = await deleteShiftById(initialShift.id)
+      if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  const eyebrowText = isEdit
+    ? t('EDIT SHIFT', 'EDITAR TURNO')
+    : source === 'locked'
+      ? t('NEW SHIFT · FROM BENCH', 'NUEVO TURNO · DESDE LA PLANTILLA')
+      : t('NEW SHIFT', 'NUEVO TURNO')
+  const openHoursLine = dayHours.closed
+    ? t('Day is closed', 'Día cerrado')
+    : `${t('Open', 'Abierto')} ${fmt(dayHours.openMin)} – ${fmt(dayHours.closeMin)}`
+
+  const eyebrowStyle: React.CSSProperties = { fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT }
+  const pill = (active: boolean): React.CSSProperties => ({
+    display: 'inline-flex', alignItems: 'center', gap: 7,
+    borderRadius: 999, padding: '5px 12px', font: 'inherit', fontSize: 12,
+    cursor: 'pointer',
+    border: `1px solid ${active ? INK : LINE}`,
+    background: active ? INK : '#fff',
+    color: active ? PAPER : '#3F3F46',
+    fontWeight: active ? 600 : 500,
+  })
+  const stepBtn: React.CSSProperties = {
+    border: `1px solid ${LINE}`, background: '#fff', borderRadius: 6,
+    width: 26, height: 18, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', font: 'inherit', fontSize: 8, color: MUTED,
+    cursor: 'pointer', padding: 0,
+  }
+
+  const primaryHex = person ? (ROLE_TONES[resolveRoleToneSlug(person.role, roleColors)]?.accent ?? '#A1A1A6') : '#A1A1A6'
+  const winStart = dayHours.closed ? clampMin : dayHours.openMin - PRE
+  const winEnd = dayHours.closed ? clampMax : dayHours.closeMin + POST
+  const winSpan = Math.max(1, winEnd - winStart)
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, display: 'flex', justifyContent: 'flex-end',
+        zIndex: 50, fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+      }}
+      role="dialog"
+      aria-label={eyebrowText}
+    >
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
+
+      <div style={{
+        position: 'relative', width: 420, maxWidth: '100%', flex: '0 0 420px',
+        height: '100vh', background: '#fff',
+        borderLeft: `1px solid ${LINE}`, boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {/* header */}
+        <div style={{ padding: '22px 26px 18px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <div style={eyebrowStyle}>{eyebrowText}</div>
+            <h2 style={{ margin: '5px 0 0', fontSize: 21, fontWeight: 700, letterSpacing: '-0.03em' }}>{dateLong}</h2>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: FAINT }}>{openHoursLine}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('Close', 'Cerrar')}
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+              width: 32, height: 32, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', font: 'inherit', fontSize: 15, color: MUTED,
+              cursor: 'pointer', flex: '0 0 auto',
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* body */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 26px 24px', display: 'block' }}>
+          {/* who — locked card or picker */}
+          {locked && person ? (
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 11, border: `1px solid ${LINE}`, borderRadius: 10, background: SURFACE, padding: '11px 12px' }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, flex: '0 0 auto', background: primaryHex }} />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ display: 'block', fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{person.name}</span>
+                <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>
+                  {person.role}
+                  {(person.trainedRoles?.length ?? 0) > 0 && (
+                    <> · {t('also', 'también')} {person.trainedRoles.join(', ')}</>
+                  )}
+                </span>
+              </span>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 7 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Who', 'Quién')}</label>
+                <span style={{ fontSize: 12, color: FAINT }}>
+                  {employeeId ? t('Tap to change', 'Toca para cambiar') : t('Pick someone', 'Elige a alguien')}
+                </span>
+              </div>
+              {employees.length === 0 ? (
+                <p style={{ margin: 0, fontSize: 12, color: FAINT }}>
+                  {t('No one on the bench for this house yet — add an employee first.', 'Nadie en la plantilla para esta casa aún — añade un empleado primero.')}
+                </p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {employees.map((p) => {
+                    const active = employeeId === p.id
+                    const hex = ROLE_TONES[resolveRoleToneSlug(p.role, roleColors)]?.accent ?? '#A1A1A6'
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => {
+                          setEmployeeId(p.id)
+                          // Default the role picker to their primary
+                          // when switching people; if the current role
+                          // is in their trained set, keep it.
+                          const trained = [p.role, ...(p.trainedRoles ?? [])].map(normalizeNameKey)
+                          if (!trained.includes(roleKey)) setRole(p.role)
+                        }}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                          borderRadius: 9, padding: '9px 11px', font: 'inherit', cursor: 'pointer',
+                          border: `1px solid ${active ? INK : LINE}`,
+                          background: active ? SURFACE : '#fff', textAlign: 'left',
+                        }}
+                      >
+                        <span style={{ width: 8, height: 8, borderRadius: 2, flex: '0 0 auto', background: hex }} />
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>{p.name}</span>
+                          <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>
+                            {p.role}
+                            {(p.trainedRoles?.length ?? 0) > 0 && (
+                              <> · {t('also', 'también')} {p.trainedRoles.join(', ')}</>
+                            )}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* working as — primary + trained */}
+          {person && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 7 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Working as', 'Trabajando como')}</label>
+                <span style={{ fontSize: 12, color: FAINT }}>
+                  {t(`Trained for ${rolePills.length} role${rolePills.length === 1 ? '' : 's'}`, `Entrenado para ${rolePills.length} puesto${rolePills.length === 1 ? '' : 's'}`)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {rolePills.map((r) => {
+                  const active = normalizeNameKey(r) === normalizeNameKey(effectiveRole)
+                  const hex = ROLE_TONES[resolveRoleToneSlug(r, roleColors)]?.accent ?? '#A1A1A6'
+                  const isPrimary = normalizeNameKey(r) === primaryKey
+                  return (
+                    <button key={r} type="button" onClick={() => setRole(r)} style={pill(active)}>
+                      <span style={{ width: 8, height: 8, borderRadius: 2, flex: '0 0 auto', background: hex }} />
+                      {r}
+                      {isPrimary && (
+                        <span style={{ fontFamily: MONO, fontSize: 9, letterSpacing: '0.12em', opacity: 0.7 }}>
+                          {t('PRIMARY', 'PRINCIPAL')}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* times */}
+          <div style={{ marginBottom: 16, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr' }}>
+              <div style={{ padding: '14px 16px' }}>
+                <div style={eyebrowStyle}>{t('STARTS', 'EMPIEZA')}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+                  <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>{fmt(startMin)}</span>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <button type="button" style={stepBtn} onClick={() => bump('start', STEP)}>▲</button>
+                    <button type="button" style={stepBtn} onClick={() => bump('start', -STEP)}>▼</button>
+                  </span>
+                </div>
+              </div>
+              <div style={{ background: LINE }} />
+              <div style={{ padding: '14px 16px' }}>
+                <div style={eyebrowStyle}>{t('ENDS', 'TERMINA')}</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+                  <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>{fmt(endMin)}</span>
+                  <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    <button type="button" style={stepBtn} onClick={() => bump('end', STEP)}>▲</button>
+                    <button type="button" style={stepBtn} onClick={() => bump('end', -STEP)}>▼</button>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* against open hours preview */}
+          {!dayHours.closed && (
+            <div style={{ marginBottom: 16, border: `1px solid ${LINE}`, borderRadius: 12, background: SURFACE, padding: '14px 16px' }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                <span style={eyebrowStyle}>{t('AGAINST OPEN HOURS', 'CONTRA HORAS DE APERTURA')}</span>
+                <span style={{ fontSize: 11, color: MUTED }}>
+                  {dur(startMin, endMin)} · {dur(0, paidHours * 60)} {t('paid', 'pagadas')}
+                </span>
+              </div>
+              <div style={{ position: 'relative', height: 10, borderRadius: 999, background: '#EDECE8', overflow: 'hidden' }}>
+                {/* Open band inside the window */}
+                <div style={{
+                  position: 'absolute', top: 0, bottom: 0,
+                  left: `${((dayHours.openMin - winStart) / winSpan) * 100}%`,
+                  width: `${((dayHours.closeMin - dayHours.openMin) / winSpan) * 100}%`,
+                  background: '#D6D5D1',
+                }} />
+                {/* The shift itself */}
+                <div style={{
+                  position: 'absolute', top: 0, bottom: 0,
+                  left: `${((startMin - winStart) / winSpan) * 100}%`,
+                  width: `${((endMin - startMin) / winSpan) * 100}%`,
+                  background: INK, borderRadius: 999,
+                }} />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 7 }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{fmtShort(winStart)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{fmtShort(winEnd)}</span>
+              </div>
+              <p style={{ margin: '10px 0 0', fontSize: 12, lineHeight: 1.5, color: outsideOpen ? '#B45309' : MUTED }}>
+                {outsideOpen
+                  ? t('Runs outside trading hours — fine for setup or close-down.', 'Corre fuera de horas de servicio — bien para preparación o cierre.')
+                  : t('Sits inside trading hours.', 'Dentro de las horas de servicio.')}
+              </p>
+            </div>
+          )}
+
+          {/* unpaid break */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', marginBottom: 7 }}>
+              {t('Unpaid break', 'Descanso no pagado')}
+            </label>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {[0, 30, 60].map((v) => (
+                <button key={v} type="button" onClick={() => setBrk(v)} style={pill(brk === v)}>
+                  {v === 0 ? t('None', 'Sin descanso') : `${v} min`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* duplicate warning */}
+          {dupCount > 0 && person && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-start', gap: 9,
+              border: '1px solid #FDE68A', background: '#FFFBEB',
+              borderRadius: 9, padding: '9px 11px', marginBottom: 12,
+            }}>
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#D97706', marginTop: 5, flex: '0 0 auto' }} />
+              <span style={{ fontSize: 12, lineHeight: 1.5, color: '#B45309' }}>
+                {person.name.split(' ')[0]} {t('already has a shift on this day — adding this one gives them another.', 'ya tiene un turno este día — añadir este le da otro más.')}
+              </span>
+            </div>
+          )}
+
+          {err && (
+            <p style={{ margin: 0, fontSize: 12, color: DANGER }}>{err}</p>
+          )}
+        </div>
+
+        {/* footer */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, padding: '16px 26px',
+          display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+        }}>
+          {isEdit ? (
+            <button
+              type="button"
+              onClick={handleRemove}
+              disabled={busy}
+              style={{
+                marginRight: 'auto', border: 0, background: 'transparent',
+                padding: '8px 0', font: 'inherit', fontSize: 13, fontWeight: 500,
+                color: DANGER, cursor: 'pointer', opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? t('Removing…', 'Eliminando…') : t('Remove shift', 'Quitar turno')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                marginRight: 'auto', border: 0, background: 'transparent',
+                padding: '8px 0', font: 'inherit', fontSize: 13, fontWeight: 500,
+                color: MUTED, cursor: 'pointer',
+              }}
+            >
+              {t('Cancel', 'Cancelar')}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={busy || !employeeId}
+            style={{
+              border: 0,
+              background: employeeId ? INK : LINE,
+              color: employeeId ? PAPER : FAINT,
+              borderRadius: 9, padding: '11px 22px',
+              font: 'inherit', fontSize: 13, fontWeight: 600,
+              cursor: employeeId ? 'pointer' : 'not-allowed',
+              opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy
+              ? t('Saving…', 'Guardando…')
+              : isEdit ? t('Save changes', 'Guardar cambios')
+                : employeeId ? t('Add shift', 'Añadir turno')
+                  : t('Pick someone first', 'Elige a alguien primero')}
           </button>
         </div>
       </div>

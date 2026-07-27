@@ -129,7 +129,7 @@ export default async function StaffingPage() {
     { data: hoursOverrides },
   ] = await Promise.all([
     supabase.from('employees').select('id, name, role, primary_location_id, trained_roles, employment, availability, sort_order').eq('active', true).order('sort_order').order('name'),
-    supabase.from('shifts').select('id, location_id, employee_id, section_id, role, start_time, end_time, notes, employees ( name )').order('start_time'),
+    supabase.from('shifts').select('id, location_id, employee_id, section_id, role, start_time, end_time, notes, break_minutes, employees ( name )').order('start_time'),
     supabase.from('shift_sections').select('id, name, role, area, default_start_hour, default_end_hour, sort_order').order('sort_order'),
     supabase.from('locations').select('id, name').order('created_at', { ascending: true }),
     // 7 rows max per location — cheap to fetch in full.
@@ -300,6 +300,7 @@ export default async function StaffingPage() {
         sectionId: s.section_id, role: s.role,
         employeeName: (s.employees as unknown as { name: string } | null)?.name ?? '—',
         startTime: s.start_time, endTime: s.end_time, notes: s.notes ?? null,
+        breakMinutes: typeof s.break_minutes === 'number' ? s.break_minutes : 0,
       }))}
       sections={sections.map((s) => ({
         id: s.id, name: s.name, role: s.role ?? 'General', area: s.area as 'foh' | 'boh',

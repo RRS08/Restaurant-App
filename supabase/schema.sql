@@ -626,10 +626,15 @@ create table public.shifts (
   start_time    timestamptz not null,
   end_time      timestamptz not null,
   notes         text,
+  -- Unpaid break in minutes. Bounded 0..480 (8h) so bad values
+  -- can't flip paid-hours math negative downstream.
+  break_minutes integer not null default 0,
   created_at    timestamptz not null default now(),
 
   -- end_time must be after start_time
-  check (end_time > start_time)
+  check (end_time > start_time),
+  constraint shifts_break_minutes_check
+    check (break_minutes >= 0 and break_minutes <= 480)
 );
 
 

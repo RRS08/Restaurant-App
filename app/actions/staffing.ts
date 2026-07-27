@@ -817,6 +817,115 @@ export async function quickAssignShift(
 }
 
 // ----------------------------------------------------------------
+// createShiftFromDrawer — the redesigned shift drawer's persist
+// path. Replaces the drag-drop instant-create flow with an
+// explicit "manager confirmed the shift in the drawer" gate.
+//
+// Inputs (FormData):
+//   employee_id     — target person
+//   day_iso         — the date the shift lives on
+//   start_min       — minutes from midnight (0..1440)
+//   end_min         — minutes from midnight (must exceed start_min)
+//   role            — must be either the employee's primary role
+//                     or one of their trained roles
+//   break_minutes   — 0..480 unpaid break
+//
+// Guards mirror the drawer:
+//   • availability check for that weekday
+//   • role validation against primary + trained set
+//   • start < end
+//   • break_minutes bounded (DB CHECK is authoritative)
+//
+// The shift is stored with section_id = null — sections are
+// retired from the UI; the row lives as a stand-alone shift.
+// ----------------------------------------------------------------
+export async function createShiftFromDrawer(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
+
+  const { locationId } = await resolveLocationId(ctx)
+  if (!locationId) return { error: 'No location.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const employeeId = ((formData.get('employee_id') as string) ?? '').trim()
+  const dayIso = ((formData.get('day_iso') as string) ?? '').trim()
+  const startMinRaw = parseInt(String(formData.get('start_min') ?? ''), 10)
+  const endMinRaw = parseInt(String(formData.get('end_min') ?? ''), 10)
+  const rawRole = ((formData.get('role') as string) ?? '').trim()
+  const breakRaw = parseInt(String(formData.get('break_minutes') ?? '0'), 10)
+
+  if (!employeeId) return { error: 'Employee is required.' }
+  if (!dayIso) return { error: 'Day is required.' }
+  if (!Number.isFinite(startMinRaw) || startMinRaw < 0) return { error: 'Start time is invalid.' }
+  if (!Number.isFinite(endMinRaw) || endMinRaw <= startMinRaw) return { error: 'End must be after start.' }
+  const breakMinutes = Number.isFinite(breakRaw) && breakRaw >= 0 && breakRaw <= 480 ? breakRaw : 0
+
+  const day = new Date(dayIso)
+  if (!Number.isFinite(day.getTime())) return { error: 'Day is not a valid date.' }
+
+  const { data: employee } = await ctx.supabase
+    .from('employees')
+    .select('name, role, trained_roles, availability')
+    .eq('id', employeeId)
+    .eq('restaurant_id', ctx.restaurantId)
+    .single()
+  if (!employee) return { error: 'Employee not found.' }
+
+  // Availability guard — same Mon..Sun remap as quickAssignShift.
+  const jsDow = day.getDay()
+  const monIdx = jsDow === 0 ? 6 : jsDow - 1
+  const availability = employee.availability
+  if (Array.isArray(availability) && availability.length === 7 && availability[monIdx] === false) {
+    return { error: `${employee.name ?? 'This employee'} isn’t available that day.` }
+  }
+
+  // Role validation — must be primary or trained. Preserves the
+  // stored display form when the picker sent a differently-cased
+  // string.
+  const primaryKey = normalizeNameKey(employee.role ?? '')
+  const trainedList = (Array.isArray(employee.trained_roles) ? employee.trained_roles : []) as string[]
+  const trainedKeys = trainedList.map((r) => normalizeNameKey(r))
+  let resolvedRole = employee.role as string
+  if (rawRole) {
+    const wantKey = normalizeNameKey(rawRole)
+    if (wantKey === primaryKey) {
+      resolvedRole = employee.role as string
+    } else if (trainedKeys.includes(wantKey)) {
+      resolvedRole = trainedList[trainedKeys.indexOf(wantKey)]
+    } else {
+      return { error: `Role “${rawRole}” isn’t in the employee’s primary or trained set.` }
+    }
+  }
+
+  // Build the timestamps from local minutes-from-midnight so the
+  // shift lands on the manager's calendar day, not UTC.
+  const startDate = new Date(day)
+  startDate.setHours(Math.floor(startMinRaw / 60), startMinRaw % 60, 0, 0)
+  const endDate = new Date(day)
+  endDate.setHours(Math.floor(endMinRaw / 60), endMinRaw % 60, 0, 0)
+  if (endDate.getTime() <= startDate.getTime()) return { error: 'End must be after start.' }
+
+  const { error } = await ctx.supabase.from('shifts').insert({
+    restaurant_id: ctx.restaurantId,
+    location_id: locationId,
+    employee_id: employeeId,
+    section_id: null,
+    role: resolvedRole,
+    start_time: startDate.toISOString(),
+    end_time: endDate.toISOString(),
+    break_minutes: breakMinutes,
+  })
+  if (error) return { error: formatError('shift', error) }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
 // copyPreviousWeek — duplicate the previous week's shifts +7 days.
 //
 // Called from the new staffing calendar's "Copy last week" button.
@@ -1289,9 +1398,22 @@ export async function updateShift(
     }
   }
 
-  const { error } = await ctx.supabase.from('shifts').update({
-    employee_id: employeeId, role: resolvedRole, start_time: startTime, end_time: endTime, notes,
-  }).eq('id', shiftId)
+  // Optional break_minutes — carried by the shift drawer but
+  // still absent from legacy callers; only include in the update
+  // when the form sent a value we can parse.
+  const breakRaw = formData.get('break_minutes')
+  const updatePayload: Record<string, unknown> = {
+    employee_id: employeeId, role: resolvedRole,
+    start_time: startTime, end_time: endTime, notes,
+  }
+  if (breakRaw !== null) {
+    const parsed = parseInt(String(breakRaw), 10)
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 480) {
+      updatePayload.break_minutes = parsed
+    }
+  }
+
+  const { error } = await ctx.supabase.from('shifts').update(updatePayload).eq('id', shiftId)
 
   if (error) return { error: formatError('shift', error) }
   revalidatePath('/staffing')

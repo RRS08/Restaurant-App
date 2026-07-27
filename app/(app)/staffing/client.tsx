@@ -870,16 +870,6 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           router.refresh()
           return r
         }}
-        onRepeatLastWeekForDay={async (dayIso) => {
-          // Reuse copyPreviousWeek scoped to whole week; day-specific
-          // filter is a future refinement. For now this repeats the
-          // previous week's shifts for the whole week (which includes
-          // the requested day). Idempotent — existing rows are skipped.
-          const _ = dayIso
-          const r = await copyPreviousWeek(weekStart.toISOString())
-          router.refresh()
-          return r
-        }}
         onClearDay={async (dayIso) => {
           // Delete every shift for the given day + active-house scope.
           const dayDate = new Date(dayIso)

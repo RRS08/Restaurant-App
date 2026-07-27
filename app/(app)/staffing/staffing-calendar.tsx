@@ -176,7 +176,11 @@ export interface StaffingCalendarProps {
   // migrate; parent may pass a no-op. Will be removed next pass.
   onSetShiftTime?: (shiftId: string, startIso: string, endIso: string) => Promise<ActionResult>
   onRemoveShift: (shiftId: string) => Promise<ActionResult>
-  onRepeatLastWeekForDay: (dayIso: string) => Promise<ActionResult>
+  // Retired 2026-07-26: the per-day "Repeat last week" button
+  // was redundant with the header's Copy last week (covers the
+  // whole week anyway). Prop signature preserved as optional so
+  // any lingering caller doesn't 500.
+  onRepeatLastWeekForDay?: (dayIso: string) => Promise<ActionResult>
   onClearDay: (dayIso: string) => Promise<ActionResult>
   onCopyLastWeek: () => Promise<ActionResult>
   // Week navigation is now driven by the ScheduleHeader (swipe +
@@ -243,7 +247,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
     lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, houseRoles,
     onOpenEditShift, onDropOnDay, onAddShiftForDay, onSetShiftTime, onRemoveShift,
-    onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
+    onClearDay, onCopyLastWeek,
     onWeekChange, onPublish,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
     onReorderBench, onReorderRoles,
@@ -397,9 +401,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   }
   const handleRemove = (shift: CalShift) => {
     startTransition(() => { onRemoveShift(shift.id) })
-  }
-  const handleRepeat = () => {
-    startTransition(() => { onRepeatLastWeekForDay(day.toISOString()) })
   }
   const handleClear = () => {
     startTransition(() => { onClearDay(day.toISOString()) })
@@ -569,9 +570,18 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
         {view === 'week' ? (
           <div style={{ minWidth: 900 }}>
-            {/* Hour ruler */}
+            {/* Hour ruler — gutter now carries a DAY · HOURS
+                eyebrow to match the Day-view STAFF label. Keeps
+                the two views' ruler bars visually parallel. */}
             <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}`, background: SURFACE, position: 'sticky', top: 41, zIndex: 2 }}>
-              <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}` }} />
+              <div style={{
+                width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`,
+                padding: '0 12px', display: 'flex', alignItems: 'center',
+              }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>
+                  {t('DAY · HOURS', 'DÍA · HORAS')}
+                </span>
+              </div>
               <div style={{ position: 'relative', height: 18, flex: 1, minWidth: 0 }}>
                 {TICKS.map((tick) => (
                   <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 4, fontFamily: MONO, fontSize: 9, color: MUTED }}>
@@ -902,16 +912,16 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
             <div style={{ padding: 14 }}>
               {/* Old day-view heading retired — ScheduleHeader now
-                  carries the date + stats. Only the day actions
-                  (Repeat / Clear) remain; they sit right-aligned
-                  above the timeline so they don't fight with the
-                  header's Copy last week + Publish cluster. */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7, marginBottom: 10, flexWrap: 'wrap' }}>
-                <button style={ghostBtn} onClick={handleRepeat}>{t('Repeat last week', 'Repetir semana pasada')}</button>
-                {dayShifts.length > 0 && (
+                  carries the date + stats. The per-day "Repeat
+                  last week" button was redundant with the header's
+                  own Copy last week (which covers the whole week);
+                  only Clear day remains, and only when there's
+                  something to clear. */}
+              {dayShifts.length > 0 && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7, marginBottom: 10, flexWrap: 'wrap' }}>
                   <button style={ghostBtn} onClick={handleClear}>{t('Clear day', 'Vaciar día')}</button>
-                )}
-              </div>
+                </div>
+              )}
 
               {(dayHours[dayIndex]?.closed ?? true) ? (
                 // Closed-day panel — dashed border, muted copy.

@@ -781,6 +781,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         bench={calBench}
         weeklyHoursByEmployee={hoursByEmployee}
         roleColors={roleColors}
+        houseRoles={isUnified ? [...fohRoles, ...bohRoles] : (activeHouse === 'foh' ? fohRoles : bohRoles)}
         onOpenEditShift={(cs) => {
           const full = weekShifts.find((s) => s.id === cs.id)
           if (full) setDrawer({ mode: 'edit', shift: full })

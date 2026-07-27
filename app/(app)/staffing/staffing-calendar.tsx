@@ -134,6 +134,11 @@ export interface StaffingCalendarProps {
   bench: CalEmployee[]            // employees already filtered to activeHouse
   weeklyHoursByEmployee: Map<string, number>  // for bench card labels
   roleColors: Record<string, string>          // slug map from staffing_config
+  // Every configured role for the active house, from staffing_config.
+  // Used as the primary legend source so roles show up even before
+  // anyone's assigned — without this, phantom roles from the
+  // onboarding seed stay invisible until someone's tagged with them.
+  houseRoles: string[]
 
   // Actions — parent wraps server calls + revalidation. Return
   // shape is deliberately wide so the callsite can return any
@@ -174,7 +179,7 @@ export const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
 
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
-    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors,
+    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, houseRoles,
     onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
@@ -548,12 +553,15 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 to inline-add. Bigger than the prior legend so it
                 doubles as the management surface for role identity. */}
             {(() => {
-              // Roles in the legend = union of (bench roles + scheduled
-              // roles). Bench roles ensure a newly-added role shows
-              // even before it's scheduled anywhere.
+              // Roles in the legend = union of (configured house roles
+              // + bench roles + scheduled roles). houseRoles comes
+              // first so configured-but-unassigned roles are visible
+              // (previously they hid until someone was tagged, which
+              // let phantom onboarding-seed roles like "Barista" lurk
+              // in the DB with no way to see or delete them).
               const seen = new Set<string>()
               const roles: string[] = []
-              for (const src of [bench.map((p) => p.role), shifts.map((s) => s.role)]) {
+              for (const src of [houseRoles, bench.map((p) => p.role), shifts.map((s) => s.role)]) {
                 for (const r of src) {
                   const k = r.toLowerCase().trim()
                   if (!k || seen.has(k)) continue

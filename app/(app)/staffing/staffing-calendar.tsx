@@ -1076,20 +1076,38 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     onDrop={() => handleDayDrop(dayIndex)}
                     style={{ display: 'flex', alignItems: 'stretch', background: '#FCFCFB' }}
                   >
-                    <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center' }}>
-                      <button
-                        type="button"
-                        onClick={() => onAddShiftForDay(day.toISOString())}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 6,
-                          border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 10px',
-                          background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
-                          color: MUTED, cursor: 'pointer', width: '100%',
-                          justifyContent: 'flex-start',
-                        }}
-                      >
-                        + {t('Add shift', 'Añadir turno')}
-                      </button>
+                    <div
+                      onMouseEnter={() => setHoverAddDay(dayIndex)}
+                      onMouseLeave={() => { if (!dragging) setHoverAddDay((v) => (v === dayIndex ? null : v)) }}
+                      style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center' }}
+                    >
+                      {(() => {
+                        // Match the Week-view ghost's blue vocabulary
+                        // when the button is hovered or a bench card
+                        // is being dragged — reads as one gesture
+                        // across views instead of two similar-but-off
+                        // affordances.
+                        const lit = hoverAddDay === dayIndex || !!dragging
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => onAddShiftForDay(day.toISOString())}
+                            style={{
+                              display: 'inline-flex', alignItems: 'center', gap: 6,
+                              border: `1px dashed ${lit ? '#93C5FD' : LINE}`,
+                              borderRadius: 8, padding: '6px 10px',
+                              background: lit ? '#EFF6FF' : 'transparent',
+                              font: 'inherit', fontSize: 12, fontWeight: lit ? 600 : 500,
+                              color: lit ? '#1D4ED8' : MUTED,
+                              cursor: 'pointer', width: '100%',
+                              justifyContent: 'flex-start',
+                              transition: 'background 120ms, border-color 120ms, color 120ms',
+                            }}
+                          >
+                            + {t('Add shift', 'Añadir turno')}
+                          </button>
+                        )
+                      })()}
                     </div>
                     <div style={{
                       position: 'relative', flex: 1, minWidth: 0, padding: '5px 0',

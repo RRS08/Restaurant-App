@@ -2986,7 +2986,6 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, hoursByEmploye
                   aria-label={t('Role name', 'Nombre del puesto')}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  autoFocus
                   placeholder={t('e.g. Cashier', 'p.ej. Cajero')}
                   style={{
                     border: '1px solid transparent', borderRadius: 8,

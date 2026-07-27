@@ -1,25 +1,31 @@
 'use client'
 
 // ----------------------------------------------------------------
-// Sales Client
+// Sales Client — 2026-07-27 design pass
 //
-// Sales is the canonical ledger / review / correction workspace for
-// completed orders. The UI is intentionally SHARED across both
-// branches (native_pos + external_pos) — only the data origin and
-// a thin layer of copy differ. Everything structural — page
-// hierarchy, filter strip, row design, drawer — is identical so the
-// pillar reads as one workspace.
+// Day-scoped ledger with a per-sale detail drawer. Everything
+// functional is preserved from the previous build:
+//   • URL-driven date navigation (?date=YYYY-MM-DD)
+//   • voidOrder server action via useActionState
+//   • Timezone-aware date rendering
+//   • Full i18n (makeT(lang) — every string)
+//   • Swipe gesture on the header band
 //
-// Two bands:
-//   1. Header — eyebrow + h1 + mode-aware subtitle + source chip
-//   2. Activity — filter strip + paged orders table + drawer
+// The visual layer follows the Claude Design pass: date as the
+// heading (tap → month picker portal), big mono total under it,
+// pill filter row, soft-card rows with method-tinted icon tiles,
+// wide drawer with an amount+status hero, items, summary rows,
+// method-adaptive payment section, two-step void confirm.
 //
-// The drawer is the inspection workspace: identity, context chips,
-// line items, totals, audit-minded footer, and the correction action.
+// Fields the design mocks but we don't have yet are omitted
+// (staff / auth code / cash tendered / Print receipt wiring)
+// rather than stubbed. If a per-order staff column lands later
+// we can drop a "Rung by" row back into the drawer with zero
+// other churn.
 // ----------------------------------------------------------------
 
-import { useState, useActionState, useEffect, useRef } from 'react'
-import Link from 'next/link'
+import { useEffect, useMemo, useRef, useState, useActionState } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { voidOrder } from '@/app/actions/sales'
 import { makeT, type Lang } from '@/lib/i18n'
@@ -27,7 +33,7 @@ import { makeT, type Lang } from '@/lib/i18n'
 type T = (en: string, es?: string) => string
 
 // ================================================================
-// Domain types
+// Domain types — unchanged. page.tsx feeds these verbatim.
 // ================================================================
 
 type Source = 'manual' | 'native_pos' | 'external_pos'
@@ -39,9 +45,6 @@ type OperatingMode = 'native_pos' | 'external_pos' | null
 interface LineItem {
   id: string
   name: string
-  /** Variant / modifier subline for POS sources that expose it
-   *  (Poynt: "1oz-Loose", "45g - Organic"). Null for manual +
-   *  native + legacy. Rendered on its own line beneath the name. */
   variantLabel: string | null
   quantity: number
   unitPrice: number
@@ -57,10 +60,6 @@ interface Order {
   paymentStatus: PaymentStatus
   status: OrderStatus
   note: string | null
-  // Receipt-shaped enrichment — nullable because manual + legacy
-  // rows don't carry it. When present, the drawer renders a
-  // Subtotal / Discount / Tax breakdown block and payment card
-  // details.
   subtotal:      number | null
   discountTotal: number | null
   taxTotal:      number | null
@@ -73,103 +72,84 @@ interface Order {
 }
 
 // ================================================================
-// Source / status vocab — same per-branch, just a label
+// Palette — mirrors the staffing calendar / role drawer / employee
+// drawer so all app surfaces read as one design system.
 // ================================================================
 
-function sourceLabel(t: T): Record<Source, string> {
-  return {
-    manual: t('Manual', 'Manual'),
-    native_pos: t('POS', 'POS'),
-    external_pos: t('External', 'Externo'),
-  }
-}
+const INK = '#18181B'
+const PAPER = '#FAF9F6'
+const LINE = '#E7E6E2'
+const LINE_SOFT = '#F0EFEB'
+const MUTED = '#6B6B70'
+const FAINT = '#A1A1A6'
+const SURFACE = '#FAFAF9'
+const BAND = '#F0EFEB'
+const DANGER = '#B91C1C'
+const MONO = "'Geist Mono', ui-monospace, monospace"
 
-// Soft text tints for the source column. Restraint over chrome:
-// colored text instead of pill chips so the row reads scannably,
-// matching Finance's category-tint pattern.
-const SOURCE_TEXT: Record<Source, string> = {
-  manual: 'text-gray-700',
-  native_pos: 'text-blue-700',
-  external_pos: 'text-indigo-700',
-}
-
-// Payment-type row tints. Same restrained colored-text pattern the
-// Source column uses, but the palette is deliberately disjoint from
-// both Source (gray / blue / indigo) and Status (green / red) so
-// Payment reads as its own scan axis:
-//   • Card  → purple — distinct from Source's blue/indigo
-//   • Cash  → orange — distinct from Status's green AND from the
-//                       amber Unpaid badge that can sit next to it
-//   • Other → neutral gray
-const PAYMENT_TEXT: Record<PaymentType, string> = {
-  card: 'text-purple-700',
-  cash: 'text-orange-700',
-  other: 'text-gray-700',
-}
-
-function statusMeta(t: T): Record<OrderStatus, { label: string; chip: string; dot: string }> {
-  return {
-    completed: { label: t('Completed', 'Completada'), chip: 'bg-green-50 text-green-700', dot: 'bg-green-500' },
-    voided:    { label: t('Voided', 'Anulada'),       chip: 'bg-red-50 text-red-700',    dot: 'bg-red-500' },
-  }
+// One hue per payment method. tile: soft bg for the icon tile;
+// ink: stroke / label color; dot: the tiny 5px dot on the meta chip.
+const METHOD_TONES: Record<PaymentType, { tile: string; ink: string; dot: string }> = {
+  card:  { tile: '#EEF2FF', ink: '#4F46E5', dot: '#6366F1' },
+  cash:  { tile: '#ECFDF5', ink: '#047857', dot: '#10B981' },
+  other: { tile: '#F4F4F5', ink: '#52525B', dot: '#71717A' },
 }
 
 // ================================================================
-// Formatting helpers
+// Formatting helpers — kept from the prior build so downstream
+// values (rows, drawer, filter counts) all agree.
 // ================================================================
 
 function fmtMoney(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
-function fmtRowDate(iso: string, locale: string = 'en-US'): { day: string; time: string } {
-  const d = new Date(iso)
-  return {
-    day: d.toLocaleDateString(locale, { month: 'short', day: 'numeric' }),
-    time: d.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' }),
-  }
+function fmtRowTime(iso: string, locale: string): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
 }
 
-function fmtFullDate(iso: string, locale: string = 'en-US'): string {
+function fmtFullDateTime(iso: string, locale: string): string {
   return new Date(iso).toLocaleString(locale, {
     month: 'short', day: 'numeric', year: 'numeric',
     hour: 'numeric', minute: '2-digit',
   })
 }
 
-function fmtRelative(iso: string, t: T, now: Date = new Date()): string {
-  const diffMs = now.getTime() - new Date(iso).getTime()
-  const diffMin = Math.round(diffMs / 60000)
-  if (diffMin < 1) return t('just now', 'justo ahora')
-  if (diffMin < 60) return `${diffMin} ${t('min ago', 'min atrás')}`
-  const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr} ${diffHr === 1 ? t('hour ago', 'hora atrás') : t('hours ago', 'horas atrás')}`
-  const diffDay = Math.round(diffHr / 24)
-  if (diffDay < 7) return `${diffDay} ${diffDay === 1 ? t('day ago', 'día atrás') : t('days ago', 'días atrás')}`
-  const diffWk = Math.round(diffDay / 7)
-  return `${diffWk} ${diffWk === 1 ? t('week ago', 'semana atrás') : t('weeks ago', 'semanas atrás')}`
+// Shift the business_date ISO by whole days without falling into DST
+// weirdness. Anchor at noon UTC so ±24h can't roll to the wrong day
+// at DST edges when the browser interprets midnight as local.
+function shiftBusinessDate(iso: string, deltaDays: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const noon = Date.UTC(y, m - 1, d, 12, 0, 0)
+  const shifted = new Date(noon + deltaDays * 86_400_000)
+  const yy = shifted.getUTCFullYear()
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
 }
 
-// First two item names, joined by · with an N more suffix.
-function fmtItemPreview(items: LineItem[], t: T): string {
-  if (items.length === 0) return '—'
-  const visible = items.slice(0, 2).map((i) => i.name).join(' · ')
-  const extra = items.length - 2
-  return extra > 0 ? `${visible} · +${extra} ${t('more', 'más')}` : visible
+function fmtBusinessDateLong(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const asUTC = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return asUTC.toLocaleDateString(locale, {
+    weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
+  })
 }
 
-// Short, read-only order id (last 6 of a uuid). Lets the drawer
-// surface a consistent identifier without ever exposing the raw uuid.
+function fmtBusinessDateShort(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const asUTC = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return asUTC.toLocaleDateString(locale, {
+    weekday: 'short', timeZone: 'UTC',
+  })
+}
+
 function shortId(id: string): string {
   const cleaned = id.replace(/-/g, '')
   return cleaned.slice(-6).toUpperCase()
 }
 
-// Poynt's `context.source` values are terse SCREAM_CASE. Render
-// them as short human strings so the manager doesn't have to
-// parse "INSTORE" every time they open the drawer. Unknown values
-// fall through unchanged rather than getting hidden — a new
-// channel type shouldn't silently disappear from the UI.
+// Poynt's terse SCREAM_CASE channel values → human strings.
 function channelLabel(raw: string, t: T): string {
   switch (raw.toUpperCase()) {
     case 'INSTORE': return t('In-store', 'En tienda')
@@ -181,216 +161,83 @@ function channelLabel(raw: string, t: T): string {
   }
 }
 
-// ================================================================
-// Day navigator helpers + component
-// ================================================================
-//
-// Dates in the URL are plain YYYY-MM-DD strings (business_date
-// in the restaurant's local timezone). Prev/next arithmetic uses
-// UTC-noon parsing so shifting by 24 h can't accidentally roll
-// into the wrong day at DST edges — a plain new Date('2026-03-08')
-// would be interpreted as midnight UTC and offsetting 24 h across
-// a DST boundary in the browser's local zone could land on the
-// same date. Anchor at noon keeps us safely in the middle of
-// the day.
-
-function shiftBusinessDate(iso: string, deltaDays: number): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const noon = Date.UTC(y, m - 1, d, 12, 0, 0)
-  const shifted = new Date(noon + deltaDays * 86_400_000)
-  const yy = shifted.getUTCFullYear()
-  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
-  const dd = String(shifted.getUTCDate()).padStart(2, '0')
-  return `${yy}-${mm}-${dd}`
+// Source phrasing used in the drawer's Source line. Kept from the
+// prior build for continuity.
+function sourceLine(order: Order, t: T): string {
+  const base =
+    order.source === 'native_pos' ? t('Native POS', 'POS nativo')
+      : order.source === 'external_pos' ? t('External POS', 'POS externo')
+        : t('Manual entry', 'Entrada manual')
+  return order.locationName ? `${base} · ${order.locationName}` : base
 }
 
-function fmtBusinessDate(iso: string, locale: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const local = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
-  return local.toLocaleDateString(locale, {
-    weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
-  })
+function paymentLabel(t: T): Record<PaymentType, string> {
+  return {
+    cash:  t('Cash', 'Efectivo'),
+    card:  t('Card', 'Tarjeta'),
+    other: t('Other', 'Otro'),
+  }
 }
 
-// Minimum horizontal drag distance (px) to register a swipe. Small
-// enough to feel responsive on iPad, large enough that a slow tap
-// with slight finger drift doesn't accidentally navigate.
-const SWIPE_THRESHOLD_PX = 55
+// ================================================================
+// Payment icons — outline only, inherit the tile tint via
+// currentColor so a single component works for both methods.
+// ================================================================
 
-function HeroDayCard({
-  date, today, lang, t,
-  salesTotal, orderCount, avgTicket, voidCount,
-}: {
-  date: string; today: string; lang: Lang; t: T
-  salesTotal: number; orderCount: number; avgTicket: number; voidCount: number
-}) {
-  const router = useRouter()
-  const locale = lang === 'es' ? 'es-ES' : 'en-US'
-  const prevDate = shiftBusinessDate(date, -1)
-  const nextDate = shiftBusinessDate(date, +1)
-  const isToday = date === today
-  const canGoNext = date < today
-
-  const daysDelta = Math.round(
-    (Date.UTC(
-      ...(today.split('-').map(Number) as [number, number, number]),
-    ) - Date.UTC(
-      ...(date.split('-').map(Number) as [number, number, number]),
-    )) / 86_400_000,
-  )
-  const relative =
-    daysDelta === 0 ? t('Today', 'Hoy')
-      : daysDelta === 1 ? t('Yesterday', 'Ayer')
-        : daysDelta > 1 ? `${daysDelta} ${t('days ago', 'días atrás')}`
-          : null
-
-  // ---- Swipe navigation ----
-  // Track the touch start point and, on release, decide whether the
-  // gesture was a horizontal swipe worth acting on. Vertical motion
-  // above a ratio bails so the page can still scroll normally.
-  const touchStartX = useRef<number | null>(null)
-  const touchStartY = useRef<number | null>(null)
-
-  const onTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    touchStartX.current = e.touches[0].clientX
-    touchStartY.current = e.touches[0].clientY
-  }
-  const onTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    const startX = touchStartX.current
-    const startY = touchStartY.current
-    touchStartX.current = null
-    touchStartY.current = null
-    if (startX === null || startY === null) return
-    const dx = e.changedTouches[0].clientX - startX
-    const dy = e.changedTouches[0].clientY - startY
-    if (Math.abs(dx) < SWIPE_THRESHOLD_PX) return           // too short
-    if (Math.abs(dy) > Math.abs(dx) * 0.7) return           // too vertical
-    if (dx < 0) {
-      // Swipe left → move forward in time. Guard against browsing
-      // past today so URL fiddling is the only way to see the future.
-      if (canGoNext) router.push(`/sales?date=${nextDate}`)
-    } else {
-      router.push(`/sales?date=${prevDate}`)
-    }
-  }
-
-  // ---- Calendar picker via native <input type="date"> ----
-  // On iPad this opens the iOS date roulette; on desktop it opens
-  // the browser's native date picker. Max is clamped to today so
-  // the picker itself disables future dates.
-  const onPickDate = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = e.target.value
-    if (!picked || !/^\d{4}-\d{2}-\d{2}$/.test(picked)) return
-    if (picked === date) return
-    router.push(`/sales?date=${picked}`)
-  }
-
+function CardIcon() {
   return (
-    <div
-      // touch-pan-y: still allow vertical scrolling; we only steal
-      // horizontal gestures. w-fit + inline-block so the card only
-      // wraps its content, not the full available width.
-      onTouchStart={onTouchStart}
-      onTouchEnd={onTouchEnd}
-      // Full-width card so it lines up with the orders feed below;
-      // content inside stays center-aligned so the big number reads
-      // as the anchor even in a wide surface.
-      className="w-full rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] px-8 py-6 select-none touch-pan-y text-center"
-    >
-      {/* Row 1 — date on top, centered over the big number.
-          Tap the date to open the native date picker (input
-          layered under the label at opacity 0). Jump-to-today
-          link sits outside the label so it isn't part of the
-          picker's click target. Day navigation is swipe-only —
-          arrows removed per pilot request. */}
-      <div className="mb-3 flex items-baseline justify-center gap-2 flex-wrap">
-        <label className="relative cursor-pointer group">
-          <span className="text-[15px] leading-none font-semibold tracking-tight text-gray-900 group-hover:text-gray-700 transition-colors">
-            {fmtBusinessDate(date, locale)}
-          </span>
-          <input
-            type="date"
-            value={date}
-            max={today}
-            onChange={onPickDate}
-            aria-label={t('Pick a date', 'Elegir una fecha')}
-            className="absolute inset-0 opacity-0 cursor-pointer"
-          />
-        </label>
-        {relative && (
-          <span className="text-[12px] text-gray-500">
-            {relative}
-            {!isToday && (
-              <>
-                <span className="text-gray-300 mx-1.5">·</span>
-                <Link href="/sales" className="text-gray-600 hover:text-gray-900 underline underline-offset-2 decoration-gray-300 hover:decoration-gray-500">
-                  {t('Jump to today', 'Ir a hoy')}
-                </Link>
-              </>
-            )}
-          </span>
-        )}
-      </div>
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect x="1.5" y="4" width="17" height="12" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M1.5 8h17" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4.5 12.5h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
 
-      {/* Row 2 — hero sales total. Tabular mono numerals so digits
-          have consistent width regardless of the value. */}
-      <p className={`text-[44px] sm:text-[52px] leading-none font-mono tabular-nums font-semibold tracking-tight ${
-        salesTotal > 0 ? 'text-gray-900' : 'text-gray-300'
-      }`}>
-        {fmtMoney(salesTotal)}
-        <span className="text-[14px] text-gray-400 font-medium ml-2 align-top mt-2 inline-block">USD</span>
-      </p>
+function CashIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <ellipse cx="10" cy="5.3" rx="6.4" ry="2.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M3.6 5.3v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V5.3" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M3.6 9.7v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V9.7" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  )
+}
 
-      {/* Row 3 — quiet inline metrics. Voids segment tints amber
-          only when > 0 so a zero-void day reads calmly. */}
-      <p className="mt-3 text-[13px] text-gray-500 flex flex-wrap items-center justify-center gap-x-2 gap-y-1">
-        <span>
-          <span className="font-semibold text-gray-800 tabular-nums">{orderCount}</span>{' '}
-          {orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')}
-        </span>
-        <span className="text-gray-300">·</span>
-        <span>
-          <span className="font-semibold text-gray-800 tabular-nums">{fmtMoney(avgTicket)}</span>{' '}
-          {t('avg ticket', 'ticket promedio')}
-        </span>
-        {voidCount > 0 && (
-          <>
-            <span className="text-gray-300">·</span>
-            <span className="text-amber-700">
-              <span className="font-semibold tabular-nums">{voidCount}</span>{' '}
-              {voidCount === 1 ? t('voided', 'anulada') : t('voided', 'anuladas')}
-            </span>
-          </>
-        )}
-      </p>
-    </div>
+function OtherIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <circle cx="10" cy="10" r="6.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 6.5v3.5l2.2 1.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
   )
 }
 
 // ================================================================
-// Sales client
+// SalesClient — top-level page component.
 // ================================================================
+
+type FilterKey = 'all' | 'card' | 'cash' | 'voided'
 
 export default function SalesClient({
-  lang,
-  orders,
-  operatingMode = null,
-  date,
-  today,
+  lang, orders, operatingMode, date, today,
 }: {
   lang: Lang
   orders: Order[]
   operatingMode?: OperatingMode
-  /** YYYY-MM-DD of the day currently displayed. Server picked it
-   *  from ?date or defaulted to today in the restaurant's TZ. */
   date: string
-  /** YYYY-MM-DD of today in the restaurant's timezone. Used by
-   *  the DayNav to know when to show a "Jump to today" link and
-   *  to gate the next-day arrow (no browsing the future). */
   today: string
 }) {
   const t = makeT(lang)
+  const router = useRouter()
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
+
   const [openId, setOpenId] = useState<string | null>(null)
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const [calOpen, setCalOpen] = useState(false)
+  const [calMonth, setCalMonth] = useState(() => monthOfIso(date))
+  const [swipeX, setSwipeX] = useState<number | null>(null)
+  const [swipeDX, setSwipeDX] = useState(0)
 
   // Close the drawer if the open order disappears after revalidation.
   useEffect(() => {
@@ -399,257 +246,503 @@ export default function SalesClient({
 
   const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-  // Day-scoped metrics. Query already narrows to one business_date,
-  // so these are naturally per-day. Average ticket = sales total ÷
-  // completed order count; $0.00 when no completed orders exist yet.
-  const completedOrders = orders.filter((o) => o.status === 'completed')
-  const voidedOrders = orders.filter((o) => o.status === 'voided')
-  const salesTotal = completedOrders.reduce((s, o) => s + o.total, 0)
-  const orderCount = completedOrders.length
-  const voidCount = voidedOrders.length
+  // Day-scoped metrics — page already narrowed to one business_date.
+  const completed = useMemo(() => orders.filter((o) => o.status === 'completed'), [orders])
+  const salesTotal = useMemo(() => completed.reduce((s, o) => s + o.total, 0), [completed])
+  const orderCount = completed.length
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
-  return (
-    <div className="max-w-[1200px]">
-      {/* ================================================================ */}
-      {/* HERO CARD — compact bordered card that owns the date nav +      */}
-      {/* sales total + inline metrics. Sized to content (not full        */}
-      {/* width) and left-aligned in the page. Day navigation is         */}
-      {/* swipe-only; tap the date to open a native calendar picker.    */}
-      {/* Source chip lives above the card as a quiet page-context      */}
-      {/* pill so the card stays focused on the day's numbers.           */}
-      {/* ================================================================ */}
-      <section className="mb-6">
-        <div className="mb-3 flex justify-center">
-          <SourceChip operatingMode={operatingMode} t={t} />
-        </div>
-        <HeroDayCard
-          date={date}
-          today={today}
-          lang={lang}
-          t={t}
-          salesTotal={salesTotal}
-          orderCount={orderCount}
-          avgTicket={avgTicket}
-          voidCount={voidCount}
-        />
-      </section>
+  // Filter counts — always across the full day so the pill numbers
+  // don't shift as the manager clicks filters.
+  const counts: Record<FilterKey, number> = {
+    all: orders.length,
+    card: orders.filter((o) => o.paymentType === 'card').length,
+    cash: orders.filter((o) => o.paymentType === 'cash').length,
+    voided: orders.filter((o) => o.status === 'voided').length,
+  }
 
-      {/* ================================================================ */}
-      {/* FEED — free-scroll list of the day's orders. Day-scoped so the  */}
-      {/* browser scroll is the pager. Empty state sits inside the        */}
-      {/* card on light days.                                             */}
-      {/* ================================================================ */}
-      <section>
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
+  const shownOrders = useMemo(() => {
+    if (filter === 'all') return orders
+    if (filter === 'voided') return orders.filter((o) => o.status === 'voided')
+    return orders.filter((o) => o.paymentType === filter)
+  }, [orders, filter])
+
+  const isToday = date === today
+  const canGoNext = date < today
+
+  const shiftDay = (delta: number) => {
+    if (delta > 0 && !canGoNext) return
+    router.push(`/sales?date=${shiftBusinessDate(date, delta)}`)
+    setCalOpen(false)
+    setOpenId(null)
+  }
+
+  // ---- Header title button anchor for the picker portal ----
+  const titleBtnRef = useRef<HTMLButtonElement | null>(null)
+  const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null)
+  useEffect(() => {
+    if (!calOpen) return
+    const compute = () => {
+      const r = titleBtnRef.current?.getBoundingClientRect()
+      if (r) setPickerAnchor({ top: r.bottom + 8, left: r.left })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    window.addEventListener('scroll', compute, true)
+    return () => {
+      window.removeEventListener('resize', compute)
+      window.removeEventListener('scroll', compute, true)
+    }
+  }, [calOpen])
+
+  // Relative day chip: Today / Yesterday / N days ago / Sat …
+  const relativeChip = ((): { label: string; kind: 'today' | 'past' } => {
+    if (isToday) return { label: t('Today', 'Hoy'), kind: 'today' }
+    const days = daysBetween(date, today)
+    if (days === 1) return { label: t('Yesterday', 'Ayer'), kind: 'past' }
+    if (days > 0 && days < 7) return { label: `${days} ${t('days ago', 'días atrás')}`, kind: 'past' }
+    return { label: fmtBusinessDateShort(date, locale), kind: 'past' }
+  })()
+
+  return (
+    <div style={{
+      minHeight: '100vh', padding: '20px 24px 28px', background: '#fff',
+      fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+    }}>
+      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+
+        {/* Header — date as the heading, big mono total, stats. */}
+        <div
+          onPointerDown={(e) => {
+            const target = e.target as HTMLElement
+            if (target.closest('button, a, input, [role="button"]')) return
+            setSwipeX(e.clientX); setSwipeDX(0)
+          }}
+          onPointerMove={(e) => { if (swipeX !== null) setSwipeDX(e.clientX - swipeX) }}
+          onPointerUp={() => {
+            if (swipeX === null) return
+            if (swipeDX <= -60) shiftDay(1)
+            else if (swipeDX >= 60) shiftDay(-1)
+            setSwipeX(null); setSwipeDX(0)
+          }}
+          onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
+          style={{
+            position: 'relative', padding: '16px 16px 14px',
+            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+            gap: 24, flexWrap: 'wrap',
+            touchAction: 'pan-y',
+            cursor: swipeX === null ? 'default' : 'grabbing',
+            transform: `translateX(${swipeDX / 6}px)`,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <button
+                ref={titleBtnRef}
+                type="button"
+                onClick={() => {
+                  setCalMonth(monthOfIso(date))
+                  setCalOpen((v) => !v)
+                }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  border: '1px solid transparent', background: 'transparent',
+                  borderRadius: 9, padding: '2px 8px', marginLeft: -8,
+                  font: 'inherit', color: INK, cursor: 'pointer',
+                }}
+              >
+                <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
+                  {fmtBusinessDateLong(date, locale)}
+                </span>
+                <span style={{ fontSize: 10, color: FAINT }}>▾</span>
+              </button>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+                padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                background: relativeChip.kind === 'today' ? '#F4F4F2' : '#EFF6FF',
+                color: relativeChip.kind === 'today' ? MUTED : '#2563EB',
+              }}>
+                {relativeChip.label}
+              </span>
+              {operatingMode && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+                  padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                  background: operatingMode === 'native_pos' ? '#EFF6FF' : '#EEF2FF',
+                  color: operatingMode === 'native_pos' ? '#2563EB' : '#4F46E5',
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: '50%',
+                    background: operatingMode === 'native_pos' ? '#3B82F6' : '#6366F1',
+                  }} />
+                  {operatingMode === 'native_pos' ? t('Native POS', 'POS nativo') : t('External POS', 'POS externo')}
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+                {fmtMoney(salesTotal)}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
+              <Dot />
+              <Stat value={String(orderCount)} label={orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')} />
+              <Dot />
+              <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
+            </div>
+          </div>
+        </div>
+
+        {/* Filter strip — All / Card / Cash / Voided with counts. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
+          borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
+          background: SURFACE, flexWrap: 'wrap',
+        }}>
+          {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
+            const on = filter === f
+            const label =
+              f === 'all' ? t('All', 'Todo')
+                : f === 'card' ? t('Card', 'Tarjeta')
+                  : f === 'cash' ? t('Cash', 'Efectivo')
+                    : t('Voided', 'Anuladas')
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  borderRadius: 999, padding: '5px 12px',
+                  font: 'inherit', fontSize: 12, cursor: 'pointer',
+                  border: `1px solid ${on ? INK : LINE}`,
+                  background: on ? INK : '#fff',
+                  color: on ? PAPER : '#3F3F46',
+                  fontWeight: on ? 600 : 500,
+                }}
+              >
+                {label}
+                <span style={{
+                  fontFamily: MONO, fontSize: 10,
+                  color: on ? 'rgba(250,249,246,0.65)' : FAINT,
+                }}>
+                  {counts[f]}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Rows — soft-card list. Not a table. */}
+        <div style={{ padding: 8, borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }}>
           {orders.length === 0 ? (
-            <EmptyLedger t={t} isToday={date === today} />
+            <EmptyLedger t={t} isToday={isToday} date={date} locale={locale} />
+          ) : shownOrders.length === 0 ? (
+            <div style={{ padding: '32px 16px', textAlign: 'center', color: FAINT, fontSize: 12 }}>
+              {t('No sales match this filter.', 'Ninguna venta coincide con este filtro.')}
+            </div>
           ) : (
-            <ul className="divide-y divide-gray-100">
-              {orders.map((o) => (
-                <OrderRow
-                  key={o.id}
-                  order={o}
-                  selected={openId === o.id}
-                  onOpen={() => setOpenId(o.id)}
-                  t={t}
-                />
-              ))}
-            </ul>
+            shownOrders.map((o) => (
+              <SaleRow
+                key={o.id}
+                order={o}
+                selected={openId === o.id}
+                onOpen={() => setOpenId(o.id)}
+                t={t}
+                locale={locale}
+              />
+            ))
           )}
         </div>
-      </section>
+      </div>
 
-      {selected && <OrderDrawer order={selected} onClose={() => setOpenId(null)} t={t} />}
+      {/* Month picker — portaled to <body> so the calendar card's
+          overflow:hidden doesn't clip it. */}
+      {calOpen && typeof document !== 'undefined' && pickerAnchor && createPortal(
+        <MonthPickerOverlay
+          date={date}
+          today={today}
+          month={calMonth}
+          setMonth={setCalMonth}
+          onPick={(iso) => {
+            router.push(`/sales?date=${iso}`)
+            setCalOpen(false)
+            setOpenId(null)
+          }}
+          onClose={() => setCalOpen(false)}
+          anchor={pickerAnchor}
+          t={t}
+          locale={locale}
+        />,
+        document.body,
+      )}
+
+      {selected && (
+        <OrderDrawer
+          order={selected}
+          onClose={() => setOpenId(null)}
+          t={t}
+          locale={locale}
+        />
+      )}
     </div>
   )
 }
 
 // ================================================================
-// SourceChip — page-level data-origin pill (Finance pattern)
+// SaleRow — soft-card row.
 // ================================================================
-function SourceChip({ operatingMode, t }: { operatingMode: OperatingMode; t: T }) {
-  const variants: Record<NonNullable<OperatingMode> | 'unset', { label: string; tone: string; dot: string }> = {
-    native_pos: {
-      label: t('Native POS ledger', 'Libro POS nativo'),
-      tone: 'text-blue-700',
-      dot: 'bg-blue-500',
-    },
-    external_pos: {
-      label: t('External POS ledger', 'Libro POS externo'),
-      tone: 'text-indigo-700',
-      dot: 'bg-indigo-500',
-    },
-    unset: {
-      label: t('Operating mode not set', 'Modo de operación no configurado'),
-      tone: 'text-gray-600',
-      dot: 'bg-gray-400',
-    },
-  }
-  const v = variants[operatingMode ?? 'unset']
-  return (
-    <div className="hidden sm:inline-flex items-center gap-2 self-start text-[11px] font-medium px-3 py-1.5 rounded-full border border-gray-200/80 bg-white/80 backdrop-blur-sm shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-      <span className={`w-1.5 h-1.5 rounded-full ${v.dot}`} />
-      <span className={v.tone}>{v.label}</span>
-    </div>
-  )
-}
 
-// ================================================================
-// OrderRow — vertical card-list row.
-//
-// Visual hierarchy:
-//   • Top-left: date · time (quiet)
-//   • Item summary (primary — semibold)
-//   • Meta: N items · location (smaller)
-//   • Bottom: Source · Payment · Status (inline, colored text) + Total ($)
-//
-// The row is a clickable surface; the selected state matches the
-// prior shadow-inset blue accent so deep-link / drawer selection
-// still reads identically. Voided rows strike-through the item
-// summary + total and mute the colored chips to gray.
-// ================================================================
-function OrderRow({
-  order,
-  selected,
-  onOpen,
-  t,
+function SaleRow({
+  order, selected, onOpen, t, locale,
 }: {
   order: Order
   selected: boolean
   onOpen: () => void
   t: T
+  locale: string
 }) {
-  const isEs = t('__lang_probe__', 'es') === 'es'
-  const locale = isEs ? 'es-ES' : 'en-US'
-  const date = fmtRowDate(order.createdAt, locale)
+  const tone = METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
-  const STATUS_META = statusMeta(t)
-  const SOURCE_LABEL = sourceLabel(t)
-  const status = STATUS_META[order.status]
   const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
-  // Localized payment-type and capitalized label for the bottom row.
-  const paymentLabel =
-    order.paymentType === 'cash' ? t('Cash', 'Efectivo')
-      : order.paymentType === 'card' ? t('Card', 'Tarjeta')
-        : t('Other', 'Otro')
+  const title = order.lineItems[0]?.name ?? t('Order', 'Orden')
+  const time = fmtRowTime(order.createdAt, locale)
+  const methodLabels = paymentLabel(t)
 
   return (
-    <li
+    <div
       onClick={onOpen}
       aria-selected={selected}
-      className={`group cursor-pointer transition-colors ${
-        selected
-          ? 'bg-blue-50/70 shadow-[inset_3px_0_0_rgba(59,130,246,0.6)]'
-          : 'hover:bg-gray-50/70'
-      }`}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 13,
+        padding: '11px 12px', borderRadius: 10, cursor: 'pointer',
+        border: `1px solid ${selected ? LINE : 'transparent'}`,
+        background: selected ? SURFACE : 'transparent',
+        opacity: isVoided ? 0.75 : 1,
+      }}
     >
-      <div className="px-6 py-3.5">
-        {/* Top — date / time */}
-        <p className="text-[11px] text-gray-500 font-mono tabular-nums">
-          {date.day} <span className="text-gray-300">·</span> {date.time}
-        </p>
-        {/* Item summary — primary identity */}
-        <p className={`mt-0.5 text-sm font-semibold truncate ${
-          isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-        }`}>
-          {fmtItemPreview(order.lineItems, t)}
-        </p>
-        {/* Meta — count + location */}
-        <p className="mt-0.5 text-[11px] text-gray-400 font-mono tabular-nums">
-          {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
-          {order.locationName ? <> · {order.locationName}</> : null}
-        </p>
-        {/* Bottom — Source · Payment · Status, total on the right */}
-        <div className="mt-2 flex items-baseline justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-medium min-w-0">
-            <span className={isVoided ? 'text-gray-400' : SOURCE_TEXT[order.source]}>
-              {SOURCE_LABEL[order.source]}
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, borderRadius: 10, flex: '0 0 auto',
+        background: tone.tile, color: tone.ink,
+      }}>
+        {order.paymentType === 'card' ? <CardIcon />
+          : order.paymentType === 'cash' ? <CashIcon />
+            : <OtherIcon />}
+      </span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{
+          display: 'block', fontSize: 14, fontWeight: 600, letterSpacing: '-0.015em',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          color: isVoided ? MUTED : INK,
+          textDecoration: isVoided ? 'line-through' : undefined,
+        }}>
+          {title}
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{time}</span>
+          <span style={{ width: 3, height: 3, borderRadius: '50%', background: LINE }} />
+          <span style={{ fontSize: 11, color: FAINT }}>
+            {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+          </span>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            borderRadius: 999, padding: '1px 8px',
+            fontSize: 10, fontWeight: 600,
+            background: tone.tile, color: tone.ink,
+          }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
+            {methodLabels[order.paymentType]}
+          </span>
+          {isVoided && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+              padding: '1px 8px', fontSize: 10, fontWeight: 600,
+              background: '#FEE2E2', color: '#B91C1C',
+            }}>
+              {t('Voided', 'Anulada')}
             </span>
-            <span className="text-gray-300">·</span>
-            <span className={isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}>
-              {paymentLabel}
+          )}
+          {order.paymentStatus === 'unpaid' && !isVoided && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+              padding: '1px 8px', fontSize: 10, fontWeight: 600,
+              background: '#FFFBEB', color: '#B45309',
+            }}>
+              {t('Unpaid', 'No pagada')}
             </span>
-            <span className="text-gray-300">·</span>
-            <span className={`inline-flex items-center gap-1 ${
-              isVoided ? 'text-red-700' : 'text-green-700'
-            }`}>
-              <span className={`w-1 h-1 rounded-full ${status.dot}`} />
-              {status.label}
-            </span>
-            {order.paymentStatus === 'unpaid' && !isVoided && (
-              <>
-                <span className="text-gray-300">·</span>
-                <span className="text-amber-700">{t('Unpaid', 'No pagada')}</span>
-              </>
-            )}
-          </div>
-          <p className={`text-base font-mono tabular-nums whitespace-nowrap flex-shrink-0 ${
-            isVoided ? 'text-gray-400 line-through' : 'text-gray-900 font-bold'
-          }`}>
-            {fmtMoney(order.total)}
-          </p>
-        </div>
-      </div>
-    </li>
-  )
-}
-
-// ================================================================
-// EmptyLedger — calm, branch-aware empty state
-// ================================================================
-function EmptyLedger({ t, isToday }: { t: T; isToday: boolean }) {
-  return (
-    <div className="px-6 py-20 text-center">
-      <p className="text-sm font-semibold text-gray-700">
-        {isToday
-          ? t('No sales yet today', 'Sin ventas hoy aún')
-          : t('No sales on this day', 'Sin ventas este día')}
-      </p>
-      <p className="mx-auto mt-2 max-w-sm text-xs text-gray-500 leading-relaxed">
-        {isToday
-          ? t('Completed sales land here as they close. The first order will appear automatically.', 'Las ventas completadas aparecen aquí al cerrarse. La primera orden se mostrará automáticamente.')
-          : t('Use the day navigator above to move to another date.', 'Usa el navegador de días arriba para ir a otra fecha.')}
-      </p>
+          )}
+        </span>
+      </span>
+      <span style={{
+        fontFamily: MONO, fontSize: 16, fontWeight: 600, letterSpacing: '-0.03em',
+        whiteSpace: 'nowrap',
+        color: isVoided ? MUTED : INK,
+        textDecoration: isVoided ? 'line-through' : undefined,
+      }}>
+        {fmtMoney(order.total)}
+      </span>
+      <span style={{ fontSize: 12, color: '#D6D5D1' }}>›</span>
     </div>
   )
 }
 
 // ================================================================
-// OrderDrawer — physical-ticket workflow.
-//
-// Reframed from a generic inspection drawer into something that
-// reads like a printed sale ticket with controlled correction
-// tools. Top-down:
-//
-//   1. Header — order #, status pill, "Status · Source · Payment"
-//      meta line, full date.
-//   2. Voided ribbon (when voided) — same as before.
-//   3. Body sections (scrollable):
-//        a. Sale total hero — large dollar amount.
-//        b. Ticket — receipt-style line items.
-//        c. Payment — method · status · amount.
-//        d. Source — recorded-via location.
-//        e. Adjustments — placeholder with item-level deferral note.
-//        f. Note (optional) — when the order carries a note string.
-//   4. Footer — Correction tools, compact: a single Void order row
-//      with short copy and a small action button on the right.
-//
-// Item-level void is DEFERRED. It requires schema columns on
-// order_items (voided_at / void_reason) + a new server action with
-// per-line inventory reversal — too risky for a UI redesign pass.
-// The Adjustments section calls out that future capability so the
-// manager doesn't expect it from this build.
+// EmptyLedger — no orders for this day.
 // ================================================================
-function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void; t: T }) {
-  const [state, action, pending] = useActionState(voidOrder, null)
-  const canVoid = order.status === 'completed'
-  const STATUS_META = statusMeta(t)
-  const status = STATUS_META[order.status]
-  const isVoided = order.status === 'voided'
-  const isEs = t('__lang_probe__', 'es') === 'es'
-  const locale = isEs ? 'es-ES' : 'en-US'
 
+function EmptyLedger({ t, isToday, date, locale }: { t: T; isToday: boolean; date: string; locale: string }) {
+  return (
+    <div style={{ padding: '44px 16px', textAlign: 'center' }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>
+        {isToday
+          ? t('No sales yet today', 'Sin ventas hoy aún')
+          : t('No sales on this day', 'Sin ventas este día')}
+      </div>
+      <div style={{ fontSize: 12, color: FAINT, marginTop: 3 }}>
+        {isToday
+          ? t('Completed sales land here as they close.', 'Las ventas completadas aparecen aquí al cerrarse.')
+          : t(`Nothing came through on ${fmtBusinessDateLong(date, locale)}.`, `No hubo movimiento el ${fmtBusinessDateLong(date, locale)}.`)}
+      </div>
+    </div>
+  )
+}
+
+// ================================================================
+// MonthPickerOverlay — portal-rendered floating picker.
+// ================================================================
+
+function MonthPickerOverlay({
+  date, today, month, setMonth, onPick, onClose, anchor, t, locale,
+}: {
+  date: string
+  today: string
+  month: { y: number; m: number }
+  setMonth: (m: { y: number; m: number }) => void
+  onPick: (iso: string) => void
+  onClose: () => void
+  anchor: { top: number; left: number }
+  t: T
+  locale: string
+}) {
+  const first = new Date(Date.UTC(month.y, month.m, 1, 12))
+  // Monday-first grid start.
+  const wd = (first.getUTCDay() + 6) % 7
+  const gridStartUTC = Date.UTC(month.y, month.m, 1 - wd, 12)
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStartUTC + i * 86_400_000)
+    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    return {
+      iso,
+      day: d.getUTCDate(),
+      inMonth: d.getUTCMonth() === month.m,
+      selected: iso === date,
+      isToday: iso === today,
+    }
+  })
+  const monthLabel = new Date(Date.UTC(month.y, month.m, 1, 12)).toLocaleDateString(locale, {
+    month: 'long', year: 'numeric', timeZone: 'UTC',
+  })
+  const weekdayLetters = Array.from({ length: 7 }, (_, i) => {
+    // Monday-first sample.
+    const sample = new Date(Date.UTC(2024, 0, 1 + i, 12)) // Jan 1 2024 was a Monday
+    return sample.toLocaleDateString(locale, { weekday: 'narrow', timeZone: 'UTC' })
+  })
+
+  const shift = (delta: number) => {
+    const next = new Date(Date.UTC(month.y, month.m + delta, 1, 12))
+    setMonth({ y: next.getUTCFullYear(), m: next.getUTCMonth() })
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div style={{
+        position: 'fixed',
+        top: anchor.top,
+        left: anchor.left,
+        zIndex: 41, width: 300,
+        border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+        boxShadow: '0 12px 32px rgba(24,24,27,0.14)', padding: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+          <NavBtn dir="‹" onClick={() => shift(-1)} />
+          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{monthLabel}</span>
+          <NavBtn dir="›" onClick={() => shift(1)} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 0, marginBottom: 6 }}>
+          {weekdayLetters.map((l, i) => (
+            <span key={i} style={{ textAlign: 'center', fontFamily: MONO, fontSize: 9, letterSpacing: '0.1em', color: FAINT }}>
+              {l}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '3px 0' }}>
+          {cells.map((c, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onPick(c.iso)}
+              disabled={c.iso > today}
+              style={{
+                position: 'relative', border: 0, borderRadius: 8, height: 30, font: 'inherit',
+                fontFamily: MONO, fontSize: 12,
+                cursor: c.iso > today ? 'not-allowed' : 'pointer',
+                background: c.selected ? BAND : 'transparent',
+                color: c.iso > today ? '#E5E5E5'
+                  : c.selected ? INK
+                    : c.inMonth ? '#3F3F46' : '#D6D5D1',
+                fontWeight: c.selected ? 600 : 400,
+              }}
+            >
+              {c.day}
+              {c.isToday && (
+                <span style={{
+                  position: 'absolute', left: '50%', bottom: 4, transform: 'translateX(-50%)',
+                  width: 3, height: 3, borderRadius: '50%', background: c.selected ? INK : FAINT,
+                }} />
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${LINE}` }}>
+          <span style={{ fontSize: 11, color: FAINT }}>
+            {t('Pick a date to see its sales', 'Elige una fecha para ver sus ventas')}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPick(today)}
+            style={{
+              border: 0, background: 'transparent', padding: 0,
+              font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer',
+            }}
+          >
+            {t('Today', 'Hoy')}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// ================================================================
+// OrderDrawer — per-sale detail sheet.
+// ================================================================
+
+function OrderDrawer({ order, onClose, t, locale }: {
+  order: Order; onClose: () => void; t: T; locale: string
+}) {
+  const [state, action, pending] = useActionState(voidOrder, null)
+  const [confirming, setConfirming] = useState(false)
+  const canVoid = order.status === 'completed'
+  const isVoided = order.status === 'voided'
+  const tone = METHOD_TONES[order.paymentType]
+  const methodLabels = paymentLabel(t)
+  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
+
+  // Escape closes + body scroll lock while open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', onKey)
@@ -661,299 +754,342 @@ function OrderDrawer({ order, onClose, t }: { order: Order; onClose: () => void;
     }
   }, [onClose])
 
-  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
-  // Manager-friendly source phrasing: "In-app POS · Location" /
-  // "External POS · Location" / "Manual entry · Location".
-  const sourceTitle =
-    order.source === 'native_pos' ? t('In-app POS', 'POS de la app')
-      : order.source === 'external_pos' ? t('External POS', 'POS externo')
-        : t('Manual entry', 'Entrada manual')
-  const sourceLine = order.locationName
-    ? `${sourceTitle} · ${order.locationName}`
-    : sourceTitle
-  const paymentTypeLabel =
-    order.paymentType === 'cash' ? t('Cash', 'Efectivo')
-      : order.paymentType === 'card' ? t('Card', 'Tarjeta')
-        : t('Other', 'Otro')
-  // English-keyed status code for tone selection, then translated label.
-  const paymentStatusCode: 'voided' | 'paid' | 'unpaid' =
-    isVoided ? 'voided'
-      : order.paymentStatus === 'paid' ? 'paid'
-        : 'unpaid'
-  const paymentStatusLabel =
-    paymentStatusCode === 'voided' ? t('Voided', 'Anulada')
-      : paymentStatusCode === 'paid' ? t('Paid', 'Pagada')
-        : t('Unpaid', 'No pagada')
-  const paymentStatusTone =
-    paymentStatusCode === 'voided' ? 'text-red-700'
-      : paymentStatusCode === 'paid' ? 'text-green-700'
-        : 'text-amber-700'
+  // Sale-summary rows — only render lines with meaningful values.
+  type SummaryRow = { label: string; value: string; strong?: boolean }
+  const summary: SummaryRow[] = []
+  if (order.subtotal != null) summary.push({ label: t('Subtotal', 'Subtotal'), value: fmtMoney(order.subtotal) })
+  if (order.discountTotal != null && order.discountTotal > 0) {
+    summary.push({ label: t('Discount', 'Descuento'), value: `−${fmtMoney(order.discountTotal)}` })
+  }
+  if (order.taxTotal != null && order.taxTotal > 0) {
+    summary.push({ label: t('Tax', 'Impuesto'), value: fmtMoney(order.taxTotal) })
+  }
+  summary.push({ label: t('Total', 'Total'), value: fmtMoney(order.total), strong: true })
+
+  const statusChipBg = isVoided ? '#FEE2E2' : order.paymentStatus === 'unpaid' ? '#FFFBEB' : '#D1FAE5'
+  const statusChipText = isVoided ? '#B91C1C' : order.paymentStatus === 'unpaid' ? '#B45309' : '#047857'
+  const statusChipDot = isVoided ? '#DC2626' : order.paymentStatus === 'unpaid' ? '#D97706' : '#10B981'
+  const statusLabel = isVoided ? t('Voided', 'Anulada')
+    : order.paymentStatus === 'unpaid' ? t('Unpaid', 'No pagada')
+      : t('Paid', 'Pagada')
+
+  const eyebrow: React.CSSProperties = {
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT,
+  }
+  const metaRow: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 12, padding: '9px 0', borderBottom: `1px solid ${LINE_SOFT}`,
+  }
 
   return (
-    <>
-      <div
-        onClick={onClose}
-        className="fixed inset-0 bg-gray-900/30 backdrop-blur-[1px] z-40"
-      />
-      <aside className="fixed top-0 right-0 z-50 h-full w-full sm:max-w-md md:max-w-lg lg:max-w-md bg-white shadow-2xl border-l border-gray-200 flex flex-col">
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end',
+      fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+    }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
 
-        {/* HEADER — Order identifier on the left, close on the
-            right. Date + status pill live inside the payment hero
-            card below so the header stays quiet and doesn't
-            repeat what's about to follow. */}
-        <div className="border-b border-gray-100 px-5 py-3.5 flex items-center justify-between gap-4 flex-shrink-0">
-          <h2 className="text-[13px] font-semibold text-gray-900 font-mono tabular-nums">
-            {t('Order', 'Orden')} #{shortId(order.id)}
-          </h2>
+      <div style={{
+        position: 'relative', width: 440, maxWidth: '100%', flex: '0 0 440px',
+        height: '100vh', background: '#fff',
+        borderLeft: `1px solid ${LINE}`, boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {/* header */}
+        <div style={{
+          padding: '20px 24px 16px', borderBottom: `1px solid ${LINE}`,
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16,
+        }}>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ ...eyebrow, color: FAINT }}>
+              {t('ORDER', 'ORDEN')} #{shortId(order.id)}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
+              <span style={{
+                fontFamily: MONO, fontSize: 28, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1,
+                textDecoration: isVoided ? 'line-through' : undefined,
+                color: isVoided ? MUTED : INK,
+              }}>
+                {fmtMoney(order.total)}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
+              <span style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+                padding: '3px 10px', fontSize: 11, fontWeight: 600,
+                background: statusChipBg, color: statusChipText,
+              }}>
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: statusChipDot }} />
+                {statusLabel}
+              </span>
+            </div>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 7 }}>
+              {fmtFullDateTime(order.createdAt, locale)} · {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+            </div>
+          </div>
           <button
             type="button"
             onClick={onClose}
-            className="flex-shrink-0 rounded-lg border border-gray-200 px-2 py-1 text-xs font-medium text-gray-500 hover:bg-gray-50 hover:text-gray-700 transition-colors"
+            aria-label={t('Close', 'Cerrar')}
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+              width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              font: 'inherit', fontSize: 15, color: MUTED, cursor: 'pointer', flex: '0 0 auto',
+            }}
           >
-            {t('Close', 'Cerrar')}
+            ×
           </button>
         </div>
 
-        {/* Voided audit stamp — full-bleed ribbon between the fixed
-            header and the scrolling body. */}
-        {isVoided && (
-          <div className="border-b border-red-200/60 bg-red-50/40 px-6 py-2.5 flex items-center gap-2 flex-shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-            <p className="text-[11px] text-red-700">
-              {t('Voided · the original record stays in the ledger for audit history.', 'Anulada · el registro original se mantiene en el libro para historial de auditoría.')}
-            </p>
-          </div>
-        )}
-
-        {/* BODY — Reshaped to mirror Poynt's transaction detail:
-            a Payment hero card (date · status pill, big total,
-            card-details definition list), then Items, then Sale
-            breakdown, then Source/Customer/Note. Cards use a
-            calmer gray-50 background than plain white so the
-            drawer reads as three distinct stacked receipts
-            instead of a wall of framed rows. */}
-        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-3">
-
-          {/* PAYMENT HERO — date on the left, status pill on the
-              right, then the big total, then a definition-list
-              of card number + payment method. Matches the top
-              card in Poynt's transaction detail. */}
-          <section className="rounded-xl border border-gray-200/80 bg-gray-50/60 px-5 py-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-[11px] text-gray-600 font-mono tabular-nums">
-                {fmtFullDate(order.createdAt, locale)}
-              </p>
-              <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.chip}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />
-                {status.label}
-              </span>
-            </div>
-            <p className={`mt-3 text-[32px] leading-none font-mono tabular-nums font-bold ${
-              isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-            }`}>
-              {fmtMoney(order.total)}
-              <span className="text-[13px] text-gray-400 font-medium ml-1.5 align-middle">USD</span>
-            </p>
-
-            {/* Definition list — Card Number + Payment Method.
-                Only the Card Number row renders when we actually
-                have card details; otherwise Payment Method stands
-                alone (cash / other). */}
-            <dl className="mt-4 space-y-1.5 text-[12px]">
-              {order.paymentType === 'card' && (order.cardBrand || order.cardLast4) && (
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="text-gray-500">{t('Card Number', 'Número de tarjeta')}</dt>
-                  <dd className="font-mono tabular-nums text-gray-900">
-                    {order.cardBrand ?? t('Card', 'Tarjeta')}
-                    {order.cardLast4 && <> **{order.cardLast4}</>}
-                  </dd>
+        {/* body */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px 24px', display: 'block' }}>
+          {/* items + summary */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ ...eyebrow, marginBottom: 8 }}>{t('ITEMS', 'ARTÍCULOS')}</div>
+            <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+              {order.lineItems.length === 0 ? (
+                <div style={{ padding: '10px 12px', fontSize: 12, color: FAINT }}>
+                  {t('No line items on this order.', 'Sin artículos en esta orden.')}
                 </div>
-              )}
-              <div className="flex items-baseline justify-between gap-3">
-                <dt className="text-gray-500">{t('Payment Method', 'Método de pago')}</dt>
-                <dd className={`font-medium ${isVoided ? 'text-gray-400' : PAYMENT_TEXT[order.paymentType]}`}>
-                  {paymentTypeLabel}
-                </dd>
-              </div>
-              {order.paymentStatus !== 'paid' && (
-                <div className="flex items-baseline justify-between gap-3">
-                  <dt className="text-gray-500">{t('Status', 'Estado')}</dt>
-                  <dd className={`font-medium ${paymentStatusTone}`}>{paymentStatusLabel}</dd>
-                </div>
-              )}
-            </dl>
-          </section>
-
-          {/* ITEMS — receipt-style line list. Each row:
-                [qty pill] {name}                     {price}
-                          {variant subline, if any}
-              Variant renders on its own line under the name,
-              matching the "1oz-Loose" subline in Poynt's UI. */}
-          <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
-            <p className="mb-3 text-[13px] font-semibold text-gray-900">
-              {t('Items', 'Artículos')}
-            </p>
-            <ul className="space-y-3">
-              {order.lineItems.map((li) => (
-                <li key={li.id} className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-3 min-w-0">
-                    {/* Compact qty pill — mimics the "2x" chip
-                        in the screenshot's item list. */}
-                    <span className="mt-0.5 flex-shrink-0 inline-flex items-center justify-center min-w-[28px] h-[22px] px-1.5 rounded-md bg-gray-100 text-gray-700 text-[11px] font-semibold font-mono tabular-nums">
-                      {li.quantity}x
-                    </span>
-                    <div className="min-w-0">
-                      <p className={`text-[13px] leading-tight ${
-                        isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-                      }`}>
-                        {li.name}
-                      </p>
-                      {li.variantLabel && (
-                        <p className="mt-0.5 text-[11px] text-gray-500">
-                          {li.variantLabel}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                  <p className={`text-[13px] font-mono tabular-nums whitespace-nowrap ${
-                    isVoided ? 'text-gray-400 line-through' : 'text-gray-900'
-                  }`}>
-                    {fmtMoney(li.totalPrice)}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          {/* SALE — Subtotal / Discount / Tax / Total. Only
-              rendered when the source gave us at least one of
-              the breakdown fields; a bare Total that duplicates
-              the hero is worthless. Discount only shows when
-              non-zero. */}
-          {(order.subtotal !== null || order.taxTotal !== null || (order.discountTotal !== null && order.discountTotal > 0)) && (
-            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
-              <p className="mb-3 text-[13px] font-semibold text-gray-900">
-                {t('Sale', 'Venta')}
-              </p>
-              <div className="space-y-1.5 text-[12px]">
-                {order.subtotal !== null && (
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-gray-600">{t('Subtotal', 'Subtotal')}</span>
-                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                      {fmtMoney(order.subtotal)}
-                    </span>
-                  </div>
-                )}
-                {order.discountTotal !== null && order.discountTotal > 0 && (
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-gray-600">{t('Discount', 'Descuento')}</span>
-                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-emerald-700'}`}>
-                      −{fmtMoney(order.discountTotal)}
-                    </span>
-                  </div>
-                )}
-                {order.taxTotal !== null && (
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-gray-600">{t('Tax', 'Impuesto')}</span>
-                    <span className={`font-mono tabular-nums ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                      {fmtMoney(order.taxTotal)}
-                    </span>
-                  </div>
-                )}
-                <div className="pt-2.5 mt-2 border-t border-gray-100 flex items-baseline justify-between gap-3">
-                  <span className="text-[13px] font-semibold text-gray-900">{t('Total', 'Total')}</span>
-                  <span className={`text-[14px] font-mono tabular-nums font-bold ${isVoided ? 'text-gray-400 line-through' : 'text-gray-900'}`}>
-                    {fmtMoney(order.total)}
-                    <span className="text-[11px] text-gray-400 font-medium ml-1 align-middle">USD</span>
+              ) : order.lineItems.map((l, i) => (
+                <div
+                  key={l.id}
+                  style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 11,
+                    padding: '9px 12px',
+                    borderBottom: i === order.lineItems.length - 1 ? undefined : `1px solid ${LINE_SOFT}`,
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 22, height: 20, borderRadius: 6,
+                    background: '#F4F4F2', fontFamily: MONO, fontSize: 10, fontWeight: 600,
+                    color: '#52525B', padding: '0 4px',
+                  }}>
+                    {l.quantity}×
+                  </span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 13, letterSpacing: '-0.01em' }}>{l.name}</span>
+                    {l.variantLabel && (
+                      <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>
+                        {l.variantLabel}
+                      </span>
+                    )}
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 13, color: '#3F3F46' }}>
+                    {fmtMoney(l.totalPrice)}
                   </span>
                 </div>
-              </div>
-            </section>
-          )}
-
-          {/* CUSTOMER — only when captured. Standalone card so
-              walk-in sales don't render an empty attribution. */}
-          {order.customerName && (
-            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
-              <p className="mb-2 text-[13px] font-semibold text-gray-900">
-                {t('Customer', 'Cliente')}
-              </p>
-              <p className="text-[13px] text-gray-800">{order.customerName}</p>
-            </section>
-          )}
-
-          {/* SOURCE — manager-friendly source line + optional
-              channel subline (In-store / Online / Mobile). */}
-          <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
-            <p className="mb-2 text-[13px] font-semibold text-gray-900">
-              {t('Source', 'Fuente')}
-            </p>
-            <p className="text-[13px] text-gray-800">{sourceLine}</p>
-            {order.channelSource && (
-              <p className="mt-0.5 text-[11px] text-gray-500">
-                {channelLabel(order.channelSource, t)}
-              </p>
-            )}
-            <p className="mt-2 text-[11px] text-gray-400 font-mono tabular-nums">
-              #{shortId(order.id)} <span className="text-gray-300 mx-1">·</span> {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
-            </p>
-          </section>
-
-          {/* NOTE — only when the order carries one. */}
-          {order.note && (
-            <section className="rounded-xl border border-gray-200/80 bg-white px-5 py-4">
-              <p className="mb-2 text-[13px] font-semibold text-gray-900">
-                {t('Note', 'Nota')}
-              </p>
-              <p className="text-[12px] text-gray-700 leading-relaxed">{order.note}</p>
-            </section>
-          )}
-        </div>
-
-        {/* FOOTER — Correction tools. Compact: a single row with
-            short copy on the left and a small Void order button on
-            the right. Less dominant than the Ticket above, but
-            clearly the drawer's destructive resolution. */}
-        <div className="border-t border-gray-100 bg-white px-6 py-3.5 flex-shrink-0">
-          <p className="mb-2 text-[10px] font-semibold font-mono uppercase tracking-[0.14em] text-slate">
-            {t('Correction tools', 'Herramientas de corrección')}
-          </p>
-          {canVoid ? (
-            <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-[12px] font-semibold text-gray-900">{t('Void order', 'Anular orden')}</p>
-                  <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                    {t('Use when the full sale was rung in error or refunded outside the system. The original ticket stays in the ledger.', 'Úsalo cuando la venta completa se registró por error o se reembolsó fuera del sistema. El ticket original se mantiene en el libro.')}
-                  </p>
+              ))}
+              {summary.map((r) => (
+                <div
+                  key={r.label}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: r.strong ? '10px 12px' : '8px 12px',
+                    borderTop: `1px solid ${r.strong ? LINE : LINE_SOFT}`,
+                    background: SURFACE,
+                  }}
+                >
+                  <span style={r.strong
+                    ? { fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }
+                    : { fontSize: 12, color: MUTED }}>
+                    {r.label}
+                  </span>
+                  <span style={r.strong
+                    ? { fontFamily: MONO, fontSize: 14, fontWeight: 700, letterSpacing: '-0.02em' }
+                    : { fontFamily: MONO, fontSize: 12 }}>
+                    {r.value}
+                  </span>
                 </div>
-                <form action={action} className="flex-shrink-0">
-                  <input type="hidden" name="order_id" value={order.id} />
-                  <button
-                    type="submit"
-                    disabled={pending}
-                    className="rounded-md border border-red-200 bg-white text-red-700 hover:bg-red-50 hover:border-red-300 px-3 py-1.5 text-[11px] font-semibold disabled:opacity-60 transition-colors whitespace-nowrap"
-                  >
-                    {pending ? t('Voiding…', 'Anulando…') : t('Void order', 'Anular orden')}
-                  </button>
-                </form>
-              </div>
-              {state?.error && (
-                <p className="mt-2 text-[11px] text-red-600">{state.error}</p>
-              )}
+              ))}
             </div>
-          ) : (
-            <div className="rounded-lg border border-gray-200/80 bg-gray-50/40 p-3">
-              <p className="text-[12px] font-semibold text-gray-700">{t('Already voided', 'Ya anulada')}</p>
-              <p className="mt-1 text-[11px] text-gray-500 leading-snug">
-                {t('The record stays in the ledger for audit history.', 'El registro se mantiene en el libro para historial de auditoría.')}
-              </p>
+          </div>
+
+          {/* payment — plain list, adapts to the method */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ ...eyebrow, marginBottom: 4 }}>{t('PAYMENT', 'PAGO')}</div>
+            <div style={metaRow}>
+              <span style={{ fontSize: 12, color: MUTED }}>{t('Method', 'Método')}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: tone.dot }} />
+                <span style={{ fontSize: 12 }}>{methodLabels[order.paymentType]}</span>
+              </span>
+            </div>
+            {order.paymentType === 'card' && (order.cardBrand || order.cardLast4) && (
+              <div style={metaRow}>
+                <span style={{ fontSize: 12, color: MUTED }}>{t('Card', 'Tarjeta')}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12 }}>
+                  {order.cardBrand ?? '—'}{order.cardLast4 ? ` ··${order.cardLast4}` : ''}
+                </span>
+              </div>
+            )}
+            <div style={metaRow}>
+              <span style={{ fontSize: 12, color: MUTED }}>{t('Status', 'Estado')}</span>
+              <span style={{ fontSize: 12, color: statusChipText, fontWeight: 600 }}>{statusLabel}</span>
+            </div>
+            <div style={{ ...metaRow, borderBottom: 'none' }}>
+              <span style={{ fontSize: 12, color: MUTED }}>{t('Source', 'Fuente')}</span>
+              <span style={{ fontSize: 12 }}>{sourceLine(order, t)}</span>
+            </div>
+          </div>
+
+          {/* channel — only when Poynt sent one */}
+          {order.channelSource && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ ...eyebrow, marginBottom: 4 }}>{t('CHANNEL', 'CANAL')}</div>
+              <div style={{ ...metaRow, borderBottom: 'none' }}>
+                <span style={{ fontSize: 12, color: MUTED }}>{t('Type', 'Tipo')}</span>
+                <span style={{ fontSize: 12 }}>{channelLabel(order.channelSource, t)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* customer — only when captured */}
+          {order.customerName && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ ...eyebrow, marginBottom: 4 }}>{t('CUSTOMER', 'CLIENTE')}</div>
+              <div style={{ ...metaRow, borderBottom: 'none' }}>
+                <span style={{ fontSize: 12, color: MUTED }}>{t('Name', 'Nombre')}</span>
+                <span style={{ fontSize: 12 }}>{order.customerName}</span>
+              </div>
+            </div>
+          )}
+
+          {/* note — only when present */}
+          {order.note && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ ...eyebrow, marginBottom: 8 }}>{t('NOTE', 'NOTA')}</div>
+              <div style={{
+                border: `1px solid ${LINE}`, borderRadius: 10, background: SURFACE,
+                padding: '10px 12px', fontSize: 12, color: '#3F3F46', lineHeight: 1.5,
+              }}>
+                {order.note}
+              </div>
             </div>
           )}
         </div>
-      </aside>
-    </>
+
+        {/* footer — two-step void confirm */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, padding: '14px 24px',
+          display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+        }}>
+          {!canVoid ? (
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {t('Already voided — the record stays in the ledger for audit history.', 'Ya anulada — el registro se mantiene en el libro para historial de auditoría.')}
+            </span>
+          ) : confirming ? (
+            <>
+              <span style={{ marginRight: 'auto', fontSize: 12, lineHeight: 1.4, color: DANGER, maxWidth: 200 }}>
+                {t('Void this sale? The ticket stays in the ledger.', '¿Anular esta venta? El ticket se mantiene en el libro.')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                style={{
+                  border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9,
+                  padding: '9px 14px', font: 'inherit', fontSize: 13, fontWeight: 500,
+                  color: '#3F3F46', cursor: 'pointer',
+                }}
+              >
+                {t('Keep it', 'Conservar')}
+              </button>
+              <form action={action}>
+                <input type="hidden" name="order_id" value={order.id} />
+                <button
+                  type="submit"
+                  disabled={pending}
+                  style={{
+                    border: 0, background: DANGER, color: '#fff', borderRadius: 9,
+                    padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', opacity: pending ? 0.6 : 1,
+                  }}
+                >
+                  {pending ? t('Voiding…', 'Anulando…') : t('Void order', 'Anular orden')}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                style={{
+                  border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9,
+                  padding: '9px 14px', font: 'inherit', fontSize: 13, fontWeight: 500,
+                  color: DANGER, cursor: 'pointer',
+                }}
+              >
+                {t('Void order', 'Anular orden')}
+              </button>
+              {/* Print receipt — UI parity with the design; the wiring
+                  will land alongside the native-POS receipt work. */}
+              <button
+                type="button"
+                onClick={() => {/* TODO: wire when receipt renderer lands */}}
+                style={{
+                  marginLeft: 'auto', border: 0, background: INK, color: PAPER, borderRadius: 9,
+                  padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                {t('Print receipt', 'Imprimir recibo')}
+              </button>
+            </>
+          )}
+        </div>
+        {state?.error && (
+          <div style={{ padding: '0 24px 12px', fontSize: 12, color: DANGER }}>{state.error}</div>
+        )}
+      </div>
+    </div>
   )
 }
 
+// ================================================================
+// Small primitives — Stat, Dot, NavBtn.
+// ================================================================
 
+function Stat({ value, label }: { value: string; label: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{value}</span>
+      <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+    </span>
+  )
+}
+
+function Dot() {
+  return <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#D6D5D1', alignSelf: 'center' }} />
+}
+
+function NavBtn({ dir, onClick }: { dir: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+        width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        font: 'inherit', fontSize: 12, color: '#52525B', cursor: 'pointer',
+      }}
+    >
+      {dir}
+    </button>
+  )
+}
+
+// ================================================================
+// Small local helpers.
+// ================================================================
+
+function monthOfIso(iso: string): { y: number; m: number } {
+  const [y, m] = iso.split('-').map(Number)
+  return { y, m: m - 1 }
+}
+
+function daysBetween(a: string, b: string): number {
+  const [ya, ma, da] = a.split('-').map(Number)
+  const [yb, mb, db] = b.split('-').map(Number)
+  const at = Date.UTC(ya, ma - 1, da, 12)
+  const bt = Date.UTC(yb, mb - 1, db, 12)
+  return Math.round((bt - at) / 86_400_000)
+}

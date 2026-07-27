@@ -47,6 +47,10 @@ export interface CalEmployee {
   // doesn't need to be updated in lock-step. Day-view bench
   // hides anyone flagged false for the visible day.
   availability?: boolean[]
+  // Extra roles the person is trained on. Bench card shows them
+  // as "Owner · also Barista"; drawer's Working-as pill row uses
+  // primary + trained too.
+  trainedRoles?: string[]
 }
 
 // ---- Role tone helper (mirrors client.tsx's roleTone) ----------
@@ -166,7 +170,10 @@ export interface StaffingCalendarProps {
   // "+ Add shift" ghost clicked on an open day → parent opens
   // the drawer in "create-blank" mode (person picker shown).
   onAddShiftForDay: (dayIso: string) => void
-  onSetShiftTime: (shiftId: string, startIso: string, endIso: string) => Promise<ActionResult>
+  // onSetShiftTime — retired with the "Set shift time" placeholder
+  // path. Kept in the prop shape for one release so callers can
+  // migrate; parent may pass a no-op. Will be removed next pass.
+  onSetShiftTime?: (shiftId: string, startIso: string, endIso: string) => Promise<ActionResult>
   onRemoveShift: (shiftId: string) => Promise<ActionResult>
   onRepeatLastWeekForDay: (dayIso: string) => Promise<ActionResult>
   onClearDay: (dayIso: string) => Promise<ActionResult>
@@ -383,22 +390,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     const h = dayHours[idx]
     if (!h || h.closed) return
     onDropOnDay(emp.id, weekDays[idx].toISOString())
-  }
-  const handleSetShiftTime = (shift: CalShift) => {
-    // Default set = fill the day's inferred open hours, or 9–5 if empty.
-    const open = openRangeForDay(dayIndex)
-    let startMin: number, endMin: number
-    if (open) {
-      startMin = axis.T0 + (open.startPct / 100) * axis.SPAN
-      endMin = axis.T0 + ((open.startPct + open.widthPct) / 100) * axis.SPAN
-    } else {
-      startMin = 9 * 60; endMin = 17 * 60
-    }
-    const startDate = new Date(day); startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
-    const endDate = new Date(day); endDate.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0)
-    startTransition(() => {
-      onSetShiftTime(shift.id, startDate.toISOString(), endDate.toISOString())
-    })
   }
   const handleRemove = (shift: CalShift) => {
     startTransition(() => { onRemoveShift(shift.id) })
@@ -904,29 +895,61 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           </div>
         ) : (
           <>
-            {/* Day pills */}
-            <div style={{ padding: '10px 14px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              {weekDays.map((d, i) => {
-                const active = i === dayIndex
-                const hasShifts = (shiftsByDay.get(i) ?? []).length > 0
-                return (
-                  <button
-                    key={i}
-                    onClick={() => setDayIndex(i)}
-                    style={{
-                      display: 'flex', alignItems: 'baseline', gap: 6,
-                      border: `1px solid ${active ? INK : LINE}`,
-                      background: active ? INK : hasShifts ? '#fff' : SURFACE,
-                      color: active ? PAPER : hasShifts ? '#3F3F46' : FAINT,
-                      borderRadius: 8, padding: '6px 11px', font: 'inherit', cursor: 'pointer',
-                    }}
-                  >
-                    <span style={{ fontSize: 11 }}>{d.toLocaleDateString(dateLocale, { weekday: 'short' })}</span>
-                    <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>{d.getDate()}</span>
-                  </button>
-                )
-              })}
-            </div>
+            {/* Day pills — with a mono count badge when the day has
+                shifts. Closed days render dimmer so the manager can
+                see at a glance which days are open. */}
+            {(() => {
+              // Same visible-window filter used for row rendering:
+              // only count shifts that actually appear on the axis
+              // so a stale off-hours row doesn't inflate the badge.
+              const visibleShiftsFor = (idx: number) => {
+                const h = dayHours[idx]
+                if (!h || h.closed) return 0
+                return (shiftsByDay.get(idx) ?? []).filter((s) => {
+                  const sMin = minutesInDay(s.startTime)
+                  const eMin = minutesInDay(s.endTime)
+                  return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+                }).length
+              }
+              return (
+                <div style={{ padding: '10px 14px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  {weekDays.map((d, i) => {
+                    const active = i === dayIndex
+                    const count = visibleShiftsFor(i)
+                    const hasShifts = count > 0
+                    const isClosed = dayHours[i]?.closed
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => setDayIndex(i)}
+                        style={{
+                          display: 'flex', alignItems: 'baseline', gap: 6,
+                          border: `1px solid ${active ? INK : LINE}`,
+                          background: active ? INK : (isClosed ? SURFACE : '#fff'),
+                          color: active ? PAPER : (isClosed ? FAINT : '#3F3F46'),
+                          borderRadius: 8, padding: '6px 11px', font: 'inherit', cursor: 'pointer',
+                        }}
+                      >
+                        <span style={{ fontSize: 11 }}>{d.toLocaleDateString(dateLocale, { weekday: 'short' })}</span>
+                        <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>{d.getDate()}</span>
+                        {hasShifts && (
+                          <span style={{
+                            marginLeft: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            minWidth: 16, height: 16, borderRadius: 999,
+                            fontFamily: MONO, fontSize: 9, fontWeight: 600,
+                            background: active ? PAPER : INK,
+                            color: active ? INK : PAPER,
+                            padding: '0 4px',
+                          }}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })()}
 
             <div style={{ padding: 14 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -946,108 +969,173 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 </div>
               </div>
 
-              <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
-                {/* Ruler */}
-                <div style={{ display: 'flex', background: SURFACE, borderBottom: `1px solid ${LINE}` }}>
-                  <div style={{ width: 150, flex: '0 0 150px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>{t('STAFF', 'EQUIPO')}</span>
-                  </div>
-                  <div style={{ position: 'relative', flex: 1, minWidth: 0, height: 24 }}>
-                    {TICKS.map((tick) => (
-                      <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 5, fontFamily: MONO, fontSize: 10, color: MUTED }}>
-                        {fmtHourShort(tick.hour)}
-                      </span>
-                    ))}
+              {(dayHours[dayIndex]?.closed ?? true) ? (
+                // Closed-day panel — dashed border, muted copy.
+                // Nothing to schedule; the manager needs to open
+                // this day via the Week view's hours drawer first.
+                <div style={{
+                  border: `1px dashed ${LINE}`, borderRadius: 10,
+                  padding: 28, textAlign: 'center', background: SURFACE,
+                }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: MUTED }}>{t('Closed', 'Cerrado')}</div>
+                  <div style={{ fontSize: 12, color: FAINT, marginTop: 2 }}>
+                    {t('No trading hours — nothing to staff. Open this day from Week view.', 'Sin horas de servicio — nada que programar. Abre este día desde la vista Semana.')}
                   </div>
                 </div>
-
-                {/* Staff lanes */}
-                {dayShifts.map((s) => {
-                  const tone = roleToneFor(s.role, roleColors)
-                  const dur = hoursBetween(s.startTime, s.endTime)
-                  const isPlaceholder = dur === 0
-                  return (
-                    <div key={s.id} style={{ display: 'flex', borderBottom: `1px solid ${LINE_SOFT}`, alignItems: 'stretch' }}>
-                      <div style={{ width: 150, flex: '0 0 150px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                            {s.employeeName}
-                          </div>
-                          <div style={{ fontSize: 11, color: tone.text, whiteSpace: 'nowrap' }}>{s.role}</div>
-                        </div>
-                        <button
-                          onClick={() => handleRemove(s)}
-                          style={{ border: 0, background: 'transparent', color: '#D6D5D1', font: 'inherit', fontSize: 14, lineHeight: 1, cursor: 'pointer', padding: 2 }}
-                          aria-label={t('Remove', 'Quitar')}
-                        >
-                          ×
-                        </button>
-                      </div>
-                      <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '5px 0' }}>
-                        {openBand(dayOpen, daySetup)}
-                        {hourLines}
-                        <div style={{ position: 'relative', height: 34 }}>
-                          {!isPlaceholder ? (
-                            renderShiftBar(s, 34, false)
-                          ) : (
-                            <button
-                              onClick={() => handleSetShiftTime(s)}
-                              style={{
-                                position: 'absolute',
-                                left: dayOpen ? `${dayOpen.startPct}%` : '0%',
-                                width: dayOpen ? `${dayOpen.widthPct}%` : '100%',
-                                height: 34, borderRadius: 7,
-                                border: `1px dashed ${tone.accent}66`,
-                                background: 'transparent', display: 'flex', alignItems: 'center',
-                                justifyContent: 'center', gap: 8, font: 'inherit',
-                                cursor: 'pointer', color: MUTED,
-                              }}
-                            >
-                              <span style={{ fontSize: 11, fontWeight: 500 }}>{t('Set shift time', 'Definir horario')}</span>
-                              <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{t('tap to fill open hours', 'toca para llenar horas de servicio')}</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
+              ) : (
+                <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
+                  {/* Ruler */}
+                  <div style={{ display: 'flex', background: SURFACE, borderBottom: `1px solid ${LINE}` }}>
+                    <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
+                      <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>{t('STAFF', 'EQUIPO')}</span>
                     </div>
-                  )
-                })}
-
-                {/* Drop zone */}
-                <div style={{ display: 'flex', alignItems: 'stretch', background: '#FCFCFB' }}>
-                  <div style={{ width: 150, flex: '0 0 150px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, color: FAINT }}>{dayShifts.length ? t('Add someone', 'Añadir alguien') : t('No one yet', 'Nadie aún')}</span>
+                    <div style={{ position: 'relative', flex: 1, minWidth: 0, height: 24 }}>
+                      {TICKS.map((tick) => (
+                        <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 5, fontFamily: MONO, fontSize: 10, color: MUTED }}>
+                          {fmtHourShort(tick.hour)}
+                        </span>
+                      ))}
+                    </div>
                   </div>
+
+                  {/* One lane per placed shift. Bar shows time +
+                      break; click routes through onOpenEditShift
+                      to the unified ShiftDrawer. */}
+                  {(() => {
+                    // Filter to shifts that actually land on the
+                    // visible axis, same as Week view. Stale off-
+                    // hours rows are hidden so the lane doesn't
+                    // render an empty row for an invisible bar.
+                    const visibleShifts = dayShifts.filter((s) => {
+                      const sMin = minutesInDay(s.startTime)
+                      const eMin = minutesInDay(s.endTime)
+                      return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+                    })
+                    return visibleShifts.map((s) => {
+                      const tone = roleToneFor(s.role, roleColors)
+                      const dur = hoursBetween(s.startTime, s.endTime)
+                      const brk = 'breakMinutes' in s ? (s as unknown as { breakMinutes: number }).breakMinutes : 0
+                      return (
+                        <div key={s.id} style={{ display: 'flex', borderBottom: `1px solid ${LINE_SOFT}`, alignItems: 'stretch' }}>
+                          <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span style={{ width: 8, height: 8, borderRadius: 2, flex: '0 0 auto', background: tone.accent }} />
+                            <div style={{ minWidth: 0, flex: 1 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {s.employeeName}
+                              </div>
+                              <div style={{ fontSize: 11, color: tone.text, whiteSpace: 'nowrap' }}>{s.role}</div>
+                            </div>
+                            <span style={{ fontFamily: MONO, fontSize: 11, color: '#71717A' }}>
+                              {fmtH(Math.max(0, dur - brk / 60))}
+                            </span>
+                          </div>
+                          <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '5px 0', overflow: 'hidden' }}>
+                            {openBand(dayOpen, daySetup)}
+                            {hourLines}
+                            <div style={{ position: 'relative', height: 30 }}>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); onOpenEditShift(s) }}
+                                style={{
+                                  position: 'absolute',
+                                  left: `${pct(minutesInDay(s.startTime))}%`,
+                                  width: `${pct(minutesInDay(s.endTime)) - pct(minutesInDay(s.startTime))}%`,
+                                  height: 30, borderRadius: 7,
+                                  background: `${tone.accent}1A`,
+                                  border: `1px solid ${tone.accent}33`,
+                                  borderLeft: `4px solid ${tone.accent}`,
+                                  display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px',
+                                  overflow: 'hidden', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+                                }}
+                              >
+                                <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 600, color: '#27272A', whiteSpace: 'nowrap' }}>
+                                  {fmtTime(s.startTime)} – {fmtTime(s.endTime)}
+                                </span>
+                                <span style={{ fontFamily: MONO, fontSize: 10, color: '#71717A', marginLeft: 'auto', whiteSpace: 'nowrap' }}>
+                                  {brk > 0 ? `${brk}m ${t('break', 'descanso')}` : t('no break', 'sin descanso')}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
+
+                  {/* Add row — "+ Add shift" affordance lives in the
+                      STAFF column (per manager's ask); the track
+                      stays a plain drop target with just the shading.
+                      Drop still opens the drawer in create-locked
+                      mode; button click opens it blank. */}
                   <div
-                    onDragOver={(e) => { e.preventDefault(); setDragOverDay(dayIndex) }}
-                    onDragLeave={() => setDragOverDay(null)}
+                    onDragOver={(e) => {
+                      if (!dragging) return
+                      e.preventDefault(); setDragOverDay(dayIndex)
+                    }}
+                    onDragLeave={() => { if (dragOverDay === dayIndex) setDragOverDay(null) }}
                     onDrop={() => handleDayDrop(dayIndex)}
-                    style={{
+                    style={{ display: 'flex', alignItems: 'stretch', background: '#FCFCFB' }}
+                  >
+                    <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => onAddShiftForDay(day.toISOString())}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 10px',
+                          background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
+                          color: MUTED, cursor: 'pointer', width: '100%',
+                          justifyContent: 'flex-start',
+                        }}
+                      >
+                        + {t('Add shift', 'Añadir turno')}
+                      </button>
+                    </div>
+                    <div style={{
                       position: 'relative', flex: 1, minWidth: 0, padding: '5px 0',
                       background: dragOverDay === dayIndex ? '#EFF6FF' : undefined,
-                      outline: dragOverDay === dayIndex ? '2px dashed #93C5FD' : undefined,
-                      outlineOffset: -4,
-                    }}
-                  >
-                    {openBand(dayOpen, daySetup)}
-                    {hourLines}
-                    {dayShifts.length ? (
-                      <div style={{ position: 'relative', height: 34, display: 'flex', alignItems: 'center', padding: '0 10px' }}>
-                        <span style={{ fontSize: 11, color: FAINT }}>
-                          {t('Drop another name from the bench to add them to the staff', 'Suelta otro nombre desde la plantilla para añadirlo al equipo')}
-                        </span>
-                      </div>
-                    ) : (
-                      <div style={{ position: 'relative', height: 120, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-                        <span style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>{t('Nobody on staff for this day yet', 'Nadie en el equipo para este día aún')}</span>
-                        <span style={{ fontSize: 12, color: FAINT }}>
-                          {t('Drag people from the bench to build the day’s staff — then set each shift’s time.', 'Arrastra personas desde la plantilla para construir el equipo del día — luego define el horario de cada turno.')}
-                        </span>
-                      </div>
-                    )}
+                    }}>
+                      {openBand(dayOpen, daySetup)}
+                      {hourLines}
+                      {(() => {
+                        const anyVisible = dayShifts.some((s) => {
+                          const sMin = minutesInDay(s.startTime)
+                          const eMin = minutesInDay(s.endTime)
+                          return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+                        })
+                        if (dragging) {
+                          return (
+                            <div style={{ position: 'relative', height: 30, display: 'flex', alignItems: 'center', paddingLeft: 12 }}>
+                              <span style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8' }}>
+                                {t('Drop', 'Soltar')} {dragging.name.split(' ')[0]} {t('here', 'aquí')}
+                              </span>
+                            </div>
+                          )
+                        }
+                        if (!anyVisible) {
+                          return (
+                            <div style={{ position: 'relative', height: 96, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 4, textAlign: 'center', padding: '0 16px' }}>
+                              <span style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>
+                                {t('Nobody on staff for this day yet', 'Nadie en el equipo para este día aún')}
+                              </span>
+                              <span style={{ fontSize: 12, color: FAINT }}>
+                                {t('Drag someone from the bench, or use + Add shift to start one.', 'Arrastra a alguien desde la plantilla, o usa + Añadir turno para empezar uno.')}
+                              </span>
+                            </div>
+                          )
+                        }
+                        return (
+                          <div style={{ position: 'relative', height: 30, display: 'flex', alignItems: 'center', paddingLeft: 12 }}>
+                            <span style={{ fontSize: 11, color: FAINT }}>
+                              {t('Drop another name from the bench to add them to the staff', 'Suelta otro nombre desde la plantilla para añadirlo al equipo')}
+                            </span>
+                          </div>
+                        )
+                      })()}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </div>
           </>
         )}

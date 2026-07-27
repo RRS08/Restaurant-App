@@ -733,6 +733,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     name: e.name,
     role: e.role,
     availability: e.availability,
+    trainedRoles: e.trainedRoles,
   }))
 
   // ----------------------------------------------------------------

@@ -125,11 +125,19 @@ export default async function StaffingPage() {
     { data: shifts },
     { data: sectionsData },
     { data: locations },
+    { data: businessHours },
+    { data: hoursOverrides },
   ] = await Promise.all([
     supabase.from('employees').select('id, name, role, primary_location_id, trained_roles, employment, availability, sort_order').eq('active', true).order('sort_order').order('name'),
     supabase.from('shifts').select('id, location_id, employee_id, section_id, role, start_time, end_time, notes, employees ( name )').order('start_time'),
     supabase.from('shift_sections').select('id, name, role, area, default_start_hour, default_end_hour, sort_order').order('sort_order'),
     supabase.from('locations').select('id, name').order('created_at', { ascending: true }),
+    // 7 rows max per location — cheap to fetch in full.
+    supabase.from('business_hours').select('location_id, weekday, closed, open_min, close_min'),
+    // Overrides are rare (holidays, one-off closes). Fetch all
+    // and let the client index by date; total volume is small
+    // enough that a rolling window buys nothing here.
+    supabase.from('hours_override').select('location_id, date, closed, open_min, close_min'),
   ])
 
   // ----------------------------------------------------------------
@@ -297,6 +305,23 @@ export default async function StaffingPage() {
         id: s.id, name: s.name, role: s.role ?? 'General', area: s.area as 'foh' | 'boh',
         defaultStartHour: s.default_start_hour, defaultEndHour: s.default_end_hour,
         sortOrder: s.sort_order,
+      }))}
+      businessHours={(businessHours ?? []).map((h) => ({
+        locationId: h.location_id as string,
+        weekday: h.weekday as number,
+        closed: !!h.closed,
+        openMin: h.open_min as number,
+        closeMin: h.close_min as number,
+      }))}
+      hoursOverrides={(hoursOverrides ?? []).map((h) => ({
+        locationId: h.location_id as string,
+        // Postgres `date` comes back as 'YYYY-MM-DD'; keep that
+        // string form as the key everywhere (avoids TZ drift when
+        // constructing a Date from it).
+        date: h.date as string,
+        closed: !!h.closed,
+        openMin: h.open_min as number,
+        closeMin: h.close_min as number,
       }))}
     />
   )

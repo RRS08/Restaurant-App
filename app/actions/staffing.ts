@@ -1381,3 +1381,108 @@ export async function resetStaffingSetup() {
   revalidatePath('/web/staffing')
   return { error: null, message: 'Staffing reset complete. Visit Staffing to run setup again.' }
 }
+
+// ----------------------------------------------------------------
+// setBusinessHours — persist per-location hours for one day.
+//
+// Two scopes:
+//   'always' → weekday rule (business_hours upsert on (location, weekday)).
+//              Also deletes any existing hours_override on the SAME
+//              date so the new rule takes effect for that day too;
+//              otherwise the drawer would "save" but the calendar
+//              would keep showing yesterday's override.
+//   'once'   → hours_override upsert on (location, date). The
+//              weekday rule stays untouched — every other date on
+//              that weekday keeps its regular hours.
+//
+// Times are minutes-from-midnight; guards match the DB CHECKs so
+// a client bug surfaces here instead of as a Postgres 23514.
+// ----------------------------------------------------------------
+export async function setBusinessHours(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner' && ctx.role !== 'manager') {
+    return { error: 'Only the owner or a manager can set business hours.' }
+  }
+
+  const { locationId } = await resolveLocationId(ctx)
+  if (!locationId) return { error: 'No location.' }
+  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
+  if (locAuthErr) return { error: locAuthErr }
+
+  const scope = (formData.get('scope') as string)?.trim()
+  if (scope !== 'always' && scope !== 'once') {
+    return { error: 'Scope must be always or once.' }
+  }
+  const dayIso = (formData.get('day_iso') as string)?.trim()
+  if (!dayIso) return { error: 'Day is required.' }
+  const dayDate = new Date(dayIso)
+  if (!Number.isFinite(dayDate.getTime())) return { error: 'Day is not a valid date.' }
+  // JS getDay() → 0=Sun..6=Sat. Our weekday convention → 0=Mon..6=Sun.
+  const jsDow = dayDate.getDay()
+  const weekday = jsDow === 0 ? 6 : jsDow - 1
+
+  const closed = (formData.get('closed') as string) === 'true'
+  const openRaw = parseInt(String(formData.get('open_min') ?? ''), 10)
+  const closeRaw = parseInt(String(formData.get('close_min') ?? ''), 10)
+  const openMin = Number.isFinite(openRaw) ? openRaw : 720
+  const closeMin = Number.isFinite(closeRaw) ? closeRaw : 1260
+
+  // Values must satisfy the DB CHECKs before we call — otherwise
+  // Postgres returns an opaque error and the drawer shows nothing.
+  if (!closed) {
+    if (openMin < 0 || openMin >= 1440) return { error: 'Open time is out of range.' }
+    if (closeMin < 0 || closeMin > 1440) return { error: 'Close time is out of range.' }
+    if (closeMin <= openMin) return { error: 'Close must be after open.' }
+  }
+
+  if (scope === 'always') {
+    // Format YYYY-MM-DD from local components so the .eq('date',…)
+    // filter below compares apples-to-apples with what Postgres
+    // stores for a `date` column.
+    const isoDate = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`
+    const { error: bhErr } = await ctx.supabase.from('business_hours').upsert(
+      {
+        location_id: locationId,
+        restaurant_id: ctx.restaurantId,
+        weekday,
+        closed,
+        // Even when closed, keep a legal open/close pair so the row
+        // satisfies the check constraint. UI ignores them for closed.
+        open_min: closed ? 720 : openMin,
+        close_min: closed ? 1260 : closeMin,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'location_id,weekday' },
+    )
+    if (bhErr) return { error: formatError('business hours', bhErr) }
+    // Drop any override for that specific date so the fresh rule
+    // takes effect on THIS date too, not just future ones.
+    await ctx.supabase
+      .from('hours_override')
+      .delete()
+      .eq('location_id', locationId)
+      .eq('date', isoDate)
+  } else {
+    const isoDate = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`
+    const { error: ovErr } = await ctx.supabase.from('hours_override').upsert(
+      {
+        location_id: locationId,
+        restaurant_id: ctx.restaurantId,
+        date: isoDate,
+        closed,
+        open_min: closed ? 720 : openMin,
+        close_min: closed ? 1260 : closeMin,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'location_id,date' },
+    )
+    if (ovErr) return { error: formatError('hours override', ovErr) }
+  }
+
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}

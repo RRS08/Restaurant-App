@@ -20,6 +20,7 @@ import {
   deleteStaffingRole,
   reorderStaffingRoles,
   reorderEmployees,
+  setBusinessHours,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
@@ -69,6 +70,15 @@ interface Shift {
   id: string; locationId: string; employeeId: string; sectionId: string | null
   employeeName: string; role: string; startTime: string; endTime: string; notes: string | null
 }
+// Business hours row shapes (as the client sees them, camelCase).
+// Times are minutes from midnight; weekday 0=Mon..6=Sun.
+interface BusinessHoursRow { locationId: string; weekday: number; closed: boolean; openMin: number; closeMin: number }
+interface HoursOverrideRow { locationId: string; date: string; closed: boolean; openMin: number; closeMin: number }
+// Merged per-day view — what the calendar renders. `override` is
+// true when the value came from hours_override (not the weekday
+// rule); the day cell paints an amber "· one-off" hint in that
+// case.
+export interface DayHours { closed: boolean; openMin: number; closeMin: number; override: boolean }
 interface Props {
   lang: Lang
   defaultLocationId: string | null; employees: Employee[]; shifts: Shift[]; sections: Section[]
@@ -80,6 +90,10 @@ interface Props {
    *  ROLE_COLOR_PALETTE. Consulted by roleTone() before the auto-
    *  color regex. Empty object when no overrides exist yet. */
   roleColors: Record<string, string>
+  /** Per-location weekday rules + one-off overrides. Merged per
+   *  visible week to render each day's hours line + shading. */
+  businessHours: BusinessHoursRow[]
+  hoursOverrides: HoursOverrideRow[]
   /** Per-role hourly wage. Keys are normalized role names, values
    *  are dollars/hour. Introduced 2026-07-26; will feed labor-cost
    *  surfaces once those land. Empty object when no wages set. */
@@ -467,7 +481,7 @@ function RoleColorPalette({ roles, t }: { roles: string[]; t: T }) {
   )
 }
 
-export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors, roleWages }: Props) {
+export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors, roleWages, businessHours, hoursOverrides }: Props) {
   const t = makeT(lang)
   const DAYS = localizedDays(t)
   const isUnified = houseModel === 'unified'
@@ -500,6 +514,13 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         // Preselected area when opening; drawer allows changing.
         area: 'foh' | 'boh'
       }
+    | { mode: 'edit-hours'
+        // Day-of-week index (Mon=0..Sun=6) and the concrete date
+        // this open is for. The drawer needs both: weekday keys
+        // the business_hours upsert, date keys the override.
+        dayIndex: number
+        dayIso: string
+      }
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [, startTransition] = useTransition()
@@ -507,6 +528,42 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
 
   const weekDays = getWeekDays(weekStart)
   const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7)
+
+  // ---- Per-week merged business hours (Mon..Sun) ---------------
+  // For each day: prefer a hours_override on that date, else the
+  // weekday rule from business_hours. Anything missing falls back
+  // to a "closed → 12p–9p when reopened" default so the drawer
+  // opens with legal starter values.
+  const dayHours: DayHours[] = weekDays.map((d) => {
+    const isoDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    // JS getDay() → 0=Sun..6=Sat. We use 0=Mon..6=Sun to key both
+    // business_hours.weekday and the DayHours[] slot.
+    const jsDow = d.getDay()
+    const weekday = jsDow === 0 ? 6 : jsDow - 1
+    const override = hoursOverrides.find(
+      (o) => o.locationId === locationId && o.date === isoDate,
+    )
+    if (override) {
+      return {
+        closed: override.closed,
+        openMin: override.openMin,
+        closeMin: override.closeMin,
+        override: true,
+      }
+    }
+    const rule = businessHours.find(
+      (h) => h.locationId === locationId && h.weekday === weekday,
+    )
+    if (rule) {
+      return {
+        closed: rule.closed,
+        openMin: rule.openMin,
+        closeMin: rule.closeMin,
+        override: false,
+      }
+    }
+    return { closed: true, openMin: 720, closeMin: 1260, override: false }
+  })
 
   // Bucket employees strictly by the roles each house has configured.
   // In unified mode, every employee and every section belongs to the one team.
@@ -859,6 +916,12 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           router.refresh()
           return r
         }}
+        dayHours={dayHours}
+        onEditDayHours={(dayIndex) => {
+          const d = weekDays[dayIndex]
+          if (!d) return
+          setDrawer({ mode: 'edit-hours', dayIndex, dayIso: d.toISOString() })
+        }}
       />
 
 
@@ -930,6 +993,14 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           allRoles={[...fohRoles, ...bohRoles]}
           roleColors={roleColors}
           roleWages={roleWages}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+      {drawer?.mode === 'edit-hours' && (
+        <EditHoursDrawer
+          lang={lang}
+          dayIso={drawer.dayIso}
+          initialHours={dayHours[drawer.dayIndex]}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -3216,6 +3287,287 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, hoursByEmploye
               </button>
             </>
           )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ----------------------------------------------------------------
+// EditHoursDrawer — Claude Design 2026-07-26. Opened by tapping
+// a day's left cell on the calendar. Sets that day's opening
+// hours as either the recurring weekday rule or a one-off for
+// this date. Persists through setBusinessHours; calendar re-
+// derives axis + shading from the fresh values on refresh.
+//
+// Design mirrors the role + employee drawers: right-side sheet,
+// inline styles, ink/paper/mono palette. Stepper-based time
+// picker keeps the drawer keyboard-navigable and doesn't need
+// a native date/time input's quirks.
+// ----------------------------------------------------------------
+function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
+  lang: Lang
+  dayIso: string
+  initialHours: DayHours
+  onClose: () => void
+}) {
+  const t = makeT(lang)
+  const router = useRouter()
+
+  // ---- Palette ----
+  const INK = '#18181B'
+  const PAPER = '#FAF9F6'
+  const LINE = '#E7E6E2'
+  const MUTED = '#6B6B70'
+  const FAINT = '#A1A1A6'
+  const SURFACE = '#FAFAF9'
+  const DANGER = '#B91C1C'
+  const MONO = "'Geist Mono', ui-monospace, monospace"
+
+  // ---- Design constants — mirror the calendar's shading window
+  //      + step size. Kept local so a future tweak here doesn't
+  //      accidentally shift the calendar's math.
+  const PRE = 90
+  const POST = 90
+  const STEP = 30
+
+  const [closed, setClosed] = useState(initialHours.closed)
+  const [openMin, setOpenMin] = useState(initialHours.openMin)
+  const [closeMin, setCloseMin] = useState(initialHours.closeMin)
+  const [scope, setScope] = useState<'always' | 'once'>(initialHours.override ? 'once' : 'always')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+
+  const day = new Date(dayIso)
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
+  const weekdayLong = day.toLocaleDateString(locale, { weekday: 'long' })
+  const dateLong = day.toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric' })
+  const dateShort = day.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+
+  // Local time helpers (mirror the calendar's + the design spec).
+  function fmt(m: number) {
+    const h24 = Math.floor(m / 60) % 24
+    const mm = m % 60
+    const h = h24 % 12 === 0 ? 12 : h24 % 12
+    return `${h}:${String(mm).padStart(2, '0')}${h24 < 12 ? 'a' : 'p'}`
+  }
+  function fmtShort(m: number) {
+    const h24 = Math.floor(m / 60) % 24
+    const mm = m % 60
+    const h = h24 % 12 === 0 ? 12 : h24 % 12
+    return `${h}${mm ? ':' + String(mm).padStart(2, '0') : ''}${h24 < 12 ? 'a' : 'p'}`
+  }
+  const dur = (a: number, b: number) => {
+    const n = (b - a) / 60
+    return `${n % 1 ? n.toFixed(1) : n}h`
+  }
+
+  const bump = (field: 'open' | 'close', delta: number) => {
+    if (field === 'open') {
+      setOpenMin((v) => Math.max(0, Math.min(closeMin - STEP, v + delta)))
+    } else {
+      setCloseMin((v) => Math.min(1440, Math.max(openMin + STEP, v + delta)))
+    }
+  }
+
+  async function handleSave() {
+    setBusy(true); setErr(null)
+    try {
+      const fd = new FormData()
+      fd.set('day_iso', dayIso)
+      fd.set('scope', scope)
+      fd.set('closed', closed ? 'true' : 'false')
+      fd.set('open_min', String(openMin))
+      fd.set('close_min', String(closeMin))
+      const r = await setBusinessHours(fd)
+      if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  const winStart = closed ? 0 : openMin - PRE
+  const winEnd = closed ? 0 : closeMin + POST
+  const winSpan = Math.max(1, winEnd - winStart)
+
+  const eyebrowStyle: React.CSSProperties = { fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT }
+  const pill = (active: boolean): React.CSSProperties => ({
+    borderRadius: 999, padding: '5px 12px', font: 'inherit', fontSize: 12,
+    cursor: 'pointer', whiteSpace: 'nowrap',
+    border: `1px solid ${active ? INK : LINE}`,
+    background: active ? INK : '#fff',
+    color: active ? PAPER : '#3F3F46',
+    fontWeight: active ? 600 : 500,
+  })
+  const stepBtn: React.CSSProperties = {
+    border: `1px solid ${LINE}`, background: '#fff', borderRadius: 6,
+    width: 26, height: 18, display: 'flex', alignItems: 'center',
+    justifyContent: 'center', font: 'inherit', fontSize: 8, color: MUTED,
+    cursor: 'pointer', padding: 0,
+  }
+
+  return (
+    <div
+      style={{
+        position: 'fixed', inset: 0, display: 'flex', justifyContent: 'flex-end',
+        zIndex: 50, fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+      }}
+      role="dialog"
+      aria-label={`${t('Hours', 'Horario')}: ${dateLong}`}
+    >
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
+
+      <div style={{
+        position: 'relative', width: 420, maxWidth: '100%', flex: '0 0 420px',
+        height: '100vh', background: '#fff',
+        borderLeft: `1px solid ${LINE}`, boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {/* header */}
+        <div style={{ padding: '22px 26px 18px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div>
+            <div style={eyebrowStyle}>{t('HOURS', 'HORARIO')}</div>
+            <h2 style={{ margin: '5px 0 0', fontSize: 21, fontWeight: 700, letterSpacing: '-0.03em' }}>{dateLong}</h2>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: FAINT }}>
+              {t('Opening and closing times for this day.', 'Horario de apertura y cierre para este día.')}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('Close', 'Cerrar')}
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+              width: 32, height: 32, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', font: 'inherit', fontSize: 15, color: MUTED,
+              cursor: 'pointer', flex: '0 0 auto',
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* body */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 26px 24px', display: 'block' }}>
+          {/* status */}
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ ...eyebrowStyle, marginRight: 2 }}>{t('STATUS', 'ESTADO')}</span>
+            <button type="button" style={pill(closed)} onClick={() => setClosed(true)}>
+              {t('Closed', 'Cerrado')}
+            </button>
+            <button type="button" style={pill(!closed)} onClick={() => setClosed(false)}>
+              {t('Open', 'Abierto')}
+            </button>
+          </div>
+
+          {!closed && (
+            <>
+              {/* times */}
+              <div style={{ marginBottom: 16, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1px 1fr' }}>
+                  <div style={{ padding: '14px 16px' }}>
+                    <div style={eyebrowStyle}>{t('OPENS', 'ABRE')}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+                      <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmt(openMin)}
+                      </span>
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <button type="button" style={stepBtn} onClick={() => bump('open', STEP)}>▲</button>
+                        <button type="button" style={stepBtn} onClick={() => bump('open', -STEP)}>▼</button>
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ background: LINE }} />
+                  <div style={{ padding: '14px 16px' }}>
+                    <div style={eyebrowStyle}>{t('CLOSES', 'CIERRA')}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
+                      <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>
+                        {fmt(closeMin)}
+                      </span>
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                        <button type="button" style={stepBtn} onClick={() => bump('close', STEP)}>▲</button>
+                        <button type="button" style={stepBtn} onClick={() => bump('close', -STEP)}>▼</button>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* shift window preview */}
+              <div style={{ marginBottom: 16, border: `1px solid ${LINE}`, borderRadius: 12, background: SURFACE, padding: '14px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 10 }}>
+                  <span style={eyebrowStyle}>{t('SHIFT WINDOW', 'VENTANA DE TURNO')}</span>
+                  <span style={{ fontSize: 11, color: MUTED }}>
+                    {t('Open', 'Abierto')} {dur(openMin, closeMin)} · {t('window', 'ventana')} {dur(openMin - PRE, closeMin + POST)}
+                  </span>
+                </div>
+                <div style={{ position: 'relative', height: 8, borderRadius: 999, background: '#EDECE8', overflow: 'hidden' }}>
+                  <div style={{
+                    position: 'absolute', top: 0, bottom: 0,
+                    left: `${((openMin - winStart) / winSpan) * 100}%`,
+                    width: `${((closeMin - openMin) / winSpan) * 100}%`,
+                    background: INK, borderRadius: 999,
+                  }} />
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 7 }}>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{fmtShort(winStart)}</span>
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT }}>{fmtShort(winEnd)}</span>
+                </div>
+                <p style={{ margin: '10px 0 0', fontSize: 12, lineHeight: 1.5, color: MUTED }}>
+                  {t('Shifts can start 1h 30m before opening and run 1h 30m past closing, for setup and close-down.', 'Los turnos pueden empezar 1h 30m antes de la apertura y terminar 1h 30m después del cierre, para preparación y limpieza.')}
+                </p>
+              </div>
+            </>
+          )}
+
+          {/* apply-to */}
+          <div style={{ marginBottom: 16, border: `1px solid ${LINE}`, borderRadius: 12, overflow: 'hidden' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 16px 10px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Apply to', 'Aplicar a')}</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <button type="button" style={pill(scope === 'always')} onClick={() => setScope('always')}>
+                  {t(`Every ${weekdayLong}`, `Cada ${weekdayLong}`)}
+                </button>
+                <button type="button" style={pill(scope === 'once')} onClick={() => setScope('once')}>
+                  {t(`Only ${dateShort}`, `Solo ${dateShort}`)}
+                </button>
+              </span>
+            </div>
+            <div style={{ padding: '10px 16px', borderTop: `1px solid ${LINE}`, background: SURFACE }}>
+              <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: MUTED }}>
+                {scope === 'always'
+                  ? t(`Saved as the regular hours for every ${weekdayLong}, this week and onwards.`, `Guardado como el horario regular para cada ${weekdayLong}, esta semana y en adelante.`)
+                  : t(`A one-off for ${dateShort} — every other ${weekdayLong} keeps its regular hours.`, `Un caso único para ${dateShort} — cada otro ${weekdayLong} conserva su horario regular.`)}
+              </p>
+            </div>
+          </div>
+
+          {err && (
+            <p style={{ margin: 0, fontSize: 12, color: DANGER }}>{err}</p>
+          )}
+        </div>
+
+        {/* footer */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, padding: '16px 26px',
+          display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+        }}>
+          <span style={{ marginRight: 'auto' }} />
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={busy}
+            style={{
+              border: 0, background: INK, color: PAPER, borderRadius: 9,
+              padding: '11px 22px', font: 'inherit', fontSize: 13, fontWeight: 600,
+              cursor: 'pointer', opacity: busy ? 0.6 : 1,
+            }}
+          >
+            {busy ? t('Saving…', 'Guardando…') : t('Save hours', 'Guardar horario')}
+          </button>
         </div>
       </div>
     </div>

@@ -634,6 +634,48 @@ create table public.shifts (
 
 
 -- ----------------------------------------------------------------
+-- business_hours: per-location recurring weekly hours
+--
+-- Weekday convention: 0 = Monday … 6 = Sunday. Times are minutes
+-- from midnight (720 = 12:00, 1260 = 21:00). The staffing calendar
+-- derives its time axis and per-row shading from these values,
+-- with ±90m of setup/close-down padding.
+-- ----------------------------------------------------------------
+create table public.business_hours (
+  location_id   uuid not null references public.locations(id) on delete cascade,
+  restaurant_id uuid not null references public.restaurants(id) on delete cascade,
+  weekday       integer not null check (weekday between 0 and 6),
+  closed        boolean not null default false,
+  open_min      integer not null default 720  check (open_min >= 0 and open_min < 1440),
+  close_min     integer not null default 1260 check (close_min >= 0 and close_min <= 1440),
+  updated_at    timestamptz not null default now(),
+  primary key (location_id, weekday),
+  check (close_min > open_min)
+);
+
+
+-- ----------------------------------------------------------------
+-- hours_override: one-off dates that break the weekly rule
+--
+-- Holidays, special closes, extended hours for events. The
+-- staffing calendar prefers an override when reading a date,
+-- else falls back to business_hours[weekday].
+-- ----------------------------------------------------------------
+create table public.hours_override (
+  id            uuid primary key default gen_random_uuid(),
+  location_id   uuid not null references public.locations(id) on delete cascade,
+  restaurant_id uuid not null references public.restaurants(id) on delete cascade,
+  date          date not null,
+  closed        boolean not null default false,
+  open_min      integer not null default 720  check (open_min >= 0 and open_min < 1440),
+  close_min     integer not null default 1260 check (close_min >= 0 and close_min <= 1440),
+  updated_at    timestamptz not null default now(),
+  unique (location_id, date),
+  check (close_min > open_min)
+);
+
+
+-- ----------------------------------------------------------------
 -- expenses: money-out records for the Finance pillar
 --
 -- This is the primary data table for Finance V1.

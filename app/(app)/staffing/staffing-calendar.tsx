@@ -118,6 +118,15 @@ function fmtHourShort(h: number): string {
   if (h === 12) return '12p'
   return h < 12 ? `${h}a` : `${h - 12}p`
 }
+// Compact hours from a minutes-from-midnight value: 720 → "12p",
+// 1290 → "9:30p". Drops ":00" and uses a single-letter meridiem.
+// Used by the day cell's hours line ("12p–10p").
+function fmtHourShortMin(m: number): string {
+  const h24 = Math.floor(m / 60) % 24
+  const mm = m % 60
+  const h = h24 % 12 === 0 ? 12 : h24 % 12
+  return `${h}${mm ? ':' + String(mm).padStart(2, '0') : ''}${h24 < 12 ? 'a' : 'p'}`
+}
 function hoursBetween(a: string, b: string): number {
   return (new Date(b).getTime() - new Date(a).getTime()) / 3_600_000
 }
@@ -178,6 +187,22 @@ export interface StaffingCalendarProps {
   // role chip = reorder). Parent handles persistence + refresh.
   onReorderBench: (orderedIds: string[]) => Promise<ActionResult>
   onReorderRoles: (orderedRoles: string[]) => Promise<ActionResult>
+  // ---- 2026-07-26 business hours ----
+  // Per-visible-week hours (Mon..Sun, length 7). Drives the time
+  // axis + per-row open/setup shading + the day cell's hours line.
+  dayHours: CalDayHours[]
+  // Tap a day's left cell → parent opens the hours drawer.
+  onEditDayHours: (dayIndex: number) => void
+}
+
+// Merged per-day hours passed in from the parent. Times are
+// minutes-from-midnight; `override` = true when the day pulled
+// from hours_override (drives the amber "· one-off" hint).
+export interface CalDayHours {
+  closed: boolean
+  openMin: number
+  closeMin: number
+  override: boolean
 }
 
 type ActionResult =
@@ -199,6 +224,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     onPrevWeek, onNextWeek, onToday, onSave,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
     onReorderBench, onReorderRoles,
+    dayHours, onEditDayHours,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -227,22 +253,30 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [roleDrag, setRoleDrag] = useState<string | null>(null)
   const [roleDropTarget, setRoleDropTarget] = useState<string | null>(null)
 
-  // ---- Time axis — dynamic min/max ± 1.5h padding, capped 0–24 --
+  // ---- Time axis — driven by business hours + 90m PRE/POST -----
+  // Previously we derived from min/max shift time; now the hours
+  // set on each day drive the ruler so the axis stays stable
+  // (adding a shift doesn't reshape the columns). Fallback to
+  // 10a–10p when every day is closed / uninitialized so the empty
+  // state still renders a sensible ruler.
+  const AXIS_PRE = 90   // minutes of setup-time before opening
+  const AXIS_POST = 90  // minutes of close-down after closing
   const axis = useMemo(() => {
-    let minH = 24, maxH = 0
-    for (const s of shifts) {
-      const sh = new Date(s.startTime).getHours() + new Date(s.startTime).getMinutes() / 60
-      const eh = new Date(s.endTime).getHours() + new Date(s.endTime).getMinutes() / 60
-      if (sh < minH) minH = sh
-      if (eh > maxH) maxH = eh
+    const openDays = dayHours.filter((h) => !h.closed)
+    let minMin: number, maxMin: number
+    if (openDays.length === 0) {
+      minMin = 10 * 60
+      maxMin = 22 * 60
+    } else {
+      minMin = Math.min(...openDays.map((h) => h.openMin)) - AXIS_PRE
+      maxMin = Math.max(...openDays.map((h) => h.closeMin)) + AXIS_POST
     }
-    if (minH >= maxH) { minH = 10; maxH = 22 }
-    minH = Math.max(0, Math.floor(minH - 1.5))
-    maxH = Math.min(24, Math.ceil(maxH + 1.5))
-    const T0 = minH * 60
-    const SPAN = (maxH - minH) * 60
-    return { T0, SPAN, minH, maxH }
-  }, [shifts])
+    // Round to hour boundaries so ruler ticks land clean.
+    const T0 = Math.max(0, Math.floor(minMin / 60) * 60)
+    const T1 = Math.min(24 * 60, Math.ceil(maxMin / 60) * 60)
+    const SPAN = Math.max(60, T1 - T0)
+    return { T0, SPAN, minH: T0 / 60, maxH: T1 / 60 }
+  }, [dayHours])
 
   const pct = (minutes: number) => ((minutes - axis.T0) / axis.SPAN) * 100
   const TICKS = useMemo(() => {
@@ -272,14 +306,21 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     return map
   }, [shifts, weekDays])
 
-  // Day-inferred open range (earliest start → latest end for that day).
-  // Falls back to null (Closed) when no shifts scheduled.
+  // Business-hours bands per day. `openBand` shades trading hours
+  // (solid); `setupBand` shades the ±90m setup/close-down window
+  // (dashed, wider than openBand). Both null when the day is
+  // closed or unset — the row renders empty like before.
   const openRangeForDay = (dayIdx: number): { startPct: number; widthPct: number } | null => {
-    const list = shiftsByDay.get(dayIdx) ?? []
-    if (list.length === 0) return null
-    const startMin = Math.min(...list.map((s) => minutesInDay(s.startTime)))
-    const endMin = Math.max(...list.map((s) => minutesInDay(s.endTime)))
-    return { startPct: pct(startMin), widthPct: pct(endMin) - pct(startMin) }
+    const h = dayHours[dayIdx]
+    if (!h || h.closed) return null
+    return { startPct: pct(h.openMin), widthPct: pct(h.closeMin) - pct(h.openMin) }
+  }
+  const setupRangeForDay = (dayIdx: number): { startPct: number; widthPct: number } | null => {
+    const h = dayHours[dayIdx]
+    if (!h || h.closed) return null
+    const s = Math.max(axis.T0, h.openMin - AXIS_PRE)
+    const e = Math.min(axis.T0 + axis.SPAN, h.closeMin + AXIS_POST)
+    return { startPct: pct(s), widthPct: pct(e) - pct(s) }
   }
 
   const weekLabel = `${weekDays[0].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })} – ${weekDays[6].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric', year: 'numeric' })}`
@@ -289,6 +330,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const day = weekDays[dayIndex]
   const dayShifts = shiftsByDay.get(dayIndex) ?? []
   const dayOpen = openRangeForDay(dayIndex)
+  const daySetup = setupRangeForDay(dayIndex)
   const dayTotalH = dayShifts.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
   const dayLongLabel = day.toLocaleDateString(dateLocale, { weekday: 'long', month: 'long', day: 'numeric' })
 
@@ -362,17 +404,38 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     color: '#3F3F46', cursor: 'pointer',
   }
 
-  const openBand = (open: { startPct: number; widthPct: number } | null, today?: boolean) =>
-    open ? (
-      <div style={{
-        position: 'absolute',
-        left: `${open.startPct}%`, width: `${open.widthPct}%`,
-        top: 0, bottom: 0,
-        background: today ? '#EFF6FF' : SURFACE,
-        borderLeft: `1px solid ${today ? '#DBEAFE' : LINE}`,
-        borderRight: `1px solid ${today ? '#DBEAFE' : LINE}`,
-      }} />
-    ) : null
+  // Two stacked bands per day row: outer = dashed setup/close-down
+  // window (±90m of the trading hours); inner = solid trading
+  // hours. Rendered in that order so the solid band overlays the
+  // dashed one exactly where they overlap.
+  const openBand = (
+    open: { startPct: number; widthPct: number } | null,
+    setup?: { startPct: number; widthPct: number } | null,
+    today?: boolean,
+  ) => (
+    <>
+      {setup && (
+        <div style={{
+          position: 'absolute',
+          left: `${setup.startPct}%`, width: `${setup.widthPct}%`,
+          top: 0, bottom: 0,
+          background: '#FCFCFB',
+          borderLeft: `1px dashed ${LINE}`,
+          borderRight: `1px dashed ${LINE}`,
+        }} />
+      )}
+      {open && (
+        <div style={{
+          position: 'absolute',
+          left: `${open.startPct}%`, width: `${open.widthPct}%`,
+          top: 0, bottom: 0,
+          background: today ? '#EFF6FF' : '#F4F4F2',
+          borderLeft: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
+          borderRight: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
+        }} />
+      )}
+    </>
+  )
 
   const hourLines = TICKS.map((tick) => (
     <span key={tick.hour} style={{
@@ -489,42 +552,26 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               const list = shiftsByDay.get(idx) ?? []
               const isToday = sameDay(d, new Date())
               const open = openRangeForDay(idx)
-              const dayHours = list.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
+              const setup = setupRangeForDay(idx)
+              const hoursForDay = dayHours[idx] ?? { closed: true, openMin: 720, closeMin: 1260, override: false }
               const isOver = dragOverDay === idx
-              if (list.length === 0) {
-                return (
-                  <div
-                    key={idx}
-                    onDragOver={(e) => { e.preventDefault(); setDragOverDay(idx) }}
-                    onDragLeave={() => setDragOverDay(null)}
-                    onDrop={() => handleDayDrop(idx)}
-                    style={{
-                      display: 'flex', borderBottom: `1px solid ${LINE}`,
-                      background: isOver ? '#EFF6FF' : SURFACE,
-                    }}
-                  >
-                    <div style={{ width: 132, flex: '0 0 132px', borderRight: `1px solid ${LINE}`, padding: '3px 12px' }}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: isToday ? SIGNAL : FAINT }}>
-                        {d.toLocaleDateString(dateLocale, { weekday: 'short' })} {d.getDate()}
-                      </span>
-                    </div>
-                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', paddingLeft: 12, height: 18 }}>
-                      <span style={{ fontSize: 11, color: isOver ? SIGNAL : FAINT }}>
-                        {isOver ? t('Drop to schedule', 'Suelta para programar') : t('No shifts scheduled', 'Sin turnos programados')}
-                      </span>
-                    </div>
-                  </div>
-                )
-              }
-              // Consistent day-row footprint. Every day gets at least
-              // WEEK_DAY_MIN_H so a light day doesn't look cramped
-              // against a stacked one. Rows expand naturally when the
-              // day's shifts exceed that floor.
+              // Row footprint. Empty rows collapse to a shorter
+              // minimum; populated rows expand to fit stacked bars.
               const barH = 22
               const barGap = 4
               const contentH = list.length * barH + Math.max(0, list.length - 1) * barGap
-              const WEEK_DAY_MIN_H = 84
+              const WEEK_DAY_MIN_H = list.length === 0 ? 52 : 84
               const dayRowH = Math.max(WEEK_DAY_MIN_H, contentH + 16)
+              // Hours-line copy: "12p–10p", "Closed", "12p–10p · one-off".
+              // Overrides paint amber to signal an exception.
+              const hoursLine = hoursForDay.closed
+                ? t('Closed', 'Cerrado')
+                : `${fmtHourShortMin(hoursForDay.openMin)}–${fmtHourShortMin(hoursForDay.closeMin)}${hoursForDay.override ? ` · ${t('one-off', 'único')}` : ''}`
+              const hoursLineColor = hoursForDay.closed
+                ? FAINT
+                : hoursForDay.override
+                  ? '#B45309'
+                  : MUTED
               return (
                 <div
                   key={idx}
@@ -538,24 +585,50 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     minHeight: dayRowH,
                   }}
                 >
-                  <div style={{
-                    width: 132, flex: '0 0 132px', borderRight: `1px solid ${LINE}`,
-                    padding: '10px 12px',
-                    borderLeft: isToday ? `3px solid ${SIGNAL}` : undefined,
-                    marginLeft: isToday ? -3 : undefined,
-                  }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: isToday ? SIGNAL : INK }}>
-                      {d.toLocaleDateString(dateLocale, { weekday: 'short' })} {d.getDate()}
-                    </div>
-                    <div style={{ fontFamily: MONO, fontSize: 10, color: isToday ? SIGNAL : MUTED, whiteSpace: 'nowrap', marginTop: 2 }}>
-                      {list.length} {list.length === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}
-                      <span style={{ color: FAINT, margin: '0 4px' }}>·</span>
-                      {fmtH(dayHours).toUpperCase()}
-                    </div>
-                  </div>
-                  <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '8px 0' }}>
-                    {openBand(open, isToday)}
-                    {list.map((s, i) => (
+                  {/* Left cell = button opening the hours drawer.
+                      Date + tiny "Edit" affordance on the top line;
+                      hours line ("12p–10p" / "Closed") underneath. */}
+                  <button
+                    type="button"
+                    onClick={() => onEditDayHours(idx)}
+                    title={t('Set opening hours', 'Definir horario de apertura')}
+                    style={{
+                      width: 132, flex: '0 0 132px',
+                      borderRight: `1px solid ${LINE}`,
+                      borderTop: 0, borderBottom: 0,
+                      borderLeft: isToday ? `3px solid ${SIGNAL}` : 'none',
+                      marginLeft: isToday ? -3 : 0,
+                      background: 'transparent',
+                      color: hoursForDay.closed ? FAINT : INK,
+                      padding: '10px 12px',
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: 'flex-start', gap: 2,
+                      font: 'inherit', textAlign: 'left', cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: isToday ? SIGNAL : (hoursForDay.closed ? FAINT : INK) }}>
+                        {d.toLocaleDateString(dateLocale, { weekday: 'short' })} {d.getDate()}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#C4C4C7' }}>{t('Edit', 'Editar')}</span>
+                    </span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: hoursLineColor, whiteSpace: 'nowrap' }}>
+                      {hoursLine}
+                    </span>
+                  </button>
+                  <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: list.length === 0 ? 0 : '8px 0' }}>
+                    {openBand(open, setup, isToday)}
+                    {list.length === 0 ? (
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%', paddingLeft: 12 }}>
+                        <span style={{ fontSize: 11, color: isOver ? SIGNAL : FAINT }}>
+                          {isOver
+                            ? t('Drop to schedule', 'Suelta para programar')
+                            : hoursForDay.closed
+                              ? t('Closed — tap the day to change', 'Cerrado — toca el día para cambiar')
+                              : t('No shifts scheduled', 'Sin turnos programados')}
+                        </span>
+                      </div>
+                    ) : list.map((s, i) => (
                       <div
                         key={s.id}
                         style={{
@@ -688,6 +761,19 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     >
                       + {t('Add role', 'Añadir puesto')}
                     </button>
+                    {/* Shading legend — sits on the right side of the
+                        roles row so a first-time viewer can decode
+                        the solid vs. dashed bands on each day. */}
+                    <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
+                        <span style={{ width: 16, height: 10, borderRadius: 2, background: '#F4F4F2', border: '1px solid #D6D5D1' }} />
+                        {t('Open', 'Abierto')}
+                      </span>
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
+                        <span style={{ width: 16, height: 10, borderRadius: 2, background: '#FCFCFB', border: `1px dashed ${LINE}` }} />
+                        {t('Setup & close-down', 'Preparación y cierre')}
+                      </span>
+                    </span>
                   </div>
                 </div>
               )
@@ -775,7 +861,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         </button>
                       </div>
                       <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '5px 0' }}>
-                        {openBand(dayOpen)}
+                        {openBand(dayOpen, daySetup)}
                         {hourLines}
                         <div style={{ position: 'relative', height: 34 }}>
                           {!isPlaceholder ? (
@@ -820,7 +906,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       outlineOffset: -4,
                     }}
                   >
-                    {openBand(dayOpen)}
+                    {openBand(dayOpen, daySetup)}
                     {hourLines}
                     {dayShifts.length ? (
                       <div style={{ position: 'relative', height: 34, display: 'flex', alignItems: 'center', padding: '0 10px' }}>

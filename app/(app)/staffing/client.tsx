@@ -16,13 +16,21 @@ import {
   addStaffingRole,
   setRoleColor,
   setRoleWage,
+  renameStaffingRole,
+  deleteStaffingRole,
+  moveStaffingRole,
   createShiftSection,
   updateShiftSection,
   deleteShiftSection,
 } from '@/app/actions/staffing'
 import { normalizeNameKey } from '@/lib/strings/names'
 import { makeT, type Lang } from '@/lib/i18n'
-import StaffingCalendar, { type CalShift, type CalEmployee } from './staffing-calendar'
+import StaffingCalendar, {
+  type CalShift,
+  type CalEmployee,
+  ROLE_TONES,
+  ROLE_TONE_SLUGS,
+} from './staffing-calendar'
 
 type T = (en: string, es?: string) => string
 
@@ -471,6 +479,12 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         defaultStartHour?: number | null
         defaultEndHour?: number | null
       }
+    | { mode: 'role-drawer'
+        // null = create new; string = edit existing role by name.
+        role: string | null
+        // Preselected area when opening; drawer allows changing.
+        area: 'foh' | 'boh'
+      }
   const [drawer, setDrawer] = useState<DrawerState | null>(null)
   const [dragOver, setDragOver] = useState<string | null>(null)
   const [, startTransition] = useTransition()
@@ -822,30 +836,19 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
         }
         onToday={() => setWeekStart(getMonday(new Date()))}
         onSave={() => { router.refresh() }}
-        onSetRoleColor={async (role, colorSlug) => {
-          const fd = new FormData()
-          fd.set('role', role)
-          fd.set('color', colorSlug ?? '')
-          const r = await setRoleColor(fd)
-          router.refresh()
-          return r
+        onEditRole={(role) => {
+          // Pick the area from staffing_config membership. If the role
+          // lives in neither list (fresh role that hasn't been persisted
+          // yet, shouldn't happen normally), fall back to activeHouse
+          // so the drawer at least opens on a defined tab.
+          const key = role.toLowerCase().trim()
+          const area: 'foh' | 'boh' =
+            fohRoles.some((r) => r.toLowerCase().trim() === key) ? 'foh'
+              : bohRoles.some((r) => r.toLowerCase().trim() === key) ? 'boh'
+                : activeHouse
+          setDrawer({ mode: 'role-drawer', role, area })
         }}
-        onSetRoleWage={async (role, wage) => {
-          const fd = new FormData()
-          fd.set('role', role)
-          fd.set('wage', wage === null ? '' : String(wage))
-          const r = await setRoleWage(fd)
-          router.refresh()
-          return r
-        }}
-        onAddRole={async (name) => {
-          const fd = new FormData()
-          fd.set('area', activeHouse)
-          fd.set('role', name)
-          const r = await addStaffingRole(null, fd)
-          router.refresh()
-          return r
-        }}
+        onOpenAddRole={() => setDrawer({ mode: 'role-drawer', role: null, area: activeHouse })}
         roleWages={roleWages}
       />
 
@@ -900,6 +903,18 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           defaultSectionId={drawer.defaultSectionId ?? null}
           defaultStartHour={drawer.defaultStartHour ?? null}
           defaultEndHour={drawer.defaultEndHour ?? null}
+          onClose={() => setDrawer(null)}
+        />
+      )}
+      {drawer?.mode === 'role-drawer' && (
+        <EditRoleDrawer
+          lang={lang}
+          role={drawer.role}
+          area={drawer.area}
+          isUnified={isUnified}
+          employees={employees}
+          roleColors={roleColors}
+          roleWages={roleWages}
           onClose={() => setDrawer(null)}
         />
       )}
@@ -2292,6 +2307,327 @@ function AddCustomShiftDrawer({
           </DrawerFooter>
         </form>
       )}
+    </DrawerShell>
+  )
+}
+
+// ----------------------------------------------------------------
+// EditRoleDrawer — the single editor surface for a staffing role.
+// Opened by clicking any chip in the roles legend (edit mode) or
+// the "+ Add role" button (create mode). Replaces the old inline
+// color popover + inline add input.
+//
+// Fields:
+//   • Name — required. Renaming propagates to shifts + employees.
+//   • House placement (FOH / BOH) — hidden in unified mode.
+//   • Color — one of ROLE_TONE_SLUGS. Empty = auto (falls back to
+//     regex → gray).
+//   • Hourly wage — per-role, feeds labor cost. Blank clears.
+//   • Assigned staff — read-only list; each row is a link to that
+//     employee's own drawer (parent handles that later; today the
+//     row is a static preview).
+//
+// Delete is available in edit mode but blocked server-side when
+// any active employee or upcoming shift still uses the role.
+// ----------------------------------------------------------------
+function EditRoleDrawer({ lang, role, area, isUnified, employees, roleColors, roleWages, onClose }: {
+  lang: Lang
+  role: string | null
+  area: 'foh' | 'boh'
+  isUnified: boolean
+  employees: Employee[]
+  roleColors: Record<string, string>
+  roleWages: Record<string, number>
+  onClose: () => void
+}) {
+  const t = makeT(lang)
+  const router = useRouter()
+  const isEdit = role != null
+  const originalKey = role ? normalizeNameKey(role) : ''
+  const currentColor = originalKey ? (roleColors[originalKey] ?? '') : ''
+  const currentWage = originalKey ? (roleWages[originalKey] ?? null) : null
+
+  const [name, setName] = useState(role ?? '')
+  const [pickedArea, setPickedArea] = useState<'foh' | 'boh'>(area)
+  const [color, setColor] = useState<string>(currentColor)
+  const [wage, setWage] = useState<string>(currentWage != null ? String(currentWage) : '')
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // Staff assigned to this role — normalized-key compare so casing
+  // doesn't cause a false miss.
+  const assigned = useMemo(() => {
+    if (!isEdit || !originalKey) return []
+    return employees.filter((e) => normalizeNameKey(e.role ?? '') === originalKey)
+  }, [isEdit, originalKey, employees])
+
+  const eyebrow = isUnified
+    ? t('Team', 'Equipo')
+    : (pickedArea === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina'))
+  const title = isEdit
+    ? t(`Edit role`, `Editar puesto`)
+    : t('New role', 'Nuevo puesto')
+  const subtitle = isEdit
+    ? t(`Name, color, wage — all apply to everyone under this role.`, `Nombre, color, salario — se aplican a todos con este puesto.`)
+    : t(`Add a role to ${eyebrow.toLowerCase()}. Fill in the details, then Save.`, `Añade un puesto a ${eyebrow.toLowerCase()}. Completa los detalles y guarda.`)
+
+  // Single Save handler — batches every mutation in order:
+  //   1. add (create-mode only) or rename (edit-mode + name changed)
+  //   2. move (edit-mode + area changed)
+  //   3. color (always, both create + edit)
+  //   4. wage (always)
+  // Each step short-circuits on error so we never leave the config
+  // half-mutated visible to the user (they see the first failure).
+  async function handleSave(e: React.FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setErr(null)
+    const trimmed = name.trim()
+    if (!trimmed) { setErr(t('Name is required.', 'El nombre es obligatorio.')); setBusy(false); return }
+    const newKey = normalizeNameKey(trimmed)
+
+    try {
+      // Step 1 — create or rename
+      let effectiveRoleName = trimmed
+      if (!isEdit) {
+        const fd = new FormData()
+        fd.set('area', pickedArea)
+        fd.set('role', trimmed)
+        const r = await addStaffingRole(null, fd)
+        if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      } else if (originalKey !== newKey || (role ?? '') !== trimmed) {
+        // Rename lives in the ORIGINAL area (the server rejects if
+        // it can't find the role there). Area moves come next.
+        const fd = new FormData()
+        fd.set('area', area)
+        fd.set('oldName', role!)
+        fd.set('newName', trimmed)
+        const r = await renameStaffingRole(fd)
+        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      }
+
+      // Step 2 — move between houses (edit-mode only)
+      if (isEdit && !isUnified && pickedArea !== area) {
+        const fd = new FormData()
+        fd.set('role', effectiveRoleName)
+        fd.set('from', area)
+        fd.set('to', pickedArea)
+        const r = await moveStaffingRole(fd)
+        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      }
+
+      // Step 3 — color. Blank = clear override.
+      {
+        const fd = new FormData()
+        fd.set('role', effectiveRoleName)
+        fd.set('color', color)
+        const r = await setRoleColor(fd)
+        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      }
+
+      // Step 4 — wage. Blank = clear.
+      {
+        const fd = new FormData()
+        fd.set('role', effectiveRoleName)
+        fd.set('wage', wage.trim())
+        const r = await setRoleWage(fd)
+        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+      }
+
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  async function handleDelete() {
+    if (!isEdit) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const fd = new FormData()
+      fd.set('area', area)
+      fd.set('role', role!)
+      const r = await deleteStaffingRole(fd)
+      if ('error' in r && r.error) { setErr(r.error); setBusy(false); setConfirmDelete(false); return }
+      router.refresh()
+      onClose()
+    } catch (caught) {
+      setErr(caught instanceof Error ? caught.message : String(caught))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <DrawerShell
+      eyebrow={eyebrow}
+      title={title}
+      subtitle={subtitle}
+      onClose={onClose}
+      closeLabel={t('Close', 'Cerrar')}
+    >
+      <form onSubmit={handleSave} className="flex-1 flex flex-col min-h-0">
+        <DrawerBody>
+          <Field label={t('Role name', 'Nombre del puesto')} htmlFor="er-name" t={t}>
+            <input
+              id="er-name"
+              type="text"
+              required
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={t('e.g. Cashier', 'p.ej. Cajero')}
+              className={fieldInputClass}
+            />
+          </Field>
+
+          {!isUnified && (
+            <Field label={t('House', 'Casa')} t={t}>
+              <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setPickedArea('foh')}
+                  className={`px-4 py-2 text-xs font-semibold ${pickedArea === 'foh' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                >
+                  {t('Front of House', 'Salón')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPickedArea('boh')}
+                  className={`px-4 py-2 text-xs font-semibold border-l border-gray-200 ${pickedArea === 'boh' ? 'bg-gray-900 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'}`}
+                >
+                  {t('Back of House', 'Cocina')}
+                </button>
+              </div>
+            </Field>
+          )}
+
+          <Field label={t('Color', 'Color')} t={t} hint={t('Leave unset to pick automatically.', 'Sin selección se elige automático.')}>
+            <div className="flex flex-wrap gap-2">
+              {ROLE_TONE_SLUGS.map((slug) => {
+                const swatch = ROLE_TONES[slug]
+                const active = color === slug
+                return (
+                  <button
+                    key={slug}
+                    type="button"
+                    onClick={() => setColor(active ? '' : slug)}
+                    title={slug}
+                    className="rounded-md transition"
+                    style={{
+                      width: 28, height: 28, borderRadius: 8,
+                      background: swatch.accent,
+                      border: active ? '2px solid #18181B' : '1px solid #E5E7EB',
+                      cursor: 'pointer',
+                    }}
+                  />
+                )
+              })}
+              {color && (
+                <button
+                  type="button"
+                  onClick={() => setColor('')}
+                  className="text-[11px] text-gray-500 hover:text-gray-700 self-center"
+                >
+                  {t('Reset to auto', 'Volver a automático')}
+                </button>
+              )}
+            </div>
+          </Field>
+
+          <Field label={t('Hourly wage', 'Salario por hora')} htmlFor="er-wage" optional t={t}
+            hint={t('Applies to everyone under this role. Individual overrides can come later.', 'Se aplica a todos con este puesto. Ajustes individuales pueden ir después.')}>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-gray-400">$</span>
+              <input
+                id="er-wage"
+                type="number"
+                min="0"
+                step="0.25"
+                inputMode="decimal"
+                value={wage}
+                onChange={(e) => setWage(e.target.value)}
+                placeholder="0.00"
+                className={`${fieldInputClass} pl-7`}
+              />
+            </div>
+          </Field>
+
+          {isEdit && (
+            <div>
+              <SectionLabel>{t('Assigned to this role', 'Asignados a este puesto')}</SectionLabel>
+              {assigned.length === 0 ? (
+                <p className="text-xs text-gray-500">
+                  {t('No one is currently assigned. This role will be selectable when adding an employee.', 'Nadie está asignado actualmente. Este puesto se podrá elegir al añadir un empleado.')}
+                </p>
+              ) : (
+                <ul className="divide-y divide-gray-100 border border-gray-100 rounded-lg overflow-hidden">
+                  {assigned.map((e) => (
+                    <li key={e.id} className="flex items-center justify-between px-3 py-2 bg-white">
+                      <span className="text-sm text-gray-900">{e.name}</span>
+                      <span className="text-[11px] text-gray-400">{e.role}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+
+          {err && (
+            <p className="text-xs text-red-600">{err}</p>
+          )}
+        </DrawerBody>
+
+        <DrawerFooter>
+          <div className="flex flex-col gap-2">
+            <button
+              type="submit"
+              disabled={busy}
+              className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {busy ? t('Saving…', 'Guardando…') : isEdit ? t('Save changes', 'Guardar cambios') : t('Add role', 'Añadir puesto')}
+            </button>
+
+            {isEdit && (
+              confirmDelete ? (
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="flex-1 text-[11px] text-red-700">
+                    {assigned.length > 0
+                      ? t('Reassign the staff above first.', 'Reasigna primero al personal de arriba.')
+                      : t('Delete this role?', '¿Eliminar este puesto?')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    className="h-8 rounded-md border border-gray-200 px-3 text-[11px] font-semibold text-gray-700 hover:bg-gray-50"
+                  >
+                    {t('Cancel', 'Cancelar')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    disabled={busy || assigned.length > 0}
+                    className="h-8 rounded-md bg-red-600 px-3 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {busy ? t('Deleting…', 'Eliminando…') : t('Delete', 'Eliminar')}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  className="text-[11px] text-red-600 hover:text-red-700 self-start"
+                >
+                  {t('Delete role', 'Eliminar puesto')}
+                </button>
+              )
+            )}
+          </div>
+        </DrawerFooter>
+      </form>
     </DrawerShell>
   )
 }

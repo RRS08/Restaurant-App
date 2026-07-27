@@ -186,6 +186,238 @@ export async function addStaffingRole(
 }
 
 // ----------------------------------------------------------------
+// renameStaffingRole — rename a role in place. Propagates to:
+//   1. staffing_config.foh_roles / boh_roles (whichever holds it)
+//   2. staffing_config.role_colors + role_wages (rekey by normalized name)
+//   3. shifts.role (all rows currently tagged with the old name)
+//   4. employees.role (same)
+//
+// Idempotent: if the new name is already the same normalized key,
+// this is a display-only rename (updates the array + rewrites all
+// role text so casing matches the chosen display form). Blocks if
+// the target name would collide with a different existing role in
+// the same area (avoids silently merging two roles).
+// ----------------------------------------------------------------
+export async function renameStaffingRole(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can rename roles.' }
+
+  const area = formData.get('area') as 'foh' | 'boh'
+  const oldRaw = ((formData.get('oldName') as string) ?? '').trim()
+  const newRaw = ((formData.get('newName') as string) ?? '').trim()
+  const oldKey = normalizeNameKey(oldRaw)
+  const newDisplay = normalizeDisplayName(newRaw)
+  const newKey = normalizeNameKey(newRaw)
+  if (!oldKey) return { error: 'Original role name is required.' }
+  if (!newDisplay) return { error: 'New role name is required.' }
+  if (area !== 'foh' && area !== 'boh') return { error: 'Invalid house.' }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('foh_roles, boh_roles, role_colors, role_wages')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!config) return { error: 'Staffing not configured yet.' }
+
+  const column = area === 'foh' ? 'foh_roles' : 'boh_roles'
+  const list: string[] = (config as unknown as Record<string, string[]>)[column] ?? []
+  const idx = list.findIndex((r) => normalizeNameKey(r) === oldKey)
+  if (idx < 0) return { error: 'Role not found in this house.' }
+
+  // Collision guard — the new normalized key must not already exist
+  // in the SAME area under a different display form. Same-key rename
+  // (display-only) is allowed and just rewrites the display text.
+  const collides = list.some((r, i) => i !== idx && normalizeNameKey(r) === newKey)
+  if (collides) return { error: 'A role with that name already exists in this house.' }
+
+  const nextList = [...list]
+  nextList[idx] = newDisplay
+
+  // Rekey role_colors + role_wages when the normalized key changes.
+  // When only the display form changes (same key), leave them alone —
+  // they're keyed by normalized name and nothing needs to move.
+  const currentColors = (config.role_colors as Record<string, string> | null) ?? {}
+  const currentWages = (config.role_wages as Record<string, number> | null) ?? {}
+  const nextColors = { ...currentColors }
+  const nextWages = { ...currentWages }
+  if (oldKey !== newKey) {
+    if (nextColors[oldKey] !== undefined) { nextColors[newKey] = nextColors[oldKey]; delete nextColors[oldKey] }
+    if (nextWages[oldKey] !== undefined) { nextWages[newKey] = nextWages[oldKey]; delete nextWages[oldKey] }
+  }
+
+  const { error: cfgErr } = await ctx.supabase.from('staffing_config').upsert(
+    {
+      restaurant_id: ctx.restaurantId,
+      [column]: nextList,
+      role_colors: nextColors,
+      role_wages: nextWages,
+    },
+    { onConflict: 'restaurant_id' },
+  )
+  if (cfgErr) return { error: formatError('role rename', cfgErr) }
+
+  // Propagate to shifts + employees. We use case-insensitive match
+  // (ilike with the exact escaped oldRaw isn't safe if the display
+  // form drifted; use eq on the exact stored variant). Since we can't
+  // know every stored casing, fetch the distinct values and match by
+  // normalized key.
+  const { data: shiftRows } = await ctx.supabase
+    .from('shifts').select('id, role').eq('restaurant_id', ctx.restaurantId)
+  const shiftIds = (shiftRows ?? []).filter((r) => normalizeNameKey(r.role ?? '') === oldKey).map((r) => r.id)
+  if (shiftIds.length > 0) {
+    await ctx.supabase.from('shifts').update({ role: newDisplay }).in('id', shiftIds)
+  }
+  const { data: empRows } = await ctx.supabase
+    .from('employees').select('id, role').eq('restaurant_id', ctx.restaurantId)
+  const empIds = (empRows ?? []).filter((r) => normalizeNameKey(r.role ?? '') === oldKey).map((r) => r.id)
+  if (empIds.length > 0) {
+    await ctx.supabase.from('employees').update({ role: newDisplay }).in('id', empIds)
+  }
+
+  await logAudit(ctx, null, 'role_renamed', 'staffing_config')
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
+// deleteStaffingRole — remove a role from the house's role list.
+//
+// Blocked when any active employee or future shift still carries
+// that role. The manager must reassign them first — silently
+// deleting would orphan shifts and leave employees with a role
+// that no longer appears in the picker.
+//
+// Also clears the role's color + wage entries so we don't leak
+// dangling JSONB keys.
+// ----------------------------------------------------------------
+export async function deleteStaffingRole(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can delete roles.' }
+
+  const area = formData.get('area') as 'foh' | 'boh'
+  const raw = ((formData.get('role') as string) ?? '').trim()
+  const roleKey = normalizeNameKey(raw)
+  if (!roleKey) return { error: 'Role name is required.' }
+  if (area !== 'foh' && area !== 'boh') return { error: 'Invalid house.' }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('foh_roles, boh_roles, role_colors, role_wages')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!config) return { error: 'Staffing not configured yet.' }
+
+  // Assignment guard — must be zero live shifts and zero active
+  // employees still tagged with this role.
+  const { data: empRows } = await ctx.supabase
+    .from('employees').select('id, role').eq('restaurant_id', ctx.restaurantId).eq('active', true)
+  const empHits = (empRows ?? []).filter((r) => normalizeNameKey(r.role ?? '') === roleKey).length
+  if (empHits > 0) {
+    return { error: `${empHits} active employee${empHits === 1 ? '' : 's'} still assigned. Reassign first.` }
+  }
+  const { data: shiftRows } = await ctx.supabase
+    .from('shifts').select('id, role, end_time').eq('restaurant_id', ctx.restaurantId)
+  const nowIso = new Date().toISOString()
+  const futureHits = (shiftRows ?? []).filter((r) =>
+    normalizeNameKey(r.role ?? '') === roleKey && (r.end_time ?? '') >= nowIso,
+  ).length
+  if (futureHits > 0) {
+    return { error: `${futureHits} upcoming shift${futureHits === 1 ? '' : 's'} still use this role. Clear or reassign first.` }
+  }
+
+  const column = area === 'foh' ? 'foh_roles' : 'boh_roles'
+  const list: string[] = (config as unknown as Record<string, string[]>)[column] ?? []
+  const nextList = list.filter((r) => normalizeNameKey(r) !== roleKey)
+
+  const nextColors = { ...((config.role_colors as Record<string, string> | null) ?? {}) }
+  const nextWages = { ...((config.role_wages as Record<string, number> | null) ?? {}) }
+  delete nextColors[roleKey]
+  delete nextWages[roleKey]
+
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    {
+      restaurant_id: ctx.restaurantId,
+      [column]: nextList,
+      role_colors: nextColors,
+      role_wages: nextWages,
+    },
+    { onConflict: 'restaurant_id' },
+  )
+  if (error) return { error: formatError('role delete', error) }
+
+  await logAudit(ctx, null, 'role_deleted', 'staffing_config')
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
+// moveStaffingRole — flip a role from FOH to BOH or vice versa.
+// Colors + wages stay by normalized key; employees + shifts carry
+// their role text unchanged (area is derived from staffing_config
+// list membership, not from the row itself).
+// ----------------------------------------------------------------
+export async function moveStaffingRole(
+  formData: FormData,
+): Promise<{ error: string } | { ok: true }> {
+  const { context: ctx, error: authError } = await getAuthContext()
+  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
+  if (ctx.role !== 'owner') return { error: 'Only the owner can move roles.' }
+
+  const from = formData.get('from') as 'foh' | 'boh'
+  const to = formData.get('to') as 'foh' | 'boh'
+  const raw = ((formData.get('role') as string) ?? '').trim()
+  const roleKey = normalizeNameKey(raw)
+  if (!roleKey) return { error: 'Role name is required.' }
+  if (from !== 'foh' && from !== 'boh') return { error: 'Invalid source house.' }
+  if (to !== 'foh' && to !== 'boh') return { error: 'Invalid target house.' }
+  if (from === to) return { ok: true }
+
+  const { data: config } = await ctx.supabase
+    .from('staffing_config')
+    .select('foh_roles, boh_roles')
+    .eq('restaurant_id', ctx.restaurantId)
+    .maybeSingle()
+  if (!config) return { error: 'Staffing not configured yet.' }
+
+  const fromCol = from === 'foh' ? 'foh_roles' : 'boh_roles'
+  const toCol = to === 'foh' ? 'foh_roles' : 'boh_roles'
+  const fromList: string[] = (config as unknown as Record<string, string[]>)[fromCol] ?? []
+  const toList: string[] = (config as unknown as Record<string, string[]>)[toCol] ?? []
+
+  const found = fromList.find((r) => normalizeNameKey(r) === roleKey)
+  if (!found) return { error: 'Role not found in source house.' }
+  if (toList.some((r) => normalizeNameKey(r) === roleKey)) {
+    return { error: 'Role already exists in target house.' }
+  }
+
+  const nextFrom = fromList.filter((r) => normalizeNameKey(r) !== roleKey)
+  const nextTo = [...toList, found]
+
+  const { error } = await ctx.supabase.from('staffing_config').upsert(
+    {
+      restaurant_id: ctx.restaurantId,
+      [fromCol]: nextFrom,
+      [toCol]: nextTo,
+    },
+    { onConflict: 'restaurant_id' },
+  )
+  if (error) return { error: formatError('role move', error) }
+
+  await logAudit(ctx, null, 'role_moved', 'staffing_config')
+  revalidatePath('/staffing')
+  revalidatePath('/web/staffing')
+  return { ok: true }
+}
+
+// ----------------------------------------------------------------
 // Shift sections (a.k.a. shift blocks) — CRUD.
 //
 // Sections are the rows on the schedule board. They drive lane

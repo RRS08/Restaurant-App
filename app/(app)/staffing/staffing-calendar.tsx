@@ -18,6 +18,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import type { Lang } from '@/lib/i18n'
 import { makeT } from '@/lib/i18n'
+import ScheduleHeader, { type DayConfig } from './schedule-header'
 
 // ---- Palette (matches marketing site + app shell) --------------
 const INK = '#18181B'
@@ -178,10 +179,14 @@ export interface StaffingCalendarProps {
   onRepeatLastWeekForDay: (dayIso: string) => Promise<ActionResult>
   onClearDay: (dayIso: string) => Promise<ActionResult>
   onCopyLastWeek: () => Promise<ActionResult>
-  onPrevWeek: () => void
-  onNextWeek: () => void
-  onToday: () => void
-  onSave: () => void  // no-op label today; becomes Publish later
+  // Week navigation is now driven by the ScheduleHeader (swipe +
+  // month picker); parent supplies onWeekChange to setWeekStart.
+  // Legacy ‹ Today › callbacks retired.
+  onWeekChange: (newWeekStart: Date) => void
+  // onPublish — cosmetic today (everything auto-saves). Wired for
+  // a future staged-changes flow. Parent typically passes a
+  // router.refresh so the button "does something."
+  onPublish: () => void
   // Role legend actions — the color slug is one of ROLE_TONES's
   // keys (see below). Passing null clears the override so the
   // role falls back to the auto-color regex.
@@ -239,7 +244,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, houseRoles,
     onOpenEditShift, onDropOnDay, onAddShiftForDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
-    onPrevWeek, onNextWeek, onToday, onSave,
+    onWeekChange, onPublish,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
     onReorderBench, onReorderRoles,
     dayHours, onEditDayHours,
@@ -257,7 +262,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const [dragging, setDragging] = useState<CalEmployee | null>(null)
   const [dragOverDay, setDragOverDay] = useState<number | null>(null)
   const [, startTransition] = useTransition()
-  const [savedFlash, setSavedFlash] = useState(false)
   const [copyMsg, setCopyMsg] = useState<string | null>(null)
   // Role editing moved to a parent-owned drawer — no legend-local
   // state needed anymore.
@@ -409,11 +413,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
       setTimeout(() => setCopyMsg(null), 3000)
     })
   }
-  const handleSave = () => {
-    onSave()
-    setSavedFlash(true)
-    setTimeout(() => setSavedFlash(false), 1500)
-  }
+  // handleSave / savedFlash retired — the redesigned header owns
+  // the Publish button and its states. Kept the copyMsg toast
+  // (still shown as a small line near Copy last week's response).
 
   // ---- Styles ---------------------------------------------------
   const tab = (active: boolean, first: boolean): React.CSSProperties => ({
@@ -519,58 +521,56 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     )
   }
 
+  // Adapt our per-day merged-hours + shift counts to the header's
+  // DayConfig shape. `shifts` here counts visible-on-axis rows so
+  // stale off-hours shifts don't inflate the day-strip badge.
+  const headerDays: DayConfig[] = weekDays.map((_d, i) => {
+    const h = dayHours[i]
+    const open: [number, number] | null = h && !h.closed ? [h.openMin, h.closeMin] : null
+    const list = shiftsByDay.get(i) ?? []
+    const visible = h && !h.closed
+      ? list.filter((s) => {
+          const sMin = minutesInDay(s.startTime)
+          const eMin = minutesInDay(s.endTime)
+          return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+        }).length
+      : 0
+    return { open, shifts: visible }
+  })
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, color: INK, fontFamily: "'Geist', system-ui, sans-serif" }}>
-      {/* Board */}
-      <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', overflow: 'hidden' }}>
-        {/* Toolbar */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 14,
-          padding: '5px 14px', borderBottom: `1px solid ${LINE}`,
-          background: '#fff', position: 'sticky', top: 0, zIndex: 3, flexWrap: 'wrap',
-        }}>
-          <div style={{ display: 'flex', border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden' }}>
-            <button onClick={onPrevWeek} style={{ border: 0, background: '#fff', padding: '5px 10px', font: 'inherit', fontSize: 13, color: '#52525B', cursor: 'pointer' }}>‹</button>
-            <button onClick={onToday} style={{ border: 0, borderLeft: `1px solid ${LINE}`, borderRight: `1px solid ${LINE}`, background: '#fff', padding: '5px 12px', font: 'inherit', fontSize: 12, fontWeight: 500, color: '#3F3F46', cursor: 'pointer' }}>{t('Today', 'Hoy')}</button>
-            <button onClick={onNextWeek} style={{ border: 0, background: '#fff', padding: '5px 10px', font: 'inherit', fontSize: 13, color: '#52525B', cursor: 'pointer' }}>›</button>
-          </div>
-          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap' }}>
-            {view === 'day' ? dayLongLabel : weekLabel}
-          </span>
-          <span style={{ width: 1, height: 16, background: LINE }} />
-          <span style={{ fontFamily: MONO, fontSize: 11, color: '#3F3F46', whiteSpace: 'nowrap' }}>
-            {view === 'day' ? `${dayShifts.length} ${t('on staff', 'en el equipo')}` : `${totalShifts} ${totalShifts === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}`}
-          </span>
-          <span style={{ fontFamily: MONO, fontSize: 11, color: '#3F3F46' }}>
-            {fmtH(view === 'day' ? dayTotalH : totalHours)}
-          </span>
-          {copyMsg && (
-            <span style={{ fontSize: 11, color: SIGNAL }}>{copyMsg}</span>
-          )}
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button onClick={handleCopyLastWeek} style={ghostBtn}>{t('Copy last week', 'Copiar semana pasada')}</button>
-            <button
-              onClick={handleSave}
-              style={{
-                border: 0, background: savedFlash ? '#059669' : INK, color: PAPER,
-                borderRadius: 8, padding: '6px 14px', font: 'inherit', fontSize: 12,
-                fontWeight: 600, cursor: 'pointer', transition: 'background 200ms',
-              }}
-            >
-              {savedFlash ? t('Saved ✓', 'Guardado ✓') : t('Save', 'Guardar')}
-            </button>
-            <div style={{ display: 'flex', border: `1px solid ${LINE}`, borderRadius: 8, overflow: 'hidden' }}>
-              <button style={tab(view === 'day', true)} onClick={() => setView('day')}>{t('Day', 'Día')}</button>
-              <button style={tab(view === 'week', false)} onClick={() => setView('week')}>{t('Week', 'Semana')}</button>
-            </div>
-          </div>
-        </div>
+      {/* Board — position:relative so the header's month picker
+          anchors here; no overflow:hidden so it isn't clipped.
+          First/last children carry their own radius instead. */}
+      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+        <ScheduleHeader
+          lang={lang}
+          view={view}
+          onViewChange={setView}
+          dayIndex={dayIndex}
+          onDayChange={setDayIndex}
+          weekStart={weekStart}
+          onWeekStartChange={onWeekChange}
+          today={new Date()}
+          days={headerDays}
+          dirty={false}
+          onPublish={onPublish}
+          onCopyLastWeek={handleCopyLastWeek}
+          dayHours={fmtH(dayTotalH)}
+          weekHours={fmtH(totalHours)}
+          weekShifts={totalShifts}
+          gutter={170}
+        />
+        {copyMsg && (
+          <div style={{ padding: '0 16px 8px', fontSize: 11, color: SIGNAL }}>{copyMsg}</div>
+        )}
 
         {view === 'week' ? (
           <div style={{ minWidth: 900 }}>
             {/* Hour ruler */}
             <div style={{ display: 'flex', borderBottom: `1px solid ${LINE}`, background: SURFACE, position: 'sticky', top: 41, zIndex: 2 }}>
-              <div style={{ width: 132, flex: '0 0 132px', borderRight: `1px solid ${LINE}` }} />
+              <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}` }} />
               <div style={{ position: 'relative', height: 18, flex: 1, minWidth: 0 }}>
                 {TICKS.map((tick) => (
                   <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 4, fontFamily: MONO, fontSize: 9, color: MUTED }}>
@@ -648,7 +648,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     onClick={() => onEditDayHours(idx)}
                     title={t('Set opening hours', 'Definir horario de apertura')}
                     style={{
-                      width: 132, flex: '0 0 132px',
+                      width: 170, flex: '0 0 170px',
                       borderRight: `1px solid ${LINE}`,
                       borderTop: 0, borderBottom: 0, borderLeft: 0,
                       // Today marker paints as an inset shadow on
@@ -780,7 +780,13 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 }
               }
               return (
-                <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
+                <div style={{
+                  padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}`,
+                  // Card no longer has overflow:hidden (the month
+                  // picker needs to escape it) so the roles footer
+                  // has to round its own bottom corners.
+                  borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
+                }}>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
                       {t('ROLES', 'PUESTOS')}
@@ -895,63 +901,16 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           </div>
         ) : (
           <>
-            {/* Day pills — with a mono count badge when the day has
-                shifts. Closed days render dimmer so the manager can
-                see at a glance which days are open. */}
-            {(() => {
-              // Same visible-window filter used for row rendering:
-              // only count shifts that actually appear on the axis
-              // so a stale off-hours row doesn't inflate the badge.
-              const visibleShiftsFor = (idx: number) => {
-                const h = dayHours[idx]
-                if (!h || h.closed) return 0
-                return (shiftsByDay.get(idx) ?? []).filter((s) => {
-                  const sMin = minutesInDay(s.startTime)
-                  const eMin = minutesInDay(s.endTime)
-                  return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
-                }).length
-              }
-              return (
-                <div style={{ padding: '10px 14px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  {weekDays.map((d, i) => {
-                    const active = i === dayIndex
-                    const count = visibleShiftsFor(i)
-                    const hasShifts = count > 0
-                    const isClosed = dayHours[i]?.closed
-                    return (
-                      <button
-                        key={i}
-                        onClick={() => setDayIndex(i)}
-                        style={{
-                          display: 'flex', alignItems: 'baseline', gap: 6,
-                          border: `1px solid ${active ? INK : LINE}`,
-                          background: active ? INK : (isClosed ? SURFACE : '#fff'),
-                          color: active ? PAPER : (isClosed ? FAINT : '#3F3F46'),
-                          borderRadius: 8, padding: '6px 11px', font: 'inherit', cursor: 'pointer',
-                        }}
-                      >
-                        <span style={{ fontSize: 11 }}>{d.toLocaleDateString(dateLocale, { weekday: 'short' })}</span>
-                        <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600 }}>{d.getDate()}</span>
-                        {hasShifts && (
-                          <span style={{
-                            marginLeft: 2, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                            minWidth: 16, height: 16, borderRadius: 999,
-                            fontFamily: MONO, fontSize: 9, fontWeight: 600,
-                            background: active ? PAPER : INK,
-                            color: active ? INK : PAPER,
-                            padding: '0 4px',
-                          }}>
-                            {count}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              )
-            })()}
+            {/* Day pills retired — the ScheduleHeader now renders
+                the aligned day strip (badges + hours + selection)
+                directly under the title. */}
 
-            <div style={{ padding: 14 }}>
+            <div style={{
+              padding: 14,
+              // Card no longer has overflow:hidden — the Day view's
+              // last child needs its own bottom radius.
+              borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
+            }}>
               <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
                 <div>
                   <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.02em' }}>{dayLongLabel}</div>

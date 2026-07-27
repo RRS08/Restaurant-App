@@ -664,10 +664,6 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     countChip:   color === 'blue' ? 'bg-blue-50 text-blue-700': 'bg-amber-50 text-amber-700',
   }
 
-  const subtitle = isUnified
-    ? t('Plan the week and track labor coverage.', 'Planifica la semana y monitorea la cobertura de personal.')
-    : t('Plan the week by house — drag from the bench to assign.', 'Planifica la semana por área — arrastra desde la plantilla para asignar.')
-
   const houseWeekShifts = weekShifts.filter(
     (s) => houseSections.some((sec) => sec.id === s.sectionId)
   )
@@ -760,15 +756,9 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     <RoleColorsContext.Provider value={roleColors}>
     <div className="max-w-[1400px]">
 
-      {/* ================================================================ */}
-      {/* 1. HEADER BAND — title + one-line subtitle. Controls live on the  */}
-      {/*    strip below so they read as a unified workflow row instead of  */}
-      {/*    being torn between top-right and a separate house line.       */}
-      {/* ================================================================ */}
-      <div className="mb-5">
-        <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Staffing', 'Personal')}</h1>
-        <p className="mt-1.5 text-sm text-gray-500">{subtitle}</p>
-      </div>
+      {/* Page-level "Staffing" title + subtitle retired — the
+          ScheduleHeader inside the calendar card owns the top
+          band now (date-as-heading design pass 2026-07-26). */}
 
       {/* ================================================================ */}
       {/* 2. CONTROL STRIP — every page-context control on one horizontal   */}
@@ -908,14 +898,8 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           router.refresh()
           return r
         }}
-        onPrevWeek={() =>
-          setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() - 7); return d })
-        }
-        onNextWeek={() =>
-          setWeekStart((p) => { const d = new Date(p); d.setDate(d.getDate() + 7); return d })
-        }
-        onToday={() => setWeekStart(getMonday(new Date()))}
-        onSave={() => { router.refresh() }}
+        onWeekChange={(d) => setWeekStart(d)}
+        onPublish={() => { router.refresh() }}
         onEditRole={(role) => {
           // Pick the area from staffing_config membership. If the role
           // lives in neither list (fresh role that hasn't been persisted

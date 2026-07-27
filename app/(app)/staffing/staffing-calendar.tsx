@@ -603,7 +603,20 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               const open = openRangeForDay(idx)
               const setup = setupRangeForDay(idx)
               const hoursForDay = dayHours[idx] ?? { closed: true, openMin: 720, closeMin: 1260, override: false }
-              const renderedList = hoursForDay.closed ? [] : list
+              // Filter to shifts that actually intersect the
+              // visible axis window. Off-axis stale bars (e.g. a
+              // 6a shift left over from before the day's hours
+              // were set) would otherwise expand the row height
+              // even though nothing renders — the exact "row is
+              // taller for no visible reason" bug we hit on today.
+              const visibleList = hoursForDay.closed
+                ? []
+                : list.filter((s) => {
+                    const sMin = minutesInDay(s.startTime)
+                    const eMin = minutesInDay(s.endTime)
+                    return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+                  })
+              const renderedList = visibleList
               const isOver = dragOverDay === idx
               // Uniform row footprint across empty + closed days
               // so the week reads as a consistent grid. Populated

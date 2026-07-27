@@ -19,7 +19,8 @@
 // source of truth for weekStart / dayIndex / view.
 // ----------------------------------------------------------------
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import type { Lang } from '@/lib/i18n'
 import { makeT } from '@/lib/i18n'
 
@@ -100,6 +101,27 @@ export default function ScheduleHeader({
   const [calMonth, setCalMonth] = useState(() => new Date(weekStart.getFullYear(), weekStart.getMonth(), 1))
   const [swipeX, setSwipeX] = useState<number | null>(null)
   const [swipeDX, setSwipeDX] = useState(0)
+  // Anchor rect for the picker — the picker portals to <body> to
+  // escape the card's overflow:hidden (which we need so the day
+  // strip cells don't leak past the card's rounded corners). We
+  // recompute on open + on window resize so the picker stays
+  // pinned to the title button as the layout shifts.
+  const titleBtnRef = useRef<HTMLButtonElement | null>(null)
+  const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null)
+  useEffect(() => {
+    if (!calOpen) return
+    const compute = () => {
+      const r = titleBtnRef.current?.getBoundingClientRect()
+      if (r) setPickerAnchor({ top: r.bottom + 8, left: r.left })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    window.addEventListener('scroll', compute, true)
+    return () => {
+      window.removeEventListener('resize', compute)
+      window.removeEventListener('scroll', compute, true)
+    }
+  }, [calOpen])
 
   const isDay = view === 'day'
   const dates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i))
@@ -168,7 +190,10 @@ export default function ScheduleHeader({
         onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
         style={{
           position: 'relative',
-          padding: '16px 16px 14px',
+          // Zero bottom padding so the DAY · HOURS ruler / day
+          // strip sits flush against the stats line — was 14px
+          // and left a visible white gap under the header.
+          padding: '16px 16px 8px',
           display: 'flex',
           alignItems: 'flex-start',
           justifyContent: 'space-between',
@@ -196,6 +221,7 @@ export default function ScheduleHeader({
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <button
+              ref={titleBtnRef}
               type="button"
               onClick={() => {
                 setCalMonth(new Date(weekStart.getFullYear(), weekStart.getMonth(), 1))
@@ -267,12 +293,18 @@ export default function ScheduleHeader({
         </div>
       </div>
 
-      {/* ---- Month picker — floating overlay ---- */}
-      {calOpen && (
+      {/* ---- Month picker — portaled to <body> so it can escape
+             the calendar card's overflow:hidden. Position fixed
+             to the viewport, anchored to the title button via
+             getBoundingClientRect. ---- */}
+      {calOpen && typeof document !== 'undefined' && pickerAnchor && createPortal(
         <>
-          <div onClick={() => setCalOpen(false)} style={{ position: 'absolute', inset: 0, zIndex: 30 }} />
+          <div onClick={() => setCalOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
           <div style={{
-            position: 'absolute', top: 62, left: 16, zIndex: 31, width: 300,
+            position: 'fixed',
+            top: pickerAnchor.top,
+            left: pickerAnchor.left,
+            zIndex: 41, width: 300,
             border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
             boxShadow: '0 12px 32px rgba(24,24,27,0.14)', padding: 12,
           }}>
@@ -349,13 +381,18 @@ export default function ScheduleHeader({
               </button>
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
 
-      {/* ---- Day strip — Day view only, aligned to the grid gutter ---- */}
+      {/* ---- Day strip — Day view only. Per manager's ask, spans
+             the FULL card width; the design's 170px gutter spacer
+             (aligned to the STAFF column below) has been dropped
+             so the days fill the empty gray patch under the stats
+             line too. `gutter` is preserved on props for callers
+             that still want an aligned strip. ---- */}
       {isDay && (
         <div style={{ display: 'flex', borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}` }}>
-          <div style={{ width: gutter, flex: `0 0 ${gutter}px`, borderRight: `1px solid ${LINE}`, background: SURFACE }} />
           {days.map((d, i) => {
             const on = i === dayIndex
             const isClosed = !d.open
@@ -366,7 +403,11 @@ export default function ScheduleHeader({
                 type="button"
                 onClick={() => onDayChange(i)}
                 style={{
-                  flex: 1, minWidth: 0, border: 0, borderLeft: `1px solid ${LINE}`,
+                  flex: 1, minWidth: 0, border: 0,
+                  // No left divider on the first cell — it now
+                  // sits at the card's left edge (the 170px
+                  // gutter spacer was removed above).
+                  borderLeft: i === 0 ? 0 : `1px solid ${LINE}`,
                   borderTop: `2px solid ${on ? INK : 'transparent'}`, marginTop: -1,
                   background: isClosed && !on ? '#FCFCFB' : '#fff',
                   padding: '8px 12px 9px', display: 'flex', flexDirection: 'column', gap: 2,

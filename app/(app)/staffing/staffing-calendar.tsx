@@ -540,10 +540,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10, color: INK, fontFamily: "'Geist', system-ui, sans-serif" }}>
-      {/* Board — position:relative so the header's month picker
-          anchors here; no overflow:hidden so it isn't clipped.
-          First/last children carry their own radius instead. */}
-      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+      {/* Board — position:relative + overflow:hidden. The month
+          picker escapes via a portal (schedule-header.tsx) so
+          overflow:hidden here doesn't clip it. Children can leak
+          to the corners without visual smear. */}
+      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', overflow: 'hidden' }}>
         <ScheduleHeader
           lang={lang}
           view={view}
@@ -780,13 +781,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 }
               }
               return (
-                <div style={{
-                  padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}`,
-                  // Card no longer has overflow:hidden (the month
-                  // picker needs to escape it) so the roles footer
-                  // has to round its own bottom corners.
-                  borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
-                }}>
+                <div style={{ padding: '10px 14px', background: SURFACE, borderTop: `1px solid ${LINE}` }}>
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                     <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
                       {t('ROLES', 'PUESTOS')}
@@ -905,27 +900,17 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 the aligned day strip (badges + hours + selection)
                 directly under the title. */}
 
-            <div style={{
-              padding: 14,
-              // Card no longer has overflow:hidden — the Day view's
-              // last child needs its own bottom radius.
-              borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
-            }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 16, marginBottom: 10, flexWrap: 'wrap' }}>
-                <div>
-                  <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.02em' }}>{dayLongLabel}</div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: MUTED, marginTop: 2 }}>
-                    {dayShifts.length > 0
-                      ? `${dayShifts.length} ${t('ON STAFF', 'EN EL EQUIPO')} · ${fmtH(dayTotalH).toUpperCase()}`
-                      : t('NO SHIFTS YET', 'SIN TURNOS AÚN')}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', gap: 7 }}>
-                  <button style={ghostBtn} onClick={handleRepeat}>{t('Repeat last week', 'Repetir semana pasada')}</button>
-                  {dayShifts.length > 0 && (
-                    <button style={ghostBtn} onClick={handleClear}>{t('Clear day', 'Vaciar día')}</button>
-                  )}
-                </div>
+            <div style={{ padding: 14 }}>
+              {/* Old day-view heading retired — ScheduleHeader now
+                  carries the date + stats. Only the day actions
+                  (Repeat / Clear) remain; they sit right-aligned
+                  above the timeline so they don't fight with the
+                  header's Copy last week + Publish cluster. */}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7, marginBottom: 10, flexWrap: 'wrap' }}>
+                <button style={ghostBtn} onClick={handleRepeat}>{t('Repeat last week', 'Repetir semana pasada')}</button>
+                {dayShifts.length > 0 && (
+                  <button style={ghostBtn} onClick={handleClear}>{t('Clear day', 'Vaciar día')}</button>
+                )}
               </div>
 
               {(dayHours[dayIndex]?.closed ?? true) ? (

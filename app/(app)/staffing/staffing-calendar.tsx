@@ -125,9 +125,6 @@ export interface StaffingCalendarProps {
   bench: CalEmployee[]            // employees already filtered to activeHouse
   weeklyHoursByEmployee: Map<string, number>  // for bench card labels
   roleColors: Record<string, string>          // slug map from staffing_config
-  // Per-role hourly wage (normalized-key → dollars/hour). Displayed
-  // + edited inline in the legend popover; empty for no override.
-  roleWages: Record<string, number>
 
   // Actions — parent wraps server calls + revalidation. Return
   // shape is deliberately wide so the callsite can return any
@@ -168,7 +165,7 @@ export const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
 
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
-    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, roleWages,
+    lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors,
     onOpenEditShift, onAssignToDay, onSetShiftTime, onRemoveShift,
     onRepeatLastWeekForDay, onClearDay, onCopyLastWeek,
     onPrevWeek, onNextWeek, onToday, onSave,
@@ -562,7 +559,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     </span>
                     {roles.map((r) => {
                       const tone = roleToneFor(r, roleColors)
-                      const wage = roleWages[r.toLowerCase().trim()]
                       return (
                         <button
                           key={r}
@@ -579,11 +575,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         >
                           <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
                           {r}
-                          {wage != null && (
-                            <span style={{ fontFamily: MONO, fontSize: 10, color: MUTED, borderLeft: `1px solid ${LINE}`, paddingLeft: 8 }}>
-                              ${wage.toFixed(2)}/hr
-                            </span>
-                          )}
                         </button>
                       )
                     })}

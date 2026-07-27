@@ -849,7 +849,6 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           setDrawer({ mode: 'role-drawer', role, area })
         }}
         onOpenAddRole={() => setDrawer({ mode: 'role-drawer', role: null, area: activeHouse })}
-        roleWages={roleWages}
       />
 
 

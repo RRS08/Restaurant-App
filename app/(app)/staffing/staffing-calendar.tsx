@@ -549,18 +549,27 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
             {/* Day rows */}
             {weekDays.map((d, idx) => {
+              // Closed days render as empty regardless of whether
+              // stale shifts exist in the DB for that date — a
+              // closed day shouldn't expand to fit invisible bars
+              // and shouldn't hide the "Closed — tap the day to
+              // change" hint. `renderedList` is what the track
+              // paints; `list` still counts real shifts (unused
+              // when the row is treated as empty).
               const list = shiftsByDay.get(idx) ?? []
               const isToday = sameDay(d, new Date())
               const open = openRangeForDay(idx)
               const setup = setupRangeForDay(idx)
               const hoursForDay = dayHours[idx] ?? { closed: true, openMin: 720, closeMin: 1260, override: false }
+              const renderedList = hoursForDay.closed ? [] : list
               const isOver = dragOverDay === idx
-              // Row footprint. Empty rows collapse to a shorter
-              // minimum; populated rows expand to fit stacked bars.
+              // Uniform row footprint across empty + closed days
+              // so the week reads as a consistent grid. Populated
+              // rows expand to fit stacked bars.
               const barH = 22
               const barGap = 4
-              const contentH = list.length * barH + Math.max(0, list.length - 1) * barGap
-              const WEEK_DAY_MIN_H = list.length === 0 ? 52 : 84
+              const contentH = renderedList.length * barH + Math.max(0, renderedList.length - 1) * barGap
+              const WEEK_DAY_MIN_H = renderedList.length === 0 ? 52 : 84
               const dayRowH = Math.max(WEEK_DAY_MIN_H, contentH + 16)
               // Hours-line copy: "12p–10p", "Closed", "12p–10p · one-off".
               // Overrides paint amber to signal an exception.
@@ -616,9 +625,17 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       {hoursLine}
                     </span>
                   </button>
-                  <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: list.length === 0 ? 0 : '8px 0' }}>
+                  <div style={{
+                    position: 'relative', flex: 1, minWidth: 0,
+                    padding: renderedList.length === 0 ? 0 : '8px 0',
+                    // Clip anything positioned outside the axis so
+                    // stray off-hours bars can't push the row edge
+                    // past the vertical divider (which is what was
+                    // making Sat/Sun look wider than Mon–Fri).
+                    overflow: 'hidden',
+                  }}>
                     {openBand(open, setup, isToday)}
-                    {list.length === 0 ? (
+                    {renderedList.length === 0 ? (
                       <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%', paddingLeft: 12 }}>
                         <span style={{ fontSize: 11, color: isOver ? SIGNAL : FAINT }}>
                           {isOver
@@ -628,13 +645,13 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                               : t('No shifts scheduled', 'Sin turnos programados')}
                         </span>
                       </div>
-                    ) : list.map((s, i) => (
+                    ) : renderedList.map((s, i) => (
                       <div
                         key={s.id}
                         style={{
                           position: 'relative',
                           height: barH,
-                          marginBottom: i === list.length - 1 ? 0 : barGap,
+                          marginBottom: i === renderedList.length - 1 ? 0 : barGap,
                         }}
                       >
                         {renderShiftBar(s, barH)}

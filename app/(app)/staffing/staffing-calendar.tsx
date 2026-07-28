@@ -246,7 +246,7 @@ export const ROLE_TONE_SLUGS: Array<keyof typeof ROLE_TONES> = [
 export default function StaffingCalendar(props: StaffingCalendarProps) {
   const {
     lang, weekStart, weekDays, shifts, bench, weeklyHoursByEmployee, roleColors, houseRoles,
-    onOpenEditShift, onDropOnDay, onAddShiftForDay, onSetShiftTime, onRemoveShift,
+    onOpenEditShift, onDropOnDay, onAddShiftForDay, onRemoveShift,
     onClearDay, onCopyLastWeek,
     onWeekChange, onPublish,
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
@@ -283,6 +283,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   // mouse-leave. Bench drag also lights it up so the manager
   // sees exactly where the drop will land.
   const [hoverAddDay, setHoverAddDay] = useState<number | null>(null)
+  // Day-view timeline hover — when true (or a drag is in
+  // flight), the Add row expands into view. When idle with
+  // shifts already placed, the row collapses so the calendar
+  // reads tight; discovered again on hover or drag.
+  const [dayTimelineHover, setDayTimelineHover] = useState(false)
 
   // ---- Time axis — driven by business hours + 90m PRE/POST -----
   // Previously we derived from min/max shift time; now the hours
@@ -357,7 +362,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     return { startPct: pct(s), widthPct: pct(e) - pct(s) }
   }
 
-  const weekLabel = `${weekDays[0].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })} – ${weekDays[6].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric', year: 'numeric' })}`
+  // weekLabel + dayLongLabel retired — ScheduleHeader carries
+  // the date/range now. totalShifts + totalHours stay because
+  // the header uses them for its stats line via headerDays.
   const totalShifts = shifts.length
   const totalHours = shifts.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
 
@@ -366,7 +373,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const dayOpen = openRangeForDay(dayIndex)
   const daySetup = setupRangeForDay(dayIndex)
   const dayTotalH = dayShifts.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
-  const dayLongLabel = day.toLocaleDateString(dateLocale, { weekday: 'long', month: 'long', day: 'numeric' })
 
   // benchWithAssigned drives what shows in the bench card grid.
   // In Day view we additionally hide anyone marked unavailable
@@ -399,9 +405,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     if (!h || h.closed) return
     onDropOnDay(emp.id, weekDays[idx].toISOString())
   }
-  const handleRemove = (shift: CalShift) => {
-    startTransition(() => { onRemoveShift(shift.id) })
-  }
+  // handleRemove retired — the shift edit drawer owns the
+  // Remove action now via its own button + onRemoveShift call.
   const handleClear = () => {
     startTransition(() => { onClearDay(day.toISOString()) })
   }
@@ -419,53 +424,39 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   // (still shown as a small line near Copy last week's response).
 
   // ---- Styles ---------------------------------------------------
-  const tab = (active: boolean, first: boolean): React.CSSProperties => ({
-    border: 0,
-    borderLeft: first ? undefined : `1px solid ${LINE}`,
-    background: active ? INK : '#fff',
-    color: active ? PAPER : '#52525B',
-    padding: '5px 11px',
-    font: 'inherit', fontSize: 11, fontWeight: active ? 600 : 500,
-    cursor: 'pointer',
-  })
+  // `tab` retired — ScheduleHeader owns the Day/Week toggle
+  // via its own segmented control.
   const ghostBtn: React.CSSProperties = {
     border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
     padding: '6px 12px', font: 'inherit', fontSize: 12, fontWeight: 500,
     color: '#3F3F46', cursor: 'pointer',
   }
 
-  // Two stacked bands per day row: outer = dashed setup/close-down
-  // window (±90m of the trading hours); inner = solid trading
-  // hours. Rendered in that order so the solid band overlays the
-  // dashed one exactly where they overlap.
+  // Single continuous shaded band per day row — spans the whole
+  // shift-assignable window (open − 60m through close + 60m) so
+  // the manager sees one clear "you can put shifts here" region
+  // instead of a faint outer band next to a darker inner one.
+  // The setup range wins when both are supplied; if the day has
+  // no setup (closed), fall back to the plain open range (which
+  // is null on closed days anyway).
   const openBand = (
     open: { startPct: number; widthPct: number } | null,
     setup?: { startPct: number; widthPct: number } | null,
     today?: boolean,
-  ) => (
-    <>
-      {setup && (
-        <div style={{
-          position: 'absolute',
-          left: `${setup.startPct}%`, width: `${setup.widthPct}%`,
-          top: 0, bottom: 0,
-          background: '#FCFCFB',
-          borderLeft: `1px dashed ${LINE}`,
-          borderRight: `1px dashed ${LINE}`,
-        }} />
-      )}
-      {open && (
-        <div style={{
-          position: 'absolute',
-          left: `${open.startPct}%`, width: `${open.widthPct}%`,
-          top: 0, bottom: 0,
-          background: today ? '#EFF6FF' : '#F4F4F2',
-          borderLeft: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
-          borderRight: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
-        }} />
-      )}
-    </>
-  )
+  ) => {
+    const band = setup ?? open
+    if (!band) return null
+    return (
+      <div style={{
+        position: 'absolute',
+        left: `${band.startPct}%`, width: `${band.widthPct}%`,
+        top: 0, bottom: 0,
+        background: today ? '#EFF6FF' : '#F4F4F2',
+        borderLeft: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
+        borderRight: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
+      }} />
+    )
+  }
 
   const hourLines = TICKS.map((tick) => (
     <span key={tick.hour} style={{
@@ -597,14 +588,14 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       position: 'absolute',
                       left: `${tick.left}%`,
                       top: 4,
-                      // First tick sits right against the gutter's
-                      // right border — nudge it 6px so the label
-                      // has some breathing room from the divider.
-                      // Last tick pulls back its own width AND an
-                      // extra 6px so it doesn't touch the card's
-                      // right edge either.
-                      paddingLeft: i === 0 ? 6 : 0,
-                      transform: i === TICKS.length - 1 ? 'translateX(calc(-100% - 6px))' : undefined,
+                      // Even spacing across all intervals: each tick
+                      // sits at its natural percentage position with
+                      // no extra offset. The last tick right-aligns
+                      // its label to the tick position (translateX
+                      // -100%) so it doesn't overflow the container;
+                      // no extra shift, so the 10p↔11p gap stays
+                      // equal to every other hour gap.
+                      transform: i === TICKS.length - 1 ? 'translateX(-100%)' : undefined,
                       fontFamily: MONO, fontSize: 9, color: MUTED,
                     }}
                   >
@@ -845,7 +836,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   </div>
                 </button>
               ) : (
-                <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}>
+                <div
+                  onMouseEnter={() => setDayTimelineHover(true)}
+                  onMouseLeave={() => setDayTimelineHover(false)}
+                  style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}
+                >
                   {/* Ruler */}
                   <div style={{ display: 'flex', background: SURFACE, borderBottom: `1px solid ${LINE}` }}>
                     <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
@@ -928,7 +923,22 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       STAFF column (per manager's ask); the track
                       stays a plain drop target with just the shading.
                       Drop still opens the drawer in create-locked
-                      mode; button click opens it blank. */}
+                      mode; button click opens it blank.
+                      Collapse rule (manager's ask): if the day has
+                      visible shifts and nothing's hovering/dragging,
+                      hide the row so the calendar reads tight. On
+                      hover of the timeline card OR during a drag,
+                      the row reappears. Empty days always show it
+                      as the primary "add someone" CTA. */}
+                  {(() => {
+                    const hasVisibleShifts = dayShifts.some((s) => {
+                      const sMin = minutesInDay(s.startTime)
+                      const eMin = minutesInDay(s.endTime)
+                      return eMin > axis.T0 && sMin < axis.T0 + axis.SPAN
+                    })
+                    const showAddRow = !hasVisibleShifts || dayTimelineHover || !!dragging
+                    if (!showAddRow) return null
+                    return (
                   <div
                     onDragOver={(e) => {
                       if (!dragging) return
@@ -1014,6 +1024,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       })()}
                     </div>
                   </div>
+                    )
+                  })()}
                 </div>
               )}
             </div>
@@ -1120,16 +1132,10 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 >
                   + {t('Add role', 'Añadir puesto')}
                 </button>
-                <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
-                    <span style={{ width: 16, height: 10, borderRadius: 2, background: '#F4F4F2', border: '1px solid #D6D5D1' }} />
-                    {t('Open', 'Abierto')}
-                  </span>
-                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: MUTED }}>
-                    <span style={{ width: 16, height: 10, borderRadius: 2, background: '#FCFCFB', border: `1px dashed ${LINE}` }} />
-                    {t('Setup & close-down', 'Preparación y cierre')}
-                  </span>
-                </span>
+                {/* Shading swatches retired — the two-band system
+                    (trading vs setup) merged into one continuous
+                    shaded region, so a legend explaining the split
+                    would be misleading. */}
               </div>
             </div>
           )

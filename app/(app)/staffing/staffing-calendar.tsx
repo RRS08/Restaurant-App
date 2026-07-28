@@ -31,14 +31,18 @@ const SURFACE = '#FAFAF9'
 const SIGNAL = '#2563EB'
 const MONO = "'Geist Mono', ui-monospace, monospace"
 
-// Horizontal inset applied UNIFORMLY to every timeline container
-// (ruler + day-row tracks + shift lanes + Add-row track). The
-// tick labels are centered on their positions, so the first/last
-// would overflow the card without this breathing room. Absolute-
-// positioned children position against the padding-box, so
-// percentages still line up across all containers as long as
-// they share the same inset.
-const TIMELINE_INSET_X = 12
+// Percent inset baked into pct() so the axis endpoints don't sit
+// flush against the container edges. Padding on the parent DOESN'T
+// naturally inset absolutely-positioned children (they still
+// position against the padding-box origin), so we compensate in
+// the pct() math instead — every consumer (ticks, shift bars,
+// hour lines, shading bands) shifts together and stays aligned
+// without any extra per-container padding.
+const TICK_INSET_PCT = 3
+// STAFF / DAY·HOURS gutter width — matches the ScheduleHeader's
+// gutter prop so the day strip cells sit above the same columns
+// as the ruler ticks below.
+const GUTTER_WIDTH = 150
 
 // ---- Domain shapes (imported at the callsite) ------------------
 export interface CalShift {
@@ -326,7 +330,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     return { T0, SPAN, minH: T0 / 60, maxH: T1 / 60 }
   }, [dayHours])
 
-  const pct = (minutes: number) => ((minutes - axis.T0) / axis.SPAN) * 100
+  // Baked-in horizontal inset so the axis endpoints aren't flush
+  // against the container's borders. Everything that uses pct()
+  // (ticks, shift bars, hourLines, openBand) shifts together and
+  // stays aligned.
+  const pct = (minutes: number) =>
+    TICK_INSET_PCT + ((minutes - axis.T0) / axis.SPAN) * (100 - 2 * TICK_INSET_PCT)
   const TICKS = useMemo(() => {
     const arr: Array<{ hour: number; left: number }> = []
     for (let h = axis.minH; h <= axis.maxH; h++) arr.push({ hour: h, left: pct(h * 60) })
@@ -560,7 +569,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           dayHours={fmtH(dayTotalH)}
           weekHours={fmtH(totalHours)}
           weekShifts={totalShifts}
-          gutter={170}
+          gutter={GUTTER_WIDTH}
         />
         {copyMsg && (
           <div style={{ padding: '0 16px 8px', fontSize: 11, color: SIGNAL }}>{copyMsg}</div>
@@ -580,7 +589,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               background: SURFACE, position: 'sticky', top: 41, zIndex: 2,
             }}>
               <div style={{
-                width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`,
+                width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`, borderRight: `1px solid ${LINE}`,
                 padding: '0 12px', display: 'flex', alignItems: 'center',
               }}>
                 <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>
@@ -589,7 +598,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               </div>
               <div style={{
                 position: 'relative', height: 18, flex: 1, minWidth: 0,
-                paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
               }}>
                 {TICKS.map((tick) => (
                   <span
@@ -686,7 +694,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     onClick={() => onEditDayHours(idx)}
                     title={t('Set opening hours', 'Definir horario de apertura')}
                     style={{
-                      width: 170, flex: '0 0 170px',
+                      width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`,
                       borderRight: `1px solid ${LINE}`,
                       borderTop: 0, borderBottom: 0, borderLeft: 0,
                       // Today marker paints as an inset shadow on
@@ -733,9 +741,15 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     }}
                     style={{
                       position: 'relative', flex: 1, minWidth: 0,
-                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
-                      paddingTop: renderedList.length === 0 ? 0 : 8,
-                      paddingBottom: renderedList.length === 0 ? 0 : 8,
+                      // Flex column centered vertically so a single
+                      // shift bar sits in the middle of a tall row
+                      // (the day cell's two-line "Day · Hours"
+                      // makes the row taller than the bar).
+                      // Additional shifts stack naturally and push
+                      // the whole stack outward from center.
+                      display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                      paddingTop: renderedList.length === 0 ? 0 : 6,
+                      paddingBottom: renderedList.length === 0 ? 0 : 6,
                       // Clip anything positioned outside the axis so
                       // stray off-hours bars can't push the row edge
                       // past the vertical divider (which is what was
@@ -745,19 +759,18 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     }}
                   >
                     {openBand(open, setup, isToday)}
-                    {renderedList.length === 0 ? (
-                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', height: '100%', paddingLeft: 12 }}>
+                    {renderedList.length === 0 && !(hoverAddDay === idx || (dragging && dragOverDay === idx)) && (
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center', paddingLeft: 12, minHeight: 26 }}>
                         <span style={{ fontSize: 11, color: isOver ? SIGNAL : FAINT }}>
                           {isOver
                             ? t('Drop to schedule', 'Suelta para programar')
                             : hoursForDay.closed
                               ? t('Closed — tap the day to change', 'Cerrado — toca el día para cambiar')
-                              : hoverAddDay === idx || dragging
-                                ? '' // ghost below takes over
-                                : t('No shifts scheduled', 'Sin turnos programados')}
+                              : t('No shifts scheduled', 'Sin turnos programados')}
                         </span>
                       </div>
-                    ) : renderedList.map((s, i) => (
+                    )}
+                    {renderedList.map((s, i) => (
                       <div
                         key={s.id}
                         style={{
@@ -770,28 +783,33 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       </div>
                     ))}
 
-                    {/* + Add shift ghost — covers the full open span.
-                        Fires on hover of an open day, and also when
-                        the manager is dragging a bench card. Click
-                        goes to onAddShiftForDay (drop is handled by
-                        the outer parent's onDrop above). */}
+                    {/* + Add shift ghost — flow-positioned so it
+                        pushes existing shifts UP as it expands the
+                        row. Previously it was absolute-positioned
+                        at bottom-8, which visually overlapped the
+                        last shift bar. */}
                     {open && !hoursForDay.closed && (hoverAddDay === idx || (dragging && dragOverDay === idx)) && (
-                      <div style={{
-                        position: 'absolute',
-                        left: `${open.startPct}%`, width: `${open.widthPct}%`,
-                        top: renderedList.length === 0 ? '50%' : undefined,
-                        bottom: renderedList.length === 0 ? undefined : 8,
-                        transform: renderedList.length === 0 ? 'translateY(-50%)' : undefined,
-                        height: 26, borderRadius: 6,
-                        background: '#EFF6FF', border: '1px dashed #93C5FD',
-                        display: 'flex', alignItems: 'center', padding: '0 9px',
-                        pointerEvents: 'none',
-                      }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', whiteSpace: 'nowrap' }}>
-                          {dragging
-                            ? `${t('Drop', 'Soltar')} ${dragging.name.split(' ')[0]} ${t('here', 'aquí')}`
-                            : `+ ${t('Add shift', 'Añadir turno')}`}
-                        </span>
+                      <div
+                        style={{
+                          position: 'relative',
+                          height: barH,
+                          marginTop: renderedList.length > 0 ? barGap : 0,
+                        }}
+                      >
+                        <div style={{
+                          position: 'absolute',
+                          left: `${open.startPct}%`, width: `${open.widthPct}%`,
+                          top: 0, bottom: 0, borderRadius: 6,
+                          background: '#EFF6FF', border: '1px dashed #93C5FD',
+                          display: 'flex', alignItems: 'center', padding: '0 9px',
+                          pointerEvents: 'none',
+                        }}>
+                          <span style={{ fontSize: 11, fontWeight: 600, color: '#1D4ED8', whiteSpace: 'nowrap' }}>
+                            {dragging
+                              ? `${t('Drop', 'Soltar')} ${dragging.name.split(' ')[0]} ${t('here', 'aquí')}`
+                              : `+ ${t('Add shift', 'Añadir turno')}`}
+                          </span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -858,12 +876,11 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 >
                   {/* Ruler */}
                   <div style={{ display: 'flex', background: SURFACE, borderBottom: `1px solid ${LINE}` }}>
-                    <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
+                    <div style={{ width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`, borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
                       <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>{t('STAFF', 'EQUIPO')}</span>
                     </div>
                     <div style={{
                       position: 'relative', flex: 1, minWidth: 0, height: 24,
-                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
                     }}>
                       {TICKS.map((tick) => (
                         <span
@@ -899,7 +916,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       const brk = 'breakMinutes' in s ? (s as unknown as { breakMinutes: number }).breakMinutes : 0
                       return (
                         <div key={s.id} style={{ display: 'flex', borderBottom: `1px solid ${LINE_SOFT}`, alignItems: 'stretch' }}>
-                          <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`, borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ width: 8, height: 8, borderRadius: 2, flex: '0 0 auto', background: tone.accent }} />
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -913,7 +930,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                           </div>
                           <div style={{
                             position: 'relative', flex: 1, minWidth: 0,
-                            paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
                             paddingTop: 5, paddingBottom: 5,
                             overflow: 'hidden',
                           }}>
@@ -981,7 +997,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     <div
                       onMouseEnter={() => setHoverAddDay(dayIndex)}
                       onMouseLeave={() => { if (!dragging) setHoverAddDay((v) => (v === dayIndex ? null : v)) }}
-                      style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center' }}
+                      style={{ width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`, borderRight: `1px solid ${LINE}`, padding: '7px 12px', display: 'flex', alignItems: 'center' }}
                     >
                       {(() => {
                         // Match the Week-view ghost's blue vocabulary
@@ -1013,7 +1029,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     </div>
                     <div style={{
                       position: 'relative', flex: 1, minWidth: 0,
-                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
                       paddingTop: 5, paddingBottom: 5,
                       background: dragOverDay === dayIndex ? '#EFF6FF' : undefined,
                     }}>

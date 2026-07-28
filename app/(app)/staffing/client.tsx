@@ -3,7 +3,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  quickAssignShift,
   copyPreviousWeek,
   updateShiftTimes,
   deleteShiftById,
@@ -622,13 +621,12 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
   const weekLabel = `${weekDays[0].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })} – ${weekDays[6].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric', year: 'numeric' })}`
 
-  const handleDrop = (e: DragEvent, dayIdx: number, sectionId: string) => {
-    e.preventDefault(); setDragOver(null)
-    const empId = e.dataTransfer.getData('text/plain')
-    if (!empId) return
-    const dayIso = weekDays[dayIdx].toISOString()
-    startTransition(async () => { await quickAssignShift(empId, sectionId, dayIso) })
-  }
+  // handleDrop + quickAssignShift retired — the old in-file
+  // timeline board is gone, and StaffingCalendar's drag flow
+  // now opens the shift drawer (not an instant-create) so the
+  // manager can confirm times. quickAssignShift also had the
+  // server-side setHours() TZ bug; keeping it out of the UI
+  // means the drawer's ISO path is the only create route.
 
   // Timeline positioning helpers + drop handler retired with the
   // in-file timeline board — StaffingCalendar (a sibling client
@@ -3765,11 +3763,21 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
         const r = await updateShift(null, fd)
         if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
       } else {
+        // Build the timestamps CLIENT-side so setHours uses the
+        // manager's local timezone. The server previously did
+        // `new Date(dayIso); setHours(min)` which uses the
+        // server's TZ (UTC on Vercel) — shifted the wall-clock by
+        // the client's UTC offset. Sending full ISO here avoids
+        // the round-trip mangle: the server stores it verbatim.
+        const dayDate = new Date(dayIso)
+        const startDate = new Date(dayDate)
+        startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
+        const endDate = new Date(dayDate)
+        endDate.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0)
         const fd = new FormData()
         fd.set('employee_id', person.id)
-        fd.set('day_iso', dayIso)
-        fd.set('start_min', String(startMin))
-        fd.set('end_min', String(endMin))
+        fd.set('start_time', startDate.toISOString())
+        fd.set('end_time', endDate.toISOString())
         fd.set('role', effectiveRole)
         fd.set('break_minutes', String(brk))
         const r = await createShiftFromDrawer(fd)

@@ -851,20 +851,54 @@ export async function createShiftFromDrawer(
   if (locAuthErr) return { error: locAuthErr }
 
   const employeeId = ((formData.get('employee_id') as string) ?? '').trim()
-  const dayIso = ((formData.get('day_iso') as string) ?? '').trim()
-  const startMinRaw = parseInt(String(formData.get('start_min') ?? ''), 10)
-  const endMinRaw = parseInt(String(formData.get('end_min') ?? ''), 10)
+  // Prefer full ISO timestamps from the client (built with local
+  // Date + .toISOString()), so the wall-clock the manager typed
+  // survives the round-trip. Older callers may still send the
+  // legacy (day_iso, start_min, end_min) triple — we accept both
+  // shapes and reconstruct on the server for those.
+  //
+  // Bug this fixes: server-side `new Date(dayIso); setHours(min)`
+  // uses the SERVER's timezone (UTC on Vercel), so a 9:00am EDT
+  // shift stored as 09:00Z rendered as 5:00am on the manager's
+  // screen. The client's ISO already carries the correct instant.
+  const startIso = ((formData.get('start_time') as string) ?? '').trim()
+  const endIso = ((formData.get('end_time') as string) ?? '').trim()
+  const dayIsoLegacy = ((formData.get('day_iso') as string) ?? '').trim()
+  const startMinLegacy = parseInt(String(formData.get('start_min') ?? ''), 10)
+  const endMinLegacy = parseInt(String(formData.get('end_min') ?? ''), 10)
   const rawRole = ((formData.get('role') as string) ?? '').trim()
   const breakRaw = parseInt(String(formData.get('break_minutes') ?? '0'), 10)
 
   if (!employeeId) return { error: 'Employee is required.' }
-  if (!dayIso) return { error: 'Day is required.' }
-  if (!Number.isFinite(startMinRaw) || startMinRaw < 0) return { error: 'Start time is invalid.' }
-  if (!Number.isFinite(endMinRaw) || endMinRaw <= startMinRaw) return { error: 'End must be after start.' }
   const breakMinutes = Number.isFinite(breakRaw) && breakRaw >= 0 && breakRaw <= 480 ? breakRaw : 0
 
-  const day = new Date(dayIso)
-  if (!Number.isFinite(day.getTime())) return { error: 'Day is not a valid date.' }
+  // Resolve the two Date objects. Preferred path (ISO from client),
+  // fallback to legacy (dayIso + minutes) with the SAME wrong-TZ
+  // caveat as before — but new callers should always send ISO.
+  let startDate: Date
+  let endDate: Date
+  let dayForAvailability: Date
+
+  if (startIso && endIso) {
+    startDate = new Date(startIso)
+    endDate = new Date(endIso)
+    if (!Number.isFinite(startDate.getTime()) || !Number.isFinite(endDate.getTime())) {
+      return { error: 'Shift time is invalid.' }
+    }
+    // Use the shift's own start as the availability reference —
+    // whatever local day the client considered this shift to be on.
+    dayForAvailability = startDate
+  } else if (dayIsoLegacy && Number.isFinite(startMinLegacy) && Number.isFinite(endMinLegacy)) {
+    const day = new Date(dayIsoLegacy)
+    if (!Number.isFinite(day.getTime())) return { error: 'Day is not a valid date.' }
+    startDate = new Date(day); startDate.setHours(Math.floor(startMinLegacy / 60), startMinLegacy % 60, 0, 0)
+    endDate = new Date(day); endDate.setHours(Math.floor(endMinLegacy / 60), endMinLegacy % 60, 0, 0)
+    dayForAvailability = day
+  } else {
+    return { error: 'Shift time is required.' }
+  }
+
+  if (endDate.getTime() <= startDate.getTime()) return { error: 'End must be after start.' }
 
   const { data: employee } = await ctx.supabase
     .from('employees')
@@ -875,7 +909,7 @@ export async function createShiftFromDrawer(
   if (!employee) return { error: 'Employee not found.' }
 
   // Availability guard — same Mon..Sun remap as quickAssignShift.
-  const jsDow = day.getDay()
+  const jsDow = dayForAvailability.getDay()
   const monIdx = jsDow === 0 ? 6 : jsDow - 1
   const availability = employee.availability
   if (Array.isArray(availability) && availability.length === 7 && availability[monIdx] === false) {
@@ -899,14 +933,6 @@ export async function createShiftFromDrawer(
       return { error: `Role “${rawRole}” isn’t in the employee’s primary or trained set.` }
     }
   }
-
-  // Build the timestamps from local minutes-from-midnight so the
-  // shift lands on the manager's calendar day, not UTC.
-  const startDate = new Date(day)
-  startDate.setHours(Math.floor(startMinRaw / 60), startMinRaw % 60, 0, 0)
-  const endDate = new Date(day)
-  endDate.setHours(Math.floor(endMinRaw / 60), endMinRaw % 60, 0, 0)
-  if (endDate.getTime() <= startDate.getTime()) return { error: 'End must be after start.' }
 
   const { error } = await ctx.supabase.from('shifts').insert({
     restaurant_id: ctx.restaurantId,

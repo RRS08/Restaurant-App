@@ -31,6 +31,15 @@ const SURFACE = '#FAFAF9'
 const SIGNAL = '#2563EB'
 const MONO = "'Geist Mono', ui-monospace, monospace"
 
+// Horizontal inset applied UNIFORMLY to every timeline container
+// (ruler + day-row tracks + shift lanes + Add-row track). The
+// tick labels are centered on their positions, so the first/last
+// would overflow the card without this breathing room. Absolute-
+// positioned children position against the padding-box, so
+// percentages still line up across all containers as long as
+// they share the same inset.
+const TIMELINE_INSET_X = 12
+
 // ---- Domain shapes (imported at the callsite) ------------------
 export interface CalShift {
   id: string
@@ -433,12 +442,10 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   }
 
   // Single continuous shaded band per day row — spans the whole
-  // shift-assignable window (open − 60m through close + 60m) so
-  // the manager sees one clear "you can put shifts here" region
-  // instead of a faint outer band next to a darker inner one.
-  // The setup range wins when both are supplied; if the day has
-  // no setup (closed), fall back to the plain open range (which
-  // is null on closed days anyway).
+  // shift-assignable window (open − 60m through close + 60m).
+  // Lighter fill + dotted side borders per manager's ask, so the
+  // shift bars pop against a calm background instead of a solid
+  // gray slab.
   const openBand = (
     open: { startPct: number; widthPct: number } | null,
     setup?: { startPct: number; widthPct: number } | null,
@@ -451,9 +458,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
         position: 'absolute',
         left: `${band.startPct}%`, width: `${band.widthPct}%`,
         top: 0, bottom: 0,
-        background: today ? '#EFF6FF' : '#F4F4F2',
-        borderLeft: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
-        borderRight: `1px solid ${today ? '#DBEAFE' : '#D6D5D1'}`,
+        background: today ? '#F6FAFF' : '#FAFAF8',
+        borderLeft: `1px dotted ${today ? '#DBEAFE' : '#D6D5D1'}`,
+        borderRight: `1px dotted ${today ? '#DBEAFE' : '#D6D5D1'}`,
       }} />
     )
   }
@@ -580,23 +587,24 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   {t('DAY · HOURS', 'DÍA · HORAS')}
                 </span>
               </div>
-              <div style={{ position: 'relative', height: 18, flex: 1, minWidth: 0 }}>
-                {TICKS.map((tick, i) => (
+              <div style={{
+                position: 'relative', height: 18, flex: 1, minWidth: 0,
+                paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
+              }}>
+                {TICKS.map((tick) => (
                   <span
                     key={tick.hour}
                     style={{
                       position: 'absolute',
                       left: `${tick.left}%`,
                       top: 4,
-                      // Even spacing across all intervals: each tick
-                      // sits at its natural percentage position with
-                      // no extra offset. The last tick right-aligns
-                      // its label to the tick position (translateX
-                      // -100%) so it doesn't overflow the container;
-                      // no extra shift, so the 10p↔11p gap stays
-                      // equal to every other hour gap.
-                      transform: i === TICKS.length - 1 ? 'translateX(-100%)' : undefined,
+                      // Every label centered on its tick position.
+                      // Container padding gives the outer labels room
+                      // to breathe without shifting the intervals —
+                      // gaps between every pair of labels are equal.
+                      transform: 'translateX(-50%)',
                       fontFamily: MONO, fontSize: 9, color: MUTED,
+                      whiteSpace: 'nowrap',
                     }}
                   >
                     {fmtHourShort(tick.hour)}
@@ -640,7 +648,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               const barH = 22
               const barGap = 4
               const contentH = renderedList.length * barH + Math.max(0, renderedList.length - 1) * barGap
-              const WEEK_DAY_MIN_H = renderedList.length === 0 ? 52 : 84
+              // Empty rows keep a comfortable 52px so the "no
+              // shifts scheduled" text has room. Non-empty rows
+              // hug their content (no 84px floor) — that floor
+              // was leaving a permanent gap below the shift bar
+              // per the manager's ask.
+              const WEEK_DAY_MIN_H = renderedList.length === 0 ? 52 : 36
               const dayRowH = Math.max(WEEK_DAY_MIN_H, contentH + 16)
               // Hours-line copy: "12p–10p", "Closed", "12p–10p · one-off".
               // Overrides paint amber to signal an exception.
@@ -720,7 +733,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     }}
                     style={{
                       position: 'relative', flex: 1, minWidth: 0,
-                      padding: renderedList.length === 0 ? 0 : '8px 0',
+                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
+                      paddingTop: renderedList.length === 0 ? 0 : 8,
+                      paddingBottom: renderedList.length === 0 ? 0 : 8,
                       // Clip anything positioned outside the axis so
                       // stray off-hours bars can't push the row edge
                       // past the vertical divider (which is what was
@@ -846,9 +861,19 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     <div style={{ width: 170, flex: '0 0 170px', borderRight: `1px solid ${LINE}`, padding: '6px 12px', display: 'flex', alignItems: 'center' }}>
                       <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED }}>{t('STAFF', 'EQUIPO')}</span>
                     </div>
-                    <div style={{ position: 'relative', flex: 1, minWidth: 0, height: 24 }}>
+                    <div style={{
+                      position: 'relative', flex: 1, minWidth: 0, height: 24,
+                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
+                    }}>
                       {TICKS.map((tick) => (
-                        <span key={tick.hour} style={{ position: 'absolute', left: `${tick.left}%`, top: 5, fontFamily: MONO, fontSize: 10, color: MUTED }}>
+                        <span
+                          key={tick.hour}
+                          style={{
+                            position: 'absolute', left: `${tick.left}%`, top: 5,
+                            transform: 'translateX(-50%)',
+                            fontFamily: MONO, fontSize: 10, color: MUTED, whiteSpace: 'nowrap',
+                          }}
+                        >
                           {fmtHourShort(tick.hour)}
                         </span>
                       ))}
@@ -886,7 +911,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                               {fmtH(Math.max(0, dur - brk / 60))}
                             </span>
                           </div>
-                          <div style={{ position: 'relative', flex: 1, minWidth: 0, padding: '5px 0', overflow: 'hidden' }}>
+                          <div style={{
+                            position: 'relative', flex: 1, minWidth: 0,
+                            paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
+                            paddingTop: 5, paddingBottom: 5,
+                            overflow: 'hidden',
+                          }}>
                             {openBand(dayOpen, daySetup)}
                             {hourLines}
                             <div style={{ position: 'relative', height: 30 }}>
@@ -982,7 +1012,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       })()}
                     </div>
                     <div style={{
-                      position: 'relative', flex: 1, minWidth: 0, padding: '5px 0',
+                      position: 'relative', flex: 1, minWidth: 0,
+                      paddingLeft: TIMELINE_INSET_X, paddingRight: TIMELINE_INSET_X,
+                      paddingTop: 5, paddingBottom: 5,
                       background: dragOverDay === dayIndex ? '#EFF6FF' : undefined,
                     }}>
                       {openBand(dayOpen, daySetup)}

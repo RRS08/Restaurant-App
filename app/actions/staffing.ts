@@ -5,6 +5,29 @@ import { getAuthContext, resolveLocationId, logAudit, formatError } from '@/lib/
 import { requireLocationAccess, AuthzError } from '@/lib/authz'
 import { normalizeDisplayName, normalizeNameKey } from '@/lib/strings/names'
 
+// Compute the UTC offset (in minutes) for `d` as observed in
+// timezone `tz`. Used by copyPreviousWeek's DST-safe week shift.
+// Positive = east of UTC (e.g. Sydney +600). Negative = west
+// (e.g. Denver DST = -360, standard = -420).
+function tzOffsetMinutes(d: Date, tz: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d)
+    const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? '0')
+    // `hour: '2-digit', hour12: false` reports 24 as "24" for midnight
+    // in some ICU versions; normalize to 0.
+    const hh = get('hour') % 24
+    const wallUtc = Date.UTC(get('year'), get('month') - 1, get('day'), hh, get('minute'), get('second'))
+    return Math.round((wallUtc - d.getTime()) / 60_000)
+  } catch {
+    return 0
+  }
+}
+
 // Graceful wrapper so existing { error: string } action returns stay
 // intact. Each location-scoped staffing write calls this right after
 // resolving the relevant location_id.
@@ -259,22 +282,25 @@ export async function renameStaffingRole(
   )
   if (cfgErr) return { error: formatError('role rename', cfgErr) }
 
-  // Propagate to shifts + employees. We use case-insensitive match
-  // (ilike with the exact escaped oldRaw isn't safe if the display
-  // form drifted; use eq on the exact stored variant). Since we can't
-  // know every stored casing, fetch the distinct values and match by
-  // normalized key.
+  // Propagate to shifts + employees. Fetch the distinct values
+  // and match by normalized key (casing may drift across rows).
+  // The propagation errors used to be silently swallowed — if
+  // one failed, the config was renamed but shifts / employees
+  // kept the old string, and the drawer reported success. Both
+  // updates now short-circuit on error and surface it.
   const { data: shiftRows } = await ctx.supabase
     .from('shifts').select('id, role').eq('restaurant_id', ctx.restaurantId)
   const shiftIds = (shiftRows ?? []).filter((r) => normalizeNameKey(r.role ?? '') === oldKey).map((r) => r.id)
   if (shiftIds.length > 0) {
-    await ctx.supabase.from('shifts').update({ role: newDisplay }).in('id', shiftIds)
+    const { error: shiftErr } = await ctx.supabase.from('shifts').update({ role: newDisplay }).in('id', shiftIds)
+    if (shiftErr) return { error: formatError('role rename (shifts)', shiftErr) }
   }
   const { data: empRows } = await ctx.supabase
     .from('employees').select('id, role').eq('restaurant_id', ctx.restaurantId)
   const empIds = (empRows ?? []).filter((r) => normalizeNameKey(r.role ?? '') === oldKey).map((r) => r.id)
   if (empIds.length > 0) {
-    await ctx.supabase.from('employees').update({ role: newDisplay }).in('id', empIds)
+    const { error: empErr } = await ctx.supabase.from('employees').update({ role: newDisplay }).in('id', empIds)
+    if (empErr) return { error: formatError('role rename (employees)', empErr) }
   }
 
   await logAudit(ctx, null, 'role_renamed', 'staffing_config')
@@ -525,12 +551,20 @@ export async function reorderEmployees(
   }
   if (orderedIds.length === 0) return { ok: true }
 
-  // Membership check — every id must belong to this restaurant.
-  const { data: existing } = await ctx.supabase
+  // Membership check — every id must belong to this restaurant,
+  // AND when the caller is a manager (scoped to a single location),
+  // every id must belong to that location too. Otherwise a manager
+  // at Location A could craft an orderedIds list containing Location
+  // B employees and reshuffle them.
+  const membershipQuery = ctx.supabase
     .from('employees')
     .select('id')
     .eq('restaurant_id', ctx.restaurantId)
     .in('id', orderedIds)
+  if (ctx.role === 'manager' && ctx.locationId) {
+    membershipQuery.eq('primary_location_id', ctx.locationId)
+  }
+  const { data: existing } = await membershipQuery
   const existingIds = new Set((existing ?? []).map((r) => r.id))
   if (existingIds.size !== orderedIds.length) {
     return { error: 'Some employees were not found. Refresh and try again.' }
@@ -554,267 +588,11 @@ export async function reorderEmployees(
   return { ok: true }
 }
 
-// ----------------------------------------------------------------
-// Shift sections (a.k.a. shift blocks) — CRUD.
-//
-// Sections are the rows on the schedule board. They drive lane
-// labels, default times for drag-drop assignment, and the shape of
-// the by_role / by_team grouping. Managers must be able to evolve
-// these past the starter set, so we expose create/update/delete here
-// with the same owner-gating used elsewhere.
-//
-// ON DELETE SET NULL semantics on shifts.section_id mean deleting a
-// block does NOT delete shifts under it — those shifts become
-// "custom" (sectionId === null) and surface on the Custom lane.
-// ----------------------------------------------------------------
-
-const VALID_AREAS = new Set(['foh', 'boh'])
-
-function parseHour(raw: FormDataEntryValue | null, label: string): number | { error: string } {
-  const n = parseInt(String(raw ?? ''), 10)
-  if (!Number.isFinite(n) || n < 0 || n > 24) {
-    return { error: `${label} must be between 0 and 24.` }
-  }
-  return n
-}
-
-export async function createShiftSection(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
-
-  // Owner-only — see addStaffingRole above.
-  if (ctx.role !== 'owner') {
-    return { error: 'Only the owner can change staffing structure.' }
-  }
-
-  const rawName = (formData.get('name') as string) ?? ''
-  const name = normalizeDisplayName(rawName)
-  const nameKey = normalizeNameKey(rawName)
-  const area = (formData.get('area') as string)?.trim()
-  const rawRole = (formData.get('role') as string) ?? ''
-  const role = normalizeDisplayName(rawRole) || 'General'
-  if (!name) return { error: 'Block name is required.' }
-  if (!VALID_AREAS.has(area)) return { error: 'Area must be foh or boh.' }
-
-  const start = parseHour(formData.get('default_start_hour'), 'Start hour')
-  if (typeof start === 'object') return start
-  const end = parseHour(formData.get('default_end_hour'), 'End hour')
-  if (typeof end === 'object') return end
-  if (end === start) return { error: 'End hour must differ from start hour.' }
-
-  // Same-shape duplicate guard — block the manager from creating a
-  // second block with identical (normalized name, area, start, end)
-  // for the same restaurant. Now uses normalizeNameKey so "Lunch"
-  // and "lunch" collide. We fetch by area + hours (the cheap filter)
-  // then check name in JS using the normalized key.
-  const { data: candidates } = await ctx.supabase
-    .from('shift_sections')
-    .select('id, name')
-    .eq('restaurant_id', ctx.restaurantId)
-    .eq('area', area)
-    .eq('default_start_hour', start)
-    .eq('default_end_hour', end)
-  const existingMatch = (candidates ?? []).find(
-    (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
-  )
-  if (existingMatch) {
-    return { error: 'A block with the same name, house, and hours already exists.' }
-  }
-
-  // Append at the end of the existing sort order so newly created
-  // blocks land at the bottom of the board, never reshuffling the
-  // manager's existing ordering.
-  const { data: maxRow } = await ctx.supabase
-    .from('shift_sections')
-    .select('sort_order')
-    .eq('restaurant_id', ctx.restaurantId)
-    .order('sort_order', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-  const nextOrder = (maxRow?.sort_order ?? 0) + 10
-
-  const { error } = await ctx.supabase.from('shift_sections').insert({
-    restaurant_id: ctx.restaurantId,
-    name, area, role,
-    default_start_hour: start,
-    default_end_hour: end,
-    sort_order: nextOrder,
-  })
-  if (error) return { error: formatError('block', error) }
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
-
-export async function updateShiftSection(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
-
-  // Owner-only — see addStaffingRole above.
-  if (ctx.role !== 'owner') {
-    return { error: 'Only the owner can change staffing structure.' }
-  }
-
-  const sectionId = (formData.get('section_id') as string)?.trim()
-  const rawName = (formData.get('name') as string) ?? ''
-  const name = normalizeDisplayName(rawName)
-  const nameKey = normalizeNameKey(rawName)
-  if (!sectionId) return { error: 'No block selected.' }
-  if (!name) return { error: 'Block name is required.' }
-
-  const start = parseHour(formData.get('default_start_hour'), 'Start hour')
-  if (typeof start === 'object') return start
-  const end = parseHour(formData.get('default_end_hour'), 'End hour')
-  if (typeof end === 'object') return end
-  if (end === start) return { error: 'End hour must differ from start hour.' }
-
-  // Block edited-name from colliding with another block in the same
-  // restaurant (same area+hours signature). The current section is
-  // excluded by id so renaming a block to its own normalized form
-  // isn't blocked.
-  const { data: currentRow } = await ctx.supabase
-    .from('shift_sections')
-    .select('area')
-    .eq('id', sectionId)
-    .eq('restaurant_id', ctx.restaurantId)
-    .maybeSingle()
-  if (currentRow) {
-    const { data: candidates } = await ctx.supabase
-      .from('shift_sections')
-      .select('id, name')
-      .eq('restaurant_id', ctx.restaurantId)
-      .eq('area', currentRow.area)
-      .eq('default_start_hour', start)
-      .eq('default_end_hour', end)
-      .neq('id', sectionId)
-    const collision = (candidates ?? []).find(
-      (row) => normalizeNameKey((row.name as string) ?? '') === nameKey,
-    )
-    if (collision) {
-      return { error: 'A block with the same name, house, and hours already exists.' }
-    }
-  }
-
-  const { error } = await ctx.supabase
-    .from('shift_sections')
-    .update({
-      name,
-      default_start_hour: start,
-      default_end_hour: end,
-    })
-    .eq('id', sectionId)
-    .eq('restaurant_id', ctx.restaurantId)
-  if (error) return { error: formatError('block', error) }
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
-
-export async function deleteShiftSection(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
-
-  // Owner-only — see addStaffingRole above.
-  if (ctx.role !== 'owner') {
-    return { error: 'Only the owner can change staffing structure.' }
-  }
-
-  const sectionId = (formData.get('section_id') as string)?.trim()
-  if (!sectionId) return { error: 'No block selected.' }
-
-  // Shifts under this section are NOT deleted — schema sets
-  // section_id to NULL via ON DELETE SET NULL, which surfaces them
-  // on the Custom lane in the UI.
-  const { error } = await ctx.supabase
-    .from('shift_sections')
-    .delete()
-    .eq('id', sectionId)
-    .eq('restaurant_id', ctx.restaurantId)
-  if (error) return { error: formatError('block', error) }
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
-
-// ----------------------------------------------------------------
-// Quick assign — drag-and-drop creates a shift instantly
-// ----------------------------------------------------------------
-export async function quickAssignShift(
-  employeeId: string,
-  sectionId: string | null,
-  dayIso: string,
-  // Optional explicit times (used by the new staffing calendar's
-  // Day view, which drops onto a specific day without a block).
-  // When absent + sectionId given, we use the section's defaults.
-  // When absent + no section, we fall back to 9-5 as a starter
-  // slot the user can edit via "Set shift time".
-  startHour?: number,
-  endHour?: number,
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
-
-  const { locationId } = await resolveLocationId(ctx)
-  if (!locationId) return { error: 'No location.' }
-  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
-  if (locAuthErr) return { error: locAuthErr }
-
-  const { data: employee } = await ctx.supabase
-    .from('employees').select('role, name, availability').eq('id', employeeId).single()
-  if (!employee) return { error: 'Employee not found.' }
-
-  // Availability guard — Mon..Sun (index 0..6). JS getDay() is
-  // Sun=0..Sat=6, so we remap. If the day is flagged false, the
-  // shift is rejected up front rather than silently created.
-  const dayCheck = new Date(dayIso)
-  const jsDow = dayCheck.getDay()
-  const monIdx = jsDow === 0 ? 6 : jsDow - 1
-  const availability = employee.availability
-  if (Array.isArray(availability) && availability.length === 7 && availability[monIdx] === false) {
-    return { error: `${employee.name ?? 'This employee'} isn’t available that day.` }
-  }
-
-  // Resolve start/end hours: explicit params > section defaults > 9-5.
-  let sh = startHour ?? 9
-  let eh = endHour ?? 17
-  let resolvedSectionId: string | null = null
-  if (sectionId) {
-    const { data: section } = await ctx.supabase
-      .from('shift_sections')
-      .select('default_start_hour, default_end_hour')
-      .eq('id', sectionId)
-      .single()
-    if (section) {
-      sh = section.default_start_hour
-      eh = section.default_end_hour
-      resolvedSectionId = sectionId
-    }
-  }
-
-  const day = new Date(dayIso)
-  const start = new Date(day); start.setHours(sh, 0, 0, 0)
-  const end = new Date(day)
-  if (eh <= sh) end.setDate(end.getDate() + 1)
-  end.setHours(eh, 0, 0, 0)
-
-  const { error } = await ctx.supabase.from('shifts').insert({
-    restaurant_id: ctx.restaurantId, location_id: locationId,
-    employee_id: employeeId, section_id: resolvedSectionId,
-    role: employee.role,
-    start_time: start.toISOString(), end_time: end.toISOString(),
-  })
-
-  if (error) return { error: error.message }
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
+// quickAssignShift retired 2026-07-27. The drag-drop flow now
+// opens the ShiftDrawer instead of instant-creating, so this
+// action was unreachable from the UI — and it still carried the
+// server-side setHours() TZ bug that createShiftFromDrawer just
+// dropped. Deleted rather than left as a landmine.
 
 // ----------------------------------------------------------------
 // createShiftFromDrawer — the redesigned shift drawer's persist
@@ -978,6 +756,14 @@ export async function copyPreviousWeek(
   const prevWeekStart = new Date(currentWeekStart); prevWeekStart.setDate(prevWeekStart.getDate() - 7)
   const currentWeekEnd = new Date(currentWeekStart); currentWeekEnd.setDate(currentWeekEnd.getDate() + 7)
 
+  // Location timezone drives the DST-safe +7 day shift below.
+  // Falls back to UTC when the location has no tz set — same
+  // graceful behavior as the sales business-date helper. Without
+  // this a shift copied across a DST boundary lands one hour off.
+  const { data: locRow } = await ctx.supabase
+    .from('locations').select('timezone').eq('id', locationId).maybeSingle()
+  const locationTimezone = (locRow?.timezone as string | null | undefined) ?? null
+
   // Fetch previous week + current week's shifts (need current
   // for dedupe). Also fetch active employees to skip inactive ones.
   const [prevRes, currRes, empRes] = await Promise.all([
@@ -1009,8 +795,15 @@ export async function copyPreviousWeek(
   for (const s of prevRes.data ?? []) {
     const employeeId = s.employee_id as string
     if (!activeIds.has(employeeId)) { skipped++; continue }
-    const newStart = new Date(s.start_time as string); newStart.setDate(newStart.getDate() + 7)
-    const newEnd = new Date(s.end_time as string); newEnd.setDate(newEnd.getDate() + 7)
+    // DST-safe +7 days: naive add of 7 days worth of ms, then
+    // adjust for the difference between the source and target
+    // instant's UTC offsets in the location's timezone.
+    // Previously used setDate(+7) which runs in the SERVER's
+    // timezone (UTC on Vercel) — preserving UTC wall-clock,
+    // not local. A shift copied across a DST transition landed
+    // one hour off in the manager's timezone.
+    const newStart = shiftByLocalWeek(s.start_time as string, locationTimezone)
+    const newEnd = shiftByLocalWeek(s.end_time as string, locationTimezone)
     const dedupeKey = `${employeeId}|${newStart.getTime()}`
     if (existing.has(dedupeKey)) { skipped++; continue }
     rows.push({
@@ -1020,6 +813,22 @@ export async function copyPreviousWeek(
       start_time: newStart.toISOString(), end_time: newEnd.toISOString(),
       notes: (s.notes as string | null) ?? null,
     })
+  }
+  // shiftByLocalWeek — advance an ISO instant by exactly seven
+  // LOCAL days (24 h × 7 = 168 h, corrected by the DST offset
+  // difference between the source and target instants). UTC-only
+  // math (setDate/+7d) would preserve UTC wall-clock, drifting
+  // by one hour whenever the target lands on the other side of
+  // a DST transition. Falls back to plain 7-day arithmetic when
+  // the location has no tz set.
+  function shiftByLocalWeek(iso: string, tz: string | null): Date {
+    const src = new Date(iso)
+    const naive = new Date(src.getTime() + 7 * 86_400_000)
+    if (!tz) return naive
+    const srcOff = tzOffsetMinutes(src, tz)
+    const naiveOff = tzOffsetMinutes(naive, tz)
+    const diff = naiveOff - srcOff
+    return diff === 0 ? naive : new Date(naive.getTime() - diff * 60_000)
   }
 
   if (rows.length > 0) {
@@ -1032,35 +841,6 @@ export async function copyPreviousWeek(
   return { copied: rows.length, skipped }
 }
 
-// ----------------------------------------------------------------
-// updateShiftTimes — thin helper for the day-view "Set shift time"
-// affordance. Only touches start/end; leaves employee, section, and
-// notes alone. Owner or matching-location manager may call.
-// ----------------------------------------------------------------
-export async function updateShiftTimes(
-  shiftId: string,
-  startIso: string,
-  endIso: string,
-): Promise<{ error: string } | null> {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
-
-  const { data: shift } = await ctx.supabase
-    .from('shifts').select('location_id').eq('id', shiftId).single()
-  if (!shift) return { error: 'Shift not found.' }
-  const locAuthErr = await requireLocResult(ctx.restaurantId, shift.location_id as string)
-  if (locAuthErr) return { error: locAuthErr }
-
-  const { error } = await ctx.supabase
-    .from('shifts')
-    .update({ start_time: startIso, end_time: endIso })
-    .eq('id', shiftId)
-  if (error) return { error: error.message }
-
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
 
 // ----------------------------------------------------------------
 // deleteShiftById — non-formData delete used by the day view's
@@ -1332,47 +1112,6 @@ export async function archiveEmployee(
   return null
 }
 
-// ----------------------------------------------------------------
-// Shift CRUD (for drawer edits)
-// ----------------------------------------------------------------
-export async function createShift(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Authentication error.' }
-
-  const formLocationId = formData.get('location_id') as string
-  const { locationId, error: locError } = await resolveLocationId(ctx, formLocationId)
-  if (locError) return { error: locError }
-  const locAuthErr = await requireLocResult(ctx.restaurantId, locationId)
-  if (locAuthErr) return { error: locAuthErr }
-
-  const employeeId = formData.get('employee_id') as string
-  const sectionId = (formData.get('section_id') as string) || null
-  const startTime = formData.get('start_time') as string
-  const endTime = formData.get('end_time') as string
-  const notes = (formData.get('notes') as string)?.trim() || null
-
-  if (!employeeId) return { error: 'Please select an employee.' }
-  if (!startTime || !endTime) return { error: 'Times are required.' }
-  if (new Date(endTime) <= new Date(startTime)) return { error: 'End must be after start.' }
-
-  const { data: employee } = await ctx.supabase
-    .from('employees').select('role, primary_location_id').eq('id', employeeId).single()
-  if (!employee) return { error: 'Employee not found.' }
-
-  const { error } = await ctx.supabase.from('shifts').insert({
-    restaurant_id: ctx.restaurantId, location_id: locationId,
-    employee_id: employeeId, section_id: sectionId,
-    role: employee.role, start_time: startTime, end_time: endTime, notes,
-  })
-
-  if (error) return { error: formatError('shift', error) }
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
-
 export async function updateShift(
   prevState: { error: string } | null, formData: FormData
 ) {
@@ -1383,7 +1122,13 @@ export async function updateShift(
   const employeeId = formData.get('employee_id') as string
   const startTime = formData.get('start_time') as string
   const endTime = formData.get('end_time') as string
-  const notes = (formData.get('notes') as string)?.trim() || null
+  // Distinguish "field absent" (leave notes alone) from "field
+  // present but empty" (clear notes). Previously the drawer's
+  // edit path didn't send `notes` at all, and this line coerced
+  // that to null → every save silently wiped any existing note.
+  const notesRaw = formData.get('notes')
+  const notesProvided = notesRaw !== null
+  const notes = notesProvided ? (String(notesRaw).trim() || null) : undefined
 
   if (!shiftId || !employeeId || !startTime || !endTime) return { error: 'Missing fields.' }
   if (new Date(endTime) <= new Date(startTime)) return { error: 'End must be after start.' }
@@ -1430,8 +1175,9 @@ export async function updateShift(
   const breakRaw = formData.get('break_minutes')
   const updatePayload: Record<string, unknown> = {
     employee_id: employeeId, role: resolvedRole,
-    start_time: startTime, end_time: endTime, notes,
+    start_time: startTime, end_time: endTime,
   }
+  if (notesProvided) updatePayload.notes = notes
   if (breakRaw !== null) {
     const parsed = parseInt(String(breakRaw), 10)
     if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 480) {
@@ -1447,26 +1193,6 @@ export async function updateShift(
   return null
 }
 
-export async function deleteShift(
-  prevState: { error: string } | null, formData: FormData
-) {
-  const { context: ctx, error: authError } = await getAuthContext()
-  if (authError || !ctx) return { error: authError ?? 'Auth error.' }
-
-  const shiftId = formData.get('shift_id') as string
-  if (!shiftId) return { error: 'No shift.' }
-
-  const { data: shiftRow } = await ctx.supabase
-    .from('shifts').select('location_id').eq('id', shiftId).single()
-  if (!shiftRow) return { error: 'Shift not found.' }
-  const locAuthErr = await requireLocResult(ctx.restaurantId, shiftRow.location_id)
-  if (locAuthErr) return { error: locAuthErr }
-
-  await ctx.supabase.from('shifts').delete().eq('id', shiftId)
-  revalidatePath('/staffing')
-  revalidatePath('/web/staffing')
-  return null
-}
 
 // ----------------------------------------------------------------
 // Testing utility — archives all employees and clears their shifts.

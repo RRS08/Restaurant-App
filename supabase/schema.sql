@@ -681,6 +681,53 @@ create table public.hours_override (
 
 
 -- ----------------------------------------------------------------
+-- RLS for business_hours + hours_override
+-- Mirrors the pattern used by shifts / employees — restaurant_id
+-- gates every read + write via public.my_restaurant_id(). Without
+-- this a fresh install bootstrapped from schema.sql alone leaves
+-- both tables unprotected. (The migration file adds them too but
+-- schema.sql is what fresh envs rebuild from.)
+-- ----------------------------------------------------------------
+alter table public.business_hours enable row level security;
+alter table public.hours_override enable row level security;
+
+create policy "Users can view business hours"
+  on public.business_hours for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can insert business hours"
+  on public.business_hours for insert
+  with check (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can update business hours"
+  on public.business_hours for update
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can delete business hours"
+  on public.business_hours for delete
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can view hours override"
+  on public.hours_override for select
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can insert hours override"
+  on public.hours_override for insert
+  with check (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can update hours override"
+  on public.hours_override for update
+  using (restaurant_id = public.my_restaurant_id());
+
+create policy "Users can delete hours override"
+  on public.hours_override for delete
+  using (restaurant_id = public.my_restaurant_id());
+
+create index if not exists idx_hours_override_location_date
+  on public.hours_override (location_id, date);
+
+
+-- ----------------------------------------------------------------
 -- expenses: money-out records for the Finance pillar
 --
 -- This is the primary data table for Finance V1.

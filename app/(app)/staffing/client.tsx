@@ -4,14 +4,11 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState, useAct
 import { useRouter } from 'next/navigation'
 import {
   copyPreviousWeek,
-  updateShiftTimes,
   deleteShiftById,
   createEmployee,
   updateEmployee,
   archiveEmployee,
-  createShift,
   updateShift,
-  deleteShift,
   addStaffingRole,
   setRoleColor,
   setRoleWage,
@@ -21,9 +18,6 @@ import {
   reorderEmployees,
   setBusinessHours,
   createShiftFromDrawer,
-  createShiftSection,
-  updateShiftSection,
-  deleteShiftSection,
 } from '@/app/actions/staffing'
 import { normalizeNameKey } from '@/lib/strings/names'
 import { makeT, type Lang } from '@/lib/i18n'
@@ -499,17 +493,8 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   // one entry here + one render branch at the bottom — no scattered
   // useState() flags and no risk of two drawers opening at once.
   type DrawerState =
-    | { mode: 'edit'; shift: Shift }
     | { mode: 'add-employee'; house: 'foh' | 'boh' }
     | { mode: 'edit-employee'; employee: Employee; house: 'foh' | 'boh' }
-    | { mode: 'add-block'; defaultArea: 'foh' | 'boh' }
-    | { mode: 'edit-block'; section: Section; shiftCount: number }
-    | { mode: 'add-shift'
-        defaultDay: string | null
-        defaultSectionId?: string | null
-        defaultStartHour?: number | null
-        defaultEndHour?: number | null
-      }
     | { mode: 'role-drawer'
         // null = create new; string = edit existing role by name.
         role: string | null
@@ -858,28 +843,30 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
             dayIso, dayIndex: idx,
           })
         }}
-        onSetShiftTime={async (shiftId, startIso, endIso) => {
-          const r = await updateShiftTimes(shiftId, startIso, endIso)
-          router.refresh()
-          return r
-        }}
         onRemoveShift={async (shiftId) => {
           const r = await deleteShiftById(shiftId)
           router.refresh()
           return r
         }}
         onClearDay={async (dayIso) => {
-          // Delete every shift for the given day + active-house scope.
+          // Delete every shift for the given day + active-house
+          // scope. Run all deletes in parallel and refresh once
+          // when they settle so partial failure never leaves the
+          // UI (deleted rows visually gone) out of sync with the
+          // DB (some still there). Errors are collected, refresh
+          // is always called, and the first surfaces to the user.
           const dayDate = new Date(dayIso)
           const toDelete = weekShifts.filter((s) =>
             sameDay(new Date(s.startTime), dayDate),
           )
-          for (const s of toDelete) {
-            const r = await deleteShiftById(s.id)
-            if (r && 'error' in r && r.error) return r
-          }
+          const results = await Promise.all(
+            toDelete.map((s) => deleteShiftById(s.id)),
+          )
           router.refresh()
-          return null
+          const firstErr = results.find(
+            (r): r is { error: string } => !!r && 'error' in r && !!r.error,
+          )
+          return firstErr ?? null
         }}
         onCopyLastWeek={async () => {
           const r = await copyPreviousWeek(weekStart.toISOString())
@@ -965,35 +952,11 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           onClose={() => setDrawer(null)}
         />
       )}
-      {drawer?.mode === 'add-block' && (
-        <AddBlockDrawer
-          lang={lang}
-          isUnified={isUnified}
-          defaultArea={drawer.defaultArea}
-          onClose={() => setDrawer(null)}
-        />
-      )}
-      {drawer?.mode === 'edit-block' && (
-        <EditBlockDrawer
-          lang={lang}
-          section={drawer.section}
-          shiftCount={drawer.shiftCount}
-          onClose={() => setDrawer(null)}
-        />
-      )}
-      {drawer?.mode === 'add-shift' && (
-        <AddCustomShiftDrawer
-          lang={lang}
-          locationId={locationId}
-          employees={locEmployees}
-          sections={houseSections}
-          defaultDay={drawer.defaultDay}
-          defaultSectionId={drawer.defaultSectionId ?? null}
-          defaultStartHour={drawer.defaultStartHour ?? null}
-          defaultEndHour={drawer.defaultEndHour ?? null}
-          onClose={() => setDrawer(null)}
-        />
-      )}
+      {/* add-block / edit-block / add-shift render branches retired
+          — no setDrawer(...) callsite exists for any of them, so
+          the components below (AddBlockDrawer, EditBlockDrawer,
+          AddCustomShiftDrawer) were unreachable. Full removal in
+          the dead-code sweep. */}
       {drawer?.mode === 'role-drawer' && (
         <EditRoleDrawer
           lang={lang}
@@ -1032,178 +995,6 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
       )}
     </div>
     </RoleColorsContext.Provider>
-  )
-}
-
-// ----------------------------------------------------------------
-// EditDrawer — the shift-edit drawer opened by clicking any shift
-// card on the schedule board. Uses the shared DrawerShell pattern
-// so it visually matches the rest of the staffing drawers (Employee,
-// Block, Custom shift). Save action lives in the footer; Remove
-// shift is a quiet destructive secondary at the bottom.
-// ----------------------------------------------------------------
-function EditDrawer({ lang, shift, employees, sections: _sections, onClose }: {
-  lang: Lang; shift: Shift; employees: Employee[]; sections: Section[]; onClose: () => void
-}) {
-  const t = makeT(lang)
-  const roleColors = useContext(RoleColorsContext)
-  const [eState, eAction, ePending] = useActionState(updateShift, null)
-  const [dState, dAction, dPending] = useActionState(deleteShift, null)
-  useAutoCloseOnSuccess(ePending, eState, onClose)
-  useAutoCloseOnSuccess(dPending, dState, onClose)
-
-  return (
-    <DrawerShell
-      eyebrow={t('Shift', 'Turno')}
-      title={t(`Edit ${shift.employeeName}`, `Editar ${shift.employeeName}`)}
-      subtitle={`${shift.role} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
-    >
-      {/* Sibling delete form — lives OUTSIDE the edit form so we
-          don't nest <form> elements (HTML disallows it and React
-          warns about hydration). The "Remove shift" button below
-          binds to this form by id via `form="staffing-delete-shift"`,
-          matching the pattern EditBlockDrawer uses for its delete. */}
-      <form id="staffing-delete-shift" action={dAction}>
-        <input type="hidden" name="shift_id" value={shift.id} />
-      </form>
-
-      <form action={eAction} className="flex-1 flex flex-col min-h-0">
-        <input type="hidden" name="shift_id" value={shift.id} />
-        <DrawerBody>
-          {(() => {
-            const role = roleTone(shift.role, roleColors)
-            const startMs = new Date(shift.startTime).getTime()
-            const endMs = new Date(shift.endTime).getTime()
-            const hrs = Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs
-              ? (endMs - startMs) / (1000 * 60 * 60)
-              : 0
-            return (
-              <PreviewCard
-                eyebrow={t('Shift', 'Turno')}
-                toneDot={role.dot}
-                title={`${shift.employeeName} · ${shift.role}`}
-                meta={[
-                  `${fmtMonthDay(shift.startTime, lang)} · ${fmt(shift.startTime)}–${fmt(shift.endTime)}`,
-                  `${formatHours(hrs)} ${t('scheduled', 'programadas')}`,
-                ]}
-              />
-            )
-          })()}
-
-          <Field label={t('Employee', 'Empleado')} htmlFor="es-employee" t={t}>
-            <select
-              id="es-employee"
-              name="employee_id"
-              required
-              defaultValue={shift.employeeId}
-              className={fieldInputClass}
-            >
-              {employees.map((e) => <option key={e.id} value={e.id}>{e.name} · {e.role}</option>)}
-            </select>
-          </Field>
-
-          {(() => {
-            // Role override picker — offers the shift's current role
-            // as the default plus every trained role the employee
-            // carries. If they've only got one option, the picker
-            // still renders (single-option select) so the UI stays
-            // consistent. Server validates the pick against the
-            // employee's primary + trained set so a tampered form
-            // can't slip an arbitrary role through.
-            const emp = employees.find((e) => e.id === shift.employeeId)
-            const primary = emp?.role ?? shift.role
-            const trained = emp?.trainedRoles ?? []
-            const options: string[] = []
-            const seen = new Set<string>()
-            for (const r of [primary, ...trained]) {
-              const k = r.toLowerCase().trim()
-              if (!k || seen.has(k)) continue
-              seen.add(k); options.push(r)
-            }
-            return (
-              <Field label={t('Role', 'Puesto')} htmlFor="es-role" t={t}
-                hint={trained.length === 0
-                  ? t('This employee has only a primary role. Train them on more roles from their drawer.', 'Este empleado solo tiene un puesto principal. Entrénalo en más puestos desde su ficha.')
-                  : undefined}
-              >
-                <select
-                  id="es-role"
-                  name="role"
-                  defaultValue={shift.role}
-                  className={fieldInputClass}
-                >
-                  {options.map((r) => (
-                    <option key={r} value={r}>{r}{r.toLowerCase() === primary.toLowerCase() ? ` · ${t('primary', 'principal')}` : ''}</option>
-                  ))}
-                </select>
-              </Field>
-            )
-          })()}
-
-          <Field label={t('Start', 'Inicio')} htmlFor="es-start" t={t}>
-            <input
-              id="es-start"
-              name="start_time"
-              type="datetime-local"
-              required
-              defaultValue={toLocal(new Date(shift.startTime))}
-              className={fieldInputClass}
-            />
-          </Field>
-
-          <Field label={t('End', 'Fin')} htmlFor="es-end" t={t}>
-            <input
-              id="es-end"
-              name="end_time"
-              type="datetime-local"
-              required
-              defaultValue={toLocal(new Date(shift.endTime))}
-              className={fieldInputClass}
-            />
-          </Field>
-
-          <Field label={t('Notes', 'Notas')} htmlFor="es-notes" optional t={t}>
-            <input
-              id="es-notes"
-              name="notes"
-              type="text"
-              defaultValue={shift.notes ?? ''}
-              placeholder={t('Anything worth flagging', 'Cualquier cosa que valga la pena señalar')}
-              className={fieldInputClass}
-            />
-          </Field>
-
-          {eState?.error && <p className="text-xs text-red-600">{eState.error}</p>}
-        </DrawerBody>
-
-        <DrawerFooter>
-          <div className="flex items-center justify-between gap-3">
-            {/* Bound to the sibling delete form above via form=""
-                so this button doesn't need to live inside its own
-                nested <form> (which would re-introduce the
-                hydration error). */}
-            <button
-              form="staffing-delete-shift"
-              type="submit"
-              disabled={dPending}
-              className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-60"
-            >
-              {dPending ? t('Removing…', 'Eliminando…') : t('Remove shift', 'Eliminar turno')}
-            </button>
-            <button
-              type="submit"
-              disabled={ePending}
-              className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {ePending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
-            </button>
-          </div>
-          {dState?.error && <p className="mt-2 text-xs text-red-500">{dState.error}</p>}
-        </DrawerFooter>
-      </form>
-    </DrawerShell>
   )
 }
 
@@ -2241,566 +2032,6 @@ function useAutoCloseOnSuccess(
 }
 
 // ----------------------------------------------------------------
-// AddBlockDrawer — create a new shift block (lane row).
-//
-// In split mode, the manager picks the area (FOH/BOH); the
-// dropdown defaults to whatever house was active when "+ Block"
-// was clicked. In unified mode the area is locked to 'foh' (the
-// single bucket the staffing client treats as the unified team).
-// Times are 0–24 hour integers — same as the schema columns.
-// ----------------------------------------------------------------
-function AddBlockDrawer({ lang, isUnified, defaultArea, onClose }: {
-  lang: Lang; isUnified: boolean; defaultArea: 'foh' | 'boh'; onClose: () => void
-}) {
-  const t = makeT(lang)
-  const [state, action, pending] = useActionState(createShiftSection, null)
-  useAutoCloseOnSuccess(pending, state, onClose)
-
-  // Controlled state for the live preview card. Inputs were
-  // uncontrolled before; keeping the field UX identical and just
-  // wiring state through `value` + `onChange` lets the preview
-  // update as the manager types.
-  const [name, setName] = useState('')
-  const [area, setArea] = useState<'foh' | 'boh'>(isUnified ? 'foh' : defaultArea)
-  const [startHour, setStartHour] = useState(9)
-  const [endHour, setEndHour] = useState(17)
-
-  const areaLabel = area === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')
-
-  return (
-    <DrawerShell
-      eyebrow={t('Block', 'Bloque')}
-      title={t('Add shift block', 'Agregar bloque de turno')}
-      subtitle={t('A reusable lane on the schedule. Drop staff onto it any day.', 'Una vía reutilizable en el horario. Suelta personal en ella cualquier día.')}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
-    >
-      <form action={action} className="flex-1 flex flex-col min-h-0">
-        <DrawerBody>
-          <PreviewCard
-            eyebrow={isUnified ? t('Block', 'Bloque') : `${t('Block', 'Bloque')} · ${areaLabel}`}
-            toneDot={area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
-            title={name.trim() || t('New block', 'Nuevo bloque')}
-            meta={[`${hL(startHour)}–${hL(endHour)} · ${areaLabel}`]}
-            footer={t('Reusable schedule lane', 'Vía de horario reutilizable')}
-          />
-
-          {/* Area is hidden + locked in unified mode. In split mode
-              it renders as an explicit field so the manager knows
-              which house the new block belongs to. */}
-          {isUnified ? (
-            <input type="hidden" name="area" value="foh" />
-          ) : (
-            <Field label={t('House', 'Área')} htmlFor="ab-area" t={t}>
-              <select
-                id="ab-area"
-                name="area"
-                required
-                value={area}
-                onChange={(e) => setArea(e.target.value as 'foh' | 'boh')}
-                className={fieldInputClass}
-              >
-                <option value="foh">{t('Front of House', 'Salón')}</option>
-                <option value="boh">{t('Back of House', 'Cocina')}</option>
-              </select>
-            </Field>
-          )}
-
-          <Field label={t('Block name', 'Nombre del bloque')} htmlFor="ab-name" t={t}>
-            <input
-              id="ab-name"
-              name="name"
-              type="text"
-              required
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('e.g. Brunch, Late, Event', 'p.ej. Brunch, Tarde, Evento')}
-              className={fieldInputClass}
-            />
-          </Field>
-          <p className="text-[10.5px] text-gray-400 leading-relaxed">
-            {t('Examples: Opening, Mid, Closing, Brunch, Prep, Service.', 'Ejemplos: Apertura, Medio, Cierre, Brunch, Preparación, Servicio.')}
-          </p>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t('Start hour', 'Hora de inicio')} htmlFor="ab-start" t={t}>
-              <select
-                id="ab-start"
-                name="default_start_hour"
-                required
-                value={startHour}
-                onChange={(e) => setStartHour(Number(e.target.value))}
-                className={`${fieldInputClass} font-mono tabular-nums`}
-              >
-                {HOUR_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t('End hour', 'Hora de fin')} htmlFor="ab-end" t={t}>
-              <select
-                id="ab-end"
-                name="default_end_hour"
-                required
-                value={endHour}
-                onChange={(e) => setEndHour(Number(e.target.value))}
-                className={`${fieldInputClass} font-mono tabular-nums`}
-              >
-                {HOUR_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <p className="text-[10.5px] text-gray-400 leading-relaxed">
-            {t('These pre-fill drag-drop assignments — times can be tweaked per shift.', 'Estos pre-rellenan las asignaciones de arrastrar y soltar — los tiempos se pueden ajustar por turno.')}
-          </p>
-
-          {state?.error && (
-            <p className="text-xs text-red-600">{state.error}</p>
-          )}
-        </DrawerBody>
-
-        <DrawerFooter>
-          <button
-            type="submit"
-            disabled={pending}
-            className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            {pending ? t('Creating…', 'Creando…') : t('Create block', 'Crear bloque')}
-          </button>
-        </DrawerFooter>
-      </form>
-    </DrawerShell>
-  )
-}
-
-// ----------------------------------------------------------------
-// EditBlockDrawer — rename / change times / delete a block.
-//
-// Footer carries both actions: primary "Save changes" on the right,
-// secondary "Delete" link on the left. Delete reveals an inline
-// confirm row that surfaces the shift count under the block, since
-// deletion cascades shifts to NULL section_id (they reappear on
-// the Custom lane, not lost) — making the consequence visible
-// without needing a heavier modal.
-// ----------------------------------------------------------------
-function EditBlockDrawer({ lang, section, shiftCount, onClose }: {
-  lang: Lang; section: Section; shiftCount: number; onClose: () => void
-}) {
-  const t = makeT(lang)
-  const [state, action, pending] = useActionState(updateShiftSection, null)
-  const [delState, delAction, delPending] = useActionState(deleteShiftSection, null)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  useAutoCloseOnSuccess(pending, state, onClose)
-  useAutoCloseOnSuccess(delPending, delState, onClose)
-
-  const areaLabel = section.area === 'foh' ? t('Front of House', 'Salón') : t('Back of House', 'Cocina')
-
-  return (
-    <DrawerShell
-      eyebrow={`${t('Block', 'Bloque')} · ${areaLabel}`}
-      title={t(`Edit ${section.name}`, `Editar ${section.name}`)}
-      subtitle={t('Rename, retime, or delete this block.', 'Renombra, cambia el horario o elimina este bloque.')}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
-    >
-      {/* Sibling delete form — lives OUTSIDE the edit form so we
-          don't nest <form> elements (HTML disallows it and React
-          warns about hydration). The Confirm-delete button below
-          binds to this form by id via `form="staffing-delete-block"`,
-          which keeps the delete action wired without nesting. */}
-      <form id="staffing-delete-block" action={delAction}>
-        <input type="hidden" name="section_id" value={section.id} />
-      </form>
-
-      <form action={action} className="flex-1 flex flex-col min-h-0">
-        <input type="hidden" name="section_id" value={section.id} />
-        <DrawerBody>
-          <PreviewCard
-            eyebrow={`${t('Block', 'Bloque')} · ${areaLabel}`}
-            toneDot={section.area === 'foh' ? 'bg-blue-500' : 'bg-amber-500'}
-            title={section.name}
-            meta={[
-              `${hL(section.defaultStartHour)}–${hL(section.defaultEndHour)} · ${areaLabel}`,
-              shiftCount === 0
-                ? t('No shifts using this block yet', 'Aún no hay turnos usando este bloque')
-                : (shiftCount === 1
-                  ? t(`${shiftCount} shift uses this block`, `${shiftCount} turno usa este bloque`)
-                  : t(`${shiftCount} shifts use this block`, `${shiftCount} turnos usan este bloque`)),
-            ]}
-            footer={t('Reusable lane on the weekly schedule', 'Vía reutilizable en el horario semanal')}
-          />
-
-          <Field label={t('Block name', 'Nombre del bloque')} htmlFor="eb-name" t={t}>
-            <input
-              id="eb-name"
-              name="name"
-              type="text"
-              required
-              defaultValue={section.name}
-              className={fieldInputClass}
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label={t('Start hour', 'Hora de inicio')} htmlFor="eb-start" t={t}>
-              <select
-                id="eb-start"
-                name="default_start_hour"
-                required
-                defaultValue={section.defaultStartHour}
-                className={`${fieldInputClass} font-mono tabular-nums`}
-              >
-                {HOUR_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label={t('End hour', 'Hora de fin')} htmlFor="eb-end" t={t}>
-              <select
-                id="eb-end"
-                name="default_end_hour"
-                required
-                defaultValue={section.defaultEndHour}
-                className={`${fieldInputClass} font-mono tabular-nums`}
-              >
-                {HOUR_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-
-          {/* Inline delete confirmation lives in the body, not the
-              footer, so the consequence text has space to breathe. */}
-          {confirmDelete && (
-            <div className="mt-2 rounded-lg border border-red-200 bg-red-50/60 p-3">
-              <p className="text-xs font-semibold text-red-900">
-                {shiftCount === 0
-                  ? t('Delete this block?', '¿Eliminar este bloque?')
-                  : (shiftCount === 1
-                    ? t(`Move ${shiftCount} shift to the Custom lane?`, `¿Mover ${shiftCount} turno a la vía Personalizada?`)
-                    : t(`Move ${shiftCount} shifts to the Custom lane?`, `¿Mover ${shiftCount} turnos a la vía Personalizada?`))}
-              </p>
-              <p className="mt-0.5 text-[11px] text-red-700/90 leading-relaxed">
-                {shiftCount === 0
-                  ? t('No shifts are using this block.', 'Ningún turno está usando este bloque.')
-                  : t("Shifts won't be deleted — they'll surface on the Custom lane.", "Los turnos no se eliminarán — aparecerán en la vía Personalizada.")}
-              </p>
-              {/* Submit button binds to the sibling delete form
-                  defined above the edit form, via `form="..."` —
-                  keeps us out of nested-form territory. */}
-              <div className="mt-2.5 flex items-center gap-2">
-                <button
-                  form="staffing-delete-block"
-                  type="submit"
-                  disabled={delPending}
-                  className="h-9 rounded-md border border-red-300 bg-white px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-60 transition-colors"
-                >
-                  {delPending ? t('Deleting…', 'Eliminando…') : t('Confirm delete', 'Confirmar eliminación')}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                  className="text-[11px] text-gray-500 hover:text-gray-700"
-                >
-                  {t('Cancel', 'Cancelar')}
-                </button>
-              </div>
-              {delState?.error && (
-                <p className="mt-1.5 text-[11px] text-red-700">{delState.error}</p>
-              )}
-            </div>
-          )}
-
-          {state?.error && (
-            <p className="text-xs text-red-600">{state.error}</p>
-          )}
-        </DrawerBody>
-
-        <DrawerFooter>
-          <div className="flex items-center justify-between gap-3">
-            {!confirmDelete ? (
-              <button
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-                className="text-xs font-medium text-red-600 hover:text-red-700"
-              >
-                {t('Delete block', 'Eliminar bloque')}
-              </button>
-            ) : (
-              <span className="text-[11px] text-gray-400">{t('Confirm above', 'Confirma arriba')}</span>
-            )}
-            <button
-              type="submit"
-              disabled={pending}
-              className="h-10 rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {pending ? t('Saving…', 'Guardando…') : t('Save changes', 'Guardar cambios')}
-            </button>
-          </div>
-        </DrawerFooter>
-      </form>
-    </DrawerShell>
-  )
-}
-
-// ----------------------------------------------------------------
-// AddCustomShiftDrawer — create a one-off shift not tied to the
-// regular block grid.
-//
-// Used when reality doesn't fit a default block: an extra server
-// for one Friday, a special prep shift, an event coverage block.
-// section_id is optional — if the manager picks a block, the new
-// shift slots into that lane on the board; otherwise it shows up
-// on the Custom lane.
-//
-// Contextual prefills:
-//   • defaultDay           — preselects the date (e.g. "this Friday")
-//   • defaultSectionId     — preselects a block, which auto-fills
-//                            start/end times from that block
-//   • defaultStartHour /
-//     defaultEndHour       — explicit time prefills, overriding the
-//                            block-derived defaults
-//
-// The drawer composes start_time / end_time from separate date +
-// time inputs into hidden datetime-local fields the server reads.
-// ----------------------------------------------------------------
-function AddCustomShiftDrawer({
-  lang, locationId, employees, sections,
-  defaultDay, defaultSectionId, defaultStartHour, defaultEndHour,
-  onClose,
-}: {
-  lang: Lang
-  locationId: string
-  employees: Employee[]
-  sections: Section[]
-  defaultDay: string | null
-  defaultSectionId?: string | null
-  defaultStartHour?: number | null
-  defaultEndHour?: number | null
-  onClose: () => void
-}) {
-  const t = makeT(lang)
-  const roleColors = useContext(RoleColorsContext)
-  const [state, action, pending] = useActionState(createShift, null)
-  useAutoCloseOnSuccess(pending, state, onClose)
-
-  // Resolve the initial section. If the caller passed an id, use
-  // it; otherwise unbind ('' = Custom lane). Used both for the
-  // dropdown defaultValue and to seed the time inputs below.
-  const initialSection = useMemo(() => {
-    if (!defaultSectionId) return null
-    return sections.find((s) => s.id === defaultSectionId) ?? null
-  }, [defaultSectionId, sections])
-  const [sectionId, setSectionId] = useState(initialSection?.id ?? '')
-
-  // Date input (YYYY-MM-DD). Defaults to today unless the caller
-  // passed a specific day (e.g. clicked an empty day cell).
-  const today = new Date()
-  const initialDate = defaultDay ?? toLocal(today).split('T')[0]
-  const [date, setDate] = useState(initialDate)
-
-  // Time inputs (HH:MM). Source priority:
-  //   1. explicit defaultStartHour/defaultEndHour from the caller
-  //   2. block defaults if a section was preselected
-  //   3. 09:00–17:00 fallback
-  const hhmm = (h: number | null | undefined, fallback: string) =>
-    typeof h === 'number' && h >= 0 && h <= 24
-      ? `${String(h).padStart(2, '0')}:00`
-      : fallback
-  const [startTime, setStartTime] = useState(
-    hhmm(defaultStartHour ?? initialSection?.defaultStartHour, '09:00')
-  )
-  const [endTime, setEndTime] = useState(
-    hhmm(defaultEndHour ?? initialSection?.defaultEndHour, '17:00')
-  )
-
-  // When the manager picks a different block, auto-fill the time
-  // inputs from that block's defaults. Keeps the "contextual feel"
-  // of the drawer alive without forcing the manager to retype.
-  const handleSectionChange = (id: string) => {
-    setSectionId(id)
-    if (!id) return
-    const next = sections.find((s) => s.id === id)
-    if (next) {
-      setStartTime(hhmm(next.defaultStartHour, startTime))
-      setEndTime(hhmm(next.defaultEndHour, endTime))
-    }
-  }
-
-  // Employee selection — controlled so the preview card above the
-  // form can update in real time as the cashier picks a person.
-  const [employeeId, setEmployeeId] = useState('')
-  const selectedEmployee = useMemo(
-    () => employees.find((e) => e.id === employeeId) ?? null,
-    [employees, employeeId],
-  )
-  const selectedSection = useMemo(
-    () => sections.find((s) => s.id === sectionId) ?? null,
-    [sections, sectionId],
-  )
-
-  // datetime-local format the server expects: YYYY-MM-DDTHH:MM
-  const composedStart = `${date}T${startTime}`
-  const composedEnd = `${date}T${endTime}`
-  // Preview duration — computed from composed start/end so the
-  // preview card stays in lockstep with the form fields.
-  const previewMs = new Date(composedEnd).getTime() - new Date(composedStart).getTime()
-  const previewHrs = Number.isFinite(previewMs) && previewMs > 0 ? previewMs / (1000 * 60 * 60) : 0
-  const previewRole = selectedEmployee ? roleTone(selectedEmployee.role, roleColors) : null
-
-  return (
-    <DrawerShell
-      eyebrow={t('Shift', 'Turno')}
-      title={t('Add shift', 'Agregar turno')}
-      subtitle={t('One-off or block-aligned. Pick a person, a day, and a time.', 'Único o alineado a un bloque. Elige una persona, un día y una hora.')}
-      onClose={onClose}
-      closeLabel={t('Close', 'Cerrar')}
-    >
-      {employees.length === 0 ? (
-        // Empty state — no people on the bench yet, so no shift can
-        // be created. Stays inside the body region so the drawer
-        // height feels intentional, not collapsed.
-        <DrawerBody>
-          <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/40 p-5 text-center">
-            <p className="text-sm font-medium text-gray-700">{t('No employees yet', 'Sin empleados aún')}</p>
-            <p className="mt-1.5 text-xs text-gray-500 leading-relaxed">
-              {t('Add at least one employee before scheduling shifts.', 'Agrega al menos un empleado antes de programar turnos.')}
-            </p>
-          </div>
-        </DrawerBody>
-      ) : (
-        <form action={action} className="flex-1 flex flex-col min-h-0">
-          <input type="hidden" name="location_id" value={locationId} />
-          {/* Composed datetime-local strings the server consumes. */}
-          <input type="hidden" name="start_time" value={composedStart} />
-          <input type="hidden" name="end_time" value={composedEnd} />
-          {/* section_id is sent as the picker's current value (empty
-              string for the Custom lane). */}
-          <input type="hidden" name="section_id" value={sectionId} />
-
-          <DrawerBody>
-            <PreviewCard
-              eyebrow={t('Shift', 'Turno')}
-              toneDot={previewRole?.dot}
-              title={
-                selectedEmployee
-                  ? `${selectedEmployee.name} · ${selectedEmployee.role}`
-                  : t('Unassigned', 'Sin asignar')
-              }
-              meta={[
-                `${fmtMonthDay(composedStart, lang)} · ${fmt(composedStart)}–${fmt(composedEnd)}`,
-                `${formatHours(previewHrs)} ${t('scheduled', 'programadas')}`,
-                ...(selectedSection ? [`${t('Block', 'Bloque')}: ${selectedSection.name}`] : []),
-              ]}
-            />
-
-            <Field label={t('Employee', 'Empleado')} htmlFor="cs-emp" t={t}>
-              <select
-                id="cs-emp"
-                name="employee_id"
-                required
-                value={employeeId}
-                onChange={(e) => setEmployeeId(e.target.value)}
-                className={fieldInputClass}
-              >
-                <option value="" disabled>{t('Select…', 'Seleccionar…')}</option>
-                {employees.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name} · {e.role}</option>
-                ))}
-              </select>
-            </Field>
-
-            <Field
-              label={t('Block', 'Bloque')}
-              htmlFor="cs-section"
-              optional
-              t={t}
-              hint={t('Pick a block to slot into its lane. Leave on Custom for a one-off.', 'Elige un bloque para insertarlo en su vía. Deja en Personalizado para un turno único.')}
-            >
-              <select
-                id="cs-section"
-                value={sectionId}
-                onChange={(e) => handleSectionChange(e.target.value)}
-                className={fieldInputClass}
-              >
-                <option value="">{t('— Custom (no block) —', '— Personalizado (sin bloque) —')}</option>
-                {sections.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} ({hL(s.defaultStartHour)}–{hL(s.defaultEndHour)})
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field label={t('Date', 'Fecha')} htmlFor="cs-date" t={t}>
-              <input
-                id="cs-date"
-                type="date"
-                required
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className={`${fieldInputClass} font-mono tabular-nums`}
-              />
-            </Field>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label={t('Start', 'Inicio')} htmlFor="cs-start" t={t}>
-                <input
-                  id="cs-start"
-                  type="time"
-                  required
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  className={`${fieldInputClass} font-mono tabular-nums`}
-                />
-              </Field>
-              <Field label={t('End', 'Fin')} htmlFor="cs-end" t={t}>
-                <input
-                  id="cs-end"
-                  type="time"
-                  required
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  className={`${fieldInputClass} font-mono tabular-nums`}
-                />
-              </Field>
-            </div>
-
-            <Field label={t('Notes', 'Notas')} htmlFor="cs-notes" optional t={t}>
-              <input
-                id="cs-notes"
-                name="notes"
-                type="text"
-                placeholder={t('e.g. Event coverage', 'p.ej. Cobertura de evento')}
-                className={fieldInputClass}
-              />
-            </Field>
-
-            {state?.error && (
-              <p className="text-xs text-red-600">{state.error}</p>
-            )}
-          </DrawerBody>
-
-          <DrawerFooter>
-            <button
-              type="submit"
-              disabled={pending}
-              className="h-10 w-full rounded-lg bg-gray-900 px-4 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {pending ? t('Adding…', 'Agregando…') : t('Add shift', 'Agregar turno')}
-            </button>
-          </DrawerFooter>
-        </form>
-      )}
-    </DrawerShell>
-  )
-}
-
-// ----------------------------------------------------------------
 // EditRoleDrawer — Claude Design layout. Right-side sheet, inline
 // styles to match the staffing calendar's ink/paper palette. One
 // surface for everything about a role: rename via the title input,
@@ -2911,12 +2142,21 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, hoursByEmploye
     const newKey = normalizeNameKey(trimmed)
 
     try {
+      // Step 1 — create or rename. If a previous save attempt
+      // already succeeded at this step but a follow-up (color /
+      // wage) failed, retrying used to hit "role already exists"
+      // and lock the drawer. We now swallow that specific dup
+      // error and proceed — the create is effectively idempotent
+      // from the user's point of view.
       if (!isEdit) {
         const fd = new FormData()
         fd.set('area', area)
         fd.set('role', trimmed)
         const r = await addStaffingRole(null, fd)
-        if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
+        if (r && 'error' in r && r.error) {
+          const isAlreadyExists = /already exists/i.test(r.error)
+          if (!isAlreadyExists) { setErr(r.error); setBusy(false); return }
+        }
       } else if (originalKey !== newKey || (role ?? '') !== trimmed) {
         const fd = new FormData()
         fd.set('area', area)
@@ -2926,23 +2166,32 @@ function EditRoleDrawer({ lang, role, area, isUnified, employees, hoursByEmploye
         if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
       }
 
+      // Steps 2 + 3 — color + wage. Run BOTH before deciding
+      // whether to close. If either fails, surface the error but
+      // stay open so the user can retry without losing the fields
+      // they entered. Whichever succeeded is already persisted.
+      const followUpErrors: string[] = []
       {
         const fd = new FormData()
         fd.set('role', trimmed)
         fd.set('color', color)
         const r = await setRoleColor(fd)
-        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+        if ('error' in r && r.error) followUpErrors.push(r.error)
       }
-
       {
         const fd = new FormData()
         fd.set('role', trimmed)
         fd.set('wage', wage.trim())
         const r = await setRoleWage(fd)
-        if ('error' in r && r.error) { setErr(r.error); setBusy(false); return }
+        if ('error' in r && r.error) followUpErrors.push(r.error)
       }
 
       router.refresh()
+      if (followUpErrors.length > 0) {
+        setErr(followUpErrors.join(' · '))
+        setBusy(false)
+        return
+      }
       onClose()
     } catch (caught) {
       setErr(caught instanceof Error ? caught.message : String(caught))
@@ -3659,15 +2908,37 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
   // open→close (blank / locked). When the day is closed the
   // drawer still opens with a legal fallback (12p–8p) so the
   // steppers work, though this path shouldn't normally trigger.
+  //
+  // OVERNIGHT: endMin is tracked as "minutes since the START day's
+  // midnight" (can exceed 1440). For a 10pm→2am shift, startMin
+  // = 1320, endMin = 1560. Display formatters mod by 1440 to
+  // render the wall-clock. Save path uses setHours(0,0,0,0) +
+  // setMinutes(endMin) so a value ≥1440 auto-advances the day.
+  // Previously endMin came out as 120 for the same shift, which
+  // meant end-before-start on save and the DB check rejected it.
   const isEdit = source === 'edit'
   const initialStartMin = isEdit && initialShift
     ? new Date(initialShift.startTime).getHours() * 60 + new Date(initialShift.startTime).getMinutes()
     : (dayHours.closed ? 720 : dayHours.openMin)
   const initialEndMin = isEdit && initialShift
-    ? new Date(initialShift.endTime).getHours() * 60 + new Date(initialShift.endTime).getMinutes()
+    ? (() => {
+        const startDT = new Date(initialShift.startTime)
+        const endDT = new Date(initialShift.endTime)
+        const rawEnd = endDT.getHours() * 60 + endDT.getMinutes()
+        const rawStart = startDT.getHours() * 60 + startDT.getMinutes()
+        const durMin = Math.round((endDT.getTime() - startDT.getTime()) / 60_000)
+        // If the two datetimes span midnight, rawEnd < rawStart.
+        // Return start + true-duration so callers get an absolute-
+        // since-start-day-midnight value (may exceed 1440).
+        return durMin > 0 && (endDT.getDate() !== startDT.getDate() || rawEnd < rawStart)
+          ? rawStart + durMin
+          : rawEnd
+      })()
     : (dayHours.closed ? 1200 : dayHours.closeMin)
   const clampMin = (dayHours.closed ? 0 : dayHours.openMin - PRE)
-  const clampMax = (dayHours.closed ? 1440 : dayHours.closeMin + POST)
+  // Extend the end clamp by 24h so overnight shifts can be created
+  // + edited via the steppers. Practical max shift length: 24h.
+  const clampMax = (dayHours.closed ? 1440 : dayHours.closeMin + POST) + 1440
 
   const [employeeId, setEmployeeId] = useState(initialEmployeeId ?? '')
   const [role, setRole] = useState<string>(initialShift?.role ?? '')
@@ -3725,7 +2996,10 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
     if (field === 'start') {
       setStartMin((v) => Math.max(clampMin, Math.min(endMin - STEP, v + delta)))
     } else {
-      setEndMin((v) => Math.min(clampMax, Math.max(startMin + STEP, v + delta)))
+      // End can range from (start + STEP) up to (start + 24h) so
+      // overnight shifts are steppable. clampMax already includes
+      // the +1440 overnight allowance.
+      setEndMin((v) => Math.min(Math.min(clampMax, startMin + 1440), Math.max(startMin + STEP, v + delta)))
     }
   }
 
@@ -3750,9 +3024,18 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
     if (!person) { setErr(t('Pick someone first.', 'Elige a alguien primero.')); return }
     setBusy(true); setErr(null)
     try {
+      // Overnight-safe date construction. startMin uses setHours
+      // (in range 0..1439). endMin may be ≥ 1440 for an overnight
+      // shift; setHours(0,0,0,0) + setMinutes(endMin) advances the
+      // day count automatically (setMinutes handles overflow).
+      const dayDate = new Date(dayIso)
+      const startDate = new Date(dayDate)
+      startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
+      const endDate = new Date(dayDate)
+      endDate.setHours(0, 0, 0, 0)
+      endDate.setMinutes(endMin)
+
       if (isEdit && initialShift) {
-        const startDate = new Date(day); startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
-        const endDate = new Date(day); endDate.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0)
         const fd = new FormData()
         fd.set('shift_id', initialShift.id)
         fd.set('employee_id', person.id)
@@ -3760,20 +3043,15 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
         fd.set('start_time', startDate.toISOString())
         fd.set('end_time', endDate.toISOString())
         fd.set('break_minutes', String(brk))
+        // Preserve any existing note — the field is deliberately
+        // omitted from the form so updateShift's absent-field
+        // check leaves DB's notes column untouched.
         const r = await updateShift(null, fd)
         if (r && 'error' in r && r.error) { setErr(r.error); setBusy(false); return }
       } else {
-        // Build the timestamps CLIENT-side so setHours uses the
-        // manager's local timezone. The server previously did
-        // `new Date(dayIso); setHours(min)` which uses the
-        // server's TZ (UTC on Vercel) — shifted the wall-clock by
-        // the client's UTC offset. Sending full ISO here avoids
-        // the round-trip mangle: the server stores it verbatim.
-        const dayDate = new Date(dayIso)
-        const startDate = new Date(dayDate)
-        startDate.setHours(Math.floor(startMin / 60), startMin % 60, 0, 0)
-        const endDate = new Date(dayDate)
-        endDate.setHours(Math.floor(endMin / 60), endMin % 60, 0, 0)
+        // Client-side ISO construction so setHours uses the
+        // manager's local timezone (server's UTC would shift the
+        // wall-clock by the offset). See TZ-bug fix in staffing.ts.
         const fd = new FormData()
         fd.set('employee_id', person.id)
         fd.set('start_time', startDate.toISOString())
@@ -3990,7 +3268,18 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
               </div>
               <div style={{ background: LINE }} />
               <div style={{ padding: '14px 16px' }}>
-                <div style={eyebrowStyle}>{t('ENDS', 'TERMINA')}</div>
+                <div style={eyebrowStyle}>
+                  {t('ENDS', 'TERMINA')}
+                  {endMin >= 1440 && (
+                    <span style={{
+                      marginLeft: 6, padding: '1px 6px', borderRadius: 999,
+                      background: '#FFFBEB', color: '#B45309',
+                      fontSize: 9, letterSpacing: '0.08em',
+                    }}>
+                      {t('NEXT DAY', 'DÍA SIG.')}
+                    </span>
+                  )}
+                </div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 8 }}>
                   <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.04em', fontVariantNumeric: 'tabular-nums' }}>{fmt(endMin)}</span>
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>

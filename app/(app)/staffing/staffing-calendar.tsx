@@ -184,16 +184,7 @@ export interface StaffingCalendarProps {
   // "+ Add shift" ghost clicked on an open day → parent opens
   // the drawer in "create-blank" mode (person picker shown).
   onAddShiftForDay: (dayIso: string) => void
-  // onSetShiftTime — retired with the "Set shift time" placeholder
-  // path. Kept in the prop shape for one release so callers can
-  // migrate; parent may pass a no-op. Will be removed next pass.
-  onSetShiftTime?: (shiftId: string, startIso: string, endIso: string) => Promise<ActionResult>
   onRemoveShift: (shiftId: string) => Promise<ActionResult>
-  // Retired 2026-07-26: the per-day "Repeat last week" button
-  // was redundant with the header's Copy last week (covers the
-  // whole week anyway). Prop signature preserved as optional so
-  // any lingering caller doesn't 500.
-  onRepeatLastWeekForDay?: (dayIso: string) => Promise<ActionResult>
   onClearDay: (dayIso: string) => Promise<ActionResult>
   onCopyLastWeek: () => Promise<ActionResult>
   // Week navigation is now driven by the ScheduleHeader (swipe +
@@ -1100,25 +1091,39 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: MUTED, whiteSpace: 'nowrap' }}>
                   {t('ROLES', 'PUESTOS')}
                 </span>
-                {roles.map((r) => {
+                {(() => {
+                  // Pre-compute the set of reorderable roles (those
+                  // actually configured in staffing_config for this
+                  // house). Chips from bench/shifts that don't have
+                  // a config entry are "orphans" — draggable
+                  // shouldn't fire on them since reorder can't
+                  // persist without a config entry. Instead of a
+                  // silent no-op, mark them non-draggable so the
+                  // affordance matches the reality.
+                  const configuredKeys = new Set(houseRoles.map((r) => r.toLowerCase().trim()))
+                  return roles.map((r) => {
                   const tone = roleToneFor(r, roleColors)
                   const key = r.toLowerCase().trim()
+                  const isConfigured = configuredKeys.has(key)
                   const isDragging = roleDrag?.toLowerCase().trim() === key
-                  const isDropTarget = roleDropTarget?.toLowerCase().trim() === key
+                  const isDropTarget = isConfigured
+                    && roleDropTarget?.toLowerCase().trim() === key
                     && roleDrag !== null
                     && roleDrag.toLowerCase().trim() !== key
                   return (
                     <button
                       key={r}
                       type="button"
-                      draggable
+                      draggable={isConfigured}
                       onDragStart={(e) => {
+                        if (!isConfigured) { e.preventDefault(); return }
                         e.dataTransfer.effectAllowed = 'move'
                         e.dataTransfer.setData('text/plain', r)
                         setRoleDrag(r)
                       }}
                       onDragEnd={() => { setRoleDrag(null); setRoleDropTarget(null) }}
                       onDragOver={(e) => {
+                        if (!isConfigured) return
                         if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
                         e.preventDefault()
                         e.stopPropagation()
@@ -1129,6 +1134,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         if (roleDropTarget?.toLowerCase().trim() === key) setRoleDropTarget(null)
                       }}
                       onDrop={(e) => {
+                        if (!isConfigured) return
                         if (!roleDrag || roleDrag.toLowerCase().trim() === key) return
                         e.preventDefault()
                         e.stopPropagation()
@@ -1149,14 +1155,16 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         if (roleDrag) return
                         onEditRole(r)
                       }}
-                      title={t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')}
+                      title={isConfigured
+                        ? t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')
+                        : t('Edit role · not reorderable until added to this house', 'Editar puesto · no reordenable hasta añadirlo a esta casa')}
                       style={{
                         display: 'inline-flex', alignItems: 'center', gap: 8,
                         border: `1px solid ${isDropTarget ? INK : LINE}`,
                         borderRadius: 8, padding: '6px 12px',
                         background: isDropTarget ? '#EFF6FF' : '#fff',
                         font: 'inherit', fontSize: 12, fontWeight: 500,
-                        color: '#3F3F46', cursor: 'grab',
+                        color: '#3F3F46', cursor: isConfigured ? 'grab' : 'pointer',
                         opacity: isDragging ? 0.4 : 1,
                         transition: 'background 120ms, border-color 120ms',
                       }}
@@ -1165,7 +1173,8 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       {r}
                     </button>
                   )
-                })}
+                  })
+                })()}
 
                 <button
                   type="button"

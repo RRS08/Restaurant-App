@@ -338,6 +338,19 @@ export async function updateInventoryItem(
   if (!nameRaw) return { error: 'Name is required.' }
   if (!unitRaw) return { error: 'Unit of measure is required.' }
 
+  // Category — free text, nullable. Absent field means "don't
+  // touch"; empty string means "clear the category". Distinct
+  // sentinel so a caller that omits the field doesn't accidentally
+  // wipe an existing value.
+  const categoryFieldRaw = formData.get('category')
+  const categoryProvided = categoryFieldRaw !== null
+  const categoryValue = categoryProvided
+    ? (typeof categoryFieldRaw === 'string' ? categoryFieldRaw.trim() : '')
+    : null
+  const category: string | null = categoryProvided
+    ? (categoryValue ? normalizeDisplayName(categoryValue) : null)
+    : null
+
   const displayName = normalizeDisplayName(nameRaw)
   const nameKey = normalizeNameKey(displayName)
 
@@ -373,15 +386,20 @@ export async function updateInventoryItem(
     }
   }
 
+  const updatePayload: {
+    name: string
+    unit_of_measure: string
+    category?: string | null
+  } = { name: displayName, unit_of_measure: unitRaw }
+  if (categoryProvided) updatePayload.category = category
+
   const { error } = await ctx.supabase
     .from('inventory_items')
-    .update({ name: displayName, unit_of_measure: unitRaw })
+    .update(updatePayload)
     .eq('id', itemId)
   if (error) return { error: formatError('inventory item', error) }
 
-  await logAudit(ctx, current.location_id, 'update_inventory_item', 'inventory_items', itemId, {
-    name: displayName, unit_of_measure: unitRaw,
-  })
+  await logAudit(ctx, current.location_id, 'update_inventory_item', 'inventory_items', itemId, updatePayload)
   revalidatePath('/inventory')
   revalidatePath('/web/inventory')
   return { ok: true }

@@ -47,7 +47,7 @@ export default async function InventoryPage() {
   // never disappears just because the column is missing.
   const itemsQuery = supabase
     .from('inventory_items')
-    .select('id, name, unit_of_measure, low_stock_threshold, active')
+    .select('id, name, unit_of_measure, low_stock_threshold, active, category')
   const filteredItemsQuery = !seedColumnsAvailable
     ? itemsQuery
     : activeSeedConcept
@@ -241,6 +241,7 @@ export default async function InventoryPage() {
       id: item.id,
       name: item.name,
       unitOfMeasure: item.unit_of_measure,
+      category: (item as { category?: string | null }).category ?? null,
       threshold,
       estimated,
       lastCount: count?.qty ?? null,

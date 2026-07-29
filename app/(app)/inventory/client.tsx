@@ -44,6 +44,10 @@ interface MenuItemDep {
 
 interface Item {
   id: string; name: string; unitOfMeasure: string; threshold: number
+  /** Free-text manager-assigned grouping (e.g. "Powders",
+   *  "Sauces"). Null when no owner has set one — row/drawer
+   *  render an "Uncategorized" placeholder in that case. */
+  category: string | null
   estimated: number | null; lastCount: number | null; status: 'no_count' | 'out' | 'low' | 'ok'
   recipeLinks: number; hasDependencies: boolean
   /** Active menu items whose recipes consume this inventory item.
@@ -364,6 +368,18 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
     [restockOrders]
   )
 
+  // Distinct categories in use — powers the drawer's <datalist>
+  // autocomplete so managers reuse existing labels instead of
+  // fragmenting "Powders" / "Powder" / "powder" across rows. Sort
+  // alphabetically for predictable suggestion order.
+  const categoriesInUse = useMemo(() => {
+    const set = new Set<string>()
+    for (const it of items) {
+      if (it.category && it.category.trim()) set.add(it.category.trim())
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [items])
+
   // Search focus is inline-driven so the pill ring + border animate
   // in one place — Tailwind's focus/focus-within can't reach the
   // wrapper the way this design wants (whole pill lights up, not
@@ -672,16 +688,18 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     }}>
                       {item.name}
                     </span>
-                    {/* Meta line — [category] [status label]. Schema
-                        doesn't carry a real category column yet, so
-                        the left slot renders a muted "Uncategorized"
-                        placeholder that will swap to the real value
-                        the moment we add the column + editor. Status
-                        label reads long-form here (there's room);
-                        filter pills keep the short form. */}
+                    {/* Meta line — [category] [status label]. Category
+                        is manager-assigned free text; unset rows read
+                        as a muted "Uncategorized" so the layout stays
+                        even. Status label reads long-form here
+                        (there's room); filter pills keep the short
+                        form. */}
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: 12, color: FAINT }}>
-                        {t('Uncategorized', 'Sin categoría')}
+                      <span style={{
+                        fontSize: 12, color: item.category ? MUTED : FAINT,
+                        fontStyle: item.category ? undefined : 'italic',
+                      }}>
+                        {item.category ?? t('Uncategorized', 'Sin categoría')}
                       </span>
                       <span style={{
                         fontSize: 12, fontWeight: 600, color: tone.ink,
@@ -799,6 +817,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           item={selectedItem}
           transactions={transactions}
           restockOrders={ordersByItem.get(selectedItem.id) ?? []}
+          categoriesInUse={categoriesInUse}
           onClose={() => setDrawer(null)}
           t={t}
         />
@@ -4103,10 +4122,11 @@ function ItemDestructiveSection({ item, t }: { item: Item; t: T }) {
 // borderless input; unit stays editable in the same panel so no
 // affordance from the legacy drawer disappeared silently.
 // ----------------------------------------------------------------
-function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: {
+function ItemWorkspaceDrawer({ item, transactions, restockOrders, categoriesInUse, onClose, t }: {
   item: Item
   transactions: Transaction[]
   restockOrders: RestockOrder[]
+  categoriesInUse: string[]
   onClose: () => void
   t: T
 }) {
@@ -4212,18 +4232,24 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
   const [identityEditing, setIdentityEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState(item.name)
   const [unitDraft, setUnitDraft] = useState(item.unitOfMeasure)
+  const [categoryDraft, setCategoryDraft] = useState(item.category ?? '')
   const [identitySaving, setIdentitySaving] = useState(false)
   const [identityError, setIdentityError] = useState<string | null>(null)
   useEffect(() => {
     setNameDraft(item.name)
     setUnitDraft(item.unitOfMeasure)
+    setCategoryDraft(item.category ?? '')
     setIdentityEditing(false)
     setIdentityError(null)
-  }, [item.id, item.name, item.unitOfMeasure])
+  }, [item.id, item.name, item.unitOfMeasure, item.category])
   const identityDirty =
     nameDraft.trim().length > 0 &&
     unitDraft.trim().length > 0 &&
-    (nameDraft.trim() !== item.name || unitDraft.trim() !== item.unitOfMeasure)
+    (
+      nameDraft.trim() !== item.name ||
+      unitDraft.trim() !== item.unitOfMeasure ||
+      categoryDraft.trim() !== (item.category ?? '')
+    )
   const saveIdentity = async () => {
     if (!identityDirty || identitySaving) return
     setIdentitySaving(true)
@@ -4232,6 +4258,9 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
     fd.set('item_id', item.id)
     fd.set('name', nameDraft.trim())
     fd.set('unit_of_measure', unitDraft.trim())
+    // Always set — empty string clears; missing field would leave
+    // the existing value untouched per the action's sentinel.
+    fd.set('category', categoryDraft.trim())
     const r = await updateInventoryItem(fd)
     setIdentitySaving(false)
     if ('error' in r) {
@@ -4411,10 +4440,21 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
               <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <input
                   type="text"
+                  list={`inv-cat-${item.id}`}
+                  value={categoryDraft}
+                  onChange={(e) => setCategoryDraft(e.target.value)}
+                  placeholder={t('Category (e.g. Powders)', 'Categoría (p. ej. Polvos)')}
+                  style={{ flex: '1 1 160px', minWidth: 140, height: 30, border: `1px solid ${LINE}`, borderRadius: 8, padding: '0 10px', font: 'inherit', fontSize: 12, color: INK, outline: 'none' }}
+                />
+                <datalist id={`inv-cat-${item.id}`}>
+                  {categoriesInUse.map((c) => <option key={c} value={c} />)}
+                </datalist>
+                <input
+                  type="text"
                   value={unitDraft}
                   onChange={(e) => setUnitDraft(e.target.value)}
                   placeholder="units, kg, lbs, oz…"
-                  style={{ flex: '0 0 auto', width: 140, height: 30, border: `1px solid ${LINE}`, borderRadius: 8, padding: '0 10px', font: 'inherit', fontFamily: MONO, fontSize: 12, color: INK, outline: 'none' }}
+                  style={{ flex: '0 0 auto', width: 120, height: 30, border: `1px solid ${LINE}`, borderRadius: 8, padding: '0 10px', font: 'inherit', fontFamily: MONO, fontSize: 12, color: INK, outline: 'none' }}
                 />
                 <button
                   type="button"
@@ -4429,6 +4469,7 @@ function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: 
                   onClick={() => {
                     setNameDraft(item.name)
                     setUnitDraft(item.unitOfMeasure)
+                    setCategoryDraft(item.category ?? '')
                     setIdentityError(null)
                     setIdentityEditing(false)
                   }}

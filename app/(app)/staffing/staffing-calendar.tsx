@@ -18,6 +18,7 @@
 import { useMemo, useState, useTransition, useEffect } from 'react'
 import type { Lang } from '@/lib/i18n'
 import { makeT } from '@/lib/i18n'
+import { normalizeNameKey } from '@/lib/strings/names'
 import ScheduleHeader, { type DayConfig } from './schedule-header'
 
 // ---- Palette (matches marketing site + app shell) --------------
@@ -224,6 +225,9 @@ export interface StaffingCalendarProps {
   dayHours: CalDayHours[]
   // Tap a day's left cell → parent opens the hours drawer.
   onEditDayHours: (dayIndex: number) => void
+  // Role → hourly wage, keyed by normalizeNameKey(role). Powers
+  // the bands header's labor cost + per-open-hour stats.
+  roleWages: Record<string, number>
 }
 
 // Merged per-day hours passed in from the parent. Times are
@@ -256,6 +260,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     onEditRole, onOpenAddRole, onOpenEmployee, onOpenAddEmployee,
     onReorderBench, onReorderRoles,
     dayHours, onEditDayHours,
+    roleWages,
   } = props
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -395,6 +400,37 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const dayOpen = openRangeForDay(dayIndex)
   const daySetup = setupRangeForDay(dayIndex)
   const dayTotalH = dayShifts.reduce((n, s) => n + hoursBetween(s.startTime, s.endTime), 0)
+
+  // ---- Labor cost + per-open-hour figures for the bands header ----
+  // Cost = paid hours × role wage, keyed by normalizeNameKey(role).
+  // CalShift doesn't carry breakMinutes here, so paid hours = gross
+  // hours (small over-count vs the exact break-adjusted number;
+  // fine for the headline stat and matches how weeklyHoursByEmployee
+  // already reports).
+  const shiftCost = (s: CalShift): number => {
+    const wage = roleWages[normalizeNameKey(s.role)] ?? 0
+    return hoursBetween(s.startTime, s.endTime) * wage
+  }
+  const weekLaborCostN = shifts.reduce((n, s) => n + shiftCost(s), 0)
+  const dayLaborCostN = dayShifts.reduce((n, s) => n + shiftCost(s), 0)
+  const weekOpenHoursN = dayHours.reduce(
+    (n, h) => n + (h.closed ? 0 : (h.closeMin - h.openMin) / 60),
+    0,
+  )
+  const dayCfg = dayHours[dayIndex]
+  const dayOpenHoursN = dayCfg && !dayCfg.closed
+    ? (dayCfg.closeMin - dayCfg.openMin) / 60
+    : 0
+  const fmtUsd = (n: number, digits = 0) =>
+    '$' + n.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })
+  const weekLaborCost = weekLaborCostN > 0 ? fmtUsd(Math.round(weekLaborCostN)) : undefined
+  const dayLaborCost = dayLaborCostN > 0 ? fmtUsd(Math.round(dayLaborCostN)) : undefined
+  const weekPerOpenHour = weekOpenHoursN > 0 && weekLaborCostN > 0
+    ? fmtUsd(weekLaborCostN / weekOpenHoursN, 2)
+    : undefined
+  const dayPerOpenHour = dayOpenHoursN > 0 && dayLaborCostN > 0
+    ? fmtUsd(dayLaborCostN / dayOpenHoursN, 2)
+    : undefined
 
   // benchWithAssigned drives what shows in the bench card grid.
   // In Day view we additionally hide anyone marked unavailable
@@ -584,7 +620,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           dayHours={fmtH(dayTotalH)}
           weekHours={fmtH(totalHours)}
           weekShifts={totalShifts}
+          dayLaborCost={dayLaborCost}
+          weekLaborCost={weekLaborCost}
+          dayPerOpenHour={dayPerOpenHour}
+          weekPerOpenHour={weekPerOpenHour}
           gutter={GUTTER_WIDTH}
+          isBands={isBands}
         />
         {copyMsg && (
           <div style={{ padding: '0 16px 8px', fontSize: 11, color: SIGNAL }}>{copyMsg}</div>

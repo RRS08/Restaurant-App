@@ -79,8 +79,19 @@ export interface ScheduleHeaderProps {
   dayHours: string
   weekHours: string
   weekShifts: number
+  /** Labor cost for the visible window ("$1,335"). Bands stats row
+   *  shows this beside the hero hours figure. */
+  dayLaborCost?: string
+  weekLaborCost?: string
+  /** Cost per trading hour for the visible window ("$26.18"). */
+  dayPerOpenHour?: string
+  weekPerOpenHour?: string
   /** Label-column width in the grid below — matches STAFF / DAY·HOURS. */
   gutter?: number
+  /** When true, render the header with bands typography — hero
+   *  hours (30px mono) + labor cost + per open hour, and title
+   *  reads "Week of July 27, 2026" instead of the terse range. */
+  isBands?: boolean
 }
 
 export default function ScheduleHeader({
@@ -92,7 +103,9 @@ export default function ScheduleHeader({
   days,
   dirty, onPublish, onCopyLastWeek,
   dayHours, weekHours, weekShifts,
+  dayLaborCost, weekLaborCost, dayPerOpenHour, weekPerOpenHour,
   gutter = 170,
+  isBands = false,
 }: ScheduleHeaderProps) {
   const t = makeT(lang)
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -138,9 +151,13 @@ export default function ScheduleHeader({
     `${dates[0].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric' })} – ` +
     `${dates[6].toLocaleDateString(dateLocale, { month: 'short', day: 'numeric', year: 'numeric' })}`
 
+  // Bands title: "Week of July 27, 2026" (matches Analytics
+  // bands header pattern); Day view keeps its weekday phrase.
+  // Non-bands: terse range for compact card header.
+  const weekOfText = `${t('Week of', 'Semana del')} ${dates[0].toLocaleDateString(dateLocale, { month: 'long', day: 'numeric', year: 'numeric' })}`
   const title = isDay
     ? dayDate.toLocaleDateString(dateLocale, { weekday: 'long', month: 'long', day: 'numeric' })
-    : rangeText
+    : (isBands ? weekOfText : rangeText)
 
   // Month grid — 6 rows of 7, Monday-first (matches Mon..Sun).
   const first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1)
@@ -249,22 +266,50 @@ export default function ScheduleHeader({
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
-            <Stat
-              value={isDay ? String(cfg.shifts) : String(weekShifts)}
-              label={isDay ? t('on staff', 'en turno') : (weekShifts === 1 ? t('shift', 'turno') : t('shifts', 'turnos'))}
-            />
-            <Dot />
-            <Stat value={isDay ? dayHours : weekHours} label={t('scheduled', 'programadas')} />
-            <Dot />
-            <span style={{ fontSize: 12, color: MUTED }}>
-              {isDay
-                ? cfg.open
-                  ? `${t('Open', 'Abierto')} ${fmtShortMin(cfg.open[0])}–${fmtShortMin(cfg.open[1])}`
-                  : t('Closed', 'Cerrado')
-                : `${openDays} ${openDays === 1 ? t('open day', 'día abierto') : t('open days', 'días abiertos')}`}
-            </span>
-          </div>
+          {isBands ? (
+            // Bands stats row: hero hours (30px mono) + labor cost
+            // + per open hour trailing stats. Drops the shift count
+            // (redundant with the lane count in the grid below) and
+            // the open-days line (visible in the day strip).
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+                {isDay ? dayHours : weekHours}
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{t('SCHEDULED', 'PROGRAMADAS')}</span>
+
+              {(isDay ? dayLaborCost : weekLaborCost) && (
+                <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+                  <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center', marginRight: 5 }} />
+                  <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{isDay ? dayLaborCost : weekLaborCost}</span>
+                  <span style={{ fontSize: 12, color: MUTED }}>{t('labor cost', 'costo laboral')}</span>
+                </span>
+              )}
+              {(isDay ? dayPerOpenHour : weekPerOpenHour) && (
+                <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+                  <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center', marginRight: 5 }} />
+                  <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{isDay ? dayPerOpenHour : weekPerOpenHour}</span>
+                  <span style={{ fontSize: 12, color: MUTED }}>{t('per open hour', 'por hora abierta')}</span>
+                </span>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
+              <Stat
+                value={isDay ? String(cfg.shifts) : String(weekShifts)}
+                label={isDay ? t('on staff', 'en turno') : (weekShifts === 1 ? t('shift', 'turno') : t('shifts', 'turnos'))}
+              />
+              <Dot />
+              <Stat value={isDay ? dayHours : weekHours} label={t('scheduled', 'programadas')} />
+              <Dot />
+              <span style={{ fontSize: 12, color: MUTED }}>
+                {isDay
+                  ? cfg.open
+                    ? `${t('Open', 'Abierto')} ${fmtShortMin(cfg.open[0])}–${fmtShortMin(cfg.open[1])}`
+                    : t('Closed', 'Cerrado')
+                  : `${openDays} ${openDays === 1 ? t('open day', 'día abierto') : t('open days', 'días abiertos')}`}
+              </span>
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

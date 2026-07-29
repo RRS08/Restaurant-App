@@ -757,7 +757,7 @@ export default function AnalyticsClient(props: Props) {
               >
                 <span style={{ width: 150, flex: '0 0 150px', minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
                 <span style={{ position: 'relative', flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, height: 8, borderRadius: 999, background: LINE_SOFT }}>
-                  <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: c.pct >= 20 ? INK : '#C4C4C7' }} />
+                  <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: INK }} />
                   {isHov && (
                     <div
                       style={{
@@ -769,7 +769,7 @@ export default function AnalyticsClient(props: Props) {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.pct >= 20 ? INK : '#C4C4C7' }} />
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: INK }} />
                         <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em' }}>{c.name}</span>
                       </div>
                       <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 1 }}>

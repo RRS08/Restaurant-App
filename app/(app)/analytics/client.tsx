@@ -749,7 +749,7 @@ export default function AnalyticsClient(props: Props) {
                   <span key={p.key} style={{ display: 'block', width: `${p.pct}%`, height: '100%', borderRadius: 999, background: p.style.dot }} />
                 ))}
               </div>
-              {pays.map((p) => (
+              {pays.filter((p) => p.count > 0).map((p) => (
                 <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: `1px solid ${LINE_SOFT}` }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 9, flex: '0 0 auto', background: p.style.bg, color: p.style.ink }}>
                     <PaymentIcon name={p.key} />
@@ -761,7 +761,7 @@ export default function AnalyticsClient(props: Props) {
                     </span>
                   </span>
                   <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT, minWidth: 56, textAlign: 'right' }}>
-                    {p.count ? `${money(p.rev / p.count)} ${t('avg', 'prom')}` : '—'}
+                    {`${money(p.rev / p.count)} ${t('avg', 'prom')}`}
                   </span>
                   <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, minWidth: 42, textAlign: 'right' }}>{p.pct}%</span>
                 </div>

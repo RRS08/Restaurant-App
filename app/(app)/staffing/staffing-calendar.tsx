@@ -586,47 +586,71 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
     return { open, shifts: visible }
   })
 
+  // Extract the ScheduleHeader element once — it renders either
+  // as a top-level band (bands mode) or nested inside the roster
+  // card (cards mode). Same props either way; the header's own
+  // isBands prop drives its internal styling.
+  const scheduleHeaderEl = (
+    <ScheduleHeader
+      lang={lang}
+      view={view}
+      onViewChange={setView}
+      dayIndex={dayIndex}
+      onDayChange={setDayIndex}
+      weekStart={weekStart}
+      onWeekStartChange={onWeekChange}
+      today={new Date()}
+      days={headerDays}
+      dirty={false}
+      onPublish={onPublish}
+      onCopyLastWeek={handleCopyLastWeek}
+      dayHours={fmtH(dayTotalH)}
+      weekHours={fmtH(totalHours)}
+      weekShifts={totalShifts}
+      dayLaborCost={dayLaborCost}
+      weekLaborCost={weekLaborCost}
+      dayPerOpenHour={dayPerOpenHour}
+      weekPerOpenHour={weekPerOpenHour}
+      gutter={GUTTER_WIDTH}
+      isBands={isBands}
+    />
+  )
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: isBands ? 14 : 10, color: INK, fontFamily: "'Geist', system-ui, sans-serif" }}>
-      {/* Board — position:relative + overflow:hidden. The month
-          picker escapes via a portal (schedule-header.tsx) so
-          overflow:hidden here doesn't clip it. Children can leak
-          to the corners without visual smear.
-          At bands (md+): border + radius dropped so header + body
-          flow as edge-to-edge content. Bench below keeps its
-          card border. */}
+    <>
+      {/* Bands mode: header runs as a full-bleed BAND above the
+          content region — gets a hairline bottom, sits pinnable
+          at the top of the page. Cards mode (phone): the header
+          renders inside the roster card instead (see below). */}
+      {isBands && (
+        <div style={{ position: 'relative', background: '#fff', borderBottom: `1px solid ${LINE}` }}>
+          {scheduleHeaderEl}
+        </div>
+      )}
+
+      <div
+        style={{
+          display: 'flex', flexDirection: 'column',
+          gap: isBands ? 14 : 10,
+          color: INK, fontFamily: "'Geist', system-ui, sans-serif",
+          // Bands: padded content region so the roster + bench
+          // cards sit inset from the band edges above.
+          padding: isBands ? '16px 24px 24px' : undefined,
+        }}
+      >
+      {/* Roster card — always bordered so at bands the header/body
+          split reads as "band then card", not one continuous
+          surface. */}
       <div
         style={{
           position: 'relative',
-          border: isBands ? 0 : `1px solid ${LINE}`,
-          borderRadius: isBands ? 0 : 12,
+          border: `1px solid ${LINE}`,
+          borderRadius: 12,
           background: '#fff',
           overflow: 'hidden',
         }}
       >
-        <ScheduleHeader
-          lang={lang}
-          view={view}
-          onViewChange={setView}
-          dayIndex={dayIndex}
-          onDayChange={setDayIndex}
-          weekStart={weekStart}
-          onWeekStartChange={onWeekChange}
-          today={new Date()}
-          days={headerDays}
-          dirty={false}
-          onPublish={onPublish}
-          onCopyLastWeek={handleCopyLastWeek}
-          dayHours={fmtH(dayTotalH)}
-          weekHours={fmtH(totalHours)}
-          weekShifts={totalShifts}
-          dayLaborCost={dayLaborCost}
-          weekLaborCost={weekLaborCost}
-          dayPerOpenHour={dayPerOpenHour}
-          weekPerOpenHour={weekPerOpenHour}
-          gutter={GUTTER_WIDTH}
-          isBands={isBands}
-        />
+        {!isBands && scheduleHeaderEl}
         {copyMsg && (
           <div style={{ padding: '0 16px 8px', fontSize: 11, color: SIGNAL }}>{copyMsg}</div>
         )}
@@ -1369,6 +1393,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           </button>
         </div>
       </div>
-    </div>
+      </div>{/* /padded content region (bands) or plain flex-col (cards) */}
+    </>
   )
 }

@@ -747,12 +747,11 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
           band now (date-as-heading design pass 2026-07-26). */}
 
       {/* ================================================================ */}
-      {/* 2. CONTROL STRIP — every page-context control on one horizontal   */}
-      {/*    level: house switch (split only) on the left, week navigation */}
-      {/*    + add buttons on the right. Wraps cleanly on narrow widths.   */}
-      {/*    Branch behavior: the strip itself is shared, only the house   */}
-      {/*    switch arm renders conditionally.                              */}
+      {/* 2. CONTROL STRIP — house switch (split houses only). Wrapped in  */}
+      {/*    a !isUnified guard so unified restaurants (the majority) don't */}
+      {/*    render an empty mb-5 spacer above the calendar band.           */}
       {/* ================================================================ */}
+      {!isUnified && (
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center">
           {!isUnified && (
@@ -792,6 +791,7 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
             its own ‹ Today › cluster that does the same thing;
             keeping it there only meant two controls for one job. */}
       </div>
+      )}
 
       {/* ================================================================ */}
       {/* 3. STAFFING CALENDAR — week timeline + day editor + bench.        */}

@@ -908,16 +908,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
 
             <div style={{ padding: 14 }}>
               {/* Old day-view heading retired — ScheduleHeader now
-                  carries the date + stats. The per-day "Repeat
-                  last week" button was redundant with the header's
-                  own Copy last week (which covers the whole week);
-                  only Clear day remains, and only when there's
-                  something to clear. */}
-              {dayShifts.length > 0 && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7, marginBottom: 10, flexWrap: 'wrap' }}>
-                  <button style={ghostBtn} onClick={handleClear}>{t('Clear day', 'Vaciar día')}</button>
-                </div>
-              )}
+                  carries the date + stats. Clear day button
+                  dropped per pilot feedback; individual shift
+                  delete is still available in the shift drawer. */}
 
               {(dayHours[dayIndex]?.closed ?? true) ? (
                 // Closed-day panel — tappable to open the hours

@@ -660,7 +660,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     }}>
                       {item.name}
                     </span>
-                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
                       <span style={{
                         display: 'inline-flex', alignItems: 'center',
                         borderRadius: 999, padding: '1px 8px',

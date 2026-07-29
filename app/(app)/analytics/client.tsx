@@ -694,7 +694,9 @@ export default function AnalyticsClient(props: Props) {
                       ? t("this day hasn't happened yet", 'este día aún no ha ocurrido')
                       : hv[2] === 0
                       ? t('closed or slow', 'cerrado o lento')
-                      : `${money((hv[2] as number) / (hv[3] as number))} ${t('avg ticket', 'ticket promedio')}`}
+                      : isRevenue
+                      ? `${money((hv[2] as number) / (hv[3] as number))} ${t('avg ticket', 'ticket promedio')}`
+                      : `${money(hv[2] as number)} ${t('in sales', 'en ventas')}`}
                   </div>
                 </div>
               )}

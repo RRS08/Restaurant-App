@@ -750,14 +750,14 @@ export default function AnalyticsClient(props: Props) {
       </div>
 
       {/* Week/Month toggle — grid column 2 (auto width). Center
-          justified within its cell AND vertically centered
-          against both stacked rows of the left column via
-          alignSelf. */}
+          justified within its cell, top-aligned against the
+          title row so the toggle + Export button read as chrome
+          pinned to the top rather than sitting under the stat
+          line. */}
       <div
         style={{
           display: 'flex', alignItems: 'center', background: FILL,
           borderRadius: 10, padding: 3, gap: 2,
-          alignSelf: isBands ? 'center' : undefined,
           justifySelf: isBands ? 'center' : undefined,
           flex: '0 0 auto',
         }}
@@ -791,7 +791,7 @@ export default function AnalyticsClient(props: Props) {
             border: 0, background: INK, color: PAPER,
             borderRadius: 10, height: 28, padding: '0 14px',
             font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-            alignSelf: 'center', justifySelf: 'end',
+            justifySelf: 'end',
           }}
         >
           {t('Export', 'Exportar')}

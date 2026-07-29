@@ -50,6 +50,16 @@ body {
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
 }
 
+/* Disable browser rubber-band overscroll (iOS Safari, Chrome, Mac
+   trackpad). Even though the sidebar / iPad rail are position:fixed,
+   the whole document rubber-banding under them still reads as if
+   the fixed elements are "getting pulled". Killing the bounce
+   entirely locks the frame to the viewport in both directions. */
+html,
+body {
+  overscroll-behavior: none;
+}
+
 input:not([type='checkbox']):not([type='radio']):not([type='range']),
 select,
 textarea {

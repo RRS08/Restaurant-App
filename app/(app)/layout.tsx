@@ -22,6 +22,7 @@ import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import Sidebar from '@/components/sidebar'
+import IPadRail from '@/components/ipad-rail'
 import AppShell from './app-shell'
 import { getOperatingMode } from '@/lib/readiness'
 import { isDevEmail } from '@/lib/dev'
@@ -182,6 +183,17 @@ export default async function AppLayout({
       <AppShell
         sidebar={
           <Sidebar
+            restaurantName={restaurant?.name ?? 'My Restaurant'}
+            userFullName={profile?.full_name ?? null}
+            userEmail={user.email ?? ''}
+            operatingMode={operatingMode}
+            nativePosEnabled={nativePosEnabled}
+            isDev={isDev}
+            lang={lang}
+          />
+        }
+        rail={
+          <IPadRail
             restaurantName={restaurant?.name ?? 'My Restaurant'}
             userFullName={profile?.full_name ?? null}
             userEmail={user.email ?? ''}

@@ -3,84 +3,63 @@
 // ----------------------------------------------------------------
 // AppShell — responsive shell wrapper for the protected app pages.
 //
-// Behavior by breakpoint:
-//   xl+ (≥1280px) — DESKTOP: sidebar is a normal flex item, always
-//                   visible, content offset to its right. Identical
-//                   to the pre-tablet-pass shell.
-//   <xl (≤1279px) — TABLET: sidebar is hidden by default and slides
-//                   in from the left over the page when toggled.
-//                   A backdrop scrim sits behind it; clicking the
-//                   scrim or hitting Escape closes the sidebar. A
-//                   compact menu button anchors the top-left of the
-//                   main content area so the manager can reopen
-//                   navigation from any page.
+// Three navigation surfaces, one per breakpoint band:
+//   xl+   (≥1280px) DESKTOP — the labeled 240px sidebar, sticky
+//                    flex item.
+//   md–xl (768–1279) TABLET — a 76px icon-only rail (IPadRail),
+//                    ALWAYS visible. Replaces the hamburger
+//                    overlay we used to render at these widths;
+//                    the rail saves ~164px of content room vs
+//                    the labeled sidebar so pages like /menu
+//                    stop wrapping.
+//   <md   (<768px)  MOBILE — the labeled sidebar slides in from
+//                    the left as an overlay when the top-left
+//                    Menu button is tapped. Kept for phone-sized
+//                    windows where 76px + content is too tight.
 //
-// Why a client wrapper:
-//   layout.tsx must stay a server component (auth gate + initial
-//   data fetch). The state for "is the tablet sidebar open" lives
-//   here so a single React state owns both the slide animation and
-//   the scrim + close behaviors.
-//
-// IMPORTANT — server/client boundary safety:
-//   This component receives `sidebar` as `React.ReactNode` — a JSX
-//   element, which IS serializable across the server/client
-//   boundary. It does NOT accept a render-prop function. Passing
-//   functions from a Server Component to a Client Component is a
-//   React runtime error ("Functions cannot be passed directly to
-//   Client Components unless you explicitly expose it by marking
-//   it with 'use server'"). That blew up production briefly
-//   during the iPad pass — the fix is the React Context below.
-//
-//   The Sidebar component, also a client component, reads the
-//   close callback via the `useSidebarClose()` hook so the
-//   "close on nav-item click" behavior still works without any
-//   function ever crossing the server→client boundary.
-//
-// z-index map (tablet only):
+// z-index map (mobile overlay only — rail and desktop sidebar are
+// static flex items so they don't need z-index):
 //   menu trigger button : z-30
 //   backdrop scrim      : z-30
 //   sidebar overlay     : z-40
 //   page-level drawers  : z-50  (existing — unchanged)
 //
-// That ordering means: when a manager opens a page drawer (Finance
-// Money Review, Inventory item drawer, etc.) on tablet, the drawer
-// sits ABOVE both the sidebar and the scrim, so the two never
-// fight visually. Clicking outside the drawer closes the drawer
-// only — the sidebar stays in whatever state it was in.
+// server/client boundary safety: `sidebar` and `rail` are both
+// React.ReactNode (pre-built JSX), not render-prop functions.
+// Functions can't cross the server→client boundary. The
+// mobile-overlay close callback flows through the React Context
+// below instead of a prop.
 // ----------------------------------------------------------------
 
 import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import { Menu } from 'lucide-react'
 
-// React Context for the tablet-overlay close handler. Lives entirely
-// in client space so a regular function value is safe here. Sidebar
-// reads this with useSidebarClose() and calls it on nav-item click.
 const SidebarCloseContext = createContext<(() => void) | null>(null)
 
-/** Hook for child client components (the Sidebar) to fetch the
- *  tablet overlay's close handler. Returns null on desktop or when
- *  the consumer is rendered outside the AppShell tree — callers
- *  should null-check before invoking. */
+/** Hook the labeled Sidebar uses to close the mobile overlay
+ *  after a nav-item click. Returns null on desktop / tablet
+ *  where the sidebar is always visible and doesn't need closing. */
 export function useSidebarClose(): (() => void) | null {
   return useContext(SidebarCloseContext)
 }
 
 export default function AppShell({
   sidebar,
+  rail,
   children,
 }: {
-  /** Pre-built sidebar JSX element. Must be a React element (not a
-   *  function) so it can cross the server→client boundary safely. */
+  /** Labeled 240px sidebar. Rendered at <md (as slide-in overlay)
+   *  and xl+ (as static flex item). Same JSX in both spots. */
   sidebar: React.ReactNode
+  /** 76px icon rail. Rendered at md–lt-xl only. */
+  rail: React.ReactNode
   children: React.ReactNode
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const close = useCallback(() => setIsOpen(false), [])
   const open = useCallback(() => setIsOpen(true), [])
 
-  // Escape closes the tablet overlay. No-op on desktop where the
-  // sidebar is always visible — Escape just won't find an open
-  // overlay to close.
+  // Escape closes the mobile overlay. No-op on tablet / desktop.
   useEffect(() => {
     if (!isOpen) return
     const onKey = (e: KeyboardEvent) => {
@@ -90,8 +69,8 @@ export default function AppShell({
     return () => window.removeEventListener('keydown', onKey)
   }, [isOpen, close])
 
-  // Lock body scroll while the overlay is open on tablet so the
-  // page behind doesn't pan around as the manager taps the scrim.
+  // Lock body scroll while the mobile overlay is open so the
+  // page behind doesn't pan around under the finger.
   useEffect(() => {
     if (!isOpen) return
     const prev = document.body.style.overflow
@@ -103,58 +82,66 @@ export default function AppShell({
 
   return (
     <SidebarCloseContext.Provider value={close}>
-      <div className="flex min-h-screen bg-white">     {/* app canvas → pure white */}
+      <div className="flex min-h-screen bg-white">
         {/* ----------------------------------------------------------------
-            Sidebar container.
-            • xl+      static flex item — same layout as before.
-            • <xl      fixed-position overlay, off-screen by default,
-                       slides in on isOpen.
-            The `xl:` classes intentionally come last so they win on
-            large screens. The transform transition only fires below
-            xl; at xl+ the sidebar is static and translate-x doesn't
-            apply.
+            Mobile (<md) — labeled sidebar as a slide-in overlay.
+            Fixed-position so it sits above content when open, off-
+            screen otherwise. Hidden entirely on md+.
         ---------------------------------------------------------------- */}
         <div
           className={`
-            fixed inset-y-0 left-0 z-40 transition-transform duration-200 ease-out
+            md:hidden fixed inset-y-0 left-0 z-40 transition-transform duration-200 ease-out
             ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-            xl:sticky xl:top-0 xl:h-screen xl:translate-x-0 xl:transition-none xl:self-start
           `}
         >
           {sidebar}
         </div>
 
-        {/* Backdrop scrim — visible only when sidebar is open on
-            tablet. Hidden on desktop entirely. */}
+        {/* ----------------------------------------------------------------
+            Tablet (md–lt-xl) — 76px icon rail. Sticky flex item so
+            it stays pinned as the page scrolls. Always visible.
+        ---------------------------------------------------------------- */}
+        <div className="hidden md:block xl:hidden sticky top-0 h-screen self-start">
+          {rail}
+        </div>
+
+        {/* ----------------------------------------------------------------
+            Desktop (xl+) — labeled sidebar as a sticky flex item.
+            Same content as the mobile overlay above, different
+            positioning.
+        ---------------------------------------------------------------- */}
+        <div className="hidden xl:block sticky top-0 h-screen self-start">
+          {sidebar}
+        </div>
+
+        {/* Backdrop scrim — only visible when the mobile overlay
+            is open. Tap-to-close. */}
         {isOpen && (
           <button
             type="button"
             aria-label="Close menu"
             onClick={close}
-            className="fixed inset-0 bg-zinc-900/30 z-30 xl:hidden"
+            className="fixed inset-0 bg-zinc-900/30 z-30 md:hidden"
           />
         )}
 
-        {/* Main content. Extra top padding only on tablet so the
-            fixed menu button doesn't visually overlap page chrome.
-            No `overflow-y-auto` — the WINDOW is the scroll container
-            so the sidebar's `sticky top-0` (see wrapper above) can
-            pin properly. If main had its own scroll, sticky would
-            no-op because the window would never scroll. */}
-        <main className="flex-1 p-8 max-xl:pt-16">
+        {/* Main content. Extra top padding on <md so the fixed
+            Menu button doesn't cover page chrome. No overflow-y
+            here — the WINDOW is the scroll container so the
+            sticky sidebar/rail can pin properly. */}
+        <main className="flex-1 min-w-0 p-8 max-md:pt-16">
           {children}
         </main>
 
-        {/* Tablet menu trigger. Fixed top-left so it's reachable from
-            any page. Hidden on desktop (sidebar is always visible
-            there, so there's nothing to open). aria-expanded reflects
-            state for screen readers. */}
+        {/* Menu trigger — only <md. On tablet the rail is always
+            visible; on desktop the sidebar is always visible; so
+            there's nothing to open at md+. */}
         <button
           type="button"
           onClick={open}
           aria-label="Open navigation menu"
           aria-expanded={isOpen}
-          className="xl:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center w-11 h-11 rounded-lg bg-white border border-hairline shadow-sm text-zinc-700 hover:bg-zinc-50 transition-colors"
+          className="md:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center w-11 h-11 rounded-lg bg-white border border-hairline shadow-sm text-zinc-700 hover:bg-zinc-50 transition-colors"
         >
           <Menu className="w-5 h-5" />
         </button>

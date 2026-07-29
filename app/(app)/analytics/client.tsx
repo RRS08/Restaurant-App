@@ -911,13 +911,19 @@ export default function AnalyticsClient(props: Props) {
           Bands: 16/24/24 padded region wraps chart + composition
           grid so all three cards share the same 24px inset as
           the header band's inner content — one vertical rail
-          runs through the whole page. Cards: no wrapper. */}
+          runs through the whole page. Cards: no wrapper.
+          Desktop: cap max-width and center via margin:auto so
+          cards don't stretch across the full monitor width;
+          equal L/R breathing room keeps them from looking
+          horizontal-heavy. Header band stays full-width. */}
       <div
         style={{
           padding: isBands ? '16px 24px 24px' : 0,
           display: isBands ? 'flex' : 'block',
           flexDirection: isBands ? 'column' : undefined,
           gap: isBands ? 16 : undefined,
+          maxWidth: isWide ? 1200 : undefined,
+          margin: isWide ? '0 auto' : undefined,
         }}
       >
 

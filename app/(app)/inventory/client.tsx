@@ -11,6 +11,7 @@
 
 import { useState, useRef, useEffect, useMemo, useActionState, useTransition } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   updateThreshold,
   archiveInventoryItem,
@@ -657,7 +658,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     }}>
                       {item.name}
                     </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
                       <span style={{
                         display: 'inline-flex', alignItems: 'center',
                         borderRadius: 999, padding: '1px 8px',
@@ -4064,7 +4065,787 @@ function ItemDestructiveSection({ item, t }: { item: Item; t: T }) {
 // `transactions` is the page-level activity feed; the drawer
 // filters it down to just this item via `inventoryItemId`.
 // ----------------------------------------------------------------
+// ----------------------------------------------------------------
+// ItemWorkspaceDrawer — 2026-07 Claude Design pass.
+//
+// 440px slide-over matching the sales / staffing drawer family.
+// Body sections top-to-bottom:
+//
+//   1. Stat grid — ON HAND / RESTOCK AT (2 col, mono, small)
+//   2. STOCK card — count + threshold steppers with one Save
+//   3. IN RESTOCK CART (only when a draft exists for this item)
+//   4. USED IN — bordered list of menu items that consume this
+//   5. MOVEMENT — plain rows, signed & colored
+//
+// Footer: quiet destructive on the left (Delete when safe,
+// Archive when recipe-linked), Add-to-cart on the right (ink pill
+// w/ cart icon; swaps to a static "In cart · Nqty" chip when a
+// draft is already staged, since the body owns the update flow).
+//
+// Rename lives inline — clicking the name flips the h2 to a
+// borderless input; unit stays editable in the same panel so no
+// affordance from the legacy drawer disappeared silently.
+// ----------------------------------------------------------------
 function ItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: {
+  item: Item
+  transactions: Transaction[]
+  restockOrders: RestockOrder[]
+  onClose: () => void
+  t: T
+}) {
+  const router = useRouter()
+  const tone = STATUS_TONE[item.status]
+  const uncounted = item.estimated === null
+  const displayEstimated = item.estimated !== null ? Math.max(0, item.estimated) : null
+  // Drift note — surfaces once inside the STOCK card when depletion
+  // has dragged the raw estimate below zero. The rest of the drawer
+  // stays clamped so managers never see negative quantities in
+  // action-context surfaces.
+  const isOverdrawn = item.estimated !== null && item.estimated < 0
+
+  // Last-count date is derived from the transaction feed (Item only
+  // carries the last-count VALUE). Falls back to null if the count
+  // event is outside the page-level window.
+  const lastCountTx = transactions.find(
+    (tx) => tx.inventoryItemId === item.id && (tx.type === 'count' || tx.type === 'initial_count'),
+  )
+  const lastCountDate = lastCountTx
+    ? new Date(lastCountTx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    : null
+
+  // ---- Stepper state ----
+  const initialCount = uncounted ? 0 : (displayEstimated ?? 0)
+  const [count, setCount] = useState<number>(initialCount)
+  const [countText, setCountText] = useState<string | null>(null)
+  // Tracks whether the user has interacted with the count stepper.
+  // Uncounted items start at 0 with no baseline to compare against,
+  // so we need an explicit touched-flag or "0 stock" can never be
+  // recorded as a first count.
+  const [countTouched, setCountTouched] = useState(false)
+  const [reorder, setReorder] = useState<number>(item.threshold)
+  const [reorderText, setReorderText] = useState<string | null>(null)
+
+  // Re-seed all steppers when the drawer opens on a different item
+  // OR when the parent revalidates and hands back a new estimate /
+  // threshold. Also clears the touched flag so the just-saved value
+  // reads as "Up to date" again.
+  useEffect(() => {
+    const seed = item.estimated === null ? 0 : Math.max(0, item.estimated)
+    setCount(seed)
+    setCountText(null)
+    setCountTouched(false)
+    setReorder(item.threshold)
+    setReorderText(null)
+  }, [item.id, item.estimated, item.threshold])
+
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const countDirty = countTouched
+  const thresholdDirty = reorder !== item.threshold
+  const dirty = countDirty || thresholdDirty
+
+  const saveStock = async () => {
+    if (!dirty || saving) return
+    setSaving(true)
+    setSaveError(null)
+    // Threshold first — no redirect, no surprises.
+    if (thresholdDirty) {
+      const fd = new FormData()
+      fd.set('item_id', item.id)
+      fd.set('low_stock_threshold', String(reorder))
+      await updateThreshold(fd)
+    }
+    // Count second. createInventoryCount ends in redirect('/inventory')
+    // on success, which throws a Next.js RedirectError when we call
+    // the action imperatively (the form-action wrapper would normally
+    // absorb it). We're already on /inventory, so swallow the
+    // redirect and lean on router.refresh() below to pick up the
+    // revalidated data. Real error responses (e.g. "Quantity must be
+    // 0 or more") come back as { error } — those we surface.
+    if (countDirty) {
+      const fd = new FormData()
+      fd.set('inventory_item_id', item.id)
+      fd.set('quantity_on_hand', String(count))
+      try {
+        const res = await createInventoryCount(null, fd)
+        if (res && 'error' in res && res.error) {
+          setSaveError(res.error)
+          setSaving(false)
+          return
+        }
+      } catch (e: unknown) {
+        const isRedirect =
+          e !== null &&
+          typeof e === 'object' &&
+          'digest' in e &&
+          typeof (e as { digest?: unknown }).digest === 'string' &&
+          (e as { digest: string }).digest.startsWith('NEXT_REDIRECT')
+        if (!isRedirect) {
+          setSaveError(e instanceof Error ? e.message : String(e))
+          setSaving(false)
+          return
+        }
+      }
+    }
+    router.refresh()
+    setSaving(false)
+  }
+
+  // ---- Identity edit (name + unit) — click-the-name to open ----
+  const [identityEditing, setIdentityEditing] = useState(false)
+  const [nameDraft, setNameDraft] = useState(item.name)
+  const [unitDraft, setUnitDraft] = useState(item.unitOfMeasure)
+  const [identitySaving, setIdentitySaving] = useState(false)
+  const [identityError, setIdentityError] = useState<string | null>(null)
+  useEffect(() => {
+    setNameDraft(item.name)
+    setUnitDraft(item.unitOfMeasure)
+    setIdentityEditing(false)
+    setIdentityError(null)
+  }, [item.id, item.name, item.unitOfMeasure])
+  const identityDirty =
+    nameDraft.trim().length > 0 &&
+    unitDraft.trim().length > 0 &&
+    (nameDraft.trim() !== item.name || unitDraft.trim() !== item.unitOfMeasure)
+  const saveIdentity = async () => {
+    if (!identityDirty || identitySaving) return
+    setIdentitySaving(true)
+    setIdentityError(null)
+    const fd = new FormData()
+    fd.set('item_id', item.id)
+    fd.set('name', nameDraft.trim())
+    fd.set('unit_of_measure', unitDraft.trim())
+    const r = await updateInventoryItem(fd)
+    setIdentitySaving(false)
+    if ('error' in r) {
+      setIdentityError(r.error)
+      return
+    }
+    setIdentityEditing(false)
+    router.refresh()
+  }
+
+  // ---- Restock cart integration ----
+  const drafts = restockOrders.filter((o) => o.status === 'draft')
+  const firstDraft = drafts[0] ?? null
+  const extraStagedCount = Math.max(0, drafts.length - 1)
+  const [stagedQty, setStagedQty] = useState<number>(firstDraft?.quantity ?? 0)
+  const [stagedText, setStagedText] = useState<string | null>(null)
+  useEffect(() => {
+    setStagedQty(firstDraft?.quantity ?? 0)
+    setStagedText(null)
+  }, [firstDraft?.id, firstDraft?.quantity])
+  const stagedDirty = firstDraft !== null && stagedQty !== firstDraft.quantity
+
+  const [cartPending, setCartPending] = useState(false)
+  const [cartError, setCartError] = useState<string | null>(null)
+
+  const handleAddToCart = async () => {
+    if (cartPending || firstDraft) return
+    setCartPending(true)
+    setCartError(null)
+    const fd = new FormData()
+    fd.set('inventory_item_id', item.id)
+    fd.set('quantity', String(defaultRestockQty(item)))
+    await quickAddToOrder(fd)
+    router.refresh()
+    setCartPending(false)
+  }
+  const handleUpdateStaged = async () => {
+    if (!firstDraft || !stagedDirty || cartPending) return
+    setCartPending(true)
+    setCartError(null)
+    const fd = new FormData()
+    fd.set('order_id', firstDraft.id)
+    fd.set('quantity', String(stagedQty))
+    const res = await updateRestockQuantity(null, fd)
+    if (res?.error) setCartError(res.error)
+    router.refresh()
+    setCartPending(false)
+  }
+  const handleRemoveStaged = async () => {
+    if (!firstDraft || cartPending) return
+    setCartPending(true)
+    setCartError(null)
+    const fd = new FormData()
+    fd.set('order_id', firstDraft.id)
+    const res = await cancelRestockOrder(null, fd)
+    if (res?.error) setCartError(res.error)
+    router.refresh()
+    setCartPending(false)
+  }
+
+  // ---- Destructive: Delete when clean, Archive when recipe-linked
+  // Both actions still guard themselves server-side; the button
+  // simply picks the most-appropriate one so managers aren't left
+  // staring at a permanently-disabled Delete.
+  const [confirming, setConfirming] = useState(false)
+  const [destructivePending, setDestructivePending] = useState(false)
+  const [destructiveError, setDestructiveError] = useState<string | null>(null)
+  const isDelete = item.recipeLinks === 0
+  const destructiveLabel = isDelete ? t('Delete item', 'Eliminar artículo') : t('Archive item', 'Archivar artículo')
+  const destructiveConfirmCopy = isDelete
+    ? t('Delete this item? Its count history goes with it.', '¿Eliminar este artículo? Su historial de conteos también se elimina.')
+    : t('Archive this item? It stays hidden from the list until restored.', '¿Archivar este artículo? Queda oculto de la lista hasta que lo restaures.')
+  const handleDestructive = async () => {
+    setDestructivePending(true)
+    setDestructiveError(null)
+    const fd = new FormData()
+    fd.set('item_id', item.id)
+    const res = isDelete ? await deleteInventoryItem(fd) : await archiveInventoryItem(null, fd)
+    if (res && 'error' in res && res.error) {
+      setDestructiveError(res.error)
+      setDestructivePending(false)
+      return
+    }
+    router.refresh()
+    // On success the page revalidates; the selectedId-not-found
+    // effect upstream closes the drawer — no local cleanup needed.
+  }
+
+  // ---- Escape to close ----
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  // ---- Movement (item-scoped, paginated) ----
+  const allItemMovement = transactions.filter((tx) => tx.inventoryItemId === item.id)
+  const MOVEMENT_PAGE_SIZE = 5
+  const totalMovementPages = Math.max(1, Math.ceil(allItemMovement.length / MOVEMENT_PAGE_SIZE))
+  const [movementPage, setMovementPage] = useState(1)
+  useEffect(() => { setMovementPage(1) }, [item.id])
+  const safeMovementPage = Math.min(movementPage, totalMovementPages)
+  const movementStart = (safeMovementPage - 1) * MOVEMENT_PAGE_SIZE
+  const visibleMovement = allItemMovement.slice(movementStart, movementStart + MOVEMENT_PAGE_SIZE)
+
+  // ---- Drawer-local design tokens ----
+  const LINE_SOFT = '#F0EFEB'
+  const DANGER = '#B91C1C'
+  const eyebrow = (color: string): React.CSSProperties => ({
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color,
+  })
+  const rowLabel = (title: string, sub: string) => (
+    <span style={{ minWidth: 0 }}>
+      <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</span>
+      <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>{sub}</span>
+    </span>
+  )
+  const thresholdNote = !uncounted && count <= reorder
+    ? `${t('Flagging low at', 'Marcando bajo en')} ${count.toFixed(2)} ${item.unitOfMeasure}`
+    : t('Alerts at or below this', 'Alerta en o por debajo de esto')
+
+  // Eyebrow context — schema has no `category`; substitute
+  // recipe-link count so managers still see role at a glance.
+  const eyebrowContext = item.recipeLinks > 0
+    ? (item.recipeLinks === 1
+        ? t('USED IN 1 RECIPE', 'USADO EN 1 RECETA')
+        : `${t('USED IN', 'USADO EN')} ${item.recipeLinks} ${t('RECIPES', 'RECETAS')}`)
+    : t('STANDALONE', 'INDEPENDIENTE')
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end', fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
+
+      <aside
+        role="dialog"
+        aria-label={`${item.name} workspace`}
+        style={{ position: 'relative', width: 440, flex: '0 0 440px', maxWidth: '100vw', height: '100vh', background: '#fff', borderLeft: `1px solid ${LINE}`, boxShadow: '-24px 0 48px rgba(24,24,27,0.10)', display: 'flex', flexDirection: 'column' }}
+      >
+        {/* HEADER */}
+        <div style={{ padding: '20px 24px 16px', borderBottom: `1px solid ${LINE}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={eyebrow(FAINT)}>{t('INVENTORY', 'INVENTARIO')} · {eyebrowContext}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 4 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 3, flex: '0 0 auto', background: tone.dot }} />
+              {!identityEditing ? (
+                <button
+                  type="button"
+                  onClick={() => setIdentityEditing(true)}
+                  title={t('Click to rename', 'Haz clic para renombrar')}
+                  style={{ border: 0, background: 'transparent', padding: 0, margin: 0, cursor: 'text', textAlign: 'left', font: 'inherit', color: 'inherit', minWidth: 0, flex: 1 }}
+                >
+                  <h2 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {item.name}
+                  </h2>
+                </button>
+              ) : (
+                <input
+                  type="text"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  autoFocus
+                  style={{ flex: 1, minWidth: 0, border: 0, background: 'transparent', padding: 0, margin: 0, font: 'inherit', fontSize: 21, fontWeight: 700, letterSpacing: '-0.03em', color: INK, outline: 'none' }}
+                />
+              )}
+            </div>
+            <p style={{ margin: '4px 0 0', fontSize: 12, color: FAINT }}>
+              {lastCountDate
+                ? `${t('Last counted', 'Último conteo')} ${lastCountDate}.`
+                : t('Never counted.', 'Nunca contado.')}
+              {' '}
+              {identityEditing
+                ? t('Editing name — pick a unit below.', 'Editando el nombre — elige una unidad abajo.')
+                : t('Click the name to rename.', 'Haz clic en el nombre para renombrar.')}
+            </p>
+
+            {identityEditing && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  value={unitDraft}
+                  onChange={(e) => setUnitDraft(e.target.value)}
+                  placeholder="units, kg, lbs, oz…"
+                  style={{ flex: '0 0 auto', width: 140, height: 30, border: `1px solid ${LINE}`, borderRadius: 8, padding: '0 10px', font: 'inherit', fontFamily: MONO, fontSize: 12, color: INK, outline: 'none' }}
+                />
+                <button
+                  type="button"
+                  onClick={saveIdentity}
+                  disabled={!identityDirty || identitySaving}
+                  style={{ border: 0, background: identityDirty ? INK : LINE_SOFT, color: identityDirty ? PAPER : '#C4C4C7', borderRadius: 999, height: 30, padding: '0 14px', font: 'inherit', fontSize: 12, fontWeight: 600, cursor: identityDirty && !identitySaving ? 'pointer' : 'default' }}
+                >
+                  {identitySaving ? t('Saving…', 'Guardando…') : t('Save', 'Guardar')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(item.name)
+                    setUnitDraft(item.unitOfMeasure)
+                    setIdentityError(null)
+                    setIdentityEditing(false)
+                  }}
+                  disabled={identitySaving}
+                  style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 12, color: MUTED, cursor: 'pointer' }}
+                >
+                  {t('Cancel', 'Cancelar')}
+                </button>
+                {identityError && (
+                  <p style={{ flex: '1 1 100%', margin: 0, fontSize: 11, color: DANGER }}>{identityError}</p>
+                )}
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('Close', 'Cerrar')}
+            style={{ border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8, width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', font: 'inherit', fontSize: 15, color: MUTED, cursor: 'pointer', flex: '0 0 auto' }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* BODY */}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px 24px', display: 'block' }}>
+
+          {/* Stat grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: LINE, border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', marginBottom: 20 }}>
+            <div style={{ background: SURFACE, padding: '10px 12px' }}>
+              <div style={eyebrow(FAINT)}>{t('ON HAND', 'DISPONIBLE')}</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 3 }}>
+                <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600, color: uncounted ? GHOST : INK }}>
+                  {uncounted ? '—' : (displayEstimated ?? 0).toFixed(2)}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{item.unitOfMeasure}</span>
+              </div>
+              <div style={{ fontSize: 11, color: tone.ink }}>{translateStatusLabel(item.status, t)}</div>
+            </div>
+            <div style={{ background: SURFACE, padding: '10px 12px' }}>
+              <div style={eyebrow(FAINT)}>{t('RESTOCK AT', 'REABASTECER EN')}</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 3 }}>
+                <span style={{ fontFamily: MONO, fontSize: 15, fontWeight: 600 }}>{item.threshold.toFixed(2)}</span>
+                <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{item.unitOfMeasure}</span>
+              </div>
+              <div style={{ fontSize: 11, color: FAINT }}>{t('alert threshold', 'umbral de alerta')}</div>
+            </div>
+          </div>
+
+          {/* STOCK card */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ ...eyebrow(MUTED), marginBottom: 8 }}>{t('STOCK', 'STOCK')}</div>
+            <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px' }}>
+                {rowLabel(
+                  t('Count on hand', 'Conteo disponible'),
+                  lastCountDate ? `${t('Counted', 'Contado')} ${lastCountDate}` : t('No count on record yet', 'Sin conteo registrado aún'),
+                )}
+                <InventoryStepper
+                  value={count}
+                  text={countText}
+                  step={0.25}
+                  onCommit={(n) => { setCountText(null); setCount(n); setCountTouched(true) }}
+                  onText={(raw, n) => { setCountText(raw); setCount(n); setCountTouched(true) }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px', borderTop: `1px solid ${LINE_SOFT}` }}>
+                {rowLabel(t('Restock threshold', 'Umbral de reabastecimiento'), thresholdNote)}
+                <InventoryStepper
+                  value={reorder}
+                  text={reorderText}
+                  step={0.5}
+                  onCommit={(n) => { setReorderText(null); setReorder(n) }}
+                  onText={(raw, n) => { setReorderText(raw); setReorder(n) }}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 12px', borderTop: `1px solid ${LINE}`, background: SURFACE }}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: dirty ? STATUS_TONE.low.ink : FAINT }}>
+                  {saving ? t('Saving…', 'Guardando…') : dirty ? t('Unsaved changes', 'Cambios sin guardar') : t('Up to date', 'Al día')}
+                </span>
+                <button
+                  type="button"
+                  onClick={saveStock}
+                  disabled={!dirty || saving}
+                  style={{
+                    border: 0, borderRadius: 999, height: 30, padding: '0 16px',
+                    font: 'inherit', fontSize: 12, fontWeight: 600,
+                    background: dirty && !saving ? INK : LINE_SOFT,
+                    color: dirty && !saving ? PAPER : '#C4C4C7',
+                    cursor: dirty && !saving ? 'pointer' : 'default',
+                  }}
+                >
+                  {t('Save', 'Guardar')}
+                </button>
+              </div>
+              {saveError && (
+                <div style={{ padding: '8px 12px', borderTop: `1px solid ${LINE}`, background: '#FEF2F2' }}>
+                  <span style={{ fontSize: 11, color: DANGER }}>{saveError}</span>
+                </div>
+              )}
+              {isOverdrawn && (
+                <div style={{ padding: '8px 12px', borderTop: `1px solid ${LINE}`, background: STATUS_TONE.out.bg }}>
+                  <span style={{ fontSize: 11, color: STATUS_TONE.out.ink }}>
+                    {t('Depletion has driven stock below zero — record a fresh count to reset.', 'La depleción llevó el stock por debajo de cero — registra un conteo nuevo para restablecer.')}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* IN RESTOCK CART — only when a draft exists for this item */}
+          {firstDraft && (
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+                <span style={eyebrow(MUTED)}>{t('IN RESTOCK CART', 'EN CARRITO DE REABASTECIMIENTO')}</span>
+                <span style={{ fontSize: 11, color: FAINT, fontFamily: MONO }}>
+                  {firstDraft.quantity.toFixed(2)} {item.unitOfMeasure}
+                </span>
+              </div>
+              <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 12px' }}>
+                  {rowLabel(t('Adjust staged quantity', 'Ajustar cantidad preparada'), t('Updates the line already in your cart', 'Actualiza la línea que ya está en tu carrito'))}
+                  <InventoryStepper
+                    value={stagedQty}
+                    text={stagedText}
+                    step={1}
+                    onCommit={(n) => { setStagedText(null); setStagedQty(n) }}
+                    onText={(raw, n) => { setStagedText(raw); setStagedQty(n) }}
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 12px', borderTop: `1px solid ${LINE}`, background: SURFACE }}>
+                  <button
+                    type="button"
+                    onClick={handleRemoveStaged}
+                    disabled={cartPending}
+                    style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 11, fontWeight: 500, color: DANGER, cursor: cartPending ? 'default' : 'pointer' }}
+                  >
+                    {t('Remove from cart', 'Quitar del carrito')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUpdateStaged}
+                    disabled={!stagedDirty || cartPending}
+                    style={{
+                      border: 0, borderRadius: 999, height: 30, padding: '0 16px',
+                      font: 'inherit', fontSize: 12, fontWeight: 600,
+                      background: stagedDirty && !cartPending ? INK : LINE_SOFT,
+                      color: stagedDirty && !cartPending ? PAPER : '#C4C4C7',
+                      cursor: stagedDirty && !cartPending ? 'pointer' : 'default',
+                    }}
+                  >
+                    {t('Update', 'Actualizar')}
+                  </button>
+                </div>
+                {extraStagedCount > 0 && (
+                  <div style={{ padding: '8px 12px', borderTop: `1px solid ${LINE}`, background: SURFACE }}>
+                    <span style={{ fontSize: 11, color: FAINT }}>
+                      +{extraStagedCount} {extraStagedCount === 1
+                        ? t('more staged line for this item in the Restock cart.', 'línea preparada más para este artículo en el Carrito.')
+                        : t('more staged lines for this item in the Restock cart.', 'líneas preparadas más para este artículo en el Carrito.')}
+                    </span>
+                  </div>
+                )}
+                {cartError && (
+                  <div style={{ padding: '8px 12px', borderTop: `1px solid ${LINE}`, background: '#FEF2F2' }}>
+                    <span style={{ fontSize: 11, color: DANGER }}>{cartError}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* USED IN */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+              <span style={eyebrow(MUTED)}>{t('USED IN', 'USADO EN')}</span>
+              <span style={{ fontSize: 11, color: FAINT }}>
+                {item.menuItems.length === 0
+                  ? t('no recipes', 'sin recetas')
+                  : item.menuItems.length === 1
+                    ? t('1 recipe', '1 receta')
+                    : `${item.menuItems.length} ${t('recipes', 'recetas')}`}
+              </span>
+            </div>
+            {item.menuItems.length > 0 ? (
+              <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
+                {item.menuItems.map((m, i) => (
+                  <Link
+                    key={m.menuItemId}
+                    href={`/menu?item=${m.menuItemId}`}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      padding: '9px 12px', textDecoration: 'none', color: 'inherit',
+                      borderBottom: i === item.menuItems.length - 1 ? undefined : `1px solid ${LINE_SOFT}`,
+                    }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 13, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {m.menuItemName}
+                    </span>
+                    {m.quantityRequired > 0 && (
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT, flex: '0 0 auto' }}>
+                        {t('uses', 'usa')} {m.quantityRequired.toFixed(2)} {item.unitOfMeasure}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 12, color: GHOST }}>›</span>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div style={{ border: `1px dashed ${LINE}`, borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                <span style={{ fontSize: 12, color: FAINT }}>
+                  {t('Not linked to any recipe yet', 'Aún no vinculado a ninguna receta')}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* MOVEMENT */}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+              <span style={eyebrow(MUTED)}>{t('MOVEMENT', 'MOVIMIENTO')}</span>
+              {allItemMovement.length > 0 && (
+                <span style={{ fontSize: 11, color: FAINT }}>
+                  {allItemMovement.length} {allItemMovement.length === 1 ? t('event', 'evento') : t('events', 'eventos')}
+                </span>
+              )}
+            </div>
+            {allItemMovement.length > 0 ? (
+              <>
+                {visibleMovement.map((tx) => {
+                  const style = movementStyle(tx.type)
+                  const rowLabelText = movementLabel(tx.type, tx.note, t)
+                  const signPrefix = style.showSign && tx.qty > 0 ? '+' : ''
+                  return (
+                    <div key={tx.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '9px 0', borderBottom: `1px solid ${LINE_SOFT}` }}>
+                      <span style={{ fontSize: 12, color: INK, minWidth: 0, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {rowLabelText}
+                      </span>
+                      <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 10, flex: '0 0 auto' }}>
+                        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600, color: style.color }}>
+                          {signPrefix}{tx.qty.toFixed(2)} {item.unitOfMeasure}
+                        </span>
+                        <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT, minWidth: 44, textAlign: 'right' }}>
+                          {new Date(tx.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                        </span>
+                      </span>
+                    </div>
+                  )
+                })}
+                {allItemMovement.length > MOVEMENT_PAGE_SIZE && (
+                  <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: MUTED }}>
+                      {t('Showing', 'Mostrando')} {movementStart + 1}–{Math.min(movementStart + MOVEMENT_PAGE_SIZE, allItemMovement.length)} {t('of', 'de')} {allItemMovement.length}
+                    </span>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <button
+                        type="button"
+                        onClick={() => setMovementPage((p) => Math.max(1, p - 1))}
+                        disabled={safeMovementPage === 1}
+                        style={{ border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8, padding: '2px 10px', font: 'inherit', fontSize: 12, color: safeMovementPage === 1 ? GHOST : '#52525B', cursor: safeMovementPage === 1 ? 'not-allowed' : 'pointer', opacity: safeMovementPage === 1 ? 0.5 : 1 }}
+                      >
+                        ←
+                      </button>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED, padding: '0 4px' }}>
+                        {safeMovementPage} / {totalMovementPages}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setMovementPage((p) => Math.min(totalMovementPages, p + 1))}
+                        disabled={safeMovementPage === totalMovementPages}
+                        style={{ border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8, padding: '2px 10px', font: 'inherit', fontSize: 12, color: safeMovementPage === totalMovementPages ? GHOST : '#52525B', cursor: safeMovementPage === totalMovementPages ? 'not-allowed' : 'pointer', opacity: safeMovementPage === totalMovementPages ? 0.5 : 1 }}
+                      >
+                        →
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ padding: '9px 0' }}>
+                <span style={{ fontSize: 12, color: FAINT }}>
+                  {t('No movement recorded — this item has never been counted.', 'Sin movimientos registrados — este artículo nunca ha sido contado.')}
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ borderTop: `1px solid ${LINE}`, padding: '14px 24px', display: 'flex', alignItems: 'center', gap: 10, background: '#fff', flexWrap: 'wrap' }}>
+          {confirming ? (
+            <>
+              <span style={{ marginRight: 'auto', fontSize: 12, lineHeight: 1.4, color: DANGER, maxWidth: 220 }}>
+                {destructiveConfirmCopy}
+              </span>
+              <button
+                type="button"
+                onClick={() => { setConfirming(false); setDestructiveError(null) }}
+                disabled={destructivePending}
+                style={{ border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9, padding: '9px 14px', font: 'inherit', fontSize: 13, fontWeight: 500, color: '#3F3F46', cursor: destructivePending ? 'default' : 'pointer' }}
+              >
+                {t('Keep it', 'Conservar')}
+              </button>
+              <button
+                type="button"
+                onClick={handleDestructive}
+                disabled={destructivePending}
+                style={{ border: 0, background: DANGER, color: '#fff', borderRadius: 9, padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 600, cursor: destructivePending ? 'default' : 'pointer', opacity: destructivePending ? 0.7 : 1 }}
+              >
+                {destructivePending ? '…' : isDelete ? t('Delete', 'Eliminar') : t('Archive', 'Archivar')}
+              </button>
+              {destructiveError && (
+                <span style={{ flex: '1 1 100%', marginTop: 6, fontSize: 11, color: DANGER }}>{destructiveError}</span>
+              )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirming(true)}
+                style={{ border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9, padding: '9px 14px', font: 'inherit', fontSize: 13, fontWeight: 500, color: DANGER, cursor: 'pointer' }}
+              >
+                {destructiveLabel}
+              </button>
+              {firstDraft ? (
+                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, padding: '4px 12px', background: FILL, fontFamily: MONO, fontSize: 11, fontWeight: 600, color: INK }}>
+                  <CartIcon />
+                  {t('In cart', 'En carrito')} · {firstDraft.quantity.toFixed(2)} {item.unitOfMeasure}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleAddToCart}
+                  disabled={cartPending}
+                  style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, border: 0, background: INK, color: PAPER, borderRadius: 9, padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 600, cursor: cartPending ? 'default' : 'pointer', opacity: cartPending ? 0.7 : 1 }}
+                >
+                  <CartIcon />
+                  {cartPending ? t('Adding…', 'Agregando…') : t('Add to cart', 'Agregar al carrito')}
+                </button>
+              )}
+              {cartError && !firstDraft && (
+                <span style={{ flex: '1 1 100%', marginTop: 6, fontSize: 11, color: DANGER }}>{cartError}</span>
+              )}
+            </>
+          )}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+// Small floating-pill stepper matching the design's STOCK card
+// treatment. `text` holds the raw in-progress string so half-typed
+// values (e.g. "1.") aren't reformatted mid-keystroke.
+function InventoryStepper({
+  value, text, step, onCommit, onText,
+}: {
+  value: number
+  text: string | null
+  step: number
+  onCommit: (n: number) => void
+  onText: (raw: string | null, n: number) => void
+}) {
+  const pill: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    border: 0, background: '#fff', borderRadius: 8, width: 28, height: 28,
+    font: 'inherit', fontSize: 15, lineHeight: 1, color: '#52525B',
+    cursor: 'pointer', boxShadow: '0 1px 2px rgba(24,24,27,0.06)',
+  }
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 2, background: '#F4F4F2', borderRadius: 10, padding: 3, flex: '0 0 auto' }}>
+      <button
+        type="button"
+        onClick={() => onCommit(Math.max(0, Math.round((value - step) * 100) / 100))}
+        style={pill}
+      >
+        −
+      </button>
+      <input
+        type="text"
+        inputMode="decimal"
+        aria-label="Quantity"
+        value={text === null ? value.toFixed(2) : text}
+        onChange={(e) => {
+          const raw = e.target.value.replace(/[^0-9.]/g, '')
+          const n = raw === '' || isNaN(parseFloat(raw)) ? 0 : parseFloat(raw)
+          onText(raw, n)
+        }}
+        style={{ width: 62, minWidth: 62, textAlign: 'center', fontFamily: MONO, fontSize: 13, fontWeight: 600, color: INK, border: 0, background: 'transparent', padding: 0, height: 28, outline: 'none' }}
+      />
+      <button
+        type="button"
+        onClick={() => onCommit(Math.round((value + step) * 100) / 100)}
+        style={pill}
+      >
+        +
+      </button>
+    </span>
+  )
+}
+
+// Movement style + label mapping. Positive stock movement → green,
+// negative → amber. Count events are neutral (initial_count reads
+// as a founding event and uses the same green as purchase).
+function movementStyle(type: string): { color: string; showSign: boolean } {
+  switch (type) {
+    case 'purchase':      return { color: '#047857', showSign: true }
+    case 'waste':
+    case 'usage':         return { color: '#B45309', showSign: true }
+    case 'initial_count': return { color: '#047857', showSign: false }
+    case 'count':         return { color: '#52525B', showSign: false }
+    default:              return { color: '#52525B', showSign: false }
+  }
+}
+function movementLabel(type: string, note: string | null, t: T): string {
+  const base = (() => {
+    switch (type) {
+      case 'purchase':      return t('Purchase', 'Compra')
+      case 'waste':         return t('Waste', 'Desperdicio')
+      case 'usage':         return t('Usage', 'Uso')
+      case 'count':         return t('Count', 'Conteo')
+      case 'initial_count': return t('Initial count', 'Conteo inicial')
+      default:              return type
+    }
+  })()
+  return note ? `${base} · ${note}` : base
+}
+
+// Retained as reference during the 2026-07 design pass — the new
+// ItemWorkspaceDrawer above replaces this one wholesale. Left in
+// place because it's the only current source for a few
+// sub-behaviors we'll re-visit (destructive-section wording,
+// staged-order deep-updates from within the drawer).
+function _LegacyItemWorkspaceDrawer({ item, transactions, restockOrders, onClose, t }: {
   item: Item
   transactions: Transaction[]
   restockOrders: RestockOrder[]

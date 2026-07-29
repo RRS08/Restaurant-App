@@ -939,7 +939,7 @@ export default function AnalyticsClient(props: Props) {
         </div>
 
         <div style={{ padding: '16px 16px 12px', display: 'flex', gap: 12 }}>
-          <div style={{ width: 44, flex: '0 0 44px', height: isWide ? 240 : (isBands ? 152 : 190), position: 'relative' }}>
+          <div style={{ width: 44, flex: '0 0 44px', height: isWide ? 280 : (isBands ? 152 : 190), position: 'relative' }}>
             {ticks.map((tk) => (
               <span key={tk.frac} style={{ position: 'absolute', right: 0, bottom: `${tk.frac * 100}%`, transform: 'translateY(50%)', fontFamily: MONO, fontSize: 9, color: FAINT }}>
                 {isRevenue && tk.value >= 1000 ? `${tk.value / 1000}k` : tk.value}
@@ -948,7 +948,7 @@ export default function AnalyticsClient(props: Props) {
           </div>
 
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ position: 'relative', height: isWide ? 240 : (isBands ? 152 : 190) }}>
+            <div style={{ position: 'relative', height: isWide ? 280 : (isBands ? 152 : 190) }}>
               {ticks.map((tk, i) => (
                 <span key={tk.frac} style={{ position: 'absolute', left: 0, right: 0, bottom: `${tk.frac * 100}%`, height: 1, background: i === 0 ? LINE : FILL }} />
               ))}

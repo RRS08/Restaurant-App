@@ -1224,9 +1224,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         ? t('Edit role · drag to reorder', 'Editar puesto · arrastra para reordenar')
                         : t('Edit role · not reorderable until added to this house', 'Editar puesto · no reordenable hasta añadirlo a esta casa')}
                       style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 8,
+                        display: 'inline-flex', alignItems: 'center', gap: 7,
                         border: `1px solid ${isDropTarget ? INK : LINE}`,
-                        borderRadius: 8, padding: '6px 12px',
+                        borderRadius: 999, padding: '5px 12px',
                         background: isDropTarget ? '#EFF6FF' : '#fff',
                         font: 'inherit', fontSize: 12, fontWeight: 500,
                         color: '#3F3F46', cursor: isConfigured ? 'grab' : 'pointer',
@@ -1234,7 +1234,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                         transition: 'background 120ms, border-color 120ms',
                       }}
                     >
-                      <span style={{ width: 10, height: 10, borderRadius: 3, background: tone.accent }} />
+                      <span style={{ width: 8, height: 8, borderRadius: '50%', background: tone.accent }} />
                       {r}
                     </button>
                   )
@@ -1246,7 +1246,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   onClick={onOpenAddRole}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
-                    border: `1px dashed ${LINE}`, borderRadius: 8, padding: '6px 12px',
+                    border: `1px dashed ${LINE}`, borderRadius: 999, padding: '5px 12px',
                     background: 'transparent', font: 'inherit', fontSize: 12, fontWeight: 500,
                     color: MUTED, cursor: 'pointer',
                   }}

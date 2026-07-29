@@ -241,7 +241,7 @@ export default function SalesClient({
 
   // Bands treatment at all md+ widths (tablet + desktop). No page
   // card, header + filter sticky as one band, hairline dividers
-  // between rows, 28px shared side inset. Above ~1336px content
+  // between rows, 24px shared side inset. Above ~1336px content
   // caps at max-width so rows don't stretch across dead space on
   // wide monitors — bands still span 100%, only their inner
   // content is capped. Phone (<md) keeps the card treatment.
@@ -369,7 +369,7 @@ export default function SalesClient({
             // md+ keeps the same vertical rhythm as phone — only
             // the SIDE padding grows to 28 so the band aligns
             // with the row inset per the doc's verdict.
-            padding: isBands ? '16px 28px 14px' : '16px 16px 14px',
+            padding: isBands ? '16px 24px 14px' : '16px 16px 14px',
             display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
             touchAction: 'pan-y',
@@ -446,7 +446,7 @@ export default function SalesClient({
         }}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          padding: isBands ? '10px 28px' : '10px 16px',
+          padding: isBands ? '10px 24px' : '10px 16px',
           flexWrap: 'wrap',
         }}>
           {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
@@ -487,7 +487,7 @@ export default function SalesClient({
         </div>{/* /sticky band */}
 
         {/* Rows — one continuous subject. md+: no wrapper
-            padding, rows own their own 28px inset so the list
+            padding, rows own their own 24px inset so the list
             runs edge-to-edge and prices land at the viewport
             right edge like a POS ledger. Phone keeps the small
             8px card gutter. */}
@@ -581,7 +581,7 @@ function SaleRow({
         // header/filter inset). Vertical rhythm and element sizes
         // stay identical to phone/desktop so rows don't feel
         // sparse in the extra horizontal room.
-        padding: isBands ? '11px 28px' : '11px 12px',
+        padding: isBands ? '11px 24px' : '11px 12px',
         // Rows are strips in a continuous list on tablet. No
         // radius, no per-row border — the tinted method tile IS
         // the row's only "card" per rule 3. A hairline divider

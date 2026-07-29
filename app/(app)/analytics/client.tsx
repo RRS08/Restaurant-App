@@ -671,7 +671,7 @@ export default function AnalyticsClient(props: Props) {
       onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
       style={{
         position: 'relative',
-        padding: isBands ? '16px 24px 15px' : '16px 16px 14px',
+        padding: isBands ? '16px 24px 14px' : '16px 16px 14px',
         display: 'flex',
         // Bands: top-align because the left column has TWO stacked
         // rows (title + stat line); the toggle needs align-self to

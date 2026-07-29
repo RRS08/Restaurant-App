@@ -626,16 +626,21 @@ export default function AnalyticsClient(props: Props) {
     ? `${days[0][0]} — ${days[days.length - 1][0]}, ${BASE.getFullYear()}`
     : `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
 
-  // Bands header date copy — reads as one human phrase, not a
-  // range with a year bolted on:
-  //   Week  → "Week of July 27, 2026"    (Monday of visible week)
-  //   Month → "July 2026"                (calendar month)
+  // Bands header date copy — matches Sales' fmtBusinessDateLong
+  // format (weekday + long month + day, no year) for the week
+  // view. Month view keeps "July 2026" because a calendar month
+  // isn't a single day — no sales equivalent to copy.
+  //   Week  → "Monday, July 27"
+  //   Month → "July 2026"
+  const bandsDateLocale = lang === 'es' ? 'es-ES' : 'en-US'
   const bandsDateLabel = ((): string => {
     if (!days.length) return ''
     if (isWeek) {
       const mondayIdx = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
       const monday = new Date(BASE.getTime() + mondayIdx * DAY_MS)
-      return `${t('Week of', 'Semana del')} ${MONTHS[monday.getMonth()]} ${monday.getDate()}, ${monday.getFullYear()}`
+      return monday.toLocaleDateString(bandsDateLocale, {
+        weekday: 'long', month: 'long', day: 'numeric',
+      })
     }
     return `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
   })()

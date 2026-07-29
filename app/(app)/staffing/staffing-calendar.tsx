@@ -15,7 +15,7 @@
 // Not a Tailwind conversion candidate for the near term.
 // ----------------------------------------------------------------
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useState, useTransition, useEffect } from 'react'
 import type { Lang } from '@/lib/i18n'
 import { makeT } from '@/lib/i18n'
 import ScheduleHeader, { type DayConfig } from './schedule-header'
@@ -261,6 +261,19 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   const dateLocale = lang === 'es' ? 'es-ES' : 'en-US'
 
   const [view, setView] = useState<'week' | 'day'>('week')
+
+  // Bands treatment at md+ — strip the roster card border so the
+  // header + schedule flow edge-to-edge like the sales/analytics
+  // bands passes; the bench card below stays bordered as its own
+  // "genuinely unlike subject" card per the design doc.
+  const [isBands, setIsBands] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
   const [dayIndex, setDayIndex] = useState(() => {
     // Default day view = today if in this week, else Monday.
     const now = new Date()
@@ -538,12 +551,23 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   })
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, color: INK, fontFamily: "'Geist', system-ui, sans-serif" }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: isBands ? 14 : 10, color: INK, fontFamily: "'Geist', system-ui, sans-serif" }}>
       {/* Board — position:relative + overflow:hidden. The month
           picker escapes via a portal (schedule-header.tsx) so
           overflow:hidden here doesn't clip it. Children can leak
-          to the corners without visual smear. */}
-      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', overflow: 'hidden' }}>
+          to the corners without visual smear.
+          At bands (md+): border + radius dropped so header + body
+          flow as edge-to-edge content. Bench below keeps its
+          card border. */}
+      <div
+        style={{
+          position: 'relative',
+          border: isBands ? 0 : `1px solid ${LINE}`,
+          borderRadius: isBands ? 0 : 12,
+          background: '#fff',
+          overflow: 'hidden',
+        }}
+      >
         <ScheduleHeader
           lang={lang}
           view={view}

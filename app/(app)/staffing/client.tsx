@@ -737,7 +737,10 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   // block) render alongside the rest — no separate lane needed.
   return (
     <RoleColorsContext.Provider value={roleColors}>
-    <div className="max-w-[1400px]">
+    {/* max-w cap drops at md+ so the schedule takes the full band
+        width like the sales / analytics tablet passes. Phone keeps
+        the 1400px comfort cap. */}
+    <div className="max-w-[1400px] md:max-w-none">
 
       {/* Page-level "Staffing" title + subtitle retired — the
           ScheduleHeader inside the calendar card owns the top

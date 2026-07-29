@@ -223,11 +223,31 @@ export default function AnalyticsClient(props: Props) {
       ]
     })
 
-    let todayIdx = rows.findIndex((_, i) => toDateKey(parseDateKey(sliced[i].date)) === todayKey)
+    const keys = sliced.map((b) => b.date)
+
+    // Server data ends today. Pad forward with null-future days
+    // until the visible week is complete (rows ends on a Sunday
+    // in Monday-first counting). Without this, mid-week loads
+    // deliver 2-3 rows to DAILY.slice(start, start + 7), and the
+    // chart's flex distribution stretches the real bars across
+    // the empty space instead of leaving future-day placeholders
+    // where they belong.
+    if (sliced.length > 0) {
+      const lastKey = sliced[sliced.length - 1].date
+      const lastDate = parseDateKey(lastKey)
+      const dowMondayFirst = (lastDate.getDay() + 6) % 7
+      const daysUntilSunday = 6 - dowMondayFirst
+      for (let i = 1; i <= daysUntilSunday; i++) {
+        const d = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate() + i)
+        rows.push([shortMonthDay(d, lang), shortWeekdayEN(d), null, null, isWeekendDate(d)])
+        keys.push(toDateKey(d))
+      }
+    }
+
+    let todayIdx = rows.findIndex((_, i) => keys[i] === todayKey)
     if (todayIdx < 0) todayIdx = rows.length - 1
     const currentWeekIdx = todayIdx - ((todayIdx % 7 + 7) % 7)
 
-    const keys = sliced.map((b) => b.date)
     return { DAILY: rows, TODAY: todayIdx, CURRENT_WEEK: Math.max(0, currentWeekIdx), BASE: base, dateKeys: keys }
   }, [dailyBuckets, lang])
 
@@ -240,6 +260,7 @@ export default function AnalyticsClient(props: Props) {
   const [calMonth, setCalMonth] = useState<Date>(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
   const [swipeX, setSwipeX] = useState<number | null>(null)
   const [swipeDX, setSwipeDX] = useState(0)
+  const [hoveredPay, setHoveredPay] = useState<'card' | 'other' | 'cash' | null>(null)
 
   const isWeek = range === 'week'
   const isRevenue = metric === 'revenue'
@@ -660,7 +681,7 @@ export default function AnalyticsClient(props: Props) {
                   </div>
                   <div style={{ fontFamily: MONO, fontSize: 10, color: FAINT, marginTop: 1 }}>
                     {hvFuture
-                      ? t('still to come', 'aún por venir')
+                      ? t("this day hasn't happened yet", 'este día aún no ha ocurrido')
                       : hv[2] === 0
                       ? t('closed or slow', 'cerrado o lento')
                       : `${money((hv[2] as number) / (hv[3] as number))} ${t('avg ticket', 'ticket promedio')}`}
@@ -744,10 +765,58 @@ export default function AnalyticsClient(props: Props) {
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden', gap: 2, marginBottom: 16 }}>
-                {pays.filter((p) => p.pct > 0).map((p) => (
-                  <span key={p.key} style={{ display: 'block', width: `${p.pct}%`, height: '100%', borderRadius: 999, background: p.style.dot }} />
-                ))}
+              {/* Stacked segment bar. Each segment reveals its
+                  method's total revenue on hover — the size hints
+                  at "how much" but the dollars underneath make it
+                  precise. Tooltip anchors to the segment's own
+                  center via cumulative-percentage math. */}
+              <div style={{ position: 'relative', marginBottom: 16 }}>
+                {hoveredPay && (() => {
+                  const visible = pays.filter((p) => p.pct > 0)
+                  let cum = 0
+                  for (const p of visible) {
+                    if (p.key === hoveredPay) {
+                      const center = cum + p.pct / 2
+                      const clampedTx = center < 12 ? '-4px' : center > 88 ? '-100%' : '-50%'
+                      return (
+                        <div
+                          key="tt"
+                          style={{
+                            position: 'absolute', bottom: 18, left: `${center}%`,
+                            transform: `translateX(${clampedTx})`,
+                            zIndex: 3, pointerEvents: 'none',
+                            border: `1px solid ${LINE}`, borderRadius: 10, background: '#fff',
+                            boxShadow: '0 8px 24px rgba(24,24,27,0.12)', padding: '7px 10px', whiteSpace: 'nowrap',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                            <span style={{ width: 6, height: 6, borderRadius: '50%', background: p.style.dot }} />
+                            <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em' }}>{p.name}</span>
+                          </div>
+                          <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 1 }}>
+                            {money(p.rev)}
+                          </div>
+                          <div style={{ fontFamily: MONO, fontSize: 10, color: FAINT, marginTop: 1 }}>
+                            {p.count} {p.count === 1 ? t('order', 'orden') : t('orders', 'órdenes')} · {p.pct}%
+                          </div>
+                        </div>
+                      )
+                    }
+                    cum += p.pct
+                  }
+                  return null
+                })()}
+                <div style={{ display: 'flex', height: 10, borderRadius: 999, overflow: 'hidden', gap: 2 }}>
+                  {pays.filter((p) => p.pct > 0).map((p) => (
+                    <span
+                      key={p.key}
+                      onMouseEnter={() => setHoveredPay(p.key)}
+                      onMouseLeave={() => setHoveredPay((cur) => (cur === p.key ? null : cur))}
+                      title={`${p.name}: ${money(p.rev)}`}
+                      style={{ display: 'block', width: `${p.pct}%`, height: '100%', borderRadius: 999, background: p.style.dot, cursor: 'default' }}
+                    />
+                  ))}
+                </div>
               </div>
               {pays.filter((p) => p.count > 0).map((p) => (
                 <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: `1px solid ${LINE_SOFT}` }}>

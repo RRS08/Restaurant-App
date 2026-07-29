@@ -239,6 +239,19 @@ export default function SalesClient({
   const [swipeX, setSwipeX] = useState<number | null>(null)
   const [swipeDX, setSwipeDX] = useState(0)
 
+  // Tablet-only "no card" experiment. At md–lt-xl widths we strip
+  // the outer wrapper's horizontal padding and the card's border /
+  // rounded corners so content spans edge-to-edge. Phone and
+  // desktop keep the card treatment as-is.
+  const [isTablet, setIsTablet] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px) and (max-width: 1279px)')
+    const update = () => setIsTablet(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
   // Close the drawer if the open order disappears after revalidation.
   useEffect(() => {
     if (openId && !orders.find((o) => o.id === openId)) setOpenId(null)
@@ -306,10 +319,33 @@ export default function SalesClient({
 
   return (
     <div style={{
-      minHeight: '100vh', padding: '20px 24px 28px', background: '#fff',
+      minHeight: '100vh',
+      // Tablet: zero padding on every side. AppShell also strips
+      // its own p-8 at this breakpoint, so the sales bands run
+      // flush against every viewport edge.
+      padding: isTablet ? 0 : '20px 24px 28px',
+      background: '#fff',
       fontFamily: "'Geist', system-ui, sans-serif", color: INK,
     }}>
-      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+      <div
+        style={{
+          position: 'relative',
+          border: isTablet ? 0 : `1px solid ${LINE}`,
+          borderRadius: isTablet ? 0 : 12,
+          background: '#fff',
+        }}
+      >
+
+        {/* Sticky band — at tablet, header + filter pin to the top
+            of the viewport so the manager can scroll the ledger
+            without losing the date, totals, or the active filter.
+            At other widths it collapses to a plain wrapper. */}
+        <div
+          style={{
+            position: isTablet ? 'sticky' : 'static',
+            top: 0, zIndex: 5, background: '#fff',
+          }}
+        >
 
         {/* Header — date as the heading, big mono total, stats. */}
         <div
@@ -327,12 +363,17 @@ export default function SalesClient({
           }}
           onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
           style={{
-            position: 'relative', padding: '16px 16px 14px',
+            position: 'relative',
+            // Tablet keeps the same vertical rhythm as phone/
+            // desktop — only the SIDE padding grows to 28 so the
+            // band aligns with the row inset per the doc's verdict.
+            padding: isTablet ? '16px 28px 14px' : '16px 16px 14px',
             display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
             touchAction: 'pan-y',
             cursor: swipeX === null ? 'default' : 'grabbing',
             transform: `translateX(${swipeDX / 6}px)`,
+            background: '#fff',
           }}
         >
           <div style={{ minWidth: 0 }}>
@@ -394,7 +435,8 @@ export default function SalesClient({
 
         {/* Filter strip — All / Card / Cash / Voided with counts. */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: isTablet ? '10px 28px' : '10px 16px',
           borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
           background: SURFACE, flexWrap: 'wrap',
         }}>
@@ -432,8 +474,16 @@ export default function SalesClient({
           })}
         </div>
 
-        {/* Rows — soft-card list. Not a table. */}
-        <div style={{ padding: 8, borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }}>
+        </div>{/* /sticky band */}
+
+        {/* Rows — one continuous subject. Tablet: no wrapper
+            padding, rows own their own 28px inset so the whole
+            list runs edge-to-edge. Non-tablet keeps the small
+            gutter it always had. */}
+        <div style={{
+          padding: isTablet ? 0 : 8,
+          borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
+        }}>
           {orders.length === 0 ? (
             <EmptyLedger t={t} isToday={isToday} date={date} locale={locale} />
           ) : shownOrders.length === 0 ? (
@@ -449,6 +499,7 @@ export default function SalesClient({
                 onOpen={() => setOpenId(o.id)}
                 t={t}
                 locale={locale}
+                isTablet={isTablet}
               />
             ))
           )}
@@ -493,13 +544,14 @@ export default function SalesClient({
 // ================================================================
 
 function SaleRow({
-  order, selected, onOpen, t, locale,
+  order, selected, onOpen, t, locale, isTablet,
 }: {
   order: Order
   selected: boolean
   onOpen: () => void
   t: T
   locale: string
+  isTablet: boolean
 }) {
   const tone = METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
@@ -514,8 +566,19 @@ function SaleRow({
       aria-selected={selected}
       style={{
         display: 'flex', alignItems: 'center', gap: 13,
-        padding: '11px 12px', borderRadius: 10, cursor: 'pointer',
-        border: `1px solid ${selected ? LINE : 'transparent'}`,
+        // Tablet: only the SIDE padding grows to 28 (matches the
+        // header/filter inset). Vertical rhythm and element sizes
+        // stay identical to phone/desktop so rows don't feel
+        // sparse in the extra horizontal room.
+        padding: isTablet ? '11px 28px' : '11px 12px',
+        // Rows are strips in a continuous list on tablet. No
+        // radius, no per-row border — the tinted method tile IS
+        // the row's only "card" per rule 3. A hairline divider
+        // separates them; selection uses a soft SURFACE fill.
+        borderRadius: isTablet ? 0 : 10,
+        cursor: 'pointer',
+        border: isTablet ? 0 : `1px solid ${selected ? LINE : 'transparent'}`,
+        borderBottom: isTablet ? `1px solid ${LINE_SOFT}` : undefined,
         background: selected ? SURFACE : 'transparent',
         opacity: isVoided ? 0.75 : 1,
       }}

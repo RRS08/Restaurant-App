@@ -101,9 +101,11 @@ const MUTED = '#6B6B70'
 const FAINT = '#A1A1A6'
 const GHOST = '#D6D5D1'
 const MONO = "'Geist Mono', ui-monospace, monospace"
-// Accent for the category bars — same blue as the Revenue chart
-// so "revenue" reads as one visual thread across the page.
-const CATEGORY_BAR = '#4285F4'
+// Accent for the category bars — teal chosen because every other
+// palette slot on this page is already taken: blue (revenue chart),
+// purple (orders chart), indigo (card payments), emerald (cash),
+// stone (other/muted), amber (warnings), red/green (delta chips).
+const CATEGORY_BAR = '#0D9488'
 
 const MONTHS_EN = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']

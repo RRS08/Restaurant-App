@@ -415,7 +415,11 @@ export default function AnalyticsClient(props: Props) {
   const peak = done.length ? Math.max(...done.map((d) => (isRevenue ? d[2] : d[3]) as number)) : 0
   const STEPS = 4
   const ceiling = niceCeiling(peak, STEPS, isRevenue ? REVENUE_UNITS : ORDER_UNITS)
-  const barColor = isRevenue ? '#4285F4' : '#7C3AED'
+  // Deeper Revenue blue + Orders violet chosen to sit next to the
+  // Card indigo / Cash emerald pills in the payment card — same
+  // "confident but not shouting" saturation instead of the brighter
+  // Google-blue and violet-500 the design first shipped with.
+  const barColor = isRevenue ? '#2563EB' : '#6D28D9'
   const ticks = Array.from({ length: STEPS + 1 }, (_, i) => ({
     frac: i / STEPS,
     value: Math.round(ceiling * (i / STEPS)),

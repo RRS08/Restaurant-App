@@ -687,13 +687,16 @@ export default function AnalyticsClient(props: Props) {
       style={{
         position: 'relative',
         padding: isBands ? '16px 24px 14px' : '16px 16px 14px',
-        display: 'flex',
-        // Bands: top-align because the left column has TWO stacked
-        // rows (title + stat line); the toggle needs align-self to
-        // vertically center against both. Cards: single row.
+        // Bands: 3-column grid (1fr auto 1fr) so the Week/Month
+        // toggle sits VIEWPORT-centered between the left content
+        // column and a right-anchored Export button — not just
+        // between whatever the two outer children happen to be.
+        // Cards: single flex row with title + toggle.
+        display: isBands ? 'grid' : 'flex',
+        gridTemplateColumns: isBands ? '1fr auto 1fr' : undefined,
         alignItems: isBands ? 'flex-start' : 'center',
-        justifyContent: 'space-between',
-        gap: 24, flexWrap: 'wrap',
+        justifyContent: isBands ? undefined : 'space-between',
+        gap: 24, flexWrap: isBands ? undefined : 'wrap',
         touchAction: 'pan-y', cursor: swipeX === null ? 'default' : 'grabbing',
         transform: `translateX(${swipeDX / 6}px)`,
       }}
@@ -746,14 +749,16 @@ export default function AnalyticsClient(props: Props) {
         )}
       </div>
 
-      {/* Week/Month toggle — align-self:center on bands so it
-          centers against BOTH the title and stat rows in the
-          left column. */}
+      {/* Week/Month toggle — grid column 2 (auto width). Center
+          justified within its cell AND vertically centered
+          against both stacked rows of the left column via
+          alignSelf. */}
       <div
         style={{
           display: 'flex', alignItems: 'center', background: FILL,
           borderRadius: 10, padding: 3, gap: 2,
           alignSelf: isBands ? 'center' : undefined,
+          justifySelf: isBands ? 'center' : undefined,
           flex: '0 0 auto',
         }}
       >
@@ -773,6 +778,25 @@ export default function AnalyticsClient(props: Props) {
           {t('Month', 'Mes')}
         </button>
       </div>
+
+      {/* Export button — grid column 3 (1fr), right-aligned.
+          Placeholder for now; wire when the export flow is
+          designed. Only rendered at bands widths so the phone
+          layout keeps its 2-child flex. */}
+      {isBands && (
+        <button
+          type="button"
+          onClick={() => { /* placeholder — export flow not wired yet */ }}
+          style={{
+            border: 0, background: INK, color: PAPER,
+            borderRadius: 10, height: 28, padding: '0 14px',
+            font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            alignSelf: 'center', justifySelf: 'end',
+          }}
+        >
+          {t('Export', 'Exportar')}
+        </button>
+      )}
     </div>
   )
 
@@ -922,7 +946,7 @@ export default function AnalyticsClient(props: Props) {
           display: isBands ? 'flex' : 'block',
           flexDirection: isBands ? 'column' : undefined,
           gap: isBands ? 16 : undefined,
-          maxWidth: isWide ? 1500 : undefined,
+          maxWidth: isWide ? 1560 : undefined,
           margin: isWide ? '0 auto' : undefined,
         }}
       >

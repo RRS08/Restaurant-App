@@ -101,10 +101,9 @@ const MUTED = '#6B6B70'
 const FAINT = '#A1A1A6'
 const GHOST = '#D6D5D1'
 const MONO = "'Geist Mono', ui-monospace, monospace"
-// Warm accent for the category bars — vibrant orange that reads
-// as "revenue" without borrowing from the amber "low stock"
-// vocabulary elsewhere in the app.
-const CATEGORY_BAR = '#EA580C'
+// Accent for the category bars — same blue as the Revenue chart
+// so "revenue" reads as one visual thread across the page.
+const CATEGORY_BAR = '#4285F4'
 
 const MONTHS_EN = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -279,16 +278,25 @@ export default function AnalyticsClient(props: Props) {
   const avgTicket = orders ? revenue / orders : 0
   const tradingDays = done.filter((d) => (d[2] as number) > 0).length
 
-  // Prev-window comparison for delta chips. Week view: 7 days
-  // before start. Month view: prev 28-day block from dailyBuckets.
-  const prevRows = isWeek ? DAILY.slice(Math.max(0, start - 7), start) : []
-  const prev = isWeek && prevRows.length
-    ? { revenue: sumOn(prevRows, 2), orders: sumOn(prevRows, 3) }
-    : (() => {
-        // Month view: sum prior 28 days from the same DAILY window.
-        const prev28 = DAILY.slice(Math.max(0, start - 49), Math.max(0, start - 21))
-        return { revenue: sumOn(prev28, 2), orders: sumOn(prev28, 3) }
-      })()
+  // Prev-period comparison for the delta chips.
+  //
+  // Rule: compare only the SAME number of done days from the prior
+  // period, not the whole prior week / prior 28 days. Mid-week,
+  // "Mon–Tue this week" is compared against "Mon–Tue last week"
+  // instead of the full prior 7 days — otherwise a partial current
+  // week loses 90% to a fully-realized prior week and the delta
+  // chip reads as a false collapse.
+  //
+  // done days are always the first N slots of the visible window
+  // (future days are filtered out), so taking the first `done.length`
+  // slots from the prior period is the aligned same-days-of-week
+  // comparison.
+  const prevOffset = isWeek ? 7 : 28
+  const visibleStart = isWeek ? start : start - 21
+  const prevSliceStart = Math.max(0, visibleStart - prevOffset)
+  const prevSliceEnd = Math.min(DAILY.length, prevSliceStart + done.length)
+  const prevRows = DAILY.slice(prevSliceStart, prevSliceEnd)
+  const prev = { revenue: sumOn(prevRows, 2), orders: sumOn(prevRows, 3) }
   const prevAvg = prev.orders ? prev.revenue / prev.orders : 0
 
   const shiftWeeks = (n: number) => {

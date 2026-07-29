@@ -952,6 +952,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 dates={weekDays}
                 dateLocale={dateLocale}
                 t={t}
+                hideTopBorder
               />
             )}
 

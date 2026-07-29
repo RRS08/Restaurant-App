@@ -458,7 +458,7 @@ export default function ScheduleHeader({
 // while the header band stays limited to title + stats + toggle.
 type DayStripT = (en: string, es?: string) => string
 export function DayStrip({
-  days, dayIndex, onDayChange, dates, dateLocale, t,
+  days, dayIndex, onDayChange, dates, dateLocale, t, hideTopBorder = false,
 }: {
   days: DayConfig[]
   dayIndex: number
@@ -466,9 +466,14 @@ export function DayStrip({
   dates: Date[]
   dateLocale: string
   t: DayStripT
+  /** true when the strip is the first child of its parent card
+   *  (bands mode). Its own borderTop would otherwise double up
+   *  with the card's border and create a "card inside a card"
+   *  visual. */
+  hideTopBorder?: boolean
 }) {
   return (
-    <div style={{ display: 'flex', borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}` }}>
+    <div style={{ display: 'flex', borderTop: hideTopBorder ? 0 : `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}` }}>
       {days.map((d, i) => {
         const on = i === dayIndex
         const isClosed = !d.open

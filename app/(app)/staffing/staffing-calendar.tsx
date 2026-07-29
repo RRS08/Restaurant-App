@@ -19,7 +19,7 @@ import { useMemo, useState, useTransition, useEffect } from 'react'
 import type { Lang } from '@/lib/i18n'
 import { makeT } from '@/lib/i18n'
 import { normalizeNameKey } from '@/lib/strings/names'
-import ScheduleHeader, { type DayConfig } from './schedule-header'
+import ScheduleHeader, { DayStrip, type DayConfig } from './schedule-header'
 
 // ---- Palette (matches marketing site + app shell) --------------
 const INK = '#18181B'
@@ -939,9 +939,21 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           </div>
         ) : (
           <>
-            {/* Day pills retired — the ScheduleHeader now renders
-                the aligned day strip (badges + hours + selection)
-                directly under the title. */}
+            {/* Bands + Day view: DayStrip lives at the TOP of the
+                roster card (not inside the ScheduleHeader band),
+                so the calendar owns its own subject and the strip
+                fills the card's full width edge-to-edge. Cards
+                mode still renders the strip inside ScheduleHeader. */}
+            {isBands && (
+              <DayStrip
+                days={headerDays}
+                dayIndex={dayIndex}
+                onDayChange={setDayIndex}
+                dates={weekDays}
+                dateLocale={dateLocale}
+                t={t}
+              />
+            )}
 
             <div style={{ padding: 14 }}>
               {/* Old day-view heading retired — ScheduleHeader now

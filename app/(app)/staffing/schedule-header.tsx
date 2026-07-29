@@ -434,69 +434,91 @@ export default function ScheduleHeader({
         document.body,
       )}
 
-      {/* ---- Day strip — Day view only. Per manager's ask, spans
-             the FULL card width; the design's 170px gutter spacer
-             (aligned to the STAFF column below) has been dropped
-             so the days fill the empty gray patch under the stats
-             line too. `gutter` is preserved on props for callers
-             that still want an aligned strip. ---- */}
-      {isDay && (
-        <div style={{ display: 'flex', borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}` }}>
-          {days.map((d, i) => {
-            const on = i === dayIndex
-            const isClosed = !d.open
-            const shortLabel = dates[i].toLocaleDateString(dateLocale, { weekday: 'short' })
-            return (
-              <button
-                key={i}
-                type="button"
-                onClick={() => onDayChange(i)}
-                style={{
-                  flex: 1, minWidth: 0, border: 0,
-                  // No left divider on the first cell — it now
-                  // sits at the card's left edge (the 170px
-                  // gutter spacer was removed above).
-                  borderLeft: i === 0 ? 0 : `1px solid ${LINE}`,
-                  borderTop: `2px solid ${on ? INK : 'transparent'}`, marginTop: -1,
-                  background: isClosed && !on ? '#FCFCFB' : '#fff',
-                  padding: '8px 12px 9px', display: 'flex', flexDirection: 'column', gap: 2,
-                  font: 'inherit', textAlign: 'left', cursor: 'pointer',
-                }}
-              >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: 11, fontWeight: 500, color: on ? INK : isClosed ? GHOST : MUTED }}>
-                    {shortLabel}
-                  </span>
-                  {d.shifts > 0 && (
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                      minWidth: 17, height: 17, borderRadius: 999, padding: '0 4px',
-                      fontFamily: MONO, fontSize: 9, fontWeight: 600,
-                      background: on ? INK : '#F4F4F2',
-                      color: on ? PAPER : '#52525B',
-                    }}>
-                      {d.shifts}
-                    </span>
-                  )}
-                </span>
-                <span style={{
-                  fontFamily: MONO, fontSize: 18, fontWeight: 600, letterSpacing: '-0.03em',
-                  lineHeight: 1.05, color: on ? INK : isClosed ? GHOST : '#3F3F46',
-                }}>
-                  {dates[i].getDate()}
-                </span>
-                <span style={{
-                  fontFamily: MONO, fontSize: 10,
-                  color: isClosed ? '#D6D5D1' : on ? MUTED : FAINT,
-                }}>
-                  {isClosed ? t('Closed', 'Cerrado') : `${fmtShortMin(d.open![0])}–${fmtShortMin(d.open![1])}`}
-                </span>
-              </button>
-            )
-          })}
-        </div>
+      {/* ---- Day strip — Day view only. At bands (md+) it moves
+             to the TOP of the roster card in staffing-calendar
+             so the calendar card owns its own subject; here we
+             only render it in cards mode (phone). ---- */}
+      {isDay && !isBands && (
+        <DayStrip
+          days={days}
+          dayIndex={dayIndex}
+          onDayChange={onDayChange}
+          dates={dates}
+          dateLocale={dateLocale}
+          t={t}
+        />
       )}
     </>
+  )
+}
+
+// Day strip — Mon–Sun cells with active-day highlight, day-of-month,
+// hours line, and shift badge. Exported so staffing-calendar can
+// render it at the top of the roster CARD in bands mode (Day view),
+// while the header band stays limited to title + stats + toggle.
+type DayStripT = (en: string, es?: string) => string
+export function DayStrip({
+  days, dayIndex, onDayChange, dates, dateLocale, t,
+}: {
+  days: DayConfig[]
+  dayIndex: number
+  onDayChange: (i: number) => void
+  dates: Date[]
+  dateLocale: string
+  t: DayStripT
+}) {
+  return (
+    <div style={{ display: 'flex', borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}` }}>
+      {days.map((d, i) => {
+        const on = i === dayIndex
+        const isClosed = !d.open
+        const shortLabel = dates[i].toLocaleDateString(dateLocale, { weekday: 'short' })
+        return (
+          <button
+            key={i}
+            type="button"
+            onClick={() => onDayChange(i)}
+            style={{
+              flex: 1, minWidth: 0, border: 0,
+              borderLeft: i === 0 ? 0 : `1px solid ${LINE}`,
+              borderTop: `2px solid ${on ? INK : 'transparent'}`, marginTop: -1,
+              background: isClosed && !on ? '#FCFCFB' : '#fff',
+              padding: '8px 12px 9px', display: 'flex', flexDirection: 'column', gap: 2,
+              font: 'inherit', textAlign: 'left', cursor: 'pointer',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 500, color: on ? INK : isClosed ? GHOST : MUTED }}>
+                {shortLabel}
+              </span>
+              {d.shifts > 0 && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  minWidth: 17, height: 17, borderRadius: 999, padding: '0 4px',
+                  fontFamily: MONO, fontSize: 9, fontWeight: 600,
+                  background: on ? INK : '#F4F4F2',
+                  color: on ? PAPER : '#52525B',
+                }}>
+                  {d.shifts}
+                </span>
+              )}
+            </span>
+            <span style={{
+              fontFamily: MONO, fontSize: 18, fontWeight: 600, letterSpacing: '-0.03em',
+              lineHeight: 1.05, color: on ? INK : isClosed ? GHOST : '#3F3F46',
+            }}>
+              {dates[i].getDate()}
+            </span>
+            <span style={{
+              fontFamily: MONO, fontSize: 10,
+              color: isClosed ? '#D6D5D1' : on ? MUTED : FAINT,
+            }}>
+              {isClosed ? t('Closed', 'Cerrado') : `${fmtShortMin(d.open![0])}–${fmtShortMin(d.open![1])}`}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 

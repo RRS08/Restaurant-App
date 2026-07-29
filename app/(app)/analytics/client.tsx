@@ -101,10 +101,6 @@ const MUTED = '#6B6B70'
 const FAINT = '#A1A1A6'
 const GHOST = '#D6D5D1'
 const MONO = "'Geist Mono', ui-monospace, monospace"
-// Accent for the category bars — ink. Simplest read; the color
-// palette variants (orange, blue, teal) all had trade-offs and
-// black doesn't compete with anything else on the page.
-const CATEGORY_BAR = INK
 
 const MONTHS_EN = ['January','February','March','April','May','June','July','August','September','October','November','December']
 const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
@@ -753,8 +749,12 @@ export default function AnalyticsClient(props: Props) {
             <div style={{ padding: '18px 0', fontSize: 12, color: FAINT, textAlign: 'center' }}>
               {t('Categories fill in as sales come through.', 'Las categorías se llenan a medida que llegan las ventas.')}
             </div>
-          ) : cats.map((c) => {
+          ) : cats.map((c, i) => {
             const isHov = hoveredCat === c.name
+            // Leader (top by revenue) gets ink; the rest shade
+            // down so the eye lands on the carrying category first.
+            // cats is already sorted revenue-desc.
+            const barColor = i === 0 ? INK : '#C4C4C7'
             // Anchor tooltip near the fill's right edge, clamped so
             // near-zero bars still get a readable position and near-
             // full bars don't overflow the card. Same edge-safe
@@ -770,7 +770,7 @@ export default function AnalyticsClient(props: Props) {
               >
                 <span style={{ width: 150, flex: '0 0 150px', minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
                 <span style={{ position: 'relative', flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, height: 8, borderRadius: 999, background: LINE_SOFT }}>
-                  <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: CATEGORY_BAR }} />
+                  <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: barColor }} />
                   {isHov && (
                     <div
                       style={{
@@ -782,7 +782,7 @@ export default function AnalyticsClient(props: Props) {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: CATEGORY_BAR }} />
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: barColor }} />
                         <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em' }}>{c.name}</span>
                       </div>
                       <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 1 }}>

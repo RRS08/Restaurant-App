@@ -22,6 +22,7 @@ import { getLang } from '@/lib/i18n-server'
 import AnalyticsClient from './client'
 import AnalyticsLocked from './locked'
 import { computeReadiness } from '@/lib/readiness'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 const WINDOW_DAYS = 60
 
@@ -40,6 +41,8 @@ interface OrderRow {
   id: string
   total_amount: number | string
   created_at: string
+  business_date: string | null
+  status: string | null
   payment_type: string | null
   order_items: OrderItemRow[] | null
 }
@@ -81,7 +84,11 @@ export default async function AnalyticsPage() {
 
   // Readiness gate — Analytics uses a setup + live-data gate. Dev
   // bypass and per-pillar overrides are already baked into the
-  // snapshot, so this branch respects both.
+  // snapshot, so this branch respects both. We also grab the
+  // restaurant's location timezone here so the daily bucketing
+  // below can key off business_date in local time (matching the
+  // Sales page) instead of UTC-drifted created_at.
+  let timezone: string | null = null
   const { data: { user } } = await supabase.auth.getUser()
   if (user) {
     const { data: role } = await supabase
@@ -94,18 +101,39 @@ export default async function AnalyticsPage() {
       if (readiness.pillars.analytics !== 'active') {
         return <AnalyticsLocked readiness={readiness} lang={lang} />
       }
+      const { data: loc } = await supabase
+        .from('locations')
+        .select('timezone')
+        .eq('restaurant_id', role.restaurant_id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+      timezone = (loc?.timezone as string | null) ?? null
     }
   }
 
-  const now = new Date()
-  const windowStart = new Date(now)
-  windowStart.setDate(windowStart.getDate() - WINDOW_DAYS)
-  windowStart.setHours(0, 0, 0, 0)
+  // Build the 60-day window in the restaurant's local calendar.
+  // These keys match the plain YYYY-MM-DD values Sales writes into
+  // orders.business_date at insert time via businessDateInTimezone.
+  // Using them for both the query filter and the daily bucketing
+  // means Analytics and Sales agree on which orders belong to
+  // which day, no matter what timezone the server runs in.
+  const todayKey = businessDateInTimezone(new Date(), timezone)
+  const dateKeys: string[] = []
+  {
+    const [y, m, d] = todayKey.split('-').map(Number)
+    const anchor = new Date(y, m - 1, d)
+    for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
+      const dd = new Date(anchor.getTime() - i * 86400000)
+      dateKeys.push(toDateKey(dd))
+    }
+  }
+  const windowStartKey = dateKeys[0]
 
   const { data: orders } = await supabase
     .from('orders')
     .select(`
-      id, total_amount, created_at, payment_type,
+      id, total_amount, created_at, business_date, payment_type, status,
       order_items (
         quantity, total_price,
         menu_items (
@@ -114,8 +142,10 @@ export default async function AnalyticsPage() {
         )
       )
     `)
-    .eq('status', 'completed')
-    .gte('created_at', windowStart.toISOString())
+    // Filter by business_date instead of created_at so late-evening
+    // orders in the restaurant's timezone don't roll into the next
+    // UTC day and disappear from their real business day.
+    .gte('business_date', windowStartKey)
     .order('created_at', { ascending: true })
 
   // ---- Seed per-day maps for the full window ----
@@ -126,10 +156,7 @@ export default async function AnalyticsPage() {
   const dailyPaymentMap = new Map<string, DailyPaymentBucket>()
   const dailyCategoryMap = new Map<string, Map<string, DailyCategoryEntry>>()
 
-  for (let i = 0; i < WINDOW_DAYS; i++) {
-    const d = new Date(windowStart)
-    d.setDate(windowStart.getDate() + i)
-    const key = toDateKey(d)
+  for (const key of dateKeys) {
     dailyMap.set(key, { revenue: 0, orders: 0 })
     dailyPaymentMap.set(key, emptyDailyPayment(key))
     dailyCategoryMap.set(key, new Map())
@@ -138,7 +165,15 @@ export default async function AnalyticsPage() {
   const typedOrders = (orders ?? []) as unknown as OrderRow[]
 
   for (const o of typedOrders) {
-    const key = toDateKey(new Date(o.created_at))
+    // Match Sales' status semantics: NULL status is treated as
+    // completed. Only voided orders are excluded from analytics.
+    // Doing this in the loop (instead of an SQL `.eq('status',
+    // 'completed')`) is what fixes the "some orders missing"
+    // discrepancy — SQL equality drops NULL rows outright.
+    if (o.status === 'voided') continue
+
+    const key = o.business_date
+    if (!key) continue
     const bucket = dailyMap.get(key)
     if (!bucket) continue
 

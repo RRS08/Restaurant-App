@@ -25,7 +25,7 @@
 // else, ranked signal blocks beat a chart wall.
 // ----------------------------------------------------------------
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { makeT, type Lang } from '@/lib/i18n'
 
 interface DailyBucket {
@@ -289,6 +289,19 @@ export default function AnalyticsClient(props: Props) {
   const [swipeDX, setSwipeDX] = useState(0)
   const [hoveredPay, setHoveredPay] = useState<'card' | 'other' | 'cash' | null>(null)
   const [hoveredCat, setHoveredCat] = useState<string | null>(null)
+
+  // Bands treatment at all md+ widths — full-bleed header band
+  // with an inline stat row, then a padded content region below
+  // holding three data cards (chart, category, payment). Phone
+  // (<md) keeps the old bordered-card + 3-KPI-grid layout.
+  const [isBands, setIsBands] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
 
   const isWeek = range === 'week'
   const isRevenue = metric === 'revenue'
@@ -613,57 +626,162 @@ export default function AnalyticsClient(props: Props) {
     ? `${days[0][0]} — ${days[days.length - 1][0]}, ${BASE.getFullYear()}`
     : `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
 
-  return (
-    <div style={{ flex: 1, minWidth: 0, padding: '20px 24px 28px', background: '#fff', fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
+  // Bands header date copy — reads as one human phrase, not a
+  // range with a year bolted on:
+  //   Week  → "Week of July 27, 2026"    (Monday of visible week)
+  //   Month → "July 2026"                (calendar month)
+  const bandsDateLabel = ((): string => {
+    if (!days.length) return ''
+    if (isWeek) {
+      const mondayIdx = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
+      const monday = new Date(BASE.getTime() + mondayIdx * DAY_MS)
+      return `${t('Week of', 'Semana del')} ${MONTHS[monday.getMonth()]} ${monday.getDate()}, ${monday.getFullYear()}`
+    }
+    return `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
+  })()
 
-      {/* ---- header + KPIs ---- */}
-      <div style={{ position: 'relative', border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', marginBottom: 14 }}>
-        <div
-          onPointerDown={(e) => { setSwipeX(e.clientX); setSwipeDX(0) }}
-          onPointerMove={(e) => { if (swipeX !== null) setSwipeDX(e.clientX - swipeX) }}
-          onPointerUp={() => {
-            if (swipeX === null) return
-            if (swipeDX <= -60) shiftWeeks(1)
-            else if (swipeDX >= 60) shiftWeeks(-1)
-            setSwipeX(null); setSwipeDX(0)
-          }}
-          onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
-          style={{
-            position: 'relative', padding: '16px 16px 14px', display: 'flex',
-            alignItems: 'center', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap',
-            touchAction: 'pan-y', cursor: swipeX === null ? 'default' : 'grabbing',
-            transform: `translateX(${swipeDX / 6}px)`,
-          }}
-        >
+  // "This week / Past week / This month / Past month" pill next
+  // to the date. Signals whether historical navigation is active.
+  const isCurrent = isWeek
+    ? Math.max(0, Math.min(CURRENT_WEEK, weekStart)) === CURRENT_WEEK
+    : monthAnchor.y === nowRef.getFullYear() && monthAnchor.m === nowRef.getMonth()
+  const rangeChipLabel = isCurrent
+    ? isWeek ? t('This week', 'Esta semana') : t('This month', 'Este mes')
+    : isWeek ? t('Past week', 'Semana pasada') : t('Past month', 'Mes pasado')
+
+  // Header row body used by BOTH the bands and cards render
+  // paths. Extracted so the swipe handler + date button + Week/
+  // Month toggle stay in one place regardless of whether the
+  // wrapper around them is a bordered card or a full-bleed band.
+  const headerRow = (
+    <div
+      onPointerDown={(e) => { setSwipeX(e.clientX); setSwipeDX(0) }}
+      onPointerMove={(e) => { if (swipeX !== null) setSwipeDX(e.clientX - swipeX) }}
+      onPointerUp={() => {
+        if (swipeX === null) return
+        if (swipeDX <= -60) shiftWeeks(1)
+        else if (swipeDX >= 60) shiftWeeks(-1)
+        setSwipeX(null); setSwipeDX(0)
+      }}
+      onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
+      style={{
+        position: 'relative',
+        padding: isBands ? '16px 24px 15px' : '16px 16px 14px',
+        display: 'flex',
+        // Bands: top-align because the left column has TWO stacked
+        // rows (title + stat line); the toggle needs align-self to
+        // vertically center against both. Cards: single row.
+        alignItems: isBands ? 'flex-start' : 'center',
+        justifyContent: 'space-between',
+        gap: 24, flexWrap: 'wrap',
+        touchAction: 'pan-y', cursor: swipeX === null ? 'default' : 'grabbing',
+        transform: `translateX(${swipeDX / 6}px)`,
+      }}
+    >
+      {/* Left column — title row + stat row (bands). Cards mode
+          just renders the title button here and puts KPIs below. */}
+      <div style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
           <button
             type="button"
             onClick={() => setCalOpen((v) => !v)}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid transparent', background: 'transparent', borderRadius: 9, padding: '2px 8px', marginLeft: -8, font: 'inherit', color: INK, cursor: 'pointer' }}
           >
             <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
-              {headerDateLabel}
+              {isBands ? bandsDateLabel : headerDateLabel}
             </span>
             <span style={{ fontSize: 10, color: FAINT }}>▾</span>
           </button>
-
-          <div style={{ display: 'flex', alignItems: 'center', background: FILL, borderRadius: 10, padding: 3, gap: 2 }}>
-            <button type="button" style={seg(isWeek)} onClick={() => { setRange('week'); setHover(null) }}>{t('Week', 'Semana')}</button>
-            <button
-              type="button"
-              style={seg(!isWeek)}
-              onClick={() => {
-                setRange('month')
-                setHover(null)
-                // Land on the current calendar month by default so
-                // switching modes lands the user on "now" instead of
-                // whatever historical month they last inspected.
-                setMonthAnchor({ y: nowRef.getFullYear(), m: nowRef.getMonth() })
+          {isBands && (
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+                padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+                background: isCurrent ? FILL : '#EFF6FF',
+                color: isCurrent ? MUTED : '#2563EB',
               }}
             >
-              {t('Month', 'Mes')}
-            </button>
-          </div>
+              {rangeChipLabel}
+            </span>
+          )}
         </div>
+
+        {/* Stat row — bands only. Hero total + USD + revenue
+            delta, then orders + avg-ticket trailing stats with
+            their own deltas. Deltas are plain colored text (not
+            pills) so the line reads as one continuous statement. */}
+        {isBands && (
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+              {money(revenue)}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
+            <Delta pct={pctChange(revenue, prev.revenue)} />
+            <StatSep />
+            <StatCell value={String(orders)} label={t('orders', 'órdenes')} delta={pctChange(orders, prev.orders)} />
+            <StatSep />
+            <StatCell value={money(avgTicket)} label={t('avg ticket', 'ticket promedio')} delta={pctChange(avgTicket, prevAvg)} />
+          </div>
+        )}
+      </div>
+
+      {/* Week/Month toggle — align-self:center on bands so it
+          centers against BOTH the title and stat rows in the
+          left column. */}
+      <div
+        style={{
+          display: 'flex', alignItems: 'center', background: FILL,
+          borderRadius: 10, padding: 3, gap: 2,
+          alignSelf: isBands ? 'center' : undefined,
+          flex: '0 0 auto',
+        }}
+      >
+        <button type="button" style={seg(isWeek)} onClick={() => { setRange('week'); setHover(null) }}>{t('Week', 'Semana')}</button>
+        <button
+          type="button"
+          style={seg(!isWeek)}
+          onClick={() => {
+            setRange('month')
+            setHover(null)
+            // Land on the current calendar month by default so
+            // switching modes lands the user on "now" instead of
+            // whatever historical month they last inspected.
+            setMonthAnchor({ y: nowRef.getFullYear(), m: nowRef.getMonth() })
+          }}
+        >
+          {t('Month', 'Mes')}
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div
+      style={{
+        flex: 1, minWidth: 0,
+        // Bands: no page padding — AppShell already zeros main at
+        // md+, so bands touch the viewport edges. Cards: the old
+        // 20/24/28 padding sits around the bordered card.
+        padding: isBands ? 0 : '20px 24px 28px',
+        background: '#fff', fontFamily: "'Geist', system-ui, sans-serif", color: INK,
+      }}
+    >
+
+      {/* ---- header ----
+          Bands: full-bleed with a hairline bottom, positioning
+          context for the picker.
+          Cards: bordered card with rounded corners. */}
+      <div
+        style={{
+          position: 'relative',
+          border: isBands ? 0 : `1px solid ${LINE}`,
+          borderRadius: isBands ? 0 : 12,
+          borderBottom: isBands ? `1px solid ${LINE}` : undefined,
+          background: '#fff',
+          marginBottom: isBands ? 0 : 14,
+        }}
+      >
+        {headerRow}
 
         {calOpen && (
           <>
@@ -738,34 +856,52 @@ export default function AnalyticsClient(props: Props) {
           </>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', borderTop: `1px solid ${LINE}` }}>
-          {kpis.map((k, i) => (
-            <div key={k.label} style={{ padding: '14px 16px 15px', borderRight: i === kpis.length - 1 ? undefined : `1px solid ${LINE}` }}>
-              <div style={eyebrow}>{k.label}</div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
-                <span style={{ fontFamily: MONO, fontSize: 26, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>{k.value}</span>
-                <span
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '2px 8px',
-                    fontFamily: MONO, fontSize: 11, fontWeight: 600,
-                    ...(k.delta === 0
-                      ? { background: FILL, color: MUTED }
-                      : k.delta > 0
-                      ? { background: '#ECFDF5', color: '#047857' }
-                      : { background: '#FEF2F2', color: '#B91C1C' }),
-                  }}
-                >
-                  {k.delta === 0 ? t('flat', 'plano') : `${k.delta > 0 ? '▲' : '▼'} ${Math.abs(k.delta)}%`}
-                </span>
+        {/* KPI 3-column grid — cards mode only. Bands mode has
+            the inline stat row inside the header already. */}
+        {!isBands && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', borderTop: `1px solid ${LINE}` }}>
+            {kpis.map((k, i) => (
+              <div key={k.label} style={{ padding: '14px 16px 15px', borderRight: i === kpis.length - 1 ? undefined : `1px solid ${LINE}` }}>
+                <div style={eyebrow}>{k.label}</div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 26, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>{k.value}</span>
+                  <span
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', borderRadius: 999, padding: '2px 8px',
+                      fontFamily: MONO, fontSize: 11, fontWeight: 600,
+                      ...(k.delta === 0
+                        ? { background: FILL, color: MUTED }
+                        : k.delta > 0
+                        ? { background: '#ECFDF5', color: '#047857' }
+                        : { background: '#FEF2F2', color: '#B91C1C' }),
+                    }}
+                  >
+                    {k.delta === 0 ? t('flat', 'plano') : `${k.delta > 0 ? '▲' : '▼'} ${Math.abs(k.delta)}%`}
+                  </span>
+                </div>
+                <div style={{ fontSize: 11, color: FAINT, marginTop: 6 }}>{k.note}</div>
               </div>
-              <div style={{ fontSize: 11, color: FAINT, marginTop: 6 }}>{k.note}</div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
+      {/* ---- content region ----
+          Bands: 16/24/24 padded region wraps chart + composition
+          grid so all three cards share the same 24px inset as
+          the header band's inner content — one vertical rail
+          runs through the whole page. Cards: no wrapper. */}
+      <div
+        style={{
+          padding: isBands ? '16px 24px 24px' : 0,
+          display: isBands ? 'flex' : 'block',
+          flexDirection: isBands ? 'column' : undefined,
+          gap: isBands ? 16 : undefined,
+        }}
+      >
+
       {/* ---- daily rhythm ---- */}
-      <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', marginBottom: 14 }}>
+      <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', marginBottom: isBands ? 0 : 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '12px 16px', borderBottom: `1px solid ${LINE}`, flexWrap: 'wrap' }}>
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>
@@ -782,7 +918,7 @@ export default function AnalyticsClient(props: Props) {
         </div>
 
         <div style={{ padding: '16px 16px 12px', display: 'flex', gap: 12 }}>
-          <div style={{ width: 44, flex: '0 0 44px', height: 190, position: 'relative' }}>
+          <div style={{ width: 44, flex: '0 0 44px', height: isBands ? 152 : 190, position: 'relative' }}>
             {ticks.map((tk) => (
               <span key={tk.frac} style={{ position: 'absolute', right: 0, bottom: `${tk.frac * 100}%`, transform: 'translateY(50%)', fontFamily: MONO, fontSize: 9, color: FAINT }}>
                 {isRevenue && tk.value >= 1000 ? `${tk.value / 1000}k` : tk.value}
@@ -791,7 +927,7 @@ export default function AnalyticsClient(props: Props) {
           </div>
 
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ position: 'relative', height: 190 }}>
+            <div style={{ position: 'relative', height: isBands ? 152 : 190 }}>
               {ticks.map((tk, i) => (
                 <span key={tk.frac} style={{ position: 'absolute', left: 0, right: 0, bottom: `${tk.frac * 100}%`, height: 1, background: i === 0 ? LINE : FILL }} />
               ))}
@@ -1061,11 +1197,42 @@ export default function AnalyticsClient(props: Props) {
           )}
         </AnalyticsCard>
       </div>
+
+      </div>{/* /content region */}
     </div>
   )
 }
 
 // ---- Small building blocks scoped to the new AnalyticsClient ----
+
+// Plain colored delta text — never a pill. Kept flat so the
+// header's stat line reads as one continuous statement instead
+// of "a value + a badge". A rounded-to-zero move reads as the
+// word "flat" in muted grey, never a green ↑ 0%.
+function Delta({ pct, size = 12 }: { pct: number; size?: number }) {
+  const color = pct === 0 ? FAINT : pct > 0 ? '#047857' : '#B91C1C'
+  return (
+    <span style={{ fontFamily: MONO, fontSize: size, fontWeight: 600, color }}>
+      {pct === 0 ? 'flat' : `${pct > 0 ? '↑' : '↓'} ${Math.abs(pct)}%`}
+    </span>
+  )
+}
+// Tiny dot separator between trailing stats in the header row.
+function StatSep() {
+  return <span style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center' }} />
+}
+// A trailing stat cell — value + label + delta, matched to the
+// design's typography scale (14/600 value, 12 label, 11 delta).
+function StatCell({ value, label, delta }: { value: string; label: string; delta: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{value}</span>
+      <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+      <Delta pct={delta} size={11} />
+    </span>
+  )
+}
+
 function FooterStat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>

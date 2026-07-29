@@ -956,7 +956,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
               />
             )}
 
-            <div style={{ padding: 14 }}>
+            <div style={{ padding: isBands ? 0 : 14 }}>
               {/* Old day-view heading retired — ScheduleHeader now
                   carries the date + stats. Clear day button
                   dropped per pilot feedback; individual shift
@@ -995,7 +995,17 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 <div
                   onMouseEnter={() => setDayTimelineHover(true)}
                   onMouseLeave={() => setDayTimelineHover(false)}
-                  style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', background: '#fff' }}
+                  style={{
+                    // Cards mode (phone): a bordered inner rectangle
+                    // reads as its own card inside the roster card.
+                    // Bands mode: the roster card is the container;
+                    // an inner border would make it a card inside
+                    // a card. Strip border+radius+overflow at bands.
+                    border: isBands ? 0 : `1px solid ${LINE}`,
+                    borderRadius: isBands ? 0 : 10,
+                    overflow: isBands ? undefined : 'hidden',
+                    background: '#fff',
+                  }}
                 >
                   {/* Ruler */}
                   <div style={{ display: 'flex', background: SURFACE, borderBottom: `1px solid ${LINE}` }}>

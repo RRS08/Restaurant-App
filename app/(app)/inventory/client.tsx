@@ -134,6 +134,110 @@ type DrawerState =
   | { mode: 'merge-items' }
   | null
 
+// ----------------------------------------------------------------
+// Design tokens (2026-07 Claude Design pass).
+//
+// Palette + type ramp shared with the sales and staffing pillars so
+// the three feel like one system. Inline styles win over Tailwind
+// for the stateful widgets (search focus, filter chip on/off) —
+// keeps behavior colocated with the element instead of ping-ponging
+// between className and a :focus-within rule that Tailwind's
+// utilities can't observe.
+// ----------------------------------------------------------------
+const INK = '#18181B'
+const PAPER = '#FAF9F6'
+const LINE = '#E7E6E2'
+const SURFACE = '#FAFAF9'
+const FILL = '#F4F4F2'
+const MUTED = '#6B6B70'
+const FAINT = '#A1A1A6'
+const GHOST = '#D6D5D1'
+const MONO = "'Geist Mono', ui-monospace, monospace"
+
+// One tone per status — tile background / stroke+text / dot.
+const STATUS_TONE: Record<Item['status'], { bg: string; ink: string; dot: string }> = {
+  out:      { bg: '#FEF2F2', ink: '#B91C1C', dot: '#DC2626' },
+  low:      { bg: '#FFFBEB', ink: '#B45309', dot: '#D97706' },
+  ok:       { bg: '#ECFDF5', ink: '#047857', dot: '#10B981' },
+  no_count: { bg: '#F5F5F4', ink: '#78716C', dot: '#A8A29E' },
+}
+
+// ---------------- Icon set (inline SVG so it inherits currentColor
+// and avoids an icon-library dependency for four glyphs). ----------
+function SearchIcon({ color = '#A1A1A6' }: { color?: string }) {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="11" cy="11" r="7" />
+      <path d="M21 21l-4.35-4.35" />
+    </svg>
+  )
+}
+function CartIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <circle cx="9" cy="20" r="1.6" />
+      <circle cx="18" cy="20" r="1.6" />
+      <path d="M3 4h2l2 12h12l2-8H6" />
+    </svg>
+  )
+}
+function OrdersIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="4" y="4" width="16" height="16" rx="2" />
+      <path d="M8 9h8M8 13h8M8 17h5" />
+    </svg>
+  )
+}
+function CountIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M8 6h12M8 12h12M8 18h12" />
+      <circle cx="4" cy="6" r="1" fill="currentColor" />
+      <circle cx="4" cy="12" r="1" fill="currentColor" />
+      <circle cx="4" cy="18" r="1" fill="currentColor" />
+    </svg>
+  )
+}
+
+// One glyph per status. Each one is deliberately distinct at 20px
+// so the icon alone communicates state — no need to read the chip.
+function StatusGlyph({ status }: { status: Item['status'] }) {
+  const ink = STATUS_TONE[status].ink
+  switch (status) {
+    case 'out':
+      return (
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+          <path d="M10 3 L18 17 L2 17 Z" fill="none" stroke={ink} strokeWidth="1.6" strokeLinejoin="round" />
+          <path d="M10 8 L10 12" stroke={ink} strokeWidth="1.6" strokeLinecap="round" />
+          <circle cx="10" cy="14.5" r="0.9" fill={ink} />
+        </svg>
+      )
+    case 'low':
+      return (
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+          <circle cx="10" cy="10" r="7" fill={ink} opacity="0.15" />
+          <path d="M10 6 L10 11" stroke={ink} strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="10" cy="13.5" r="0.9" fill={ink} />
+        </svg>
+      )
+    case 'ok':
+      return (
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+          <circle cx="10" cy="10" r="7" fill={ink} opacity="0.15" />
+          <path d="M6.5 10 L9 12.5 L13.5 8" fill="none" stroke={ink} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      )
+    case 'no_count':
+      return (
+        <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden>
+          <circle cx="10" cy="10" r="7" fill="none" stroke={ink} strokeWidth="1.4" strokeDasharray="2 2" />
+          <text x="10" y="14" textAnchor="middle" fontFamily="'Geist Mono', ui-monospace, monospace" fontSize="10" fontWeight="600" fill={ink}>?</text>
+        </svg>
+      )
+  }
+}
+
 export default function InventoryClient({ items, transactions, restockOrders, closedRestockOrders = [], duplicateGroups = [], mergeableItems = [], archivedInRecipes = [], lang }: {
   items: Item[]
   transactions: Transaction[]
@@ -244,35 +348,44 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
     [restockOrders]
   )
 
-  return (
-    <div className="max-w-[1400px]">
+  // Search focus is inline-driven so the pill ring + border animate
+  // in one place — Tailwind's focus/focus-within can't reach the
+  // wrapper the way this design wants (whole pill lights up, not
+  // just the input).
+  const [searchFocused, setSearchFocused] = useState(false)
 
-      {/* ---- HEADER — same shape as Finance / Staffing: strong   */}
-      {/*    title + one-line subtitle, mobile-only inline action.   */}
-      {/* `Merge items` is the always-visible escape hatch for       */}
-      {/*    duplicate cleanup when the banner doesn't fire — for     */}
-      {/*    example, when one of the duplicates is already archived */}
-      {/*    or the auto-detection's name-normalization missed them. */}
-      <div className="mb-7 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-[28px] leading-tight font-semibold tracking-tight text-gray-900">{t('Inventory', 'Inventario')}</h1>
-          <p className="mt-1.5 text-sm text-gray-500">{t('Track stock health for ingredients and operational supplies.', 'Monitorea la salud del stock de ingredientes y suministros operativos.')}</p>
-        </div>
-        <div className="flex-shrink-0 flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setDrawer({ mode: 'merge-items' })}
-            className="text-[11px] font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline transition-colors"
-          >
-            {t('Merge items', 'Combinar artículos')}
-          </button>
-          {/* Mobile-only fallback — desktop uses the right-rail inline flow */}
-          <Link href="/inventory/new-item"
-            className="lg:hidden inline-flex items-center rounded-lg border border-gray-200/80 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors">
-            {t('+ New item', '+ Nuevo artículo')}
-          </Link>
-        </div>
-      </div>
+  // Small helper for the header stat row ("12 items · 3 need
+  // restocking"). Fabricated inline to keep call sites terse.
+  const stat = (v: string, label: string, color: string = INK) => (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', color }}>{v}</span>
+      <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+    </span>
+  )
+  const dot = <span style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center' }} />
+
+  const ghostBtn: React.CSSProperties = {
+    display: 'inline-flex', alignItems: 'center', gap: 8,
+    border: `1px solid ${LINE}`, background: '#fff', borderRadius: 10,
+    height: 34, padding: '0 13px', font: 'inherit', fontSize: 13,
+    fontWeight: 500, color: '#3F3F46', cursor: 'pointer',
+  }
+  const inkBtn: React.CSSProperties = {
+    border: 0, background: INK, color: PAPER, borderRadius: 10,
+    height: 34, padding: '0 16px', font: 'inherit', fontSize: 13,
+    fontWeight: 600, cursor: 'pointer',
+  }
+
+  const filterMeta: Array<{ key: Filter; label: string; count: number; tone: { bg: string; ink: string; dot: string } | null }> = [
+    { key: 'all',      label: t('All', 'Todos'),                count: counts.total,    tone: null              },
+    { key: 'out',      label: t('Out', 'Agotado'),              count: counts.out,      tone: STATUS_TONE.out   },
+    { key: 'low',      label: t('Low', 'Bajo'),                 count: counts.low,      tone: STATUS_TONE.low   },
+    { key: 'ok',       label: t('Healthy', 'Saludable'),        count: counts.ok,       tone: STATUS_TONE.ok    },
+    { key: 'no_count', label: t('Never counted', 'Sin conteo'), count: counts.no_count, tone: STATUS_TONE.no_count },
+  ]
+
+  return (
+    <div style={{ maxWidth: 1400, fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
 
       {/* Duplicate-name banner.
           Renders when any item-name group has multiple rows and at
@@ -301,168 +414,341 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
       )}
 
       {items.length === 0 ? (
-        <div className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] p-12 text-center">
-          <p className="text-sm font-semibold text-gray-700">{t('No inventory items yet', 'Sin artículos de inventario aún')}</p>
-          <p className="mx-auto mt-1.5 max-w-sm text-xs text-gray-500 leading-relaxed">
+        <div style={{
+          border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+          padding: 48, textAlign: 'center',
+        }}>
+          <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: '#3F3F46' }}>
+            {t('No inventory items yet', 'Sin artículos de inventario aún')}
+          </p>
+          <p style={{ margin: '6px auto 0', maxWidth: 380, fontSize: 12, color: FAINT, lineHeight: 1.5 }}>
             {t('Add ingredients and products to start tracking stock health and movements.', 'Agrega ingredientes y productos para comenzar a rastrear la salud del stock y los movimientos.')}
           </p>
           <button
             type="button"
             onClick={() => setDrawer({ mode: 'create-item' })}
-            className="mt-5 inline-flex items-center rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white hover:bg-gray-800 transition-colors"
+            style={{ ...inkBtn, marginTop: 20 }}
           >
             {t('+ Track new item', '+ Rastrear nuevo artículo')}
           </button>
         </div>
       ) : (
-        <>
-          {/* ---- QUERY / ACTION STRIP ----
-              One horizontal strip: wide search on the left, three
-              page-level actions on the right (+ Item / Orders /
-              Cart). Cart carries a live badge of draft line count.
-              All three open drawers — there's no permanent rail
-              anymore; the page stays focused on the list. */}
-          <div className="mb-5 flex flex-wrap items-center gap-2.5">
-            <div className="relative flex-1 min-w-[180px] sm:min-w-[280px]">
-              <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
-              </svg>
+        <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+
+          {/* ---- HEADER BAND ----
+              Title + inline stats on the left; four actions on the
+              right (Merge / Orders / Cart / Add item). Stats read
+              as headline facts, not badges — a mono count paired
+              with a muted noun keeps the eye moving fast. */}
+          <div style={{
+            padding: '16px 16px 14px', display: 'flex',
+            alignItems: 'center', justifyContent: 'space-between',
+            gap: 24, flexWrap: 'wrap',
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
+                {t('Inventory', 'Inventario')}
+              </h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 7, flexWrap: 'wrap' }}>
+                {stat(String(counts.total), counts.total === 1 ? t('item', 'artículo') : t('items', 'artículos'))}
+                {(counts.out + counts.low) > 0 && (<>{dot}{stat(String(counts.out + counts.low), t('need restocking', 'requieren reabastecimiento'), STATUS_TONE.low.ink)}</>)}
+                {counts.no_count > 0 && (<>{dot}{stat(String(counts.no_count), t('uncounted', 'sin conteo'), STATUS_TONE.no_count.ink)}</>)}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setDrawer({ mode: 'merge-items' })}
+                style={ghostBtn}
+                title={t('Merge duplicate items', 'Combinar artículos duplicados')}
+              >
+                {t('Merge', 'Combinar')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawer({ mode: 'orders' })}
+                style={ghostBtn}
+                title={t('Restock orders awaiting receipt', 'Órdenes de reabastecimiento esperando recepción')}
+              >
+                <OrdersIcon />
+                {t('Orders', 'Órdenes')}
+                {orderedOrders.length > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 18, height: 18, borderRadius: 999,
+                    background: STATUS_TONE.low.bg, color: STATUS_TONE.low.ink,
+                    fontFamily: MONO, fontSize: 10, fontWeight: 600, padding: '0 4px',
+                  }}>
+                    {orderedOrders.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawer({ mode: 'cart' })}
+                style={ghostBtn}
+                title={t('Items staged for your next restock order', 'Artículos preparados para tu próxima orden de reabastecimiento')}
+              >
+                <CartIcon />
+                {t('Cart', 'Carrito')}
+                {draftOrders.length > 0 && (
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    minWidth: 18, height: 18, borderRadius: 999,
+                    background: INK, color: PAPER,
+                    fontFamily: MONO, fontSize: 10, fontWeight: 600, padding: '0 4px',
+                  }}>
+                    {draftOrders.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDrawer({ mode: 'create-item' })}
+                style={inkBtn}
+              >
+                {t('Add item', 'Añadir artículo')}
+              </button>
+            </div>
+          </div>
+
+          {/* ---- FILTER BAR + SEARCH PILL ----
+              Five pills for the four health buckets + All, with a
+              live count on each. Search pill sits on the right and
+              lights up on focus (bg + border + soft ring). */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
+            borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
+            background: SURFACE, flexWrap: 'wrap',
+          }}>
+            {filterMeta.map((f) => {
+              const on = filter === f.key
+              return (
+                <button
+                  key={f.key}
+                  type="button"
+                  onClick={() => setFilter(f.key)}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 7,
+                    borderRadius: 999, padding: '5px 12px',
+                    font: 'inherit', fontSize: 12, cursor: 'pointer',
+                    border: `1px solid ${on ? INK : LINE}`,
+                    background: on ? INK : '#fff',
+                    color: on ? PAPER : '#3F3F46',
+                    fontWeight: on ? 600 : 500,
+                  }}
+                >
+                  {f.tone && <span style={{ width: 6, height: 6, borderRadius: '50%', background: f.tone.dot }} />}
+                  {f.label}
+                  <span style={{ fontFamily: MONO, fontSize: 10, color: on ? 'rgba(250,249,246,0.65)' : FAINT }}>
+                    {f.count}
+                  </span>
+                </button>
+              )
+            })}
+
+            <span style={{
+              marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8,
+              borderRadius: 999, padding: '0 6px 0 12px', height: 34,
+              transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
+              background: searchFocused ? '#fff' : FILL,
+              border: `1px solid ${searchFocused ? INK : 'transparent'}`,
+              boxShadow: searchFocused ? '0 0 0 3px rgba(24,24,27,0.06)' : 'none',
+            }}>
+              <SearchIcon color={searchFocused ? '#52525B' : FAINT} />
               <input
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder={t('Search items by name…', 'Buscar artículos por nombre…')}
-                className="h-10 w-full rounded-lg border border-gray-200/80 bg-white pl-9 pr-3 text-sm text-gray-900 placeholder:text-gray-400 shadow-[0_1px_2px_rgba(0,0,0,0.03)] focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 transition"
+                onFocus={() => setSearchFocused(true)}
+                onBlur={() => setSearchFocused(false)}
+                placeholder={`${t('Search', 'Buscar')} ${counts.total} ${counts.total === 1 ? t('item', 'artículo') : t('items', 'artículos')}`}
+                style={{
+                  border: 0, background: 'transparent', fontFamily: 'inherit',
+                  fontSize: 13, color: INK, width: 180, padding: 0, outline: 'none',
+                }}
               />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setDrawer({ mode: 'create-item' })}
-              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              {t('Item', 'Artículo')}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setDrawer({ mode: 'orders' })}
-              title={t('Restock orders awaiting receipt', 'Órdenes de reabastecimiento esperando recepción')}
-              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
-              {t('Restock orders', 'Órdenes de reabastecimiento')}
-              {orderedOrders.length > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-amber-100 text-amber-700 text-[10px] font-bold px-1">
-                  {orderedOrders.length}
-                </span>
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  title={t('Clear search', 'Borrar búsqueda')}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, border: 0, borderRadius: '50%',
+                    background: LINE, font: 'inherit', fontSize: 13, lineHeight: 1,
+                    color: '#52525B', cursor: 'pointer', flex: '0 0 auto',
+                  }}
+                >
+                  ×
+                </button>
               )}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setDrawer({ mode: 'cart' })}
-              title={t('Items staged for your next restock order', 'Artículos preparados para tu próxima orden de reabastecimiento')}
-              className="inline-flex items-center gap-1.5 h-10 rounded-lg border border-gray-200/80 bg-white px-3.5 text-xs font-medium text-gray-700 hover:bg-gray-50 shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              {t('Restock cart', 'Carrito de reabastecimiento')}
-              {draftOrders.length > 0 && (
-                <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold px-1">
-                  {draftOrders.length}
-                </span>
-              )}
-            </button>
+            </span>
           </div>
 
-          {/* ---- STOCK HEALTH CARD ----
-              Card header now hosts the status filter pills on the
-              right so the filters read as controls for THIS list
-              rather than a standalone status strip. On narrow
-              widths the title/subtitle block keeps its line height
-              and the pills wrap below within the same header
-              padding. "Showing N of M · Clear filters" still lives
-              below when a filter or search is active. */}
-          <section className="rounded-xl border border-gray-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.03)] overflow-hidden">
-            <div className="border-b border-gray-100 px-6 py-3">
-              <div className="flex items-center justify-between gap-4 flex-wrap">
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold tracking-tight text-gray-900">{t('Stock Health', 'Salud del stock')}</h2>
-                  <p className="text-[11px] text-gray-500 mt-0.5">
-                    {t('Items sorted by urgency — out, low, uncounted, then healthy.', 'Artículos ordenados por urgencia: agotado, bajo, sin conteo, luego saludables.')}
-                  </p>
-                </div>
-                <StockStatusStrip
-                  counts={counts}
-                  filter={filter}
-                  onFilter={setFilter}
-                  t={t}
-                />
+          {/* ---- ROWS ----
+              Soft rows inside the board card. Each row: status
+              glyph tile · name + status chip (+ recipe count if
+              linked) · qty column with reorder line · action
+              button · chevron. Row click opens the item drawer;
+              the action button is the visible affordance for the
+              same destination — count for uncounted, cart for
+              everything else. */}
+          <div style={{ padding: 8 }}>
+            {pageItems.length === 0 ? (
+              <div style={{ padding: '48px 16px', textAlign: 'center', color: FAINT, fontSize: 12 }}>
+                {t('No items match this filter.', 'Ningún artículo coincide con este filtro.')}
+                {(filter !== 'all' || query.length > 0) && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      onClick={() => { setFilter('all'); setQuery('') }}
+                      style={{
+                        border: 0, background: 'transparent', padding: 0,
+                        font: 'inherit', fontSize: 12, fontWeight: 500,
+                        color: '#2563EB', cursor: 'pointer',
+                      }}
+                    >
+                      {t('Clear filters', 'Limpiar filtros')}
+                    </button>
+                  </>
+                )}
               </div>
-              {(filter !== 'all' || query.length > 0) && (
-                <div className="mt-3 flex items-center gap-2">
-                  <span className="text-[11px] text-gray-500 font-mono tabular-nums">
-                    {t('Showing', 'Mostrando')} <span className="font-semibold text-gray-700">{filteredItems.length}</span> {t('of', 'de')} <span className="font-semibold text-gray-700">{counts.total}</span>
+            ) : pageItems.map((item) => {
+              const tone = STATUS_TONE[item.status]
+              const uncounted = item.status === 'no_count'
+              // Depletion can drag `estimated` below zero (write-ahead
+              // consumption with no follow-up count). Clamp for
+              // display so the qty reads as an actionable target.
+              const displayQty = item.estimated === null
+                ? null
+                : Math.max(0, item.estimated)
+              const qtyColor =
+                uncounted ? GHOST
+                  : item.status === 'ok' ? INK
+                    : tone.ink
+              const selected = item.id === selectedId
+              return (
+                <div
+                  key={item.id}
+                  onClick={() => setDrawer({ mode: 'item', itemId: item.id })}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 13,
+                    padding: '11px 12px', borderRadius: 10, cursor: 'pointer',
+                    border: `1px solid ${selected ? LINE : 'transparent'}`,
+                    background: selected ? SURFACE : 'transparent',
+                    transition: 'background 120ms',
+                  }}
+                >
+                  <span style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 34, height: 34, borderRadius: 10, flex: '0 0 auto',
+                    background: tone.bg,
+                  }}>
+                    <StatusGlyph status={item.status} />
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => { setFilter('all'); setQuery('') }}
-                    className="text-xs font-medium text-gray-500 hover:text-gray-700 underline-offset-2 hover:underline"
-                  >
-                    {t('Clear filters', 'Limpiar filtros')}
-                  </button>
-                </div>
-              )}
-            </div>
 
-            <table className="w-full text-sm mt-2">
-              <tbody className="divide-y divide-gray-100">
-                {pageItems.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-6 py-14 text-center text-xs text-gray-400">
-                      {t('No items match this filter.', 'Ningún artículo coincide con este filtro.')}
-                    </td>
-                  </tr>
-                ) : pageItems.map((item) => {
-                  const itemOrders = ordersByItem.get(item.id) ?? []
-                  const draftLine = itemOrders.find((o) => o.status === 'draft') ?? null
-                  return (
-                    <ItemRow
-                      key={item.id}
-                      item={item}
-                      draftLine={draftLine}
-                      selected={item.id === selectedId}
-                      onOpen={() => setDrawer({ mode: 'item', itemId: item.id })}
-                      t={t}
-                    />
-                  )
-                })}
-              </tbody>
-            </table>
+                  <span style={{ minWidth: 0, flex: 1, paddingRight: 24 }}>
+                    <span style={{
+                      display: 'block', fontSize: 14, fontWeight: 600,
+                      letterSpacing: '-0.015em',
+                      whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                    }}>
+                      {item.name}
+                    </span>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
+                      <span style={{
+                        display: 'inline-flex', alignItems: 'center',
+                        borderRadius: 999, padding: '1px 8px',
+                        fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
+                        background: tone.bg, color: tone.ink,
+                      }}>
+                        {translateStatusLabel(item.status, t)}
+                      </span>
+                      {item.recipeLinks > 0 && (
+                        <span style={{ fontSize: 11, color: FAINT }}>
+                          {t('used in', 'usado en')} {item.recipeLinks} {item.recipeLinks === 1 ? t('recipe', 'receta') : t('recipes', 'recetas')}
+                        </span>
+                      )}
+                    </span>
+                  </span>
+
+                  <span style={{ width: 150, flex: '0 0 150px', textAlign: 'right' }}>
+                    <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'flex-end', gap: 5 }}>
+                      <span style={{
+                        fontFamily: MONO, fontSize: 16, fontWeight: 600,
+                        letterSpacing: '-0.03em', color: qtyColor,
+                      }}>
+                        {displayQty === null ? '—' : displayQty.toFixed(2)}
+                      </span>
+                      <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{item.unitOfMeasure}</span>
+                    </span>
+                    <span style={{
+                      display: 'block', fontFamily: MONO, fontSize: 11, color: FAINT,
+                      marginTop: 2, whiteSpace: 'nowrap',
+                    }}>
+                      {t('restock at', 'reabastecer a')} {item.threshold.toFixed(2)} {item.unitOfMeasure}
+                    </span>
+                  </span>
+
+                  <span style={{ width: 48, flex: '0 0 48px', display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      title={uncounted
+                        ? t('Count this item', 'Contar este artículo')
+                        : t('Add to restock cart', 'Añadir al carrito de reabastecimiento')}
+                      onClick={(e) => {
+                        // Same destination as the row click for now
+                        // (opens the item drawer). Kept as its own
+                        // control so a future quick-add-to-cart flow
+                        // can hang here without touching row markup.
+                        e.stopPropagation()
+                        setDrawer({ mode: 'item', itemId: item.id })
+                      }}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        width: 34, height: 34, border: `1px solid ${LINE}`,
+                        background: '#fff', borderRadius: 9, padding: 0,
+                        font: 'inherit', color: '#52525B', cursor: 'pointer',
+                      }}
+                    >
+                      {uncounted ? <CountIcon /> : <CartIcon />}
+                    </button>
+                  </span>
+
+                  <span style={{ fontSize: 12, color: GHOST, marginLeft: -4 }}>›</span>
+                </div>
+              )
+            })}
 
             {filteredItems.length > PAGE_SIZE && (
-              <div className="border-t border-gray-100 px-6 py-2.5 flex items-center justify-between">
-                <p className="text-[10px] text-gray-500 font-mono tabular-nums">
-                  {t('Showing', 'Mostrando')} <span className="font-semibold text-gray-700">{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> {t('of', 'de')} <span className="font-semibold text-gray-700">{filteredItems.length}</span>
-                </p>
-                <div className="inline-flex items-center gap-1">
+              <div style={{
+                borderTop: `1px solid ${LINE}`, marginTop: 8,
+                padding: '10px 8px 4px', display: 'flex',
+                alignItems: 'center', justifyContent: 'space-between',
+                flexWrap: 'wrap', gap: 8,
+              }}>
+                <span style={{ fontFamily: MONO, fontSize: 10, color: MUTED }}>
+                  {t('Showing', 'Mostrando')} <span style={{ color: '#3F3F46', fontWeight: 600 }}>{pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, filteredItems.length)}</span> {t('of', 'de')} <span style={{ color: '#3F3F46', fontWeight: 600 }}>{filteredItems.length}</span>
+                </span>
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <button
                     type="button"
                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                     disabled={safePage === 1}
                     aria-label={t('Previous items', 'Artículos anteriores')}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    style={{
+                      border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+                      padding: '2px 10px', font: 'inherit', fontSize: 12,
+                      color: safePage === 1 ? GHOST : '#52525B',
+                      cursor: safePage === 1 ? 'not-allowed' : 'pointer',
+                      opacity: safePage === 1 ? 0.5 : 1,
+                    }}
                   >
                     ←
                   </button>
-                  <span className="text-[10px] text-gray-500 px-1.5 font-mono tabular-nums">
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: MUTED, padding: '0 4px' }}>
                     {safePage} / {totalPages}
                   </span>
                   <button
@@ -470,15 +756,21 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                     disabled={safePage === totalPages}
                     aria-label={t('Next items', 'Artículos siguientes')}
-                    className="rounded-md border border-gray-200 bg-white px-2 py-0.5 text-[10px] font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    style={{
+                      border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+                      padding: '2px 10px', font: 'inherit', fontSize: 12,
+                      color: safePage === totalPages ? GHOST : '#52525B',
+                      cursor: safePage === totalPages ? 'not-allowed' : 'pointer',
+                      opacity: safePage === totalPages ? 0.5 : 1,
+                    }}
                   >
                     →
                   </button>
                 </div>
               </div>
             )}
-          </section>
-        </>
+          </div>
+        </div>
       )}
 
       {/* ---- DRAWERS ----

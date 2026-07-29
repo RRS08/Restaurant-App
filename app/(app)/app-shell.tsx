@@ -98,19 +98,21 @@ export default function AppShell({
         </div>
 
         {/* ----------------------------------------------------------------
-            Tablet (md–lt-xl) — 76px icon rail. Sticky flex item so
-            it stays pinned as the page scrolls. Always visible.
+            Tablet (md–lt-xl) — 56px icon rail. FIXED, not sticky,
+            so it never rubber-bands with content on iOS Safari's
+            overscroll. Out of flex flow — main compensates with
+            md:pl-14 (56px) below.
         ---------------------------------------------------------------- */}
-        <div className="hidden md:block xl:hidden sticky top-0 h-screen self-start">
+        <div className="hidden md:block xl:hidden fixed inset-y-0 left-0 z-20">
           {rail}
         </div>
 
         {/* ----------------------------------------------------------------
-            Desktop (xl+) — labeled sidebar as a sticky flex item.
-            Same content as the mobile overlay above, different
-            positioning.
+            Desktop (xl+) — labeled 240px sidebar. Same fixed
+            treatment for the same reason (Mac trackpad rubber-
+            band). Main compensates with xl:pl-60 (240px) below.
         ---------------------------------------------------------------- */}
-        <div className="hidden xl:block sticky top-0 h-screen self-start">
+        <div className="hidden xl:block fixed inset-y-0 left-0 z-20">
           {sidebar}
         </div>
 
@@ -129,12 +131,13 @@ export default function AppShell({
             • <md   pt-16 clears the fixed Menu button; small
                      16px padding elsewhere so tap targets don't
                      touch the viewport edge on a phone.
-            • md+   NO padding — pages at tablet AND desktop
-                     widths own their own edge-to-edge treatment
-                     (see the sales bands + content cap).
-            No overflow-y here — the WINDOW is the scroll container
-            so the sticky sidebar/rail can pin properly. */}
-        <main className="flex-1 min-w-0 p-4 pt-16 md:p-0">
+            • md–xl NO padding except left = rail width (56px),
+                     since the rail is fixed and out of flow.
+            • xl+   NO padding except left = sidebar width (240px),
+                     since the sidebar is fixed and out of flow.
+            No overflow-y here — the WINDOW is the scroll
+            container so the fixed rail stays perfectly locked. */}
+        <main className="flex-1 min-w-0 p-4 pt-16 md:p-0 md:pl-14 xl:pl-60">
           {children}
         </main>
 

@@ -118,6 +118,18 @@ function translateStatusLabel(status: Item['status'], t: T): string {
   }
 }
 
+// Long-form status label — used in the row meta line where full
+// phrasing reads better ("Running low" vs "Low"). Filter pills and
+// tight chips stay on the short form above.
+function longStatusLabel(status: Item['status'], t: T): string {
+  switch (status) {
+    case 'no_count': return t('Never counted', 'Nunca contado')
+    case 'out':      return t('Out of stock', 'Agotado')
+    case 'low':      return t('Running low', 'Nivel bajo')
+    case 'ok':       return t('Healthy', 'Saludable')
+  }
+}
+
 const STATUS_ORDER: Record<Item['status'], number> = { out: 0, low: 1, no_count: 2, ok: 3 }
 type Filter = 'all' | 'out' | 'low' | 'no_count' | 'ok'
 
@@ -660,20 +672,23 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                     }}>
                       {item.name}
                     </span>
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 3, flexWrap: 'wrap' }}>
-                      <span style={{
-                        display: 'inline-flex', alignItems: 'center',
-                        borderRadius: 999, padding: '1px 8px',
-                        fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
-                        background: tone.bg, color: tone.ink,
-                      }}>
-                        {translateStatusLabel(item.status, t)}
+                    {/* Meta line — [category] [status label]. Schema
+                        doesn't carry a real category column yet, so
+                        the left slot renders a muted "Uncategorized"
+                        placeholder that will swap to the real value
+                        the moment we add the column + editor. Status
+                        label reads long-form here (there's room);
+                        filter pills keep the short form. */}
+                    <span style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: FAINT }}>
+                        {t('Uncategorized', 'Sin categoría')}
                       </span>
-                      {item.recipeLinks > 0 && (
-                        <span style={{ fontSize: 11, color: FAINT }}>
-                          {t('used in', 'usado en')} {item.recipeLinks} {item.recipeLinks === 1 ? t('recipe', 'receta') : t('recipes', 'recetas')}
-                        </span>
-                      )}
+                      <span style={{
+                        fontSize: 12, fontWeight: 600, color: tone.ink,
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {longStatusLabel(item.status, t)}
+                      </span>
                     </span>
                   </span>
 

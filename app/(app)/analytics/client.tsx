@@ -295,12 +295,27 @@ export default function AnalyticsClient(props: Props) {
   // holding three data cards (chart, category, payment). Phone
   // (<md) keeps the old bordered-card + 3-KPI-grid layout.
   const [isBands, setIsBands] = useState(false)
+  // Desktop-only flag for the chart plot height bump. On a wide
+  // monitor the chart card feels stretched horizontally against
+  // the 152px iPad plot height; bumping to 240 gives it enough
+  // vertical mass to balance against the wider composition
+  // cards sitting below it. Tablet keeps 152 so the composition
+  // grid still lands above the iPad fold.
+  const [isWide, setIsWide] = useState(false)
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const update = () => setIsBands(mq.matches)
+    const bandsMq = window.matchMedia('(min-width: 768px)')
+    const wideMq = window.matchMedia('(min-width: 1280px)')
+    const update = () => {
+      setIsBands(bandsMq.matches)
+      setIsWide(wideMq.matches)
+    }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    bandsMq.addEventListener('change', update)
+    wideMq.addEventListener('change', update)
+    return () => {
+      bandsMq.removeEventListener('change', update)
+      wideMq.removeEventListener('change', update)
+    }
   }, [])
 
   const isWeek = range === 'week'
@@ -924,7 +939,7 @@ export default function AnalyticsClient(props: Props) {
         </div>
 
         <div style={{ padding: '16px 16px 12px', display: 'flex', gap: 12 }}>
-          <div style={{ width: 44, flex: '0 0 44px', height: isBands ? 152 : 190, position: 'relative' }}>
+          <div style={{ width: 44, flex: '0 0 44px', height: isWide ? 240 : (isBands ? 152 : 190), position: 'relative' }}>
             {ticks.map((tk) => (
               <span key={tk.frac} style={{ position: 'absolute', right: 0, bottom: `${tk.frac * 100}%`, transform: 'translateY(50%)', fontFamily: MONO, fontSize: 9, color: FAINT }}>
                 {isRevenue && tk.value >= 1000 ? `${tk.value / 1000}k` : tk.value}
@@ -933,7 +948,7 @@ export default function AnalyticsClient(props: Props) {
           </div>
 
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ position: 'relative', height: isBands ? 152 : 190 }}>
+            <div style={{ position: 'relative', height: isWide ? 240 : (isBands ? 152 : 190) }}>
               {ticks.map((tk, i) => (
                 <span key={tk.frac} style={{ position: 'absolute', left: 0, right: 0, bottom: `${tk.frac * 100}%`, height: 1, background: i === 0 ? LINE : FILL }} />
               ))}
@@ -1081,7 +1096,7 @@ export default function AnalyticsClient(props: Props) {
                 key={c.name}
                 onMouseEnter={() => setHoveredCat(c.name)}
                 onMouseLeave={() => setHoveredCat((cur) => (cur === c.name ? null : cur))}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 0', cursor: 'default' }}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', cursor: 'default' }}
               >
                 <span style={{ width: 150, flex: '0 0 150px', minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
                 <span style={{ position: 'relative', flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, height: 8, borderRadius: 999, background: LINE_SOFT }}>
@@ -1183,7 +1198,7 @@ export default function AnalyticsClient(props: Props) {
                 </div>
               </div>
               {pays.filter((p) => p.count > 0).map((p) => (
-                <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 0', borderBottom: `1px solid ${LINE_SOFT}` }}>
+                <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 0', borderBottom: `1px solid ${LINE_SOFT}` }}>
                   <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, borderRadius: 9, flex: '0 0 auto', background: p.style.bg, color: p.style.ink }}>
                     <PaymentIcon name={p.key} />
                   </span>
@@ -1264,7 +1279,7 @@ function AnalyticsCard({ title, subtitle, footLeft, footRight, children }: {
         <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{title}</div>
         <div style={{ fontSize: 12, color: FAINT, marginTop: 1 }}>{subtitle}</div>
       </div>
-      <div style={{ padding: '18px 16px 12px', flex: 1 }}>{children}</div>
+      <div style={{ padding: '14px 16px 8px', flex: 1 }}>{children}</div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 16px', borderTop: `1px solid ${LINE}`, background: SURFACE, borderBottomLeftRadius: 12, borderBottomRightRadius: 12 }}>
         <span style={{ fontSize: 12, color: MUTED }}>{footLeft}</span>
         <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 600 }}>{footRight}</span>

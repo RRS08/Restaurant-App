@@ -507,13 +507,14 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
         position: 'absolute',
         left: `${band.startPct}%`, width: `${band.widthPct}%`,
         top: 0, bottom: 0,
-        // Background tint only on TODAY's row so the operational
-        // window on other days doesn't compete visually with the
-        // real shift bars. Dotted setup/close-down edges still
-        // render on every day for the time-of-day context.
-        background: today ? '#F6FAFF' : 'transparent',
-        borderLeft: `1px dotted ${today ? '#DBEAFE' : '#D6D5D1'}`,
-        borderRight: `1px dotted ${today ? '#DBEAFE' : '#D6D5D1'}`,
+        // No background fill — the row tint already marks today,
+        // and a second tint on top read as a stray blue hue that
+        // competed with the shift bars. Dotted setup/close-down
+        // edges still render on every day for time-of-day context
+        // and use the same neutral grey regardless of today.
+        background: 'transparent',
+        borderLeft: `1px dotted #D6D5D1`,
+        borderRight: `1px dotted #D6D5D1`,
       }} />
     )
   }

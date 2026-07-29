@@ -34,28 +34,26 @@ interface DailyBucket {
   orders: number
 }
 
-interface CategoryMixEntry {
-  id: string
-  name: string
-  revenue: number
-  qty: number
-}
-
-interface PaymentMix {
+interface DailyPaymentBucket {
+  date: string
   cash: { revenue: number; orders: number }
   card: { revenue: number; orders: number }
   other: { revenue: number; orders: number }
-  totalRevenue: number
-  totalOrders: number
+}
+
+interface DailyCategoryEntry {
+  date: string
+  categoryId: string
+  categoryName: string
+  revenue: number
+  qty: number
 }
 
 interface Props {
   lang: Lang
   dailyBuckets: DailyBucket[]
-  categoryMix7d: CategoryMixEntry[]
-  categoryMix30d: CategoryMixEntry[]
-  paymentMix7d: PaymentMix
-  paymentMix30d: PaymentMix
+  dailyPayments: DailyPaymentBucket[]
+  dailyCategories: DailyCategoryEntry[]
 }
 
 type Metric = 'revenue' | 'orders'
@@ -82,12 +80,14 @@ type Metric = 'revenue' | 'orders'
 //     dailyBuckets, those days render as the design's low stub
 //     with copy "No sales" instead of "Closed". A follow-up can
 //     join business_hours server-side for the honest label.
-//   • Category shares come from categoryMix7d / categoryMix30d
-//     (top 5, plus an "Other" rollup when there are more).
-//   • Composition cards always reflect the current-window mix;
-//     historical week navigation rewinds the chart bars but not
-//     the mix cards. Subtitle says "last 7 / 30 days" to keep it
-//     honest — we don't have per-day category totals server-side.
+//   • Category shares are derived from dailyCategories filtered
+//     to the currently-visible done days (top 5, plus an "Other"
+//     rollup when there are more). Same for payment mix — both
+//     match the exact window the KPIs and chart show.
+//   • Historical week / month navigation rewinds composition too:
+//     jump to a prior week and the cards recompute against those
+//     days. Current-week view is Monday-anchored and builds up as
+//     the days accumulate.
 // ================================================================
 
 const INK = '#18181B'
@@ -180,10 +180,8 @@ export default function AnalyticsClient(props: Props) {
   const {
     lang,
     dailyBuckets,
-    categoryMix7d,
-    categoryMix30d,
-    paymentMix7d,
-    paymentMix30d,
+    dailyPayments,
+    dailyCategories,
   } = props
   const t = makeT(lang)
   const MONTHS = lang === 'es' ? MONTHS_ES : MONTHS_EN
@@ -192,10 +190,12 @@ export default function AnalyticsClient(props: Props) {
   // ---- Build the design's Monday-anchored DAILY window from real
   // dailyBuckets. Server ships up to WINDOW_DAYS (60) rows ending
   // today. We anchor index 0 to the first Monday in that window
-  // so the design's WEEK_START / TODAY math still works.
-  const { DAILY, TODAY, CURRENT_WEEK, BASE } = useMemo(() => {
+  // so the design's WEEK_START / TODAY math still works. dateKeys
+  // is the parallel ISO-key array so composition math can filter
+  // dailyPayments / dailyCategories by the visible window.
+  const { DAILY, TODAY, CURRENT_WEEK, BASE, dateKeys } = useMemo(() => {
     if (dailyBuckets.length === 0) {
-      return { DAILY: [] as Day[], TODAY: 0, CURRENT_WEEK: 0, BASE: new Date() }
+      return { DAILY: [] as Day[], TODAY: 0, CURRENT_WEEK: 0, BASE: new Date(), dateKeys: [] as string[] }
     }
     // Find the first Monday in the window; that becomes index 0.
     // JS getDay(): Sun=0 … Sat=6. Convert to Mon=0 … Sun=6 via +6 % 7.
@@ -227,7 +227,8 @@ export default function AnalyticsClient(props: Props) {
     if (todayIdx < 0) todayIdx = rows.length - 1
     const currentWeekIdx = todayIdx - ((todayIdx % 7 + 7) % 7)
 
-    return { DAILY: rows, TODAY: todayIdx, CURRENT_WEEK: Math.max(0, currentWeekIdx), BASE: base }
+    const keys = sliced.map((b) => b.date)
+    return { DAILY: rows, TODAY: todayIdx, CURRENT_WEEK: Math.max(0, currentWeekIdx), BASE: base, dateKeys: keys }
   }, [dailyBuckets, lang])
 
   // ---- View state ----
@@ -301,28 +302,81 @@ export default function AnalyticsClient(props: Props) {
   }, [calMonth, start, isWeek, BASE, TODAY, DAILY.length])
 
   // ---- Composition ----
-  // Category rows: top 5 by revenue from the appropriate window
-  // mix. Anything past the fifth rolls into "Other" so the sum
-  // stays honest against the KPI revenue.
-  const catSource = isWeek ? categoryMix7d : categoryMix30d
+  // Everything in the two cards is derived from the currently-
+  // visible done days so historical week navigation rewinds the
+  // mix, and the current week "builds up" as days accumulate
+  // instead of showing a stale rolling-7d snapshot.
+  const visibleFrom = isWeek ? start : start - 21
+  const visibleTo = start + 6
+  const visibleDoneKeys = useMemo(() => {
+    const keys = new Set<string>()
+    for (let i = visibleFrom; i <= visibleTo && i < dateKeys.length; i++) {
+      if (i < 0) continue
+      const row = DAILY[i]
+      if (row && row[2] !== null) keys.add(dateKeys[i])
+    }
+    return keys
+  }, [visibleFrom, visibleTo, dateKeys, DAILY])
+
+  // Category rows: sum revenue per category across the visible
+  // done days, sort desc, keep top 5, roll the rest into "Other".
   const cats = useMemo(() => {
-    const total = catSource.reduce((s, c) => s + c.revenue, 0)
-    if (total <= 0 || catSource.length === 0) {
+    if (visibleDoneKeys.size === 0) {
       return [] as Array<{ name: string; pct: number; amount: number }>
     }
-    const top = catSource.slice(0, 5)
-    const rest = catSource.slice(5)
+    const byCat = new Map<string, { name: string; revenue: number }>()
+    for (const e of dailyCategories) {
+      if (!visibleDoneKeys.has(e.date)) continue
+      const row = byCat.get(e.categoryId) ?? { name: e.categoryName, revenue: 0 }
+      row.revenue += e.revenue
+      byCat.set(e.categoryId, row)
+    }
+    const sorted = Array.from(byCat.values()).sort((a, b) => b.revenue - a.revenue)
+    const total = sorted.reduce((s, c) => s + c.revenue, 0)
+    if (total <= 0) return []
+    const top = sorted.slice(0, 5)
+    const rest = sorted.slice(5)
     const restRev = rest.reduce((s, c) => s + c.revenue, 0)
-    const rows = top.map((c) => ({ name: c.name, pct: Math.round((c.revenue / total) * 100), amount: c.revenue }))
+    const rows = top.map((c) => ({
+      name: c.name,
+      pct: Math.round((c.revenue / total) * 100),
+      amount: Math.round(c.revenue * 100) / 100,
+    }))
     if (restRev > 0) {
-      rows.push({ name: t('Other', 'Otros'), pct: Math.round((restRev / total) * 100), amount: restRev })
+      rows.push({
+        name: t('Other', 'Otros'),
+        pct: Math.round((restRev / total) * 100),
+        amount: Math.round(restRev * 100) / 100,
+      })
     }
     return rows
-  }, [catSource, t])
+  }, [visibleDoneKeys, dailyCategories, t])
 
-  // Payment rows fixed to Card / Other / Cash in that order,
-  // matching the sales-ledger convention.
-  const paymentSource = isWeek ? paymentMix7d : paymentMix30d
+  // Payment rows: fixed Card / Other / Cash order, matching the
+  // sales-ledger convention. Sums pulled from dailyPayments over
+  // the visible done days.
+  const paySums = useMemo(() => {
+    const acc = { cash: { revenue: 0, orders: 0 }, card: { revenue: 0, orders: 0 }, other: { revenue: 0, orders: 0 } }
+    for (const p of dailyPayments) {
+      if (!visibleDoneKeys.has(p.date)) continue
+      for (const k of ['cash', 'card', 'other'] as const) {
+        acc[k].revenue += p[k].revenue
+        acc[k].orders += p[k].orders
+      }
+    }
+    return acc
+  }, [visibleDoneKeys, dailyPayments])
+  const payTotalOrders = paySums.card.orders + paySums.other.orders + paySums.cash.orders
+
+  // Card subtitles echo the exact done-day range so the composition
+  // cards obviously match the chart / KPIs. Current partial week
+  // appends "so far" so the "builds up as the week fills" behavior
+  // is legible instead of surprising.
+  const hasFutureInWindow = days.some((d) => d[2] === null)
+  const windowSubtitle = done.length === 0
+    ? t('no days recorded yet', 'sin días registrados aún')
+    : `${done[0][0]} – ${done[done.length - 1][0]}${hasFutureInWindow ? ` · ${t('so far', 'hasta ahora')}` : ''}`
+
   const pays = useMemo(() => {
     const rows: Array<{
       key: 'card' | 'other' | 'cash'
@@ -332,14 +386,14 @@ export default function AnalyticsClient(props: Props) {
       pct: number
       style: typeof PAYMENT_STYLE[keyof typeof PAYMENT_STYLE]
     }> = [
-      { key: 'card',  name: t('Card', 'Tarjeta'), count: paymentSource.card.orders,  rev: paymentSource.card.revenue,  pct: 0, style: PAYMENT_STYLE.card  },
-      { key: 'other', name: t('Other', 'Otros'),  count: paymentSource.other.orders, rev: paymentSource.other.revenue, pct: 0, style: PAYMENT_STYLE.other },
-      { key: 'cash',  name: t('Cash', 'Efectivo'),count: paymentSource.cash.orders,  rev: paymentSource.cash.revenue,  pct: 0, style: PAYMENT_STYLE.cash  },
+      { key: 'card',  name: t('Card', 'Tarjeta'),  count: paySums.card.orders,  rev: paySums.card.revenue,  pct: 0, style: PAYMENT_STYLE.card  },
+      { key: 'other', name: t('Other', 'Otros'),   count: paySums.other.orders, rev: paySums.other.revenue, pct: 0, style: PAYMENT_STYLE.other },
+      { key: 'cash',  name: t('Cash', 'Efectivo'), count: paySums.cash.orders,  rev: paySums.cash.revenue,  pct: 0, style: PAYMENT_STYLE.cash  },
     ]
     const total = rows.reduce((s, r) => s + r.count, 0)
     if (total > 0) for (const r of rows) r.pct = Math.round((r.count / total) * 100)
     return rows
-  }, [paymentSource, t])
+  }, [paySums, t])
   const leader = pays.reduce((a, b) => (b.count > a.count ? b : a), pays[0])
 
   // ---- Chart footer stats ----
@@ -654,7 +708,7 @@ export default function AnalyticsClient(props: Props) {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <AnalyticsCard
           title={t('Where revenue comes from', 'De dónde vienen los ingresos')}
-          subtitle={`${t('Share of tracked revenue by category', 'Participación de los ingresos por categoría')} · ${isWeek ? t('last 7 days', 'últimos 7 días') : t('last 30 days', 'últimos 30 días')}`}
+          subtitle={`${t('Share of tracked revenue by category', 'Participación de los ingresos por categoría')} · ${windowSubtitle}`}
           footLeft={cats.length
             ? `${cats[0].name} ${t('carry', 'lleva')} ${cats[0].pct}% ${t('of revenue', 'de los ingresos')}`
             : t('No category revenue in this window.', 'Sin ingresos por categoría en esta ventana.')}
@@ -678,13 +732,13 @@ export default function AnalyticsClient(props: Props) {
 
         <AnalyticsCard
           title={t('How guests paid', 'Cómo pagaron los clientes')}
-          subtitle={`${t('Share of orders by payment method', 'Participación de órdenes por método de pago')} · ${isWeek ? t('last 7 days', 'últimos 7 días') : t('last 30 days', 'últimos 30 días')}`}
-          footLeft={paymentSource.totalOrders
+          subtitle={`${t('Share of orders by payment method', 'Participación de órdenes por método de pago')} · ${windowSubtitle}`}
+          footLeft={payTotalOrders
             ? `${leader.name} ${t('leads at', 'lidera con')} ${leader.pct}% ${t('of orders', 'de las órdenes')}`
             : t('No payment mix yet.', 'Sin mezcla de pagos aún.')}
-          footRight={`${paymentSource.totalOrders} ${t('orders', 'órdenes')}`}
+          footRight={`${payTotalOrders} ${t('orders', 'órdenes')}`}
         >
-          {paymentSource.totalOrders === 0 ? (
+          {payTotalOrders === 0 ? (
             <div style={{ padding: '18px 0', fontSize: 12, color: FAINT, textAlign: 'center' }}>
               {t('Payment method breakdown appears as orders come in.', 'El desglose por método de pago aparece cuando entran las órdenes.')}
             </div>

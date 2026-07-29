@@ -922,7 +922,7 @@ export default function AnalyticsClient(props: Props) {
           display: isBands ? 'flex' : 'block',
           flexDirection: isBands ? 'column' : undefined,
           gap: isBands ? 16 : undefined,
-          maxWidth: isWide ? 1200 : undefined,
+          maxWidth: isWide ? 1500 : undefined,
           margin: isWide ? '0 auto' : undefined,
         }}
       >

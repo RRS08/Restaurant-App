@@ -261,6 +261,7 @@ export default function AnalyticsClient(props: Props) {
   const [swipeX, setSwipeX] = useState<number | null>(null)
   const [swipeDX, setSwipeDX] = useState(0)
   const [hoveredPay, setHoveredPay] = useState<'card' | 'other' | 'cash' | null>(null)
+  const [hoveredCat, setHoveredCat] = useState<string | null>(null)
 
   const isWeek = range === 'week'
   const isRevenue = metric === 'revenue'
@@ -739,16 +740,51 @@ export default function AnalyticsClient(props: Props) {
             <div style={{ padding: '18px 0', fontSize: 12, color: FAINT, textAlign: 'center' }}>
               {t('Categories fill in as sales come through.', 'Las categorías se llenan a medida que llegan las ventas.')}
             </div>
-          ) : cats.map((c) => (
-            <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0' }}>
-              <span style={{ width: 150, flex: '0 0 150px', minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
-              <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, height: 8, borderRadius: 999, background: LINE_SOFT, overflow: 'hidden' }}>
-                <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: c.pct >= 20 ? INK : '#C4C4C7' }} />
-              </span>
-              <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, minWidth: 38, textAlign: 'right' }}>{c.pct}%</span>
-              <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT, minWidth: 56, textAlign: 'right' }}>{shortMoney(c.amount)}</span>
-            </div>
-          ))}
+          ) : cats.map((c) => {
+            const isHov = hoveredCat === c.name
+            // Anchor tooltip near the fill's right edge, clamped so
+            // near-zero bars still get a readable position and near-
+            // full bars don't overflow the card. Same edge-safe
+            // pattern as the payment-bar tooltip.
+            const anchorPct = Math.min(Math.max(c.pct, 4), 96)
+            const clampedTx = c.pct < 12 ? '-4px' : c.pct > 88 ? '-100%' : '-50%'
+            return (
+              <div
+                key={c.name}
+                onMouseEnter={() => setHoveredCat(c.name)}
+                onMouseLeave={() => setHoveredCat((cur) => (cur === c.name ? null : cur))}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', cursor: 'default' }}
+              >
+                <span style={{ width: 150, flex: '0 0 150px', minWidth: 0, fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.name}</span>
+                <span style={{ position: 'relative', flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, height: 8, borderRadius: 999, background: LINE_SOFT }}>
+                  <span style={{ display: 'block', width: `${c.pct}%`, height: '100%', borderRadius: 999, background: c.pct >= 20 ? INK : '#C4C4C7' }} />
+                  {isHov && (
+                    <div
+                      style={{
+                        position: 'absolute', bottom: 14, left: `${anchorPct}%`,
+                        transform: `translateX(${clampedTx})`,
+                        zIndex: 3, pointerEvents: 'none',
+                        border: `1px solid ${LINE}`, borderRadius: 10, background: '#fff',
+                        boxShadow: '0 8px 24px rgba(24,24,27,0.12)', padding: '7px 10px', whiteSpace: 'nowrap',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.pct >= 20 ? INK : '#C4C4C7' }} />
+                        <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em' }}>{c.name}</span>
+                      </div>
+                      <div style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 1 }}>
+                        {money(c.amount)}
+                      </div>
+                      <div style={{ fontFamily: MONO, fontSize: 10, color: FAINT, marginTop: 1 }}>
+                        {c.pct}% {t('of tracked revenue', 'de los ingresos rastreados')}
+                      </div>
+                    </div>
+                  )}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, minWidth: 38, textAlign: 'right' }}>{c.pct}%</span>
+              </div>
+            )
+          })}
         </AnalyticsCard>
 
         <AnalyticsCard

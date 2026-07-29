@@ -658,13 +658,15 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
         {view === 'week' ? (
           <div style={{ minWidth: 900 }}>
             {/* Hour ruler — gutter carries a DAY · HOURS eyebrow
-                to match the Day-view STAFF label. Explicit borderTop
-                so the ruler reads as its own strip separated from
-                the header above (was blending into the header
-                because both were surface-toned). */}
+                to match the Day-view STAFF label. borderTop only
+                at non-bands (phone), where the ScheduleHeader
+                sits above inside the same card and needs a visual
+                divider. At bands the ruler is the FIRST child of
+                the roster card, so its borderTop would double up
+                with the card's own border. */}
             <div style={{
               display: 'flex',
-              borderTop: `1px solid ${LINE}`,
+              borderTop: isBands ? 0 : `1px solid ${LINE}`,
               borderBottom: `1px solid ${LINE}`,
               background: SURFACE, position: 'sticky', top: 41, zIndex: 2,
             }}>
@@ -762,7 +764,10 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                   style={{
                     display: 'flex',
                     borderBottom: `1px solid ${LINE}`,
-                    background: isOver ? '#EFF6FF' : isToday ? '#F7FAFF' : undefined,
+                    // Today: subtle ink-tinted surface — matches
+                    // the Day view's black highlight vocabulary.
+                    // Drag-over keeps its blue drop-target signal.
+                    background: isOver ? '#EFF6FF' : isToday ? SURFACE : undefined,
                     minHeight: dayRowH,
                   }}
                 >
@@ -780,8 +785,9 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                       // Today marker paints as an inset shadow on
                       // the left — no layout impact so the cell's
                       // content sits at exactly the same X as every
-                      // other day.
-                      boxShadow: isToday ? `inset 3px 0 0 ${SIGNAL}` : 'none',
+                      // other day. Ink for a monochrome match with
+                      // the Day view's black day-strip highlight.
+                      boxShadow: isToday ? `inset 3px 0 0 ${INK}` : 'none',
                       background: 'transparent',
                       color: hoursForDay.closed ? FAINT : INK,
                       padding: '10px 12px',
@@ -791,7 +797,7 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                     }}
                   >
                     <span style={{ display: 'flex', alignItems: 'baseline', gap: 7 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: isToday ? SIGNAL : (hoursForDay.closed ? FAINT : INK) }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: hoursForDay.closed ? FAINT : INK }}>
                         {d.toLocaleDateString(dateLocale, { weekday: 'short' })} {d.getDate()}
                       </span>
                       <span style={{ fontSize: 10, color: '#C4C4C7' }}>{t('Edit', 'Editar')}</span>
@@ -1284,14 +1290,6 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
       <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '10px 14px', borderBottom: `1px solid ${LINE}` }}>
           <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Bench', 'Plantilla')}</div>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 6,
-            background: '#EFF6FF', color: SIGNAL, borderRadius: 999,
-            padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: SIGNAL }} />
-            {benchWithAssigned.filter((p) => !p.assigned).length} {t('available', 'disponible')}
-          </span>
         </div>
         <div style={{ padding: '12px 14px', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {benchWithAssigned.map((p) => {

@@ -269,9 +269,19 @@ export default function AnalyticsClient(props: Props) {
   }, [dailyBuckets, lang])
 
   // ---- View state ----
+  // Week and Month are two independent navigation axes. Week is
+  // indexed against DAILY (Monday-anchored); Month tracks a real
+  // calendar month so "August" reads as August 1–31, not "last 28
+  // days ending Sunday". Switching modes doesn't cross-sync — each
+  // mode remembers its own position.
   const [range, setRange] = useState<'week' | 'month'>('week')
   const [metric, setMetric] = useState<Metric>('revenue')
   const [weekStart, setWeekStart] = useState<number>(CURRENT_WEEK)
+  const nowRef = new Date()
+  const [monthAnchor, setMonthAnchor] = useState<{ y: number; m: number }>(() => ({
+    y: nowRef.getFullYear(),
+    m: nowRef.getMonth(),
+  }))
   const [hover, setHover] = useState<number | null>(null)
   const [calOpen, setCalOpen] = useState(false)
   const [calMonth, setCalMonth] = useState<Date>(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
@@ -282,9 +292,57 @@ export default function AnalyticsClient(props: Props) {
 
   const isWeek = range === 'week'
   const isRevenue = metric === 'revenue'
-  const minStart = isWeek ? 0 : 21
-  const start = Math.max(minStart, Math.min(CURRENT_WEEK, weekStart))
-  const days = isWeek ? DAILY.slice(start, start + 7) : DAILY.slice(start - 21, start + 7)
+
+  // Fast lookup from date-key → DAILY row. Month view generates
+  // its day range from calendar math and pulls each day's row
+  // from here, filling gaps outside the server window with a
+  // future/no-data placeholder.
+  const daysByKey = useMemo(() => {
+    const m = new Map<string, Day>()
+    DAILY.forEach((d, i) => m.set(dateKeys[i], d))
+    return m
+  }, [DAILY, dateKeys])
+
+  // Visible days + their date-keys, mode-aware.
+  const { days, visibleKeys } = useMemo(() => {
+    if (isWeek) {
+      const s = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
+      return {
+        days: DAILY.slice(s, s + 7),
+        visibleKeys: dateKeys.slice(s, s + 7),
+      }
+    }
+    // Month: enumerate each day-of-month (1..lastDay) and pull the
+    // row from daysByKey. Days outside the server window (before
+    // the fetch cutoff) render as zero-bar "no data" days; days in
+    // the future render as null-revenue placeholders.
+    const lastDay = new Date(monthAnchor.y, monthAnchor.m + 1, 0)
+    const now = new Date()
+    const outDays: Day[] = []
+    const outKeys: string[] = []
+    for (let d = 1; d <= lastDay.getDate(); d++) {
+      const day = new Date(monthAnchor.y, monthAnchor.m, d)
+      const key = toDateKey(day)
+      outKeys.push(key)
+      const existing = daysByKey.get(key)
+      if (existing) {
+        outDays.push(existing)
+      } else {
+        const isFuture = day.getTime() > now.getTime() && !sameDay(day, now)
+        outDays.push([
+          shortMonthDay(day, lang),
+          shortWeekdayEN(day),
+          isFuture ? null : 0,
+          isFuture ? null : 0,
+          isWeekendDate(day),
+          null,
+          null,
+        ])
+      }
+    }
+    return { days: outDays, visibleKeys: outKeys }
+  }, [isWeek, weekStart, monthAnchor, daysByKey, DAILY, dateKeys, CURRENT_WEEK, lang])
+
   const done = days.filter((d) => d[2] !== null)
 
   const revenue = sumOn(done, 2)
@@ -294,30 +352,64 @@ export default function AnalyticsClient(props: Props) {
 
   // Prev-period comparison for the delta chips.
   //
-  // Rule: compare only the SAME number of done days from the prior
-  // period, not the whole prior week / prior 28 days. Mid-week,
-  // "Mon–Tue this week" is compared against "Mon–Tue last week"
-  // instead of the full prior 7 days — otherwise a partial current
-  // week loses 90% to a fully-realized prior week and the delta
-  // chip reads as a false collapse.
-  //
-  // done days are always the first N slots of the visible window
-  // (future days are filtered out), so taking the first `done.length`
-  // slots from the prior period is the aligned same-days-of-week
-  // comparison.
-  const prevOffset = isWeek ? 7 : 28
-  const visibleStart = isWeek ? start : start - 21
-  const prevSliceStart = Math.max(0, visibleStart - prevOffset)
-  const prevSliceEnd = Math.min(DAILY.length, prevSliceStart + done.length)
-  const prevRows = DAILY.slice(prevSliceStart, prevSliceEnd)
+  // Week: prior week's same first-N days as done (aligned days of
+  // the week — "Mon–Tue this week" vs "Mon–Tue last week").
+  // Month: prior calendar month's same first-N days-of-month as
+  // done (Aug 1–2 vs Jul 1–2). This keeps partial current periods
+  // from losing to fully-realized prior ones.
+  const prevRows = useMemo(() => {
+    if (isWeek) {
+      const s = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
+      const from = Math.max(0, s - 7)
+      const to = Math.min(DAILY.length, from + done.length)
+      return DAILY.slice(from, to)
+    }
+    // Prior calendar month, same day-of-month range as done.
+    const rows: Day[] = []
+    for (let i = 0; i < done.length; i++) {
+      const day = new Date(monthAnchor.y, monthAnchor.m - 1, i + 1)
+      const key = toDateKey(day)
+      const existing = daysByKey.get(key)
+      if (existing) rows.push(existing)
+    }
+    return rows
+  }, [isWeek, weekStart, monthAnchor, done.length, daysByKey, DAILY, CURRENT_WEEK])
   const prev = { revenue: sumOn(prevRows, 2), orders: sumOn(prevRows, 3) }
   const prevAvg = prev.orders ? prev.revenue / prev.orders : 0
 
-  const shiftWeeks = (n: number) => {
-    setWeekStart((w) => Math.max(minStart, Math.min(CURRENT_WEEK, w + n * 7)))
+  // Earliest month present in the fetched window — bounds the
+  // month picker so users can't navigate to months with no data.
+  const earliestMonth = useMemo(() => {
+    if (dateKeys.length === 0) return { y: nowRef.getFullYear(), m: nowRef.getMonth() }
+    const first = parseDateKey(dateKeys[0])
+    // The earliest FULL month is the first-of-month that's >=
+    // dateKeys[0]. If dateKeys[0] falls mid-month, that month's
+    // data is partial; still allow it as a valid anchor.
+    return { y: first.getFullYear(), m: first.getMonth() }
+  }, [dateKeys, nowRef])
+  const latestMonth = { y: nowRef.getFullYear(), m: nowRef.getMonth() }
+
+  const shift = (n: number) => {
+    if (isWeek) {
+      setWeekStart((w) => Math.max(0, Math.min(CURRENT_WEEK, w + n * 7)))
+    } else {
+      setMonthAnchor((a) => {
+        const next = { y: a.y, m: a.m + n }
+        // Normalize m to 0..11
+        while (next.m < 0) { next.m += 12; next.y -= 1 }
+        while (next.m > 11) { next.m -= 12; next.y += 1 }
+        // Clamp: not past the current month, not before the earliest.
+        if (next.y > latestMonth.y || (next.y === latestMonth.y && next.m > latestMonth.m)) return latestMonth
+        if (next.y < earliestMonth.y || (next.y === earliestMonth.y && next.m < earliestMonth.m)) return earliestMonth
+        return next
+      })
+    }
     setCalOpen(false)
     setHover(null)
   }
+  // Old name kept for pointer handlers below — they call shiftWeeks
+  // but the new implementation dispatches to the mode-aware shift.
+  const shiftWeeks = shift
 
   // ---- Chart scale ----
   const peak = done.length ? Math.max(...done.map((d) => (isRevenue ? d[2] : d[3]) as number)) : 0
@@ -330,41 +422,52 @@ export default function AnalyticsClient(props: Props) {
   }))
 
   // ---- Month picker grid (Monday-first, 6 rows) ----
+  // In Week mode the highlight band spans the anchored Monday–
+  // Sunday range. In Month mode it spans the entire anchored
+  // calendar month (may cross the picker's rendered month if the
+  // picker is showing a different month).
   const cells = useMemo(() => {
     const first = new Date(calMonth.getFullYear(), calMonth.getMonth(), 1)
     const gridStart = new Date(first.getFullYear(), first.getMonth(), first.getDate() - ((first.getDay() + 6) % 7))
-    const from = isWeek ? start : start - 21
-    const to = start + 6
     const baseTime = BASE.getTime()
+    const todayDate = new Date(BASE.getTime() + TODAY * DAY_MS)
+    // Precompute window bounds so inWindow is a simple range check.
+    let windowFrom = 0, windowTo = -1
+    if (isWeek) {
+      const s = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
+      windowFrom = s
+      windowTo = s + 6
+    } else {
+      const firstOfMonth = new Date(monthAnchor.y, monthAnchor.m, 1)
+      const lastOfMonth = new Date(monthAnchor.y, monthAnchor.m + 1, 0)
+      windowFrom = Math.round((firstOfMonth.getTime() - baseTime) / DAY_MS)
+      windowTo = Math.round((lastOfMonth.getTime() - baseTime) / DAY_MS)
+    }
     return Array.from({ length: 42 }, (_, i) => {
       const d = new Date(gridStart.getTime() + i * DAY_MS)
       const idx = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - baseTime) / DAY_MS)
       return {
         d, i, idx,
         inMonth: d.getMonth() === calMonth.getMonth(),
-        inWindow: idx >= from && idx <= to,
-        isToday: sameDay(d, new Date(BASE.getTime() + TODAY * DAY_MS)),
+        inWindow: idx >= windowFrom && idx <= windowTo,
+        isToday: sameDay(d, todayDate),
         hasData: idx >= 0 && idx < DAILY.length,
       }
     })
-  }, [calMonth, start, isWeek, BASE, TODAY, DAILY.length])
+  }, [calMonth, isWeek, weekStart, monthAnchor, BASE, TODAY, DAILY.length, CURRENT_WEEK])
 
   // ---- Composition ----
   // Everything in the two cards is derived from the currently-
-  // visible done days so historical week navigation rewinds the
-  // mix, and the current week "builds up" as days accumulate
-  // instead of showing a stale rolling-7d snapshot.
-  const visibleFrom = isWeek ? start : start - 21
-  const visibleTo = start + 6
+  // visible done days so historical navigation rewinds the mix,
+  // and the current week/month "builds up" as days accumulate
+  // instead of showing a stale rolling snapshot.
   const visibleDoneKeys = useMemo(() => {
     const keys = new Set<string>()
-    for (let i = visibleFrom; i <= visibleTo && i < dateKeys.length; i++) {
-      if (i < 0) continue
-      const row = DAILY[i]
-      if (row && row[2] !== null) keys.add(dateKeys[i])
+    for (let i = 0; i < days.length; i++) {
+      if (days[i][2] !== null) keys.add(visibleKeys[i])
     }
     return keys
-  }, [visibleFrom, visibleTo, dateKeys, DAILY])
+  }, [days, visibleKeys])
 
   // Category rows: sum revenue per category across the visible
   // done days, sort desc, keep top 5, roll the rest into "Other".
@@ -497,9 +600,14 @@ export default function AnalyticsClient(props: Props) {
     },
   ]
 
-  const headerDateLabel = days.length
+  // Header label: Week shows the visible range; Month shows the
+  // full month name so navigation reads "July → August" instead
+  // of "Jul 1–Jul 31 → Aug 1–Aug 31".
+  const headerDateLabel = !days.length
+    ? ''
+    : isWeek
     ? `${days[0][0]} — ${days[days.length - 1][0]}, ${BASE.getFullYear()}`
-    : ''
+    : `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
 
   return (
     <div style={{ flex: 1, minWidth: 0, padding: '20px 24px 28px', background: '#fff', fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
@@ -536,7 +644,20 @@ export default function AnalyticsClient(props: Props) {
 
           <div style={{ display: 'flex', alignItems: 'center', background: FILL, borderRadius: 10, padding: 3, gap: 2 }}>
             <button type="button" style={seg(isWeek)} onClick={() => { setRange('week'); setHover(null) }}>{t('Week', 'Semana')}</button>
-            <button type="button" style={seg(!isWeek)} onClick={() => { setRange('month'); setHover(null); setWeekStart((w) => Math.max(21, w)) }}>{t('Month', 'Mes')}</button>
+            <button
+              type="button"
+              style={seg(!isWeek)}
+              onClick={() => {
+                setRange('month')
+                setHover(null)
+                // Land on the current calendar month by default so
+                // switching modes lands the user on "now" instead of
+                // whatever historical month they last inspected.
+                setMonthAnchor({ y: nowRef.getFullYear(), m: nowRef.getMonth() })
+              }}
+            >
+              {t('Month', 'Mes')}
+            </button>
           </div>
         </div>
 
@@ -561,8 +682,17 @@ export default function AnalyticsClient(props: Props) {
                     type="button"
                     onClick={() => {
                       if (!hasData) return
-                      const monday = idx - (((idx % 7) + 7) % 7)
-                      setWeekStart(Math.max(minStart, Math.min(CURRENT_WEEK, monday)))
+                      if (isWeek) {
+                        const monday = idx - (((idx % 7) + 7) % 7)
+                        setWeekStart(Math.max(0, Math.min(CURRENT_WEEK, monday)))
+                      } else {
+                        // Jump to the calendar month containing the
+                        // clicked date, clamped to the fetch window.
+                        let next = { y: d.getFullYear(), m: d.getMonth() }
+                        if (next.y > latestMonth.y || (next.y === latestMonth.y && next.m > latestMonth.m)) next = latestMonth
+                        if (next.y < earliestMonth.y || (next.y === earliestMonth.y && next.m < earliestMonth.m)) next = earliestMonth
+                        setMonthAnchor(next)
+                      }
                       setCalOpen(false); setHover(null)
                     }}
                     style={{
@@ -584,9 +714,19 @@ export default function AnalyticsClient(props: Props) {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${LINE}` }}>
                 <span style={{ fontSize: 11, color: FAINT }}>
-                  {isWeek ? t('Pick a date to jump to its week', 'Elige una fecha para ir a su semana') : t('Pick a date to end the month there', 'Elige una fecha para terminar el mes ahí')}
+                  {isWeek ? t('Pick a date to jump to its week', 'Elige una fecha para ir a su semana') : t('Pick a date to jump to its month', 'Elige una fecha para ir a su mes')}
                 </span>
-                <button type="button" onClick={() => { setWeekStart(CURRENT_WEEK); setCalOpen(false); setCalMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); setHover(null) }} style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isWeek) setWeekStart(CURRENT_WEEK)
+                    else setMonthAnchor({ y: nowRef.getFullYear(), m: nowRef.getMonth() })
+                    setCalOpen(false)
+                    setCalMonth(new Date(nowRef.getFullYear(), nowRef.getMonth(), 1))
+                    setHover(null)
+                  }}
+                  style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer' }}
+                >
                   {t('This week', 'Esta semana')}
                 </button>
               </div>
@@ -724,7 +864,7 @@ export default function AnalyticsClient(props: Props) {
             <div style={{ display: 'flex', gap: 3, marginTop: 8 }}>
               {days.map((d, i) => {
                 const weekBreak = !isWeek && i > 0 && d[1] === 'Mon'
-                const isToday = (isWeek ? start + i : start - 21 + i) === TODAY
+                const isToday = visibleKeys[i] === toDateKey(new Date(BASE.getTime() + TODAY * DAY_MS))
                 const label = isWeek ? `${d[1]} ${d[0].split(' ')[1]}` : d[1] === 'Mon' || i === days.length - 1 ? d[0] : ''
                 return (
                   <span

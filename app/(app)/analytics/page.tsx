@@ -24,7 +24,10 @@ import AnalyticsLocked from './locked'
 import { computeReadiness } from '@/lib/readiness'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
 
-const WINDOW_DAYS = 60
+// 95 days ≈ 3 full calendar months + buffer, so the Month view
+// can always render a full "this month" + "prior month" pair for
+// the delta comparison without falling off the fetch window.
+const WINDOW_DAYS = 95
 
 interface OrderItemRow {
   quantity: number

@@ -129,12 +129,12 @@ export default function AppShell({
             • <md   pt-16 clears the fixed Menu button; small
                      16px padding elsewhere so tap targets don't
                      touch the viewport edge on a phone.
-            • md–xl NO padding — tablet pages own their own
-                     edge-to-edge treatment (see the sales bands).
-            • xl+   32px padding, roomy desktop margin.
+            • md+   NO padding — pages at tablet AND desktop
+                     widths own their own edge-to-edge treatment
+                     (see the sales bands + content cap).
             No overflow-y here — the WINDOW is the scroll container
             so the sticky sidebar/rail can pin properly. */}
-        <main className="flex-1 min-w-0 p-4 pt-16 md:p-0 xl:p-8">
+        <main className="flex-1 min-w-0 p-4 pt-16 md:p-0">
           {children}
         </main>
 

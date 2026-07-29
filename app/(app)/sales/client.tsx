@@ -87,6 +87,14 @@ const BAND = '#F0EFEB'
 const DANGER = '#B91C1C'
 const MONO = "'Geist Mono', ui-monospace, monospace"
 
+// Content cap for the bands. Bands themselves span 100% at md+
+// so their backgrounds/borders reach every viewport edge; the
+// content INSIDE each band caps at 1280px + 28px padding on each
+// side = 1336 total. Above ~1600px the leftover space sits as
+// empty right-margin, not a gutter with a border. Matches the
+// "bands span; content is capped" rule.
+const BAND_CONTENT_MAX = 1336
+
 // One hue per payment method. tile: soft bg for the icon tile;
 // ink: stroke / label color; dot: the tiny 5px dot on the meta chip.
 const METHOD_TONES: Record<PaymentType, { tile: string; ink: string; dot: string }> = {
@@ -239,14 +247,16 @@ export default function SalesClient({
   const [swipeX, setSwipeX] = useState<number | null>(null)
   const [swipeDX, setSwipeDX] = useState(0)
 
-  // Tablet-only "no card" experiment. At md–lt-xl widths we strip
-  // the outer wrapper's horizontal padding and the card's border /
-  // rounded corners so content spans edge-to-edge. Phone and
-  // desktop keep the card treatment as-is.
-  const [isTablet, setIsTablet] = useState(false)
+  // Bands treatment at all md+ widths (tablet + desktop). No page
+  // card, header + filter sticky as one band, hairline dividers
+  // between rows, 28px shared side inset. Above ~1336px content
+  // caps at max-width so rows don't stretch across dead space on
+  // wide monitors — bands still span 100%, only their inner
+  // content is capped. Phone (<md) keeps the card treatment.
+  const [isBands, setIsBands] = useState(false)
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px) and (max-width: 1279px)')
-    const update = () => setIsTablet(mq.matches)
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
     update()
     mq.addEventListener('change', update)
     return () => mq.removeEventListener('change', update)
@@ -323,15 +333,15 @@ export default function SalesClient({
       // Tablet: zero padding on every side. AppShell also strips
       // its own p-8 at this breakpoint, so the sales bands run
       // flush against every viewport edge.
-      padding: isTablet ? 0 : '20px 24px 28px',
+      padding: isBands ? 0 : '20px 24px 28px',
       background: '#fff',
       fontFamily: "'Geist', system-ui, sans-serif", color: INK,
     }}>
       <div
         style={{
           position: 'relative',
-          border: isTablet ? 0 : `1px solid ${LINE}`,
-          borderRadius: isTablet ? 0 : 12,
+          border: isBands ? 0 : `1px solid ${LINE}`,
+          borderRadius: isBands ? 0 : 12,
           background: '#fff',
         }}
       >
@@ -342,7 +352,7 @@ export default function SalesClient({
             At other widths it collapses to a plain wrapper. */}
         <div
           style={{
-            position: isTablet ? 'sticky' : 'static',
+            position: isBands ? 'sticky' : 'static',
             top: 0, zIndex: 5, background: '#fff',
           }}
         >
@@ -364,10 +374,16 @@ export default function SalesClient({
           onPointerLeave={() => { setSwipeX(null); setSwipeDX(0) }}
           style={{
             position: 'relative',
-            // Tablet keeps the same vertical rhythm as phone/
-            // desktop — only the SIDE padding grows to 28 so the
-            // band aligns with the row inset per the doc's verdict.
-            padding: isTablet ? '16px 28px 14px' : '16px 16px 14px',
+            // md+ keeps the same vertical rhythm as phone — only
+            // the SIDE padding grows to 28 so the band aligns
+            // with the row inset per the doc's verdict.
+            padding: isBands ? '16px 28px 14px' : '16px 16px 14px',
+            // Cap content width so on a wide monitor the header
+            // stats + date don't drift far apart across dead
+            // space. Left-anchored (no margin auto) so the extra
+            // width sits as empty right margin, matching how the
+            // rows below cap.
+            maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
             display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
             touchAction: 'pan-y',
@@ -433,12 +449,20 @@ export default function SalesClient({
           </div>
         </div>
 
-        {/* Filter strip — All / Card / Cash / Voided with counts. */}
+        {/* Filter strip — All / Card / Cash / Voided with counts.
+            At md+ the band's bg + borders span 100% (the outer
+            div), while the buttons themselves are capped and
+            left-anchored (the inner div). Below md the whole
+            thing is one div because there's no cap needed. */}
+        <div style={{
+          borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
+          background: SURFACE,
+        }}>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          padding: isTablet ? '10px 28px' : '10px 16px',
-          borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
-          background: SURFACE, flexWrap: 'wrap',
+          padding: isBands ? '10px 28px' : '10px 16px',
+          maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
+          flexWrap: 'wrap',
         }}>
           {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
             const on = filter === f
@@ -473,16 +497,19 @@ export default function SalesClient({
             )
           })}
         </div>
+        </div>{/* /filter band outer */}
 
         </div>{/* /sticky band */}
 
-        {/* Rows — one continuous subject. Tablet: no wrapper
-            padding, rows own their own 28px inset so the whole
-            list runs edge-to-edge. Non-tablet keeps the small
-            gutter it always had. */}
+        {/* Rows — one continuous subject. md+: no wrapper
+            padding, rows own their own 28px inset so the list
+            runs edge-to-edge; content caps at BAND_CONTENT_MAX
+            so on a wide monitor rows don't stretch across dead
+            space. Phone keeps the small 8px card gutter. */}
         <div style={{
-          padding: isTablet ? 0 : 8,
+          padding: isBands ? 0 : 8,
           borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
+          maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
         }}>
           {orders.length === 0 ? (
             <EmptyLedger t={t} isToday={isToday} date={date} locale={locale} />
@@ -499,7 +526,7 @@ export default function SalesClient({
                 onOpen={() => setOpenId(o.id)}
                 t={t}
                 locale={locale}
-                isTablet={isTablet}
+                isBands={isBands}
               />
             ))
           )}
@@ -544,14 +571,14 @@ export default function SalesClient({
 // ================================================================
 
 function SaleRow({
-  order, selected, onOpen, t, locale, isTablet,
+  order, selected, onOpen, t, locale, isBands,
 }: {
   order: Order
   selected: boolean
   onOpen: () => void
   t: T
   locale: string
-  isTablet: boolean
+  isBands: boolean
 }) {
   const tone = METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
@@ -570,15 +597,15 @@ function SaleRow({
         // header/filter inset). Vertical rhythm and element sizes
         // stay identical to phone/desktop so rows don't feel
         // sparse in the extra horizontal room.
-        padding: isTablet ? '11px 28px' : '11px 12px',
+        padding: isBands ? '11px 28px' : '11px 12px',
         // Rows are strips in a continuous list on tablet. No
         // radius, no per-row border — the tinted method tile IS
         // the row's only "card" per rule 3. A hairline divider
         // separates them; selection uses a soft SURFACE fill.
-        borderRadius: isTablet ? 0 : 10,
+        borderRadius: isBands ? 0 : 10,
         cursor: 'pointer',
-        border: isTablet ? 0 : `1px solid ${selected ? LINE : 'transparent'}`,
-        borderBottom: isTablet ? `1px solid ${LINE_SOFT}` : undefined,
+        border: isBands ? 0 : `1px solid ${selected ? LINE : 'transparent'}`,
+        borderBottom: isBands ? `1px solid ${LINE_SOFT}` : undefined,
         background: selected ? SURFACE : 'transparent',
         opacity: isVoided ? 0.75 : 1,
       }}

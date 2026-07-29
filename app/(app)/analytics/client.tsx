@@ -714,7 +714,10 @@ export default function AnalyticsClient(props: Props) {
         {/* Stat row — bands only. Hero total + USD + revenue
             delta, then orders + avg-ticket trailing stats with
             their own deltas. Deltas are plain colored text (not
-            pills) so the line reads as one continuous statement. */}
+            pills) so the line reads as one continuous statement.
+            The separator dot lives INSIDE each trailing cell (via
+            the `sep` flag) with marginRight:5 so the dot hugs
+            its stat instead of floating mid-space. */}
         {isBands && (
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
@@ -722,10 +725,8 @@ export default function AnalyticsClient(props: Props) {
             </span>
             <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
             <Delta pct={pctChange(revenue, prev.revenue)} />
-            <StatSep />
-            <StatCell value={String(orders)} label={t('orders', 'órdenes')} delta={pctChange(orders, prev.orders)} />
-            <StatSep />
-            <StatCell value={money(avgTicket)} label={t('avg ticket', 'ticket promedio')} delta={pctChange(avgTicket, prevAvg)} />
+            <StatCell sep value={String(orders)} label={t('orders', 'órdenes')} delta={pctChange(orders, prev.orders)} />
+            <StatCell sep value={money(avgTicket)} label={t('avg ticket', 'ticket promedio')} delta={pctChange(avgTicket, prevAvg)} />
           </div>
         )}
       </div>
@@ -1222,15 +1223,22 @@ function Delta({ pct, size = 12 }: { pct: number; size?: number }) {
     </span>
   )
 }
-// Tiny dot separator between trailing stats in the header row.
-function StatSep() {
-  return <span style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center' }} />
-}
 // A trailing stat cell — value + label + delta, matched to the
 // design's typography scale (14/600 value, 12 label, 11 delta).
-function StatCell({ value, label, delta }: { value: string; label: string; delta: number }) {
+// `sep` prepends a small ghost dot with marginRight:5 so the
+// separator hugs its own stat instead of floating between two.
+function StatCell({ sep, value, label, delta }: { sep?: boolean; value: string; label: string; delta: number }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      {sep && (
+        <span
+          aria-hidden
+          style={{
+            width: 3, height: 3, borderRadius: '50%',
+            background: GHOST, alignSelf: 'center', marginRight: 5,
+          }}
+        />
+      )}
       <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{value}</span>
       <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
       <Delta pct={delta} size={11} />

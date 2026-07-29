@@ -271,13 +271,25 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
   // header + schedule flow edge-to-edge like the sales/analytics
   // bands passes; the bench card below stays bordered as its own
   // "genuinely unlike subject" card per the design doc.
+  // isWide (xl+) caps the content region so the roster + bench
+  // cards don't stretch across a 1920px monitor — matches the
+  // analytics content-region max-width treatment.
   const [isBands, setIsBands] = useState(false)
+  const [isWide, setIsWide] = useState(false)
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const update = () => setIsBands(mq.matches)
+    const bandsMq = window.matchMedia('(min-width: 768px)')
+    const wideMq = window.matchMedia('(min-width: 1280px)')
+    const update = () => {
+      setIsBands(bandsMq.matches)
+      setIsWide(wideMq.matches)
+    }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    bandsMq.addEventListener('change', update)
+    wideMq.addEventListener('change', update)
+    return () => {
+      bandsMq.removeEventListener('change', update)
+      wideMq.removeEventListener('change', update)
+    }
   }, [])
   const [dayIndex, setDayIndex] = useState(() => {
     // Default day view = today if in this week, else Monday.
@@ -641,6 +653,12 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
           // Bands: padded content region so the roster + bench
           // cards sit inset from the band edges above.
           padding: isBands ? '16px 24px 24px' : undefined,
+          // Desktop: cap max-width and center via margin:auto so
+          // the roster + bench cards don't stretch across a 1920px
+          // monitor. Header band stays full-width. Same treatment
+          // analytics uses.
+          maxWidth: isWide ? 1560 : undefined,
+          margin: isWide ? '0 auto' : undefined,
         }}
       >
       {/* Roster card — always bordered so at bands the header/body

@@ -663,12 +663,20 @@ export default function StaffingCalendar(props: StaffingCalendarProps) {
                 sits above inside the same card and needs a visual
                 divider. At bands the ruler is the FIRST child of
                 the roster card, so its borderTop would double up
-                with the card's own border. */}
+                with the card's own border.
+                Sticky positioning only at non-bands (cards mode)
+                where the roster card is a scroll-friendly wrap.
+                At bands the window scrolls and the header sits in
+                a separate band ABOVE the roster — sticking the
+                ruler at top:41 pins it inside the wrong region. */}
             <div style={{
               display: 'flex',
               borderTop: isBands ? 0 : `1px solid ${LINE}`,
               borderBottom: `1px solid ${LINE}`,
-              background: SURFACE, position: 'sticky', top: 41, zIndex: 2,
+              background: SURFACE,
+              position: isBands ? 'static' : 'sticky',
+              top: isBands ? undefined : 41,
+              zIndex: isBands ? undefined : 2,
             }}>
               <div style={{
                 width: GUTTER_WIDTH, flex: `0 0 ${GUTTER_WIDTH}px`, borderRight: `1px solid ${LINE}`,

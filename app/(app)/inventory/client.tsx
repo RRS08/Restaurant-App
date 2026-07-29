@@ -185,8 +185,11 @@ function CartIcon() {
 function OrdersIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <rect x="4" y="4" width="16" height="16" rx="2" />
-      <path d="M8 9h8M8 13h8M8 17h5" />
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="7" cy="9" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="13" r="0.9" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="17" r="0.9" fill="currentColor" stroke="none" />
+      <path d="M10 9h8M10 13h8M10 17h5" />
     </svg>
   )
 }
@@ -457,14 +460,13 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => setDrawer({ mode: 'merge-items' })}
-                style={ghostBtn}
-                title={t('Merge duplicate items', 'Combinar artículos duplicados')}
-              >
-                {t('Merge', 'Combinar')}
-              </button>
+              {/* Merge (manual duplicate picker) moved off the header
+                  per pilot feedback — clutter for a rare action. The
+                  DuplicateMergeBanner still auto-surfaces same-named
+                  active rows, so the common case is covered without
+                  a permanent button. The manual escape hatch (for
+                  active+archived name pairs the banner can't detect)
+                  will live in Settings when we build that surface. */}
               <button
                 type="button"
                 onClick={() => setDrawer({ mode: 'orders' })}

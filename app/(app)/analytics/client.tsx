@@ -626,12 +626,10 @@ export default function AnalyticsClient(props: Props) {
     ? `${days[0][0]} — ${days[days.length - 1][0]}, ${BASE.getFullYear()}`
     : `${MONTHS[monthAnchor.m]} ${monthAnchor.y}`
 
-  // Bands header date copy — "Week of" prefix + full date incl.
-  // year for the week view. Uses Sales' fmtBusinessDateLong
-  // shape (weekday + long month + day) + explicit year appended
-  // so the phrase is self-anchored no matter how far back the
-  // manager has navigated.
-  //   Week  → "Week of Monday, July 27, 2026"
+  // Bands header date copy — "Week of" prefix + Monday's date
+  // with year, no weekday. "Week of Monday" is redundant since
+  // the phrase already implies the week starts Monday.
+  //   Week  → "Week of July 27, 2026"
   //   Month → "July 2026"
   const bandsDateLocale = lang === 'es' ? 'es-ES' : 'en-US'
   const bandsDateLabel = ((): string => {
@@ -640,7 +638,7 @@ export default function AnalyticsClient(props: Props) {
       const mondayIdx = Math.max(0, Math.min(CURRENT_WEEK, weekStart))
       const monday = new Date(BASE.getTime() + mondayIdx * DAY_MS)
       const dateStr = monday.toLocaleDateString(bandsDateLocale, {
-        weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+        month: 'long', day: 'numeric', year: 'numeric',
       })
       return `${t('Week of', 'Semana del')} ${dateStr}`
     }

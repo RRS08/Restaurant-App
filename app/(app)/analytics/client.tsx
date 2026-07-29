@@ -32,6 +32,11 @@ interface DailyBucket {
   date: string
   revenue: number
   orders: number
+  /** Local hour (0-23) with the most orders that day. null when
+   *  the day has no orders. Powers the "peak 7 PM" tooltip line. */
+  peakHour: number | null
+  /** Order count in the peak hour. null when the day has no orders. */
+  peakHourOrders: number | null
 }
 
 interface DailyPaymentBucket {
@@ -123,7 +128,8 @@ const PAYMENT_STYLE = {
 // weekday, revenue|null, orders|null, isWeekend]. Revenue === null
 // means "not yet" (future day); 0 means the day happened but had
 // no sales (closed or slow — visually treated the same).
-type Day = [string, string, number | null, number | null, boolean]
+// [label, weekday, revenue|null, orders|null, isWeekend, peakHour|null, peakHourOrders|null]
+type Day = [string, string, number | null, number | null, boolean, number | null, number | null]
 
 function money(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -175,6 +181,15 @@ function shortWeekdayEN(d: Date): string {
 function shortMonthDay(d: Date, lang: Lang): string {
   return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { month: 'short', day: 'numeric' })
 }
+// Format 0-23 as "12 AM" / "7 PM" style. Spanish gets 24h since
+// AM/PM isn't idiomatic there.
+function formatHour(hour: number, lang: Lang): string {
+  if (lang === 'es') return `${hour}:00`
+  if (hour === 0) return '12 AM'
+  if (hour < 12) return `${hour} AM`
+  if (hour === 12) return '12 PM'
+  return `${hour - 12} PM`
+}
 
 export default function AnalyticsClient(props: Props) {
   const {
@@ -220,6 +235,8 @@ export default function AnalyticsClient(props: Props) {
         isFuture ? null : b.revenue,
         isFuture ? null : b.orders,
         isWeekendDate(d),
+        isFuture ? null : b.peakHour,
+        isFuture ? null : b.peakHourOrders,
       ]
     })
 
@@ -239,7 +256,7 @@ export default function AnalyticsClient(props: Props) {
       const daysUntilSunday = 6 - dowMondayFirst
       for (let i = 1; i <= daysUntilSunday; i++) {
         const d = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate() + i)
-        rows.push([shortMonthDay(d, lang), shortWeekdayEN(d), null, null, isWeekendDate(d)])
+        rows.push([shortMonthDay(d, lang), shortWeekdayEN(d), null, null, isWeekendDate(d), null, null])
         keys.push(toDateKey(d))
       }
     }
@@ -696,7 +713,9 @@ export default function AnalyticsClient(props: Props) {
                       ? t('closed or slow', 'cerrado o lento')
                       : isRevenue
                       ? `${money((hv[2] as number) / (hv[3] as number))} ${t('avg ticket', 'ticket promedio')}`
-                      : `${money(hv[2] as number)} ${t('in sales', 'en ventas')}`}
+                      : hv[5] !== null && hv[6] !== null
+                      ? `${t('peak', 'pico')} ${formatHour(hv[5], lang)} · ${hv[6]} ${hv[6] === 1 ? t('order', 'orden') : t('orders', 'órdenes')}`
+                      : `${hv[3]} ${t('orders total', 'órdenes en total')}`}
                   </div>
                 </div>
               )}

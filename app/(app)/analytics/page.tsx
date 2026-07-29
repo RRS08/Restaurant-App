@@ -153,11 +153,13 @@ export default async function AnalyticsPage() {
   // the arrays without null-checking, and gaps still render as
   // zero-bar days on the chart.
   const dailyMap = new Map<string, { revenue: number; orders: number }>()
+  const dailyHourMap = new Map<string, Map<number, number>>()
   const dailyPaymentMap = new Map<string, DailyPaymentBucket>()
   const dailyCategoryMap = new Map<string, Map<string, DailyCategoryEntry>>()
 
   for (const key of dateKeys) {
     dailyMap.set(key, { revenue: 0, orders: 0 })
+    dailyHourMap.set(key, new Map())
     dailyPaymentMap.set(key, emptyDailyPayment(key))
     dailyCategoryMap.set(key, new Map())
   }
@@ -180,6 +182,12 @@ export default async function AnalyticsPage() {
     const total = Number(o.total_amount)
     bucket.revenue += total
     bucket.orders += 1
+
+    // Hour-of-day in the restaurant's local timezone. Powers the
+    // peak-hour readout in the chart tooltip.
+    const hour = hourInTimezone(new Date(o.created_at), timezone)
+    const dayHours = dailyHourMap.get(key)!
+    dayHours.set(hour, (dayHours.get(hour) ?? 0) + 1)
 
     const dayPayment = dailyPaymentMap.get(key)!
     const paymentBucket = normalizePaymentType(o.payment_type ?? null)
@@ -204,11 +212,23 @@ export default async function AnalyticsPage() {
     }
   }
 
-  const dailyBuckets = Array.from(dailyMap.entries()).map(([date, b]) => ({
-    date,
-    revenue: round2(b.revenue),
-    orders: b.orders,
-  }))
+  const dailyBuckets = Array.from(dailyMap.entries()).map(([date, b]) => {
+    const hours = dailyHourMap.get(date)
+    let peakHour: number | null = null
+    let peakHourOrders = 0
+    if (hours) {
+      for (const [h, count] of hours) {
+        if (count > peakHourOrders) { peakHour = h; peakHourOrders = count }
+      }
+    }
+    return {
+      date,
+      revenue: round2(b.revenue),
+      orders: b.orders,
+      peakHour,
+      peakHourOrders: peakHourOrders || null,
+    }
+  })
 
   const dailyPayments = Array.from(dailyPaymentMap.values()).map((p) => ({
     date: p.date,
@@ -242,4 +262,24 @@ function toDateKey(d: Date): string {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+// Extract 0-23 hour-of-day in the given IANA timezone. Same
+// Intl.DateTimeFormat pattern as businessDateInTimezone — the
+// server may be UTC (Vercel), so this can't lean on .getHours()
+// which reads the SERVER's local time.
+function hourInTimezone(when: Date, timezone: string | null | undefined): number {
+  const tz = timezone && timezone.trim().length > 0 ? timezone : 'UTC'
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour: 'numeric',
+      hour12: false,
+    }).formatToParts(when)
+    const hourStr = parts.find((p) => p.type === 'hour')?.value ?? '0'
+    const n = parseInt(hourStr, 10)
+    return Number.isFinite(n) ? (n === 24 ? 0 : n) : 0
+  } catch {
+    return when.getUTCHours()
+  }
 }

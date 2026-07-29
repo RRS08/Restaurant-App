@@ -87,14 +87,6 @@ const BAND = '#F0EFEB'
 const DANGER = '#B91C1C'
 const MONO = "'Geist Mono', ui-monospace, monospace"
 
-// Content cap for the bands. Bands themselves span 100% at md+
-// so their backgrounds/borders reach every viewport edge; the
-// content INSIDE each band caps at 1280px + 28px padding on each
-// side = 1336 total. Above ~1600px the leftover space sits as
-// empty right-margin, not a gutter with a border. Matches the
-// "bands span; content is capped" rule.
-const BAND_CONTENT_MAX = 1336
-
 // One hue per payment method. tile: soft bg for the icon tile;
 // ink: stroke / label color; dot: the tiny 5px dot on the meta chip.
 const METHOD_TONES: Record<PaymentType, { tile: string; ink: string; dot: string }> = {
@@ -378,12 +370,6 @@ export default function SalesClient({
             // the SIDE padding grows to 28 so the band aligns
             // with the row inset per the doc's verdict.
             padding: isBands ? '16px 28px 14px' : '16px 16px 14px',
-            // Cap content width so on a wide monitor the header
-            // stats + date don't drift far apart across dead
-            // space. Left-anchored (no margin auto) so the extra
-            // width sits as empty right margin, matching how the
-            // rows below cap.
-            maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
             display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
             touchAction: 'pan-y',
@@ -461,7 +447,6 @@ export default function SalesClient({
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           padding: isBands ? '10px 28px' : '10px 16px',
-          maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
           flexWrap: 'wrap',
         }}>
           {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
@@ -503,13 +488,12 @@ export default function SalesClient({
 
         {/* Rows — one continuous subject. md+: no wrapper
             padding, rows own their own 28px inset so the list
-            runs edge-to-edge; content caps at BAND_CONTENT_MAX
-            so on a wide monitor rows don't stretch across dead
-            space. Phone keeps the small 8px card gutter. */}
+            runs edge-to-edge and prices land at the viewport
+            right edge like a POS ledger. Phone keeps the small
+            8px card gutter. */}
         <div style={{
           padding: isBands ? 0 : 8,
           borderBottomLeftRadius: 12, borderBottomRightRadius: 12,
-          maxWidth: isBands ? BAND_CONTENT_MAX : undefined,
         }}>
           {orders.length === 0 ? (
             <EmptyLedger t={t} isToday={isToday} date={date} locale={locale} />

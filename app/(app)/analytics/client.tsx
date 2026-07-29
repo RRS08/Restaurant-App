@@ -868,7 +868,15 @@ export default function AnalyticsClient(props: Props) {
             <div style={{ display: 'flex', gap: 3, marginTop: 8 }}>
               {days.map((d, i) => {
                 const weekBreak = !isWeek && i > 0 && d[1] === 'Mon'
-                const isToday = visibleKeys[i] === toDateKey(new Date(BASE.getTime() + TODAY * DAY_MS))
+                // isToday check: position-based, no date-string math.
+                // Week: index into DAILY, compare against TODAY index.
+                // Month: day-of-month at position i is i+1, and we're
+                // today only if the anchored (year, month) is right now.
+                const isToday = isWeek
+                  ? Math.max(0, Math.min(CURRENT_WEEK, weekStart)) + i === TODAY
+                  : monthAnchor.y === nowRef.getFullYear()
+                    && monthAnchor.m === nowRef.getMonth()
+                    && i + 1 === nowRef.getDate()
                 const label = isWeek ? `${d[1]} ${d[0].split(' ')[1]}` : d[1] === 'Mon' || i === days.length - 1 ? d[0] : ''
                 return (
                   <span

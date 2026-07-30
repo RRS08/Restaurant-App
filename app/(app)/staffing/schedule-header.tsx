@@ -212,7 +212,7 @@ export default function ScheduleHeader({
           // and left a visible white gap under the header.
           padding: '16px 16px 8px',
           display: 'flex',
-          alignItems: 'flex-start',
+          alignItems: 'center',
           justifyContent: 'space-between',
           gap: 24,
           flexWrap: 'wrap',

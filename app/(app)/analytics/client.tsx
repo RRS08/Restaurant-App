@@ -694,7 +694,7 @@ export default function AnalyticsClient(props: Props) {
         // Cards: single flex row with title + toggle.
         display: isBands ? 'grid' : 'flex',
         gridTemplateColumns: isBands ? '1fr auto 1fr' : undefined,
-        alignItems: isBands ? 'flex-start' : 'center',
+        alignItems: 'center',
         justifyContent: isBands ? undefined : 'space-between',
         gap: 24, flexWrap: isBands ? undefined : 'wrap',
         touchAction: 'pan-y', cursor: swipeX === null ? 'default' : 'grabbing',

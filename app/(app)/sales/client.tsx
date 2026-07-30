@@ -370,7 +370,7 @@ export default function SalesClient({
             // the SIDE padding grows to 28 so the band aligns
             // with the row inset per the doc's verdict.
             padding: isBands ? '16px 24px 14px' : '16px 16px 14px',
-            display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
             touchAction: 'pan-y',
             cursor: swipeX === null ? 'default' : 'grabbing',
@@ -433,6 +433,23 @@ export default function SalesClient({
               <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
             </div>
           </div>
+          {/* Dead Export button — bands only, mirrors analytics
+              header. Placeholder for now; wire when export flow
+              is designed. */}
+          {isBands && (
+            <button
+              type="button"
+              onClick={() => { /* placeholder — export flow not wired yet */ }}
+              style={{
+                border: 0, background: INK, color: PAPER,
+                borderRadius: 10, height: 28, padding: '0 14px',
+                font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                flex: '0 0 auto',
+              }}
+            >
+              {t('Export', 'Exportar')}
+            </button>
+          )}
         </div>
 
         {/* Filter strip — All / Card / Cash / Voided with counts.

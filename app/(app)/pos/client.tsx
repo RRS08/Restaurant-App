@@ -36,7 +36,13 @@ import {
 // Domain
 // ================================================================
 
-interface Category { id: string; name: string }
+interface Category {
+  id: string
+  name: string
+  /** Non-null when this is a sub-category. Bands layout groups
+   *  sub-categories under their parent tab; phone keeps flat. */
+  parentId: string | null
+}
 interface Item {
   id: string
   name: string
@@ -97,6 +103,21 @@ type TerminalStage =
   | 'canceled'
 
 const CURRENCY = (n: number) => `$${n.toFixed(2)}`
+
+// ================================================================
+// Bands (tablet md+) design tokens. Prefixed B_ so they never
+// collide with future imports or the existing Tailwind layout.
+// ================================================================
+const B_INK = '#18181B'
+const B_PAPER = '#FAF9F6'
+const B_LINE = '#E7E6E2'
+const B_LINE_SOFT = '#F0EFEB'
+const B_SURFACE = '#FAFAF9'
+const B_FILL = '#F4F4F2'
+const B_MUTED = '#6B6B70'
+const B_FAINT = '#A1A1A6'
+const B_GHOST = '#C4C4C7'
+const B_MONO = "'Geist Mono', ui-monospace, monospace"
 
 // Per-line unique id for cart rows. Each click on a menu tile
 // generates a fresh one so two identical base items can live as
@@ -220,6 +241,24 @@ export default function PosClient({
   // can read live from the cart state and auto-close if the row
   // gets removed.
   const [editingLineId, setEditingLineId] = useState<string | null>(null)
+
+  // Bands (md+) tablet layout. Below md the existing chip + grid
+  // renders unchanged. At md+ the return branches into a full-height
+  // shell (header band + drag-scroll rail + item grid + right-side
+  // order column). All checkout wiring (createOrder, Stripe Terminal,
+  // offline queue, kiosk mode, confetti) is preserved — bands just
+  // re-skins the ordering surface.
+  const [isBands, setIsBands] = useState(false)
+  const [bandsTabId, setBandsTabId] = useState<string | null>(null)
+  const [bandsQuery, setBandsQuery] = useState('')
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
 
   // ----------------------------------------------------------------
   // Success effect.
@@ -351,8 +390,68 @@ export default function PosClient({
 
   const cartItemCount = cart.reduce((s, l) => s + l.quantity, 0)
 
+  // -------- bands (md+) derivations -----------------------------
+  // Top-level categories = tabs. Each tab covers its own id + its
+  // sub-categories' ids. A tab covering more than one key renders
+  // dotted section headers between the groups so the hierarchy
+  // reads without a second row of chips (spec §3).
+  const topLevelCats = categories.filter((c) => !c.parentId)
+  const kidsOf = (parentId: string) => categories.filter((c) => c.parentId === parentId)
+  const bandsTabs: Array<{ id: string; name: string; keys: string[] }> = topLevelCats.map((c) => ({
+    id: c.id,
+    name: c.name,
+    keys: [c.id, ...kidsOf(c.id).map((k) => k.id)],
+  }))
+  const activeBandsTab = bandsTabs.find((t) => t.id === bandsTabId) ?? bandsTabs[0] ?? null
+
+  // Bands cart-line quantity by item id. Bands consolidates lines
+  // per menu item (one line per item id, +/- stepper). Phone keeps
+  // its per-tap-per-line behaviour so notes/modifier lines don't
+  // collapse across taps.
+  const bandsQtyOf = (itemId: string) => cart.reduce((n, l) => l.itemId === itemId ? n + l.quantity : n, 0)
+  const bandsAdd = (item: Item) => {
+    setCart((p) => {
+      // Bump the first line that has the same itemId (no notes).
+      // If any exists with notes/modifiers, we still stack onto a
+      // clean one first — the drawer per-line editor is phone-only,
+      // so at bands there should be at most one line per itemId.
+      const i = p.findIndex((l) => l.itemId === item.id && !l.notes && !l.modifiers?.length)
+      if (i > -1) return p.map((l, j) => j === i ? { ...l, quantity: l.quantity + 1 } : l)
+      return [...p, {
+        lineId: makeLineId(), itemId: item.id, name: item.name, price: item.price, quantity: 1,
+      }]
+    })
+  }
+  const bandsBump = (itemId: string, by: number) => {
+    setCart((p) => {
+      // Bump the first matching line; if that would zero it, drop
+      // every line with that itemId (consolidated view had one).
+      const i = p.findIndex((l) => l.itemId === itemId)
+      if (i < 0) return p
+      const next = p[i].quantity + by
+      if (next <= 0) return p.filter((l) => l.itemId !== itemId)
+      return p.map((l, j) => j === i ? { ...l, quantity: next } : l)
+    })
+  }
+
+  // Search spans the whole (already price>0) catalogue. Otherwise
+  // items are grouped by category key inside the active tab.
+  const bandsQ = bandsQuery.trim().toLowerCase()
+  const bandsSections: Array<{ label: string; items: Item[] }> = bandsQ
+    ? [{
+        label: t('Results', 'Resultados'),
+        items: items.filter((i) => i.name.toLowerCase().includes(bandsQ)),
+      }]
+    : (activeBandsTab
+        ? activeBandsTab.keys.map((k) => ({
+            label: categories.find((c) => c.id === k)?.name ?? '',
+            items: items.filter((i) => i.categoryId === k),
+          })).filter((s) => s.items.length > 0)
+        : [])
+  const bandsMultiSections = bandsSections.length > 1
+
   return (
-    <div className="max-w-[1400px] h-full relative">
+    <div className={isBands ? '' : 'max-w-[1400px] h-full relative'} style={isBands ? { height: '100vh', display: 'flex', flexDirection: 'column', minHeight: 0, background: '#fff', color: B_INK, fontFamily: "'Geist', system-ui, sans-serif" } : undefined}>
       {/* Payment-complete reward overlay.
           The "did it!" moment. We want the cashier — and the
           customer watching from the other side of the counter — to
@@ -490,6 +589,189 @@ export default function PosClient({
         </div>
       )}
 
+      {isBands ? (
+        // ============================================================
+        // BANDS (md+) LAYOUT — full-height 2-pane shell. Header band
+        // on top, drag-scroll category rail below, item grid + 334px
+        // order column filling the rest. Keeps the existing cart /
+        // checkout / drawers wiring by delegating to setCart / setCheckoutOpen.
+        // ============================================================
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* HEADER BAND — hidden in kiosk mode (external kiosk chrome
+              already carries brand + identity). External-POS advisory
+              collapses into a chip beside the title (spec §1). */}
+          {!kioskMode && (
+            <div style={{ padding: '14px 24px 13px', borderBottom: `1px solid ${B_LINE}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, flexWrap: 'wrap', flex: '0 0 auto' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
+                  {t('POS', 'POS')}
+                </h1>
+                {operatingMode === 'external_pos' && (
+                  <span
+                    title={t('Your provider is the canonical sales source — use this surface only when needed.', 'Tu proveedor es la fuente principal de ventas — usa esta superficie solo cuando sea necesario.')}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#EEF2FF', color: '#4F46E5', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}
+                  >
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#6366F1' }} />
+                    {t('Backup register', 'Registro auxiliar')}
+                  </span>
+                )}
+              </div>
+              <BandsSearchPill
+                total={items.length}
+                value={bandsQuery}
+                onChange={setBandsQuery}
+                placeholder={t('Search', 'Buscar')}
+                unit={items.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+              />
+            </div>
+          )}
+
+          {/* CATEGORY RAIL — one drag-scrollable row at any count. */}
+          <BandsCategoryRail
+            tabs={bandsTabs}
+            activeId={bandsQuery ? null : (activeBandsTab?.id ?? null)}
+            onPick={(id) => { setBandsTabId(id); setBandsQuery('') }}
+          />
+
+          {/* ITEM GRID + ORDER COLUMN */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+            <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '0 0 20px' }}>
+              {bandsSections.length === 0 ? (
+                <div style={{ padding: '44px 16px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>
+                    {bandsQuery
+                      ? `${t('Nothing matches', 'Nada coincide con')} "${bandsQuery}"`
+                      : t('No sellable items here yet.', 'Aún no hay artículos vendibles aquí.')}
+                  </div>
+                  <div style={{ fontSize: 12, color: B_FAINT, marginTop: 3 }}>
+                    {bandsQuery
+                      ? t('Try a shorter search, or pick another category.', 'Prueba una búsqueda más corta o elige otra categoría.')
+                      : t('Priced items in Menu appear on the register.', 'Los artículos con precio en el Menú aparecen en el registro.')}
+                  </div>
+                </div>
+              ) : (
+                bandsSections.map((s, si) => (
+                  <div key={`${s.label}-${si}`}>
+                    {bandsMultiSections && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 16px 8px', background: '#fff', position: 'sticky', top: 0, zIndex: 2 }}>
+                        <span style={{ fontFamily: B_MONO, fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', color: B_INK, flex: '0 0 auto' }}>
+                          {s.label.toUpperCase()}
+                        </span>
+                        <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', height: 0, borderTop: `1px dotted ${B_INK}` }} />
+                      </div>
+                    )}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, padding: `${bandsMultiSections || si > 0 ? 0 : 14}px 16px 10px` }}>
+                      {s.items.map((it) => (
+                        <BandsItemCard
+                          key={it.id}
+                          item={it}
+                          inCart={bandsQtyOf(it.id)}
+                          onAdd={() => bandsAdd(it)}
+                          t={t}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* ORDER COLUMN — 334px right rail. */}
+            <div style={{ width: 334, flex: '0 0 334px', borderLeft: `1px solid ${B_LINE}`, background: '#fff', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 18px 11px', borderBottom: `1px solid ${B_LINE}`, flex: '0 0 auto' }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: B_MONO, fontSize: 10, fontWeight: 600, letterSpacing: '0.16em', color: B_INK }}>
+                    {t('CURRENT ORDER', 'PEDIDO ACTUAL')}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 5 }}>
+                    <span style={{ fontFamily: B_MONO, fontSize: 19, fontWeight: 600, letterSpacing: '-0.035em', lineHeight: 1 }}>{cartItemCount}</span>
+                    <span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>
+                      {cartItemCount === 1 ? t('ITEM', 'ARTÍCULO') : t('ITEMS', 'ARTÍCULOS')}
+                    </span>
+                  </div>
+                </div>
+                {cart.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearCart}
+                    style={{ border: `1px solid ${B_LINE}`, background: '#fff', borderRadius: 9, height: 30, padding: '0 11px', fontFamily: 'inherit', fontSize: 12, fontWeight: 500, color: '#3F3F46', cursor: 'pointer', flex: '0 0 auto' }}
+                  >
+                    {t('Clear', 'Limpiar')}
+                  </button>
+                )}
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                {cart.length === 0 ? (
+                  <div style={{ padding: '48px 20px', textAlign: 'center' }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 44, height: 44, borderRadius: 999, background: B_FILL, marginBottom: 12 }}>
+                      <BandsCartIcon color={B_FAINT} size={20} />
+                    </div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>
+                      {t('No items yet', 'Aún no hay artículos')}
+                    </div>
+                    <div style={{ fontSize: 12, color: B_FAINT, marginTop: 3, lineHeight: 1.5 }}>
+                      {t('Tap anything on the left to add it.', 'Toca cualquier cosa a la izquierda para agregarla.')}
+                    </div>
+                  </div>
+                ) : (
+                  // Consolidated view — one row per itemId with a
+                  // stepper. Lines from the same item id are summed.
+                  (() => {
+                    const byItem = new Map<string, { name: string; price: number; quantity: number }>()
+                    for (const l of cart) {
+                      const prev = byItem.get(l.itemId)
+                      if (prev) prev.quantity += l.quantity
+                      else byItem.set(l.itemId, { name: l.name, price: l.price, quantity: l.quantity })
+                    }
+                    return Array.from(byItem.entries()).map(([itemId, l]) => (
+                      <div key={itemId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderBottom: `1px solid ${B_LINE_SOFT}` }}>
+                        <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.3 }}>{l.name}</span>
+                          <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>{CURRENCY(l.price)} {t('each', 'c/u')}</span>
+                        </span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 2, background: B_FILL, borderRadius: 9, padding: 2, flex: '0 0 auto' }}>
+                          <BandsStepBtn onClick={() => bandsBump(itemId, -1)}>−</BandsStepBtn>
+                          <span style={{ minWidth: 24, textAlign: 'center', fontFamily: B_MONO, fontSize: 12, fontWeight: 600 }}>{l.quantity}</span>
+                          <BandsStepBtn onClick={() => bandsBump(itemId, 1)}>+</BandsStepBtn>
+                        </span>
+                        <span style={{ fontFamily: B_MONO, fontSize: 13, fontWeight: 600, minWidth: 52, textAlign: 'right', flex: '0 0 auto' }}>{CURRENCY(l.price * l.quantity)}</span>
+                      </div>
+                    ))
+                  })()
+                )}
+              </div>
+
+              <div style={{ borderTop: `1px solid ${B_LINE}`, background: B_SURFACE, padding: '12px 18px 14px', flex: '0 0 auto' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                  <span style={{ fontSize: 12, color: B_MUTED }}>{t('Subtotal', 'Subtotal')}</span>
+                  <span style={{ fontFamily: B_MONO, fontSize: 12 }}>{CURRENCY(subtotal)}</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginTop: 8, paddingTop: 9, borderTop: `1px solid ${B_LINE}` }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{t('Total', 'Total')}</span>
+                  <span style={{ fontFamily: B_MONO, fontSize: 26, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>{CURRENCY(subtotal)}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { if (cart.length) setCheckoutOpen(true) }}
+                  disabled={cart.length === 0 || pending}
+                  style={{
+                    width: '100%', marginTop: 12, border: 0, borderRadius: 11, height: 46,
+                    fontFamily: 'inherit', fontSize: 14, fontWeight: 600,
+                    ...(cart.length && !pending
+                      ? { background: B_INK, color: B_PAPER, cursor: 'pointer' }
+                      : { background: B_LINE_SOFT, color: B_GHOST, cursor: 'default' }),
+                  }}
+                >
+                  {cart.length
+                    ? `${t('Take payment', 'Cobrar')} · ${CURRENCY(subtotal)}`
+                    : t('Add items to start', 'Agrega artículos para comenzar')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (<>
       {/* Page header — hidden in kiosk mode because the (app) layout's
           kiosk strip already carries the brand + "POS" eyebrow at the
           top of the device. Showing it twice wastes a vertical band
@@ -692,13 +974,15 @@ export default function PosClient({
           </div>
         </aside>
       </div>
+      </>)}
 
       {/* Order item drawer — clicking a cart row in the right rail
           opens this drawer for that specific line item. Quantity,
           notes, modifier placeholders, and the per-line Remove
           action all live here so the cart row itself stays minimal
-          (name + line total + remove X). */}
-      {editingLine && (
+          (name + line total + remove X). Phone-only for now — bands
+          uses a consolidated stepper directly on each cart row. */}
+      {editingLine && !isBands && (
         <OrderItemDrawer
           line={editingLine}
           onClose={() => setEditingLineId(null)}
@@ -1902,5 +2186,175 @@ function OrderItemDrawer({
         </div>
       </aside>
     </>
+  )
+}
+
+// ================================================================
+// Bands (md+) helpers — only used by the isBands branch.
+// ================================================================
+
+/** Drag-scrollable single-row category rail. Fills chevron + edge
+ *  fade when there's more to the right; drag-to-scroll on tablet. */
+function BandsCategoryRail({
+  tabs, activeId, onPick,
+}: {
+  tabs: Array<{ id: string; name: string; keys: string[] }>
+  activeId: string | null
+  onPick: (id: string) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [drag, setDrag] = useState<{ x: number; at: number } | null>(null)
+  const [more, setMore] = useState(false)
+  const sync = () => {
+    const el = ref.current
+    if (el) setMore(el.scrollLeft < el.scrollWidth - el.clientWidth - 4)
+  }
+  useEffect(() => { sync() }, [tabs.length])
+  return (
+    <div style={{ position: 'relative', borderBottom: `1px solid ${B_LINE}`, background: B_SURFACE, flex: '0 0 auto' }}>
+      <div
+        ref={ref}
+        onPointerDown={(e) => { if (ref.current) setDrag({ x: e.clientX, at: ref.current.scrollLeft }) }}
+        onPointerMove={(e) => { if (drag && ref.current) { ref.current.scrollLeft = drag.at - (e.clientX - drag.x); sync() } }}
+        onPointerUp={() => setDrag(null)}
+        onPointerLeave={() => setDrag(null)}
+        onScroll={sync}
+        style={{
+          display: 'flex', alignItems: 'stretch',
+          padding: '0 34px 0 24px',
+          overflowX: 'auto', overflowY: 'hidden', scrollbarWidth: 'none',
+          touchAction: 'pan-x', cursor: drag ? 'grabbing' : 'grab',
+        }}
+      >
+        {tabs.map((tb) => {
+          const on = activeId === tb.id
+          return (
+            <button
+              key={tb.id}
+              type="button"
+              onClick={() => onPick(tb.id)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', border: 0, background: 'transparent',
+                padding: '11px 14px 10px', marginLeft: -14, marginBottom: -1,
+                fontFamily: 'inherit', fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto',
+                borderBottom: `2px solid ${on ? B_INK : 'transparent'}`,
+                fontWeight: on ? 600 : 500, color: on ? B_INK : B_MUTED,
+              }}
+            >
+              {tb.name}
+            </button>
+          )
+        })}
+      </div>
+      {more && (
+        <>
+          <span aria-hidden style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: 52, pointerEvents: 'none', background: 'linear-gradient(270deg,#FAFAF9 34%,rgba(250,250,249,0))' }} />
+          <button
+            type="button"
+            onClick={() => { if (ref.current) { ref.current.scrollLeft += 240; sync() } }}
+            title="More categories"
+            style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)', zIndex: 2, display: 'flex', alignItems: 'center', justifyContent: 'center', width: 26, height: 26, border: `1px solid ${B_LINE}`, borderRadius: 999, background: '#fff', boxShadow: '0 1px 3px rgba(24,24,27,0.10)', fontFamily: 'inherit', fontSize: 13, lineHeight: 1, color: '#52525B', cursor: 'pointer', padding: 0 }}
+          >
+            ›
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Sellable item tile — every item here already has price > 0
+ *  (filtered server-side). Ink border + "N in order" badge when
+ *  the item is in the cart. */
+function BandsItemCard({
+  item, inCart, onAdd, t,
+}: { item: Item; inCart: number; onAdd: () => void; t: (en: string, es?: string) => string }) {
+  return (
+    <button
+      type="button"
+      onClick={onAdd}
+      title={`${t('Add', 'Añadir')} ${item.name}`}
+      style={{
+        display: 'block', width: '100%', textAlign: 'left', borderRadius: 10,
+        padding: '11px 12px', fontFamily: 'inherit', color: B_INK,
+        border: `1px solid ${inCart ? B_INK : B_LINE}`,
+        background: inCart ? B_SURFACE : '#fff',
+        cursor: 'pointer',
+      }}
+    >
+      <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.35 }}>{item.name}</span>
+      <span style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: 9 }}>
+        <span style={{ fontFamily: B_MONO, fontSize: 14, fontWeight: 600, color: B_INK }}>{CURRENCY(item.price)}</span>
+        {inCart > 0 && (
+          <span style={{ fontFamily: B_MONO, fontSize: 10, fontWeight: 600, color: B_PAPER, background: B_INK, borderRadius: 999, padding: '2px 7px' }}>
+            {inCart} {t('in order', 'en pedido')}
+          </span>
+        )}
+      </span>
+    </button>
+  )
+}
+
+/** Bands search pill — header-band right anchor. Same silhouette
+ *  as the menu / sales / inventory tablet searches. */
+function BandsSearchPill({
+  total, value, onChange, placeholder, unit,
+}: { total: number; value: string; onChange: (v: string) => void; placeholder: string; unit: string }) {
+  const [focused, setFocused] = useState(false)
+  return (
+    <span
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 8, borderRadius: 999,
+        padding: '0 6px 0 12px', height: 34, flex: '0 0 auto',
+        transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
+        background: focused ? '#fff' : B_FILL,
+        border: `1px solid ${focused ? B_INK : 'transparent'}`,
+        boxShadow: focused ? '0 0 0 3px rgba(24,24,27,0.06)' : 'none',
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={focused ? '#52525B' : B_FAINT} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="11" cy="11" r="7" />
+        <path d="M21 21l-4.35-4.35" />
+      </svg>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder={`${placeholder} ${total} ${unit}`}
+        style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 13, color: B_INK, width: 200, padding: 0, outline: 'none' }}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, border: 0, borderRadius: '50%', background: B_LINE, fontFamily: 'inherit', fontSize: 13, lineHeight: 1, color: '#52525B', cursor: 'pointer', flex: '0 0 auto' }}
+        >
+          ×
+        </button>
+      )}
+    </span>
+  )
+}
+
+function BandsStepBtn({ children, onClick }: { children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', border: 0, background: '#fff', borderRadius: 7, width: 24, height: 24, fontFamily: 'inherit', fontSize: 14, lineHeight: 1, color: '#52525B', cursor: 'pointer', boxShadow: '0 1px 2px rgba(24,24,27,0.06)' }}
+    >
+      {children}
+    </button>
+  )
+}
+
+function BandsCartIcon({ color, size = 22 }: { color: string; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="21" r="1" /><circle cx="19" cy="21" r="1" />
+      <path d="M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12" />
+    </svg>
   )
 }

@@ -126,7 +126,7 @@ export default async function PosPage() {
     applyMenuSeedFilter(
       supabase
         .from('menu_categories')
-        .select('id, name, sort_order')
+        .select('id, name, sort_order, parent_id')
     ).order('sort_order', { ascending: true }),
 
     fetchActiveMenuItems(),
@@ -159,11 +159,16 @@ export default async function PosPage() {
   if (countsRes.error) console.error('[pos/page] inventory_counts select failed:', countsRes.error)
   if (transactionsRes.error) console.error('[pos/page] inventory_transactions select failed:', transactionsRes.error)
 
-  const items = rawItems as Array<{
+  const itemsRawTyped = rawItems as Array<{
     id: string; name: string; current_price: number | string
     category_id: string | null; active: boolean
     availability_override?: string | null
   }> | null
+
+  // Unpriced items don't belong on the register. Filter them out
+  // server-side so no downstream code (categories, availability,
+  // tiles) ever sees a $0 sellable. Owner sets the price in Menu.
+  const items = (itemsRawTyped ?? []).filter((i) => Number(i.current_price) > 0)
 
   const itemIdSet = new Set((items ?? []).map((i) => i.id))
   const distinctRecipeMenuItemIds = new Set((recipeComponents ?? []).map((rc) => rc.menu_item_id as string))
@@ -228,7 +233,11 @@ export default async function PosPage() {
     <PosClient
       lang={lang}
       kioskMode={kioskMode}
-      categories={(categories ?? []).map((c) => ({ id: c.id, name: c.name }))}
+      categories={(categories ?? []).map((c) => ({
+        id: c.id,
+        name: c.name,
+        parentId: (c.parent_id as string | null) ?? null,
+      }))}
       items={(items ?? []).map((i) => {
         // `availability_override` may be undefined if the migration
         // hasn't landed; treat as 'none' to keep tiles sellable.

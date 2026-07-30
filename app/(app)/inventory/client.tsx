@@ -164,6 +164,7 @@ type DrawerState =
 const INK = '#18181B'
 const PAPER = '#FAF9F6'
 const LINE = '#E7E6E2'
+const LINE_SOFT = '#F0EFEB'
 const SURFACE = '#FAFAF9'
 const FILL = '#F4F4F2'
 const MUTED = '#6B6B70'
@@ -386,6 +387,18 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
   // just the input).
   const [searchFocused, setSearchFocused] = useState(false)
 
+  // Bands treatment at md+ — strip the outer page card so the
+  // header, filter, and item rows read as full-bleed bands
+  // matching sales/analytics/staffing. Phone keeps the card.
+  const [isBands, setIsBands] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
   // Small helper for the header stat row ("12 items · 3 need
   // restocking"). Fabricated inline to keep call sites terse.
   const stat = (v: string, label: string, color: string = INK) => (
@@ -417,7 +430,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
   ]
 
   return (
-    <div style={{ maxWidth: 1400, fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
+    <div style={{ maxWidth: isBands ? undefined : 1400, fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
 
       {/* Duplicate-name banner.
           Renders when any item-name group has multiple rows and at
@@ -465,7 +478,14 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           </button>
         </div>
       ) : (
-        <div style={{ border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff' }}>
+        <div style={{
+          // Bands mode: no page card — the header, filter, and
+          // rows below all read as full-bleed bands. Cards mode
+          // (phone) keeps the outer border + radius.
+          border: isBands ? 0 : `1px solid ${LINE}`,
+          borderRadius: isBands ? 0 : 12,
+          background: '#fff',
+        }}>
 
           {/* ---- HEADER BAND ----
               Title + inline stats on the left; four actions on the
@@ -473,7 +493,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               as headline facts, not badges — a mono count paired
               with a muted noun keeps the eye moving fast. */}
           <div style={{
-            padding: '16px 16px 14px', display: 'flex',
+            padding: isBands ? '16px 24px 14px' : '16px 16px 14px', display: 'flex',
             alignItems: 'center', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
           }}>
@@ -548,7 +568,8 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               live count on each. Search pill sits on the right and
               lights up on focus (bg + border + soft ring). */}
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 16px',
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: isBands ? '10px 24px' : '10px 16px',
             borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
             background: SURFACE, flexWrap: 'wrap',
           }}>
@@ -666,8 +687,15 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                   onClick={() => setDrawer({ mode: 'item', itemId: item.id })}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 13,
-                    padding: '11px 12px', borderRadius: 10, cursor: 'pointer',
-                    border: `1px solid ${selected ? LINE : 'transparent'}`,
+                    // Bands: 24px shared inset with the header/filter
+                    // above; hairline divider between rows; no per-row
+                    // border/radius. Cards mode (phone) keeps its
+                    // rounded selection ring.
+                    padding: isBands ? '11px 24px' : '11px 12px',
+                    borderRadius: isBands ? 0 : 10,
+                    cursor: 'pointer',
+                    border: isBands ? 0 : `1px solid ${selected ? LINE : 'transparent'}`,
+                    borderBottom: isBands ? `1px solid ${LINE_SOFT}` : undefined,
                     background: selected ? SURFACE : 'transparent',
                     transition: 'background 120ms',
                   }}

@@ -221,9 +221,12 @@ export default function ScheduleHeader({
           transform: `translateX(${swipeDX / 6}px)`,
         }}
       >
-        {/* View switch — absolutely centred, pinned to title's optical row */}
+        {/* View switch — absolutely centred vertically + horizontally
+            against the header band. Was pinned to top:18 (title row),
+            but the header now center-aligns the title + stats block,
+            so the toggle needs to match. */}
         <div style={{
-          position: 'absolute', left: '50%', top: 18, transform: 'translateX(-50%)',
+          position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
           zIndex: 2, display: 'flex', alignItems: 'center',
           background: '#F4F4F2', borderRadius: 10, padding: 3, gap: 2,
         }}>

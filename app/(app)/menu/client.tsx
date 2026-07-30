@@ -239,6 +239,7 @@ export default function MenuClient({
   // layout renders unchanged. At md+ the return branches into a
   // full-height 2-pane shell (tree + item grid) using this state.
   const [isBands, setIsBands] = useState(false)
+  const [isWide, setIsWide] = useState(false)
   const [bandsSel, setBandsSel] = useState<
     | { kind: 'orphan' }
     | { kind: 'category'; id: string }
@@ -251,11 +252,16 @@ export default function MenuClient({
   const [bandsAddItemOpen, setBandsAddItemOpen] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const mq = window.matchMedia('(min-width: 768px)')
-    const update = () => setIsBands(mq.matches)
+    const mqBands = window.matchMedia('(min-width: 768px)')
+    const mqWide = window.matchMedia('(min-width: 1280px)')
+    const update = () => { setIsBands(mqBands.matches); setIsWide(mqWide.matches) }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    mqBands.addEventListener('change', update)
+    mqWide.addEventListener('change', update)
+    return () => {
+      mqBands.removeEventListener('change', update)
+      mqWide.removeEventListener('change', update)
+    }
   }, [])
 
   const assignTo = (itemId: string, categoryId: string | null) => {
@@ -811,9 +817,15 @@ export default function MenuClient({
                 </div>
               ) : (
                 paneGroupsFiltered.map((g, gi) => {
-                  const trios: (MenuItem | undefined)[][] = []
-                  for (let i = 0; i < g.items.length; i += 3) {
-                    trios.push([g.items[i], g.items[i + 1], g.items[i + 2]])
+                  // At browser widths (xl+) the item region has enough
+                  // room for 4 cards per row without stretching. Tablet
+                  // stays at 3-up so the cards still read comfortably.
+                  const perRow = isWide ? 4 : 3
+                  const rowsOfCards: (MenuItem | undefined)[][] = []
+                  for (let i = 0; i < g.items.length; i += perRow) {
+                    const row: (MenuItem | undefined)[] = []
+                    for (let k = 0; k < perRow; k++) row.push(g.items[i + k])
+                    rowsOfCards.push(row)
                   }
                   const bare = !g.label || paneGroupsFiltered.length === 1
                   return (
@@ -826,9 +838,9 @@ export default function MenuClient({
                           <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', height: 0, borderTop: `1px dotted ${B_INK}` }} />
                         </div>
                       )}
-                      {trios.map((trio, i) => (
-                        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, padding: `${i === 0 ? 12 : 0}px 20px 10px` }}>
-                          {trio.map((r, j) =>
+                      {rowsOfCards.map((row, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: `repeat(${perRow},1fr)`, gap: 10, padding: `${i === 0 ? 12 : 0}px 20px 10px` }}>
+                          {row.map((r, j) =>
                             r ? (
                               <BandsItemCard
                                 key={r.id}
@@ -3664,7 +3676,13 @@ function BandsTreeRow({
       <span aria-hidden style={{ width: 10, flex: '0 0 10px', fontSize: 9, color: B_FAINT }}>
         {hasKids ? (expanded ? '▾' : '▸') : ''}
       </span>
-      <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, fontSize: 13, fontWeight: on ? 600 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <span style={{
+        flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, fontSize: 13,
+        // Top-level rows always bold so the hierarchy reads at a
+        // glance; sub-rows step down to 500 until selected.
+        fontWeight: depth === 0 ? 700 : (on ? 600 : 500),
+        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      }}>
         {name}
       </span>
       <span

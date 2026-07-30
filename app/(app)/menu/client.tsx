@@ -248,6 +248,7 @@ export default function MenuClient({
   const [bandsQuery, setBandsQuery] = useState('')
   const [bandsAddCatOpen, setBandsAddCatOpen] = useState(false)
   const [bandsAddSubOpen, setBandsAddSubOpen] = useState(false)
+  const [bandsAddItemOpen, setBandsAddItemOpen] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mq = window.matchMedia('(min-width: 768px)')
@@ -847,13 +848,26 @@ export default function MenuClient({
                 })
               )}
               <div style={{ padding: '12px 20px 20px' }}>
-                <a
-                  href="/menu/new-item"
-                  style={{ display: 'inline-block', border: `1px dashed #D6D5D1`, background: 'transparent', borderRadius: 10, padding: '9px 14px', fontSize: 12, color: B_MUTED, textDecoration: 'none' }}
-                >
-                  + {t('Add item', 'Añadir artículo')}
-                  {activeBandsSel?.kind === 'category' ? ` ${t('to', 'a')} ${activeName}` : ''}
-                </a>
+                {activeBandsSel?.kind === 'category' ? (
+                  bandsAddItemOpen ? (
+                    <div style={{ maxWidth: 320 }}>
+                      <BandsAddItemForm
+                        categoryId={activeBandsSel.id}
+                        categoryName={activeName}
+                        onClose={() => setBandsAddItemOpen(false)}
+                        t={t}
+                      />
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setBandsAddItemOpen(true)}
+                      style={{ display: 'inline-block', border: `1px dashed #D6D5D1`, background: 'transparent', borderRadius: 10, padding: '9px 14px', fontFamily: 'inherit', fontSize: 12, color: B_MUTED, cursor: 'pointer' }}
+                    >
+                      + {t('Add item', 'Añadir artículo')} {t('to', 'a')} {activeName}
+                    </button>
+                  )
+                ) : null}
               </div>
             </div>
           </div>
@@ -3762,6 +3776,92 @@ function BandsAddCategoryForm({
           }}
         >
           {pending ? t('Adding…', 'Agregando…') : isSub ? t('Add sub-section', 'Agregar sub-sección') : t('Add category', 'Agregar categoría')}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            border: `1px solid ${B_LINE}`, background: '#fff', color: B_MUTED, borderRadius: 8,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer',
+          }}
+        >
+          {t('Cancel', 'Cancelar')}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/** Inline "New item" form scoped to a specific category. Same
+ *  server action as the phone layout (createMenuItemInSection),
+ *  same fields (name + price). Recipe mapping happens later, once
+ *  the drawer is open. Closes on a clean submit. */
+function BandsAddItemForm({
+  categoryId,
+  categoryName,
+  onClose,
+  t,
+}: {
+  categoryId: string
+  categoryName: string
+  onClose: () => void
+  t: T
+}) {
+  const [state, action, pending] = useActionState(createMenuItemInSection, null)
+  const wasPending = useRef(false)
+  useEffect(() => {
+    if (wasPending.current && !pending && !state?.error) onClose()
+    wasPending.current = pending
+  }, [pending, state, onClose])
+  return (
+    <form action={action} style={{ display: 'flex', flexDirection: 'column', gap: 8, background: '#fff', border: `1px solid ${B_LINE}`, borderRadius: 12, padding: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: B_INK }}>
+        {t(`New item in ${categoryName}`, `Nuevo artículo en ${categoryName}`)}
+      </div>
+      <input type="hidden" name="category_id" value={categoryId} />
+      <input
+        name="name"
+        type="text"
+        required
+        autoFocus
+        placeholder={t('Item name', 'Nombre del artículo')}
+        style={{
+          width: '100%', borderRadius: 8, border: `1px solid ${B_LINE}`, background: '#fff',
+          padding: '7px 10px', fontFamily: 'inherit', fontSize: 13, color: B_INK, outline: 'none',
+        }}
+      />
+      <div style={{ position: 'relative' }}>
+        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: B_FAINT }}>$</span>
+        <input
+          name="price"
+          type="number"
+          required
+          min="0"
+          step="0.01"
+          placeholder="0.00"
+          style={{
+            width: '100%', borderRadius: 8, border: `1px solid ${B_LINE}`, background: '#fff',
+            padding: '7px 10px 7px 22px', fontFamily: 'inherit', fontSize: 13, color: B_INK, outline: 'none',
+          }}
+        />
+      </div>
+      {state?.error && (
+        <div style={{ fontSize: 11, color: '#B91C1C' }}>{state.error}</div>
+      )}
+      <div style={{ fontSize: 10, color: B_FAINT, lineHeight: 1.4 }}>
+        {t('Map ingredients to inventory once the item is open in the drawer.', 'Vincula los ingredientes al inventario una vez que el artículo esté abierto en el panel.')}
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          type="submit"
+          disabled={pending}
+          style={{
+            flex: 1, border: 0, background: B_INK, color: B_PAPER, borderRadius: 8,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+            cursor: pending ? 'default' : 'pointer', opacity: pending ? 0.6 : 1,
+          }}
+        >
+          {pending ? t('Adding…', 'Agregando…') : t('Add item', 'Agregar artículo')}
         </button>
         <button
           type="button"

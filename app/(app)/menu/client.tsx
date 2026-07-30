@@ -163,6 +163,23 @@ const fmtMoney = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 
 // ================================================================
+// Bands (tablet md+) design tokens.
+// Only used by the bands layout so they can't collide with anything
+// the phone Tailwind path renders. Prefixed with B_ for grep-ability.
+// ================================================================
+const B_INK = '#18181B'
+const B_PAPER = '#FAF9F6'
+const B_LINE = '#E7E6E2'
+const B_TREE_BG = '#FCFCFB'
+const B_FILL = '#F4F4F5'
+const B_MUTED = '#6B6B70'
+const B_FAINT = '#A1A1A6'
+const B_GHOST = '#C4C4C7'
+const B_AMBER_BG = '#FFFBEB'
+const B_AMBER = '#B45309'
+const B_MONO = "'Geist Mono', ui-monospace, monospace"
+
+// ================================================================
 // Page
 // ================================================================
 
@@ -217,6 +234,26 @@ export default function MenuClient({
   // bucket immediately on drop without waiting for revalidation.
   const [pendingMoves, setPendingMoves] = useState<Record<string, string | null>>({})
   const [, startAssignTransition] = useTransition()
+
+  // Bands (tablet md+) layout state. Below md the existing chip
+  // layout renders unchanged. At md+ the return branches into a
+  // full-height 2-pane shell (tree + item grid) using this state.
+  const [isBands, setIsBands] = useState(false)
+  const [bandsSel, setBandsSel] = useState<
+    | { kind: 'orphan' }
+    | { kind: 'category'; id: string }
+    | null
+  >(null)
+  const [bandsExpanded, setBandsExpanded] = useState<string | null>(null)
+  const [bandsQuery, setBandsQuery] = useState('')
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
 
   const assignTo = (itemId: string, categoryId: string | null) => {
     setPendingMoves((prev) => ({ ...prev, [itemId]: categoryId }))
@@ -477,7 +514,330 @@ export default function MenuClient({
     return () => window.clearTimeout(t)
   }, [searchParams, items])
 
+  // -------- bands (md+) derivations ---------------------------------
+  // Everything below is only read by the bands branch of the return.
+  // Nothing here mutates state used by the phone/chip path.
+  const bandsTopLevel = displayedCategories.filter((c) => !c.parentId)
+  const bandsKidsOf = (cat: Category) =>
+    displayedCategories.filter((c) => c.parentId === cat.id)
+  const bandsCountFor = (
+    sel: { kind: 'orphan' } | { kind: 'category'; id: string },
+  ): number => {
+    if (sel.kind === 'orphan') return awaitingItems.length
+    const cat = categories.find((c) => c.id === sel.id)
+    if (!cat) return 0
+    const own = (itemsByCategory.get(cat.id) ?? []).length
+    if (cat.parentId) return own
+    const kids = bandsKidsOf(cat)
+    return own + kids.reduce((n, k) => n + (itemsByCategory.get(k.id) ?? []).length, 0)
+  }
+  const bandsReviewCountFor = (
+    sel: { kind: 'orphan' } | { kind: 'category'; id: string },
+  ): number => {
+    if (sel.kind === 'orphan') return awaitingItems.filter((i) => !hasRecipe(i)).length
+    const cat = categories.find((c) => c.id === sel.id)
+    if (!cat) return 0
+    const own = (itemsByCategory.get(cat.id) ?? []).filter((i) => !hasRecipe(i)).length
+    if (cat.parentId) return own
+    const kids = bandsKidsOf(cat)
+    return own + kids.reduce(
+      (n, k) => n + (itemsByCategory.get(k.id) ?? []).filter((i) => !hasRecipe(i)).length,
+      0,
+    )
+  }
+  // Pane groups — one flat feed of { label, items }. Label null =
+  // no section header rendered (would repeat the pane title).
+  const bandsPaneGroups = (
+    sel: { kind: 'orphan' } | { kind: 'category'; id: string },
+  ): Array<{ label: string | null; items: MenuItem[] }> => {
+    if (sel.kind === 'orphan') return [{ label: null, items: awaitingItems }]
+    const cat = categories.find((c) => c.id === sel.id)
+    if (!cat) return []
+    if (cat.parentId) return [{ label: null, items: itemsByCategory.get(cat.id) ?? [] }]
+    const kids = bandsKidsOf(cat)
+    if (kids.length === 0) return [{ label: null, items: itemsByCategory.get(cat.id) ?? [] }]
+    const groups: Array<{ label: string | null; items: MenuItem[] }> = []
+    const own = itemsByCategory.get(cat.id) ?? []
+    if (own.length > 0) groups.push({ label: cat.name, items: own })
+    for (const k of kids) {
+      const items = itemsByCategory.get(k.id) ?? []
+      if (items.length > 0) groups.push({ label: k.name, items })
+    }
+    return groups
+  }
+  // Default selection: first top-level with items, else first
+  // top-level, else the orphan pen if it has items.
+  const activeBandsSel: { kind: 'orphan' } | { kind: 'category'; id: string } | null =
+    bandsSel ??
+    (bandsTopLevel.find((c) => (itemsByCategory.get(c.id) ?? []).length > 0 || bandsKidsOf(c).length > 0)
+      ? { kind: 'category', id: bandsTopLevel[0].id }
+      : bandsTopLevel[0]
+        ? { kind: 'category', id: bandsTopLevel[0].id }
+        : awaitingItems.length > 0
+          ? { kind: 'orphan' }
+          : null)
+  const selKey =
+    activeBandsSel?.kind === 'orphan'
+      ? '__orphan__'
+      : activeBandsSel?.kind === 'category'
+        ? activeBandsSel.id
+        : ''
+  // Derive expanded-parent from selection: sub-category → parent, top-level with kids → itself.
+  const expandedParent = (() => {
+    if (activeBandsSel?.kind !== 'category') return bandsExpanded
+    const cat = categories.find((c) => c.id === activeBandsSel.id)
+    if (!cat) return bandsExpanded
+    if (cat.parentId) return cat.parentId
+    return bandsKidsOf(cat).length > 0 ? cat.id : bandsExpanded
+  })()
+  const selectBands = (sel: { kind: 'orphan' } | { kind: 'category'; id: string }) => {
+    setBandsSel(sel)
+    if (sel.kind === 'orphan') { setBandsExpanded(null); return }
+    const cat = categories.find((c) => c.id === sel.id)
+    if (!cat) { setBandsExpanded(null); return }
+    if (cat.parentId) { setBandsExpanded(cat.parentId); return }
+    setBandsExpanded(bandsKidsOf(cat).length > 0 ? cat.id : null)
+  }
+  const paneEyebrow = (() => {
+    if (!activeBandsSel) return ''
+    if (activeBandsSel.kind === 'orphan') return t('UNCATEGORISED', 'SIN CATEGORÍA')
+    const cat = categories.find((c) => c.id === activeBandsSel.id)
+    if (!cat) return ''
+    if (cat.parentId) {
+      const parent = categories.find((c) => c.id === cat.parentId)
+      return parent ? `${parent.name.toUpperCase()} · ${cat.name.toUpperCase()}` : cat.name.toUpperCase()
+    }
+    return cat.name.toUpperCase()
+  })()
+  const activeName = (() => {
+    if (!activeBandsSel) return ''
+    if (activeBandsSel.kind === 'orphan') return t('Uncategorised', 'Sin categoría')
+    return categories.find((c) => c.id === activeBandsSel.id)?.name ?? ''
+  })()
+  const activeCount = activeBandsSel ? bandsCountFor(activeBandsSel) : 0
+  const activeReview = activeBandsSel ? bandsReviewCountFor(activeBandsSel) : 0
+  const bandsQ = bandsQuery.trim().toLowerCase()
+  const paneGroupsFiltered = activeBandsSel
+    ? bandsPaneGroups(activeBandsSel)
+        .map((g) => ({ label: g.label, items: bandsQ ? g.items.filter((i) => i.name.toLowerCase().includes(bandsQ)) : g.items }))
+        .filter((g) => g.items.length > 0)
+    : []
+  const bandsTotalItems = visibleItems.length
+  const bandsTotalReview = visibleItems.filter((i) => !hasRecipe(i)).length
+  const bandsTotalCats = displayedCategories.filter((c) => !c.parentId).length
+  const activeIsTopLevel =
+    activeBandsSel?.kind === 'category' &&
+    !categories.find((c) => c.id === activeBandsSel.id)?.parentId
+
   return (
+    <>
+    {isBands ? (
+      // ============================================================
+      // BANDS (md+) LAYOUT — full-height 2-pane shell: header band on
+      // top, then tree (264px) + item grid. Below md this branch is
+      // skipped and the existing chip layout renders unchanged.
+      // ============================================================
+      <div style={{
+        height: '100vh', minWidth: 0, display: 'flex', flexDirection: 'column',
+        background: '#fff', fontFamily: "'Geist', system-ui, sans-serif", color: B_INK,
+      }}>
+        {/* HEADER BAND */}
+        <div style={{ background: '#fff', borderBottom: `1px solid ${B_LINE}`, flex: '0 0 auto' }}>
+          <div style={{ padding: '16px 24px 15px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}>
+            <div style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
+                  {t('Menu', 'Menú')}
+                </h1>
+                {isExternal && (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#EEF2FF', color: '#4F46E5', borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                    <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#6366F1' }} />
+                    {t('Imported menu', 'Menú importado')}
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontFamily: B_MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+                  {bandsTotalItems}
+                </span>
+                <span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>
+                  {bandsTotalItems === 1 ? t('ITEM', 'ARTÍCULO') : t('ITEMS', 'ARTÍCULOS')}
+                </span>
+                {bandsTotalReview > 0 && (
+                  <BandsTrail value={String(bandsTotalReview)} label={t('need review', 'requieren revisión')} tone={B_AMBER} />
+                )}
+                <BandsTrail
+                  value={String(bandsTotalCats)}
+                  label={bandsTotalCats === 1 ? t('category', 'categoría') : t('categories', 'categorías')}
+                />
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignSelf: 'center', alignItems: 'center', gap: 8, flex: '0 0 auto' }}>
+              <BandsSearchPill total={bandsTotalItems} value={bandsQuery} onChange={setBandsQuery} placeholder={t('Search', 'Buscar')} />
+            </div>
+          </div>
+        </div>
+
+        {/* TREE + ITEMS */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          {/* TREE PANE */}
+          <div style={{ width: 264, flex: '0 0 264px', borderRight: `1px solid ${B_LINE}`, background: B_TREE_BG, overflowY: 'auto', padding: '10px 8px 16px' }}>
+            <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT, padding: '6px 10px 8px' }}>
+              {t('CATEGORIES', 'CATEGORÍAS')}
+            </div>
+            {bandsTopLevel.length === 0 && awaitingItems.length === 0 ? (
+              <div style={{ padding: '6px 10px', fontSize: 12, color: B_MUTED }}>
+                {t('No categories yet.', 'Aún no hay categorías.')}
+              </div>
+            ) : (
+              <>
+                {bandsTopLevel.map((c) => {
+                  const kids = bandsKidsOf(c)
+                  const rows: React.ReactNode[] = [
+                    <BandsTreeRow
+                      key={c.id}
+                      name={c.name}
+                      on={selKey === c.id}
+                      depth={0}
+                      hasKids={kids.length > 0}
+                      expanded={expandedParent === c.id}
+                      needsReview={bandsReviewCountFor({ kind: 'category', id: c.id }) > 0}
+                      onClick={() => selectBands({ kind: 'category', id: c.id })}
+                    />,
+                  ]
+                  if (kids.length > 0 && expandedParent === c.id) {
+                    for (const k of kids) {
+                      rows.push(
+                        <BandsTreeRow
+                          key={k.id}
+                          name={k.name}
+                          on={selKey === k.id}
+                          depth={1}
+                          hasKids={false}
+                          expanded={false}
+                          needsReview={bandsReviewCountFor({ kind: 'category', id: k.id }) > 0}
+                          onClick={() => selectBands({ kind: 'category', id: k.id })}
+                        />,
+                      )
+                    }
+                  }
+                  return rows
+                })}
+                {awaitingItems.length > 0 && (
+                  <BandsTreeRow
+                    key="__orphan__"
+                    name={t('Uncategorised', 'Sin categoría')}
+                    on={selKey === '__orphan__'}
+                    depth={0}
+                    hasKids={false}
+                    expanded={false}
+                    needsReview={awaitingItems.some((i) => !hasRecipe(i))}
+                    onClick={() => selectBands({ kind: 'orphan' })}
+                    orphan
+                  />
+                )}
+              </>
+            )}
+            <a
+              href="/menu/new-category"
+              style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', borderRadius: 9, padding: '8px 10px', marginTop: 6, fontSize: 13, color: B_FAINT, textDecoration: 'none' }}
+            >
+              + {t('Add category', 'Añadir categoría')}
+            </a>
+          </div>
+
+          {/* ITEM REGION */}
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {/* CATEGORY HEADER BAND */}
+            <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, padding: '12px 20px 11px', borderBottom: `1px solid ${B_LINE}`, background: '#fff', flex: '0 0 auto', flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>
+                  {paneEyebrow}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 5, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: B_MONO, fontSize: 19, fontWeight: 600, letterSpacing: '-0.035em', lineHeight: 1 }}>
+                    {activeCount}
+                  </span>
+                  <span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>
+                    {activeCount === 1 ? t('ITEM', 'ARTÍCULO') : t('ITEMS', 'ARTÍCULOS')}
+                  </span>
+                  {activeReview > 0 && (
+                    <BandsTrail value={String(activeReview)} label={t('need review', 'requieren revisión')} tone={B_AMBER} size={13} />
+                  )}
+                </div>
+              </div>
+              {activeIsTopLevel && (
+                <a
+                  href="/menu/new-category"
+                  style={{ display: 'inline-flex', alignItems: 'center', background: B_INK, color: B_PAPER, borderRadius: 10, height: 34, padding: '0 15px', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', flex: '0 0 auto', textDecoration: 'none' }}
+                >
+                  + {t('Sub-section', 'Subsección')}
+                </a>
+              )}
+            </div>
+
+            {/* ITEM GRID — one flat feed, no nested lists. Section
+                headers only render when the pane has more than one
+                group (i.e., a parent with sub-categories). */}
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '0 0 4px' }}>
+              {paneGroupsFiltered.length === 0 ? (
+                <div style={{ padding: '40px 20px', color: B_MUTED, fontSize: 13 }}>
+                  {bandsQ
+                    ? t('No items match that search.', 'Ningún artículo coincide con esa búsqueda.')
+                    : t('No items yet.', 'Aún no hay artículos.')}
+                </div>
+              ) : (
+                paneGroupsFiltered.map((g, gi) => {
+                  const trios: (MenuItem | undefined)[][] = []
+                  for (let i = 0; i < g.items.length; i += 3) {
+                    trios.push([g.items[i], g.items[i + 1], g.items[i + 2]])
+                  }
+                  const bare = !g.label || paneGroupsFiltered.length === 1
+                  return (
+                    <div key={g.label ?? `g${gi}`}>
+                      {!bare && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '18px 20px 10px', background: '#fff', position: 'sticky', top: 0, zIndex: 2 }}>
+                          <span style={{ fontFamily: B_MONO, fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', color: B_INK, flex: '0 0 auto' }}>
+                            {g.label!.toUpperCase()}
+                          </span>
+                          <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', height: 0, borderTop: `1px dotted ${B_INK}` }} />
+                        </div>
+                      )}
+                      {trios.map((trio, i) => (
+                        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, padding: `${i === 0 ? 12 : 0}px 20px 10px` }}>
+                          {trio.map((r, j) =>
+                            r ? (
+                              <BandsItemCard
+                                key={r.id}
+                                item={r}
+                                onOpen={() => setSelectedItemId(r.id)}
+                                selected={selectedItemId === r.id}
+                                t={t}
+                              />
+                            ) : (
+                              <span key={j} />
+                            ),
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })
+              )}
+              <div style={{ padding: '12px 20px 20px' }}>
+                <a
+                  href="/menu/new-item"
+                  style={{ display: 'inline-block', border: `1px dashed #D6D5D1`, background: 'transparent', borderRadius: 10, padding: '9px 14px', fontSize: 12, color: B_MUTED, textDecoration: 'none' }}
+                >
+                  + {t('Add item', 'Añadir artículo')}
+                  {activeBandsSel?.kind === 'category' ? ` ${t('to', 'a')} ${activeName}` : ''}
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    ) : (
     <div className="max-w-[1200px]">
 
       {/* ================================================================ */}
@@ -633,20 +993,24 @@ export default function MenuClient({
         </>
       )}
 
-      {/* DRAWER */}
-      {liveItem && (
-        <ItemDrawer
-          item={liveItem}
-          sectionName={categories.find((c) => c.id === effectiveCategoryId(liveItem))?.name ?? null}
-          categories={categories}
-          inventoryItems={inventoryItems}
-          inventoryActive={inventoryActive}
-          onAssign={assignTo}
-          onClose={() => setSelectedItemId(null)}
-          t={t}
-        />
-      )}
     </div>
+    )}
+
+    {/* DRAWER — shared between the bands and phone layouts. Rendered
+        as a fixed overlay, so its position in the tree doesn't matter. */}
+    {liveItem && (
+      <ItemDrawer
+        item={liveItem}
+        sectionName={categories.find((c) => c.id === effectiveCategoryId(liveItem))?.name ?? null}
+        categories={categories}
+        inventoryItems={inventoryItems}
+        inventoryActive={inventoryActive}
+        onAssign={assignTo}
+        onClose={() => setSelectedItemId(null)}
+        t={t}
+      />
+    )}
+    </>
   )
 }
 
@@ -3216,5 +3580,147 @@ function RecipeRow({ rc, menuItemId, t }: { rc: RecipeEntry; menuItemId: string;
       )}
       {err && <p className="mt-1 text-[10px] text-red-600">{err}</p>}
     </li>
+  )
+}
+
+// ================================================================
+// Bands (tablet md+) pieces — only rendered by the isBands branch.
+// ================================================================
+
+function BandsTrail({
+  value, label, tone, size = 14,
+}: { value: string; label: string; tone?: string; size?: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: '#D6D5D1', alignSelf: 'center', marginRight: 5 }} />
+      <span style={{ fontFamily: B_MONO, fontSize: size, fontWeight: 600, color: tone ?? B_INK }}>{value}</span>
+      <span style={{ fontSize: 12, color: tone ?? B_MUTED }}>{label}</span>
+    </span>
+  )
+}
+
+function BandsTreeRow({
+  name, on, depth, hasKids, expanded, needsReview, onClick, orphan = false,
+}: {
+  name: string
+  on: boolean
+  depth: number
+  hasKids: boolean
+  expanded: boolean
+  needsReview: boolean
+  onClick: () => void
+  orphan?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+        textAlign: 'left', cursor: 'pointer', fontFamily: 'inherit',
+        padding: `8px 10px 8px ${10 + depth * 16}px`,
+        borderRadius: 9,
+        ...(orphan
+          ? { marginTop: 8, border: `1px dashed ${on ? B_FAINT : B_LINE}`, background: on ? B_FILL : 'transparent', color: on ? B_INK : B_MUTED }
+          : { border: 0, background: on ? B_FILL : 'transparent', color: on ? B_INK : '#3F3F46' }),
+      }}
+    >
+      <span aria-hidden style={{ width: 10, flex: '0 0 10px', fontSize: 9, color: B_FAINT }}>
+        {hasKids ? (expanded ? '▾' : '▸') : ''}
+      </span>
+      <span style={{ flexGrow: 1, flexShrink: 1, flexBasis: '0%', minWidth: 0, fontSize: 13, fontWeight: on ? 600 : 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        {name}
+      </span>
+      <span
+        aria-hidden
+        style={{
+          width: 6, height: 6, flex: '0 0 auto',
+          ...(needsReview ? { borderRadius: '50%', background: '#D97706' } : {}),
+        }}
+      />
+    </button>
+  )
+}
+
+function BandsItemCard({
+  item, onOpen, selected, t,
+}: { item: MenuItem; onOpen: () => void; selected: boolean; t: T }) {
+  const priced = item.currentPrice > 0
+  const linked = hasRecipe(item)
+  return (
+    <button
+      type="button"
+      id={`menu-item-${item.id}`}
+      onClick={onOpen}
+      style={{
+        border: `1px solid ${selected ? B_INK : B_LINE}`,
+        borderRadius: 10, padding: '11px 12px', background: '#fff', cursor: 'pointer',
+        textAlign: 'left', fontFamily: 'inherit', color: B_INK,
+        boxShadow: selected ? '0 0 0 3px rgba(24,24,27,0.06)' : 'none',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
+        <span style={{ minWidth: 0, fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', lineHeight: 1.35 }}>
+          {item.name}
+        </span>
+        <span style={{ fontFamily: B_MONO, fontSize: 13, fontWeight: 600, flex: '0 0 auto', color: priced ? B_INK : B_GHOST }}>
+          {fmtMoney(item.currentPrice)}
+        </span>
+      </div>
+      <div style={{ marginTop: 9 }}>
+        <span
+          style={{
+            display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+            padding: '2px 9px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap',
+            ...(linked
+              ? { background: '#ECFDF5', color: '#047857' }
+              : { background: B_AMBER_BG, color: B_AMBER }),
+          }}
+        >
+          {linked ? t('Recipe linked', 'Receta vinculada') : t('Needs review', 'Requiere revisión')}
+        </span>
+      </div>
+    </button>
+  )
+}
+
+function BandsSearchPill({
+  total, value, onChange, placeholder,
+}: { total: number; value: string; onChange: (v: string) => void; placeholder: string }) {
+  const [focused, setFocused] = useState(false)
+  return (
+    <span
+      style={{
+        display: 'flex', alignItems: 'center', gap: 8, borderRadius: 999,
+        padding: '0 6px 0 12px', height: 34,
+        transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
+        background: focused ? '#fff' : '#F4F4F2',
+        border: `1px solid ${focused ? B_INK : 'transparent'}`,
+        boxShadow: focused ? '0 0 0 3px rgba(24,24,27,0.06)' : 'none',
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" style={{ flex: '0 0 auto', color: focused ? '#52525B' : B_FAINT }}>
+        <circle cx="8.8" cy="8.8" r="5.6" strokeWidth="1.7" />
+        <path d="M13 13l4 4" strokeWidth="1.7" strokeLinecap="round" />
+      </svg>
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder={`${placeholder} ${total}`}
+        style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 13, color: B_INK, width: 150, padding: 0, flex: 1, outline: 'none' }}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          aria-label="Clear search"
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, border: 0, borderRadius: '50%', background: B_LINE, fontFamily: 'inherit', fontSize: 13, lineHeight: 1, color: '#52525B', cursor: 'pointer', flex: '0 0 auto' }}
+        >
+          ×
+        </button>
+      )}
+    </span>
   )
 }

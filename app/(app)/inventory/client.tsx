@@ -487,6 +487,18 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
           background: '#fff',
         }}>
 
+        {/* Sticky band — at bands, header + filter pin to the top
+            of the viewport so the manager can scroll the item
+            list without losing the totals or active filter (same
+            pattern sales uses). Collapses to a plain wrapper at
+            phone/cards mode. */}
+        <div
+          style={{
+            position: isBands ? 'sticky' : 'static',
+            top: 0, zIndex: 5, background: '#fff',
+          }}
+        >
+
           {/* ---- HEADER BAND ----
               Title + inline stats on the left; four actions on the
               right (Merge / Orders / Cart / Add item). Stats read
@@ -638,6 +650,8 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
             </span>
           </div>
 
+          </div>{/* /sticky band */}
+
           {/* ---- ROWS ----
               Soft rows inside the board card. Each row: status
               glyph tile · name + status chip (+ recipe count if
@@ -645,9 +659,12 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               button · chevron. Row click opens the item drawer;
               the action button is the visible affordance for the
               same destination — count for uncounted, cart for
-              everything else. */}
-          <div style={{ padding: 8 }}>
-            {pageItems.length === 0 ? (
+              everything else.
+              Bands mode renders EVERY filtered item (no pagination
+              footer); phone keeps the 12-per-page slicing so
+              small screens don't render 200 rows at once. */}
+          <div style={{ padding: isBands ? 0 : 8 }}>
+            {(isBands ? filteredItems : pageItems).length === 0 ? (
               <div style={{ padding: '48px 16px', textAlign: 'center', color: FAINT, fontSize: 12 }}>
                 {t('No items match this filter.', 'Ningún artículo coincide con este filtro.')}
                 {(filter !== 'all' || query.length > 0) && (
@@ -667,7 +684,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                   </>
                 )}
               </div>
-            ) : pageItems.map((item) => {
+            ) : (isBands ? filteredItems : pageItems).map((item) => {
               const tone = STATUS_TONE[item.status]
               const uncounted = item.status === 'no_count'
               // Depletion can drag `estimated` below zero (write-ahead
@@ -786,7 +803,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               )
             })}
 
-            {filteredItems.length > PAGE_SIZE && (
+            {!isBands && filteredItems.length > PAGE_SIZE && (
               <div style={{
                 borderTop: `1px solid ${LINE}`, marginTop: 8,
                 padding: '10px 8px 4px', display: 'flex',

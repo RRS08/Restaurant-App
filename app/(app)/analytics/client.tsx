@@ -710,7 +710,7 @@ export default function AnalyticsClient(props: Props) {
             onClick={() => setCalOpen((v) => !v)}
             style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid transparent', background: 'transparent', borderRadius: 9, padding: '2px 8px', marginLeft: -8, font: 'inherit', color: INK, cursor: 'pointer' }}
           >
-            <span style={{ fontSize: 21, fontWeight: 800, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
               {isBands ? bandsDateLabel : headerDateLabel}
             </span>
             <span style={{ fontSize: 10, color: FAINT }}>▾</span>

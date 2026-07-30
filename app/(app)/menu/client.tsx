@@ -246,6 +246,8 @@ export default function MenuClient({
   >(null)
   const [bandsExpanded, setBandsExpanded] = useState<string | null>(null)
   const [bandsQuery, setBandsQuery] = useState('')
+  const [bandsAddCatOpen, setBandsAddCatOpen] = useState(false)
+  const [bandsAddSubOpen, setBandsAddSubOpen] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mq = window.matchMedia('(min-width: 768px)')
@@ -738,12 +740,19 @@ export default function MenuClient({
                 )}
               </>
             )}
-            <a
-              href="/menu/new-category"
-              style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', borderRadius: 9, padding: '8px 10px', marginTop: 6, fontSize: 13, color: B_FAINT, textDecoration: 'none' }}
-            >
-              + {t('Add category', 'Añadir categoría')}
-            </a>
+            {bandsAddCatOpen ? (
+              <div style={{ marginTop: 6, padding: '8px 10px' }}>
+                <BandsAddCategoryForm onClose={() => setBandsAddCatOpen(false)} t={t} />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setBandsAddCatOpen(true)}
+                style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', border: 0, background: 'transparent', borderRadius: 9, padding: '8px 10px', marginTop: 6, fontFamily: 'inherit', fontSize: 13, color: B_FAINT, cursor: 'pointer', textAlign: 'left' }}
+              >
+                + {t('Add category', 'Añadir categoría')}
+              </button>
+            )}
           </div>
 
           {/* ITEM REGION */}
@@ -766,13 +775,26 @@ export default function MenuClient({
                   )}
                 </div>
               </div>
-              {activeIsTopLevel && (
-                <a
-                  href="/menu/new-category"
-                  style={{ display: 'inline-flex', alignItems: 'center', background: B_INK, color: B_PAPER, borderRadius: 10, height: 34, padding: '0 15px', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', flex: '0 0 auto', textDecoration: 'none' }}
-                >
-                  + {t('Sub-section', 'Subsección')}
-                </a>
+              {activeIsTopLevel && activeBandsSel?.kind === 'category' && (
+                <div style={{ position: 'relative', flex: '0 0 auto' }}>
+                  <button
+                    type="button"
+                    onClick={() => setBandsAddSubOpen((v) => !v)}
+                    style={{ display: 'inline-flex', alignItems: 'center', border: 0, background: B_INK, color: B_PAPER, borderRadius: 10, height: 34, padding: '0 15px', fontFamily: 'inherit', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', cursor: 'pointer' }}
+                  >
+                    + {t('Sub-section', 'Subsección')}
+                  </button>
+                  {bandsAddSubOpen && (
+                    <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, width: 260, zIndex: 30, background: '#fff', borderRadius: 12, border: `1px solid ${B_LINE}`, boxShadow: '0 10px 30px rgba(0,0,0,0.08)', padding: 14 }}>
+                      <BandsAddCategoryForm
+                        parentId={activeBandsSel.id}
+                        parentName={activeName}
+                        onClose={() => setBandsAddSubOpen(false)}
+                        t={t}
+                      />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
 
@@ -3681,6 +3703,78 @@ function BandsItemCard({
         </span>
       </div>
     </button>
+  )
+}
+
+/** Inline "New category" / "New sub-section" form. Uses the same
+ *  createCategory server action as the phone layout's AddSectionForm
+ *  — pass parentId to nest under a top-level category. Closes on
+ *  a clean submit (revalidation propagates the new row through the
+ *  categories prop). */
+function BandsAddCategoryForm({
+  parentId,
+  parentName,
+  onClose,
+  t,
+}: {
+  parentId?: string
+  parentName?: string
+  onClose: () => void
+  t: T
+}) {
+  const [state, action, pending] = useActionState(createCategory, null)
+  const wasPending = useRef(false)
+  useEffect(() => {
+    if (wasPending.current && !pending && !state?.error) onClose()
+    wasPending.current = pending
+  }, [pending, state, onClose])
+  const isSub = !!parentId
+  return (
+    <form action={action} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: B_INK }}>
+        {isSub
+          ? t(`New sub-section under ${parentName}`, `Nueva sub-sección bajo ${parentName}`)
+          : t('New category', 'Nueva categoría')}
+      </div>
+      {parentId && <input type="hidden" name="parent_id" value={parentId} />}
+      <input
+        name="name"
+        type="text"
+        required
+        autoFocus
+        placeholder={isSub ? t('Sub-section name', 'Nombre de la sub-sección') : t('Category name', 'Nombre de la categoría')}
+        style={{
+          width: '100%', borderRadius: 8, border: `1px solid ${B_LINE}`, background: '#fff',
+          padding: '7px 10px', fontFamily: 'inherit', fontSize: 13, color: B_INK, outline: 'none',
+        }}
+      />
+      {state?.error && (
+        <div style={{ fontSize: 11, color: '#B91C1C' }}>{state.error}</div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button
+          type="submit"
+          disabled={pending}
+          style={{
+            flex: 1, border: 0, background: B_INK, color: B_PAPER, borderRadius: 8,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 12, fontWeight: 600,
+            cursor: pending ? 'default' : 'pointer', opacity: pending ? 0.6 : 1,
+          }}
+        >
+          {pending ? t('Adding…', 'Agregando…') : isSub ? t('Add sub-section', 'Agregar sub-sección') : t('Add category', 'Agregar categoría')}
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            border: `1px solid ${B_LINE}`, background: '#fff', color: B_MUTED, borderRadius: 8,
+            padding: '7px 10px', fontFamily: 'inherit', fontSize: 12, fontWeight: 500, cursor: 'pointer',
+          }}
+        >
+          {t('Cancel', 'Cancelar')}
+        </button>
+      </div>
+    </form>
   )
 }
 

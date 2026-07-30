@@ -446,20 +446,28 @@ export default function SalesClient({
               <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
             </div>
           </div>
-          {/* Dead Export button — bands only, mirrors analytics
-              header. Placeholder for now; wire when export flow
-              is designed. */}
+          {/* Export — bands only. Reads as chrome (outline pill,
+              matches the filter-row search pill's idle look) rather
+              than a solid-ink CTA. A solid-ink pill on the right
+              with nothing balancing it made the header look
+              lopsided; this recedes into the family. */}
           {isBands && (
             <button
               type="button"
               onClick={() => { /* placeholder — export flow not wired yet */ }}
               style={{
-                border: 0, background: INK, color: PAPER,
-                borderRadius: 10, height: 28, padding: '0 14px',
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                border: `1px solid ${LINE}`, background: '#F4F4F2', color: INK,
+                borderRadius: 999, height: 30, padding: '0 14px',
                 font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 flex: '0 0 auto',
               }}
             >
+              <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M10 3v10" />
+                <path d="M5 9l5 5 5-5" />
+                <path d="M3.5 17h13" />
+              </svg>
               {t('Export', 'Exportar')}
             </button>
           )}
@@ -475,59 +483,60 @@ export default function SalesClient({
           background: SURFACE,
         }}>
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 12,
-          justifyContent: 'space-between',
+          display: 'flex', alignItems: 'center', gap: 8,
           padding: isBands ? '10px 24px' : '10px 16px',
           flexWrap: 'wrap',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
-              const on = filter === f
-              const label =
-                f === 'all' ? t('All', 'Todo')
-                  : f === 'card' ? t('Card', 'Tarjeta')
-                    : f === 'cash' ? t('Cash', 'Efectivo')
-                      : t('Voided', 'Anuladas')
-              // Same treatment as inventory's filter row — a small
-              // hue-coded dot so managers can scan the row by color
-              // before reading the label. 'All' stays dotless.
-              const dot =
-                f === 'card' ? METHOD_TONES.card.dot
-                  : f === 'cash' ? METHOD_TONES.cash.dot
-                    : f === 'voided' ? '#DC2626'
-                      : null
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setFilter(f)}
-                  style={{
-                    display: 'inline-flex', alignItems: 'center', gap: 7,
-                    borderRadius: 999, padding: '5px 12px',
-                    font: 'inherit', fontSize: 12, cursor: 'pointer',
-                    border: `1px solid ${on ? INK : LINE}`,
-                    background: on ? INK : '#fff',
-                    color: on ? PAPER : '#3F3F46',
-                    fontWeight: on ? 600 : 500,
-                  }}
-                >
-                  {dot && <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: dot }} />}
-                  {label}
-                  <span style={{
-                    fontFamily: MONO, fontSize: 10,
-                    color: on ? 'rgba(250,249,246,0.65)' : FAINT,
-                  }}>
-                    {counts[f]}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
+          {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
+            const on = filter === f
+            const label =
+              f === 'all' ? t('All', 'Todo')
+                : f === 'card' ? t('Card', 'Tarjeta')
+                  : f === 'cash' ? t('Cash', 'Efectivo')
+                    : t('Voided', 'Anuladas')
+            // Same treatment as inventory's filter row — a small
+            // hue-coded dot so managers can scan the row by color
+            // before reading the label. 'All' stays dotless.
+            const dot =
+              f === 'card' ? METHOD_TONES.card.dot
+                : f === 'cash' ? METHOD_TONES.cash.dot
+                  : f === 'voided' ? '#DC2626'
+                    : null
+            return (
+              <button
+                key={f}
+                type="button"
+                onClick={() => setFilter(f)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 7,
+                  borderRadius: 999, padding: '5px 12px',
+                  font: 'inherit', fontSize: 12, cursor: 'pointer',
+                  border: `1px solid ${on ? INK : LINE}`,
+                  background: on ? INK : '#fff',
+                  color: on ? PAPER : '#3F3F46',
+                  fontWeight: on ? 600 : 500,
+                }}
+              >
+                {dot && <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: dot }} />}
+                {label}
+                <span style={{
+                  fontFamily: MONO, fontSize: 10,
+                  color: on ? 'rgba(250,249,246,0.65)' : FAINT,
+                }}>
+                  {counts[f]}
+                </span>
+              </button>
+            )
+          })}
+          {/* Search pill — marginLeft:auto anchors it to the right
+              edge of the same row, matching inventory's filter bar
+              layout exactly (same padding row, no wrapper div). */}
           <SalesSearchPill
             total={orders.length}
             value={salesQuery}
             onChange={setSalesQuery}
             placeholder={t('Search', 'Buscar')}
+            unit={t('sales', 'ventas')}
           />
         </div>
         </div>{/* /filter band outer */}
@@ -1216,44 +1225,44 @@ function daysBetween(a: string, b: string): number {
   return Math.round((bt - at) / 86_400_000)
 }
 
-/** Filter-row search pill. Same silhouette as the menu tablet
- *  search — pill that fills on focus with a soft ink ring, an
- *  inline clear button when a query is present. Left-anchored
- *  magnifier icon so the pill reads as a search even when empty. */
+/** Filter-row search pill. Sized and styled to match inventory's
+ *  filter-row search exactly — same 34px height, 180px input,
+ *  same 22px clear button, same icon size. marginLeft:auto pins
+ *  it to the right edge of the same flex row. */
 function SalesSearchPill({
-  total, value, onChange, placeholder,
-}: { total: number; value: string; onChange: (v: string) => void; placeholder: string }) {
+  total, value, onChange, placeholder, unit,
+}: { total: number; value: string; onChange: (v: string) => void; placeholder: string; unit: string }) {
   const [focused, setFocused] = useState(false)
   return (
     <span
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 8, borderRadius: 999,
-        padding: '0 6px 0 12px', height: 30,
+        marginLeft: 'auto',
+        display: 'flex', alignItems: 'center', gap: 8, borderRadius: 999,
+        padding: '0 6px 0 12px', height: 34,
         transition: 'background 140ms ease, border-color 140ms ease, box-shadow 140ms ease',
         background: focused ? '#fff' : '#F4F4F2',
         border: `1px solid ${focused ? INK : 'transparent'}`,
         boxShadow: focused ? '0 0 0 3px rgba(24,24,27,0.06)' : 'none',
-        flex: '0 0 auto',
       }}
     >
-      <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" style={{ flex: '0 0 auto', color: focused ? '#52525B' : FAINT }}>
-        <circle cx="8.8" cy="8.8" r="5.6" strokeWidth="1.7" />
-        <path d="M13 13l4 4" strokeWidth="1.7" strokeLinecap="round" />
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={focused ? '#52525B' : FAINT} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <circle cx="11" cy="11" r="7" />
+        <path d="M21 21l-4.35-4.35" />
       </svg>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        placeholder={`${placeholder} ${total}`}
-        style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 12, color: INK, width: 140, padding: 0, outline: 'none' }}
+        placeholder={`${placeholder} ${total} ${unit}`}
+        style={{ border: 0, background: 'transparent', fontFamily: 'inherit', fontSize: 13, color: INK, width: 180, padding: 0, outline: 'none' }}
       />
       {value && (
         <button
           type="button"
           onClick={() => onChange('')}
           aria-label="Clear search"
-          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, border: 0, borderRadius: '50%', background: LINE, fontFamily: 'inherit', fontSize: 12, lineHeight: 1, color: '#52525B', cursor: 'pointer', flex: '0 0 auto' }}
+          style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, border: 0, borderRadius: '50%', background: LINE, fontFamily: 'inherit', fontSize: 13, lineHeight: 1, color: '#52525B', cursor: 'pointer', flex: '0 0 auto' }}
         >
           ×
         </button>

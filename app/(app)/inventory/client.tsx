@@ -781,7 +781,10 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
                         {item.category ?? t('Uncategorized', 'Sin categoría')}
                       </span>
                       <span style={{
-                        fontSize: 12, fontWeight: 600, color: tone.ink,
+                        display: 'inline-flex', alignItems: 'center',
+                        fontSize: 11, fontWeight: 600,
+                        color: tone.ink, background: tone.bg,
+                        borderRadius: 999, padding: '2px 8px',
                         whiteSpace: 'nowrap',
                       }}>
                         {longStatusLabel(item.status, t)}

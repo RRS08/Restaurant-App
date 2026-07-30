@@ -513,11 +513,45 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
                 {t('Inventory', 'Inventario')}
               </h1>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 7, flexWrap: 'wrap' }}>
-                {stat(String(counts.total), counts.total === 1 ? t('item', 'artículo') : t('items', 'artículos'))}
-                {(counts.out + counts.low) > 0 && (<>{dot}{stat(String(counts.out + counts.low), t('need restocking', 'requieren reabastecimiento'), STATUS_TONE.low.ink)}</>)}
-                {counts.no_count > 0 && (<>{dot}{stat(String(counts.no_count), t('uncounted', 'sin conteo'), STATUS_TONE.no_count.ink)}</>)}
-              </div>
+              {isBands ? (
+                // Bands: analytics-style stat row — 30px MONO hero
+                // + trailing stats with 3px dot separators. Matches
+                // the "$304.50 USD · 27 orders · $11.28 avg ticket"
+                // pattern so all three tablet headers read as one
+                // system.
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+                    {counts.total}
+                  </span>
+                  <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>
+                    {counts.total === 1 ? t('ITEM', 'ARTÍCULO') : t('ITEMS', 'ARTÍCULOS')}
+                  </span>
+                  {(counts.out + counts.low) > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+                      <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center', marginRight: 5 }} />
+                      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: STATUS_TONE.low.ink }}>
+                        {counts.out + counts.low}
+                      </span>
+                      <span style={{ fontSize: 12, color: MUTED }}>{t('need restocking', 'requieren reabastecimiento')}</span>
+                    </span>
+                  )}
+                  {counts.no_count > 0 && (
+                    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+                      <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: GHOST, alignSelf: 'center', marginRight: 5 }} />
+                      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: STATUS_TONE.no_count.ink }}>
+                        {counts.no_count}
+                      </span>
+                      <span style={{ fontSize: 12, color: MUTED }}>{t('uncounted', 'sin conteo')}</span>
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginTop: 7, flexWrap: 'wrap' }}>
+                  {stat(String(counts.total), counts.total === 1 ? t('item', 'artículo') : t('items', 'artículos'))}
+                  {(counts.out + counts.low) > 0 && (<>{dot}{stat(String(counts.out + counts.low), t('need restocking', 'requieren reabastecimiento'), STATUS_TONE.low.ink)}</>)}
+                  {counts.no_count > 0 && (<>{dot}{stat(String(counts.no_count), t('uncounted', 'sin conteo'), STATUS_TONE.no_count.ink)}</>)}
+                </div>
+              )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               {/* Merge (manual duplicate picker) moved off the header

@@ -767,7 +767,7 @@ export default function MenuClient({
             {/* CATEGORY HEADER BAND */}
             <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 16, padding: '12px 20px 11px', borderBottom: `1px solid ${B_LINE}`, background: '#fff', flex: '0 0 auto', flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
-                <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>
+                <div style={{ fontFamily: B_MONO, fontSize: 10, fontWeight: 700, letterSpacing: '0.16em', color: B_FAINT }}>
                   {paneEyebrow}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, marginTop: 5, flexWrap: 'wrap' }}>

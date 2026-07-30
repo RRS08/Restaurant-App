@@ -506,11 +506,7 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
               with a muted noun keeps the eye moving fast. */}
           <div style={{
             padding: isBands ? '16px 24px 14px' : '16px 16px 14px', display: 'flex',
-            // Bands: top-align so the Orders / Cart / Add item
-            // buttons pin to the title row instead of centering
-            // against the two-row title + stats block.
-            alignItems: isBands ? 'flex-start' : 'center',
-            justifyContent: 'space-between',
+            alignItems: 'center', justifyContent: 'space-between',
             gap: 24, flexWrap: 'wrap',
           }}>
             <div style={{ minWidth: 0 }}>

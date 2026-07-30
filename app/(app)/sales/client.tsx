@@ -446,28 +446,21 @@ export default function SalesClient({
               <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
             </div>
           </div>
-          {/* Export — bands only. Reads as chrome (outline pill,
-              matches the filter-row search pill's idle look) rather
-              than a solid-ink CTA. A solid-ink pill on the right
-              with nothing balancing it made the header look
-              lopsided; this recedes into the family. */}
+          {/* Export — solid-ink pill, sized to match inventory's
+              "Add item" header CTA (34px, 16px padding, radius 10,
+              fontSize 13). Placeholder for now; wire when the
+              export flow is designed. */}
           {isBands && (
             <button
               type="button"
               onClick={() => { /* placeholder — export flow not wired yet */ }}
               style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                border: `1px solid ${LINE}`, background: '#F4F4F2', color: INK,
-                borderRadius: 999, height: 30, padding: '0 14px',
-                font: 'inherit', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: 0, background: INK, color: PAPER,
+                borderRadius: 10, height: 34, padding: '0 16px',
+                font: 'inherit', fontSize: 13, fontWeight: 600, cursor: 'pointer',
                 flex: '0 0 auto',
               }}
             >
-              <svg width="13" height="13" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                <path d="M10 3v10" />
-                <path d="M5 9l5 5 5-5" />
-                <path d="M3.5 17h13" />
-              </svg>
               {t('Export', 'Exportar')}
             </button>
           )}

@@ -737,7 +737,7 @@ export default function AnalyticsClient(props: Props) {
             the `sep` flag) with marginRight:5 so the dot hugs
             its stat instead of floating mid-space. */}
         {isBands && (
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'nowrap', whiteSpace: 'nowrap' }}>
             <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
               {money(revenue)}
             </span>

@@ -230,9 +230,12 @@ export default async function DashboardPage() {
 
     // 19. Active menu items — count is used as the denominator
     //     for the "X / Y affected" inventory menu-impact metric.
+    //     Bands Needs-doing card also mines this for two attention
+    //     signals: unpriced items (current_price = 0) and items with
+    //     no category assigned. Cheap addition — same row scan.
     supabase
       .from('menu_items')
-      .select('id')
+      .select('id, current_price, category_id')
       .eq('active', true),
 
     // 20. Today's order line items — feeds the Sales carousel's
@@ -624,6 +627,15 @@ export default async function DashboardPage() {
     },
   }
 
+  // Bands Needs-doing signals mined from the already-fetched
+  // activeMenuItems set — no extra query cost.
+  const menuRows = (activeMenuItems ?? []) as Array<{ id: string; current_price: number | string | null; category_id: string | null }>
+  const unpricedMenuItems = menuRows.filter((m) => {
+    const p = m.current_price
+    return p === null || Number(p) <= 0
+  }).length
+  const uncategorizedMenuItems = menuRows.filter((m) => !m.category_id).length
+
   // Bands "Sales today" card wants the last 5 completed orders with
   // per-order item count and the payment type (drives the tile hue).
   // order_items(count) comes back as `[{ count: N }]`; flatten to a
@@ -646,6 +658,10 @@ export default async function DashboardPage() {
       firstName={firstName}
       renderedAt={renderedAt}
       recentSales={recentSales}
+      attention={{
+        unpricedMenuItems,
+        uncategorizedMenuItems,
+      }}
       readiness={readinessPillars}
       bankConnectedUnsynced={bankConnectedUnsynced}
       inventoryWriteLive={inventoryWriteLive}

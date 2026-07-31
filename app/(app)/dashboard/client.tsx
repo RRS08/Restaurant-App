@@ -101,6 +101,11 @@ interface Props {
     paymentType: 'card' | 'cash' | 'other'
     itemCount: number
   }[]
+  /** Bands Needs-doing signals not already covered by topCards. */
+  attention?: {
+    unpricedMenuItems: number
+    uncategorizedMenuItems: number
+  }
   latestSale: { amount: number; datetime: string } | null
   latestExpense: { amount: number; date: string } | null
   latestInventoryMovement: {
@@ -267,6 +272,7 @@ export default function DashboardClient(props: Props) {
     topCards,
     recentSales,
     watchlist,
+    attention,
   } = props
   const t = makeT(lang)
 
@@ -355,39 +361,101 @@ export default function DashboardClient(props: Props) {
     const avg7 = sales.ordersLast7Days > 0 ? sales.totalLast7Days / 7 : 0
     const deltaPct = avg7 > 0 ? Math.round(((sales.salesToday - avg7) / avg7) * 100) : null
 
-    // Needs doing — build from available signals. Each row names its
-    // destination; the icon set matches the sidebar rail.
+    // Needs doing — build from every real signal we have. Sorted
+    // by severity (out-of-stock first, setup/setup-config last).
+    // Each row names its destination; the icon set matches the
+    // sidebar rail.
     type NoteArea = 'STOCK' | 'MONEY' | 'MENU' | 'STAFF'
-    const needsDoing: Array<{ area: NoteArea; title: string; detail: string }> = []
+    type Note = { area: NoteArea; title: string; detail: string; weight: number }
+    const notes: Note[] = []
+
+    // STOCK — most urgent first
     if (topCards.inventory.outItems > 0) {
-      needsDoing.push({
-        area: 'STOCK',
+      notes.push({
+        area: 'STOCK', weight: 100,
         title: `${topCards.inventory.outItems} ${topCards.inventory.outItems === 1 ? t('item is out of stock', 'artículo agotado') : t('items are out of stock', 'artículos agotados')}`,
         detail: t('Restock before service continues.', 'Reabastece antes de continuar el servicio.'),
       })
     }
+    if (topCards.inventory.lowItems > 0) {
+      notes.push({
+        area: 'STOCK', weight: 60,
+        title: `${topCards.inventory.lowItems} ${topCards.inventory.lowItems === 1 ? t('item is running low', 'artículo con nivel bajo') : t('items are running low', 'artículos con nivel bajo')}`,
+        detail: t('Below the restock point.', 'Debajo del punto de reorden.'),
+      })
+    }
+    if (inventory.noCountCount > 0) {
+      notes.push({
+        area: 'STOCK', weight: 25,
+        title: `${inventory.noCountCount} ${inventory.noCountCount === 1 ? t('item never counted', 'artículo sin conteo') : t('items never counted', 'artículos sin conteo')}`,
+        detail: t('Do a first count so alerts start working.', 'Haz un primer conteo para activar las alertas.'),
+      })
+    }
+    if (topCards.inventory.pendingRestocks.drafts > 0) {
+      notes.push({
+        area: 'STOCK', weight: 45,
+        title: `${topCards.inventory.pendingRestocks.drafts} ${topCards.inventory.pendingRestocks.drafts === 1 ? t('draft restock waiting', 'reorden en borrador') : t('draft restocks waiting', 'reórdenes en borrador')}`,
+        detail: t('Send them to a supplier.', 'Envíalos a un proveedor.'),
+      })
+    }
+
+    // MONEY
     if (topCards.finance.moneyReview.attention > 0) {
-      needsDoing.push({
-        area: 'MONEY',
+      notes.push({
+        area: 'MONEY', weight: 80,
         title: `${topCards.finance.moneyReview.attention} ${topCards.finance.moneyReview.attention === 1 ? t('bank item to confirm', 'ítem bancario por confirmar') : t('bank items to confirm', 'ítems bancarios por confirmar')}`,
         detail: t('Match deposits and card fees.', 'Confirma depósitos y cargos de tarjeta.'),
       })
     }
     if (topCards.finance.depositsToConfirm > 0) {
-      needsDoing.push({
-        area: 'MONEY',
+      notes.push({
+        area: 'MONEY', weight: 55,
         title: `${topCards.finance.depositsToConfirm} ${topCards.finance.depositsToConfirm === 1 ? t('deposit to confirm', 'depósito por confirmar') : t('deposits to confirm', 'depósitos por confirmar')}`,
         detail: t('Waiting on your review in Finance.', 'Esperando tu revisión en Finanzas.'),
       })
     }
-    if (topCards.inventory.lowItems > 0) {
-      needsDoing.push({
-        area: 'STOCK',
-        title: `${topCards.inventory.lowItems} ${topCards.inventory.lowItems === 1 ? t('item is running low', 'artículo con nivel bajo') : t('items are running low', 'artículos con nivel bajo')}`,
-        detail: t('Below the restock point.', 'Debajo del punto de reorden.'),
+    if (bankConnectedUnsynced) {
+      notes.push({
+        area: 'MONEY', weight: 30,
+        title: t('Bank hasn’t synced yet', 'El banco aún no sincroniza'),
+        detail: t('Deposits will appear once it does.', 'Los depósitos aparecerán al sincronizar.'),
       })
     }
-    const needsDoingClipped = needsDoing.slice(0, 4)
+
+    // MENU
+    if (attention && attention.unpricedMenuItems > 0) {
+      notes.push({
+        area: 'MENU', weight: 70,
+        title: `${attention.unpricedMenuItems} ${attention.unpricedMenuItems === 1 ? t('menu item has no price', 'artículo del menú sin precio') : t('menu items have no price', 'artículos del menú sin precio')}`,
+        detail: t('They can’t be sold until priced.', 'No se pueden vender hasta ponerles precio.'),
+      })
+    }
+    if (attention && attention.uncategorizedMenuItems > 0) {
+      notes.push({
+        area: 'MENU', weight: 20,
+        title: `${attention.uncategorizedMenuItems} ${attention.uncategorizedMenuItems === 1 ? t('item needs a category', 'artículo necesita categoría') : t('items need a category', 'artículos necesitan categoría')}`,
+        detail: t('Assign them a section so they show up on the POS.', 'Asígnales una sección para que aparezcan en el POS.'),
+      })
+    }
+
+    // STAFF
+    if (staffing.shiftsToday === 0) {
+      notes.push({
+        area: 'STAFF', weight: 65,
+        title: t('No shifts scheduled today', 'No hay turnos programados hoy'),
+        detail: t('Add someone to the day so the floor is covered.', 'Agrega personal para cubrir el día.'),
+      })
+    }
+    if (staffing.employeeCount === 0) {
+      notes.push({
+        area: 'STAFF', weight: 15,
+        title: t('No employees yet', 'Aún no hay empleados'),
+        detail: t('Add your team to start scheduling.', 'Agrega tu equipo para empezar a programar.'),
+      })
+    }
+
+    notes.sort((a, b) => b.weight - a.weight)
+    const needsDoingClipped = notes.slice(0, 6)
 
     // On the floor — upcomingShifts filtered to "started, not ended".
     const nowMs = now.getTime()

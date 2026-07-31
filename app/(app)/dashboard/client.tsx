@@ -511,10 +511,10 @@ export default function DashboardClient(props: Props) {
         </div>
 
         {/* CONTENT — two flex rows, no page scroll.
-            Capped at 1500 on browser widths (xl+) so the 4 cards
-            don't stretch across a wide monitor. Header above stays
-            full-bleed; only the card region narrows. */}
-        <div style={{ flex: 1, minHeight: 0, padding: '14px 24px 22px', display: 'flex', flexDirection: 'column', gap: 14, maxWidth: isWide ? 1500 : undefined, width: isWide ? '100%' : undefined, margin: isWide ? '0 auto' : undefined, alignSelf: isWide ? 'center' : undefined }}>
+            Capped at 1500 on browser widths (xl+) and pinned to the
+            left so the cards sit under the header's title rather
+            than drifting to the middle of the viewport. */}
+        <div style={{ flex: 1, minHeight: 0, padding: '14px 24px 22px', display: 'flex', flexDirection: 'column', gap: 14, maxWidth: isWide ? 1500 : undefined, width: isWide ? '100%' : undefined, alignSelf: isWide ? 'flex-start' : undefined }}>
 
           {/* ROW 1 — Sales today (2fr) + Needs doing (1fr) */}
           <div style={{ flex: 1.12, minHeight: 0, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>

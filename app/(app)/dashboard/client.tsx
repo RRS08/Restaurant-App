@@ -442,70 +442,40 @@ export default function DashboardClient(props: Props) {
           {/* ROW 1 — Sales today (2fr) + Needs doing (1fr) */}
           <div style={{ flex: 1.12, minHeight: 0, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
 
-            {/* SALES TODAY */}
+            {/* SALES TODAY — recent-orders list only (side panel with
+                How they paid / Best seller / Average ticket was
+                removed on request; the same figures live on Analytics). */}
             <BandsCard title={t('Sales today', 'Ventas de hoy')}>
-              <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-                  {!recentSales || recentSales.length === 0 ? (
-                    <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED }}>
-                      {t('No sales yet today.', 'Aún no hay ventas hoy.')}
-                    </div>
-                  ) : (
-                    recentSales.map((s, i) => {
-                      const isCard = s.paymentType === 'card'
-                      const isCash = s.paymentType === 'cash'
-                      const pair = isCard
-                        ? (['#EEF2FF', '#4F46E5'] as const)
-                        : isCash
-                          ? B_PAIR.success
-                          : B_PAIR.neutral
-                      return (
-                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === recentSales.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
-                          <BandsTile pair={pair}>{isCash ? <BandsCashGlyph /> : <BandsCardGlyph />}</BandsTile>
-                          <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
-                            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta')}
-                            </span>
-                            <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>
-                              {fmtBandsTimeShort(s.createdAt)} · {s.itemCount} {s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
-                            </span>
-                          </span>
-                          <span style={{ fontFamily: B_MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', flex: '0 0 auto' }}>{MONEY(s.amount, true)}</span>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-
-                {/* Side panel — how they paid + best seller + avg ticket */}
-                <div style={{ width: 186, flex: '0 0 186px', borderLeft: `1px solid ${B_LINE}`, background: B_PANEL, padding: '13px 15px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {topCards.sales.paymentMix && topCards.sales.paymentMix.total > 0 && (
-                    <div>
-                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('HOW THEY PAID', 'CÓMO PAGARON')}</div>
-                      <div style={{ display: 'flex', height: 7, borderRadius: 999, overflow: 'hidden', gap: 2, marginTop: 9 }}>
-                        <span style={{ width: `${(topCards.sales.paymentMix.card / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#6366F1' }} />
-                        <span style={{ width: `${(topCards.sales.paymentMix.cash / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#10B981' }} />
-                      </div>
-                      <BandsSplit color="#6366F1" label={t('Card', 'Tarjeta')} value={MONEY(topCards.sales.paymentMix.card, true)} top={9} />
-                      <BandsSplit color="#10B981" label={t('Cash', 'Efectivo')} value={MONEY(topCards.sales.paymentMix.cash, true)} top={5} />
-                    </div>
-                  )}
-                  {topCards.sales.bestSeller && (
-                    <div style={{ paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
-                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('BEST SELLER', 'MÁS VENDIDO')}</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', marginTop: 6, lineHeight: 1.3 }}>{topCards.sales.bestSeller.name}</div>
-                      <div style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 3 }}>
-                        {topCards.sales.bestSeller.count} {topCards.sales.bestSeller.count === 1 ? t('sold', 'vendido') : t('sold', 'vendidos')}
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ marginTop: 'auto', paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
-                    <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('AVERAGE TICKET', 'TICKET PROMEDIO')}</div>
-                    <div style={{ fontFamily: B_MONO, fontSize: 17, fontWeight: 600, letterSpacing: '-0.03em', marginTop: 5 }}>
-                      {MONEY(topCards.sales.avgTicketToday, true)}
-                    </div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                {!recentSales || recentSales.length === 0 ? (
+                  <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED }}>
+                    {t('No sales yet today.', 'Aún no hay ventas hoy.')}
                   </div>
-                </div>
+                ) : (
+                  recentSales.map((s, i) => {
+                    const isCard = s.paymentType === 'card'
+                    const isCash = s.paymentType === 'cash'
+                    const pair = isCard
+                      ? (['#EEF2FF', '#4F46E5'] as const)
+                      : isCash
+                        ? B_PAIR.success
+                        : B_PAIR.neutral
+                    return (
+                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === recentSales.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                        <BandsTile pair={pair}>{isCash ? <BandsCashGlyph /> : <BandsCardGlyph />}</BandsTile>
+                        <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta')}
+                          </span>
+                          <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>
+                            {fmtBandsTimeShort(s.createdAt)} · {s.itemCount} {s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+                          </span>
+                        </span>
+                        <span style={{ fontFamily: B_MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', flex: '0 0 auto' }}>{MONEY(s.amount, true)}</span>
+                      </div>
+                    )
+                  })
+                )}
               </div>
             </BandsCard>
 

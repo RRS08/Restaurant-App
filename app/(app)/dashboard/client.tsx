@@ -91,6 +91,16 @@ interface Props {
     startTime: string
     endTime: string
   }[]
+  /** Bands (md+) Sales-today card renders the top 5 completed
+   *  orders inline. Older layouts only need `latestSale` (the single
+   *  most-recent), so this stays optional. */
+  recentSales?: {
+    id: string
+    amount: number
+    createdAt: string
+    paymentType: 'card' | 'cash' | 'other'
+    itemCount: number
+  }[]
   latestSale: { amount: number; datetime: string } | null
   latestExpense: { amount: number; date: string } | null
   latestInventoryMovement: {
@@ -199,6 +209,39 @@ function fmtDateOnly(iso: string, locale: string = 'en-US'): string {
 }
 
 // ================================================================
+// Bands (tablet md+) design tokens. Prefixed B_ so they can't
+// collide with the existing Tailwind classes when phone renders.
+// ================================================================
+const B_INK = '#18181B'
+const B_LINE = '#E7E6E2'
+const B_LINE_SOFT = '#F0EFEB'
+const B_SURFACE = '#FAFAF9'
+const B_PANEL = '#FCFCFB'
+const B_FILL = '#F4F4F5'
+const B_MUTED = '#6B6B70'
+const B_FAINT = '#A1A1A6'
+const B_GHOST = '#D6D5D1'
+const B_MONO = "'Geist Mono', ui-monospace, monospace"
+const B_PAIR = {
+  danger:  ['#FEF2F2', '#B91C1C'] as const,
+  warning: ['#FFFBEB', '#B45309'] as const,
+  success: ['#ECFDF5', '#047857'] as const,
+  neutral: ['#F5F5F4', '#78716C'] as const,
+}
+
+// Short time-of-day for the Sales-today rows ("8:43p"). Matches
+// the spec's row meta shape.
+function fmtBandsTimeShort(iso: string): string {
+  const d = new Date(iso)
+  let h = d.getHours()
+  const m = d.getMinutes().toString().padStart(2, '0')
+  const suffix = h >= 12 ? 'p' : 'a'
+  h = h % 12
+  if (h === 0) h = 12
+  return `${h}:${m}${suffix}`
+}
+
+// ================================================================
 // Main client
 // ================================================================
 
@@ -222,8 +265,23 @@ export default function DashboardClient(props: Props) {
     bankConnectedUnsynced,
     inventoryWriteLive,
     topCards,
+    recentSales,
+    watchlist,
   } = props
   const t = makeT(lang)
+
+  // Bands (md+) tablet layout. Below md renders the existing
+  // Tailwind dashboard unchanged. At md+ the return branches into
+  // a full-viewport 4-card grid matching the Claude Design spec.
+  const [isBands, setIsBands] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
 
   // Today's Mon..Sun index (0=Mon, 6=Sun). Used by Operating
   // Pressure to anchor today's column with a stronger fill.
@@ -280,6 +338,319 @@ export default function DashboardClient(props: Props) {
         : financeState === 'limited'
           ? t('Internal only', 'Solo interno')
           : t('Needs setup', 'Requiere configuración')
+
+  if (isBands) {
+    // ============================================================
+    // BANDS (md+) LAYOUT — full-viewport 4-card grid per Claude
+    // Design spec. Reads existing server props; no page.tsx changes
+    // beyond the new recentSales[] plumbing. Below md the else
+    // branch renders the existing Tailwind dashboard unchanged.
+    // ============================================================
+    const now = new Date()
+    const locale = lang === 'es' ? 'es-ES' : 'en-US'
+    const bandsDateLabel = now.toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric' })
+
+    // Delta vs prior 7-day average — the fairest "how's today going".
+    // avg7 = totalLast7Days / 7. Show a plain colored delta pct.
+    const avg7 = sales.ordersLast7Days > 0 ? sales.totalLast7Days / 7 : 0
+    const deltaPct = avg7 > 0 ? Math.round(((sales.salesToday - avg7) / avg7) * 100) : null
+
+    // Needs doing — build from available signals. Each row names its
+    // destination; the icon set matches the sidebar rail.
+    type NoteArea = 'STOCK' | 'MONEY' | 'MENU' | 'STAFF'
+    const needsDoing: Array<{ area: NoteArea; title: string; detail: string }> = []
+    if (topCards.inventory.outItems > 0) {
+      needsDoing.push({
+        area: 'STOCK',
+        title: `${topCards.inventory.outItems} ${topCards.inventory.outItems === 1 ? t('item is out of stock', 'artículo agotado') : t('items are out of stock', 'artículos agotados')}`,
+        detail: t('Restock before service continues.', 'Reabastece antes de continuar el servicio.'),
+      })
+    }
+    if (topCards.finance.moneyReview.attention > 0) {
+      needsDoing.push({
+        area: 'MONEY',
+        title: `${topCards.finance.moneyReview.attention} ${topCards.finance.moneyReview.attention === 1 ? t('bank item to confirm', 'ítem bancario por confirmar') : t('bank items to confirm', 'ítems bancarios por confirmar')}`,
+        detail: t('Match deposits and card fees.', 'Confirma depósitos y cargos de tarjeta.'),
+      })
+    }
+    if (topCards.finance.depositsToConfirm > 0) {
+      needsDoing.push({
+        area: 'MONEY',
+        title: `${topCards.finance.depositsToConfirm} ${topCards.finance.depositsToConfirm === 1 ? t('deposit to confirm', 'depósito por confirmar') : t('deposits to confirm', 'depósitos por confirmar')}`,
+        detail: t('Waiting on your review in Finance.', 'Esperando tu revisión en Finanzas.'),
+      })
+    }
+    if (topCards.inventory.lowItems > 0) {
+      needsDoing.push({
+        area: 'STOCK',
+        title: `${topCards.inventory.lowItems} ${topCards.inventory.lowItems === 1 ? t('item is running low', 'artículo con nivel bajo') : t('items are running low', 'artículos con nivel bajo')}`,
+        detail: t('Below the restock point.', 'Debajo del punto de reorden.'),
+      })
+    }
+    const needsDoingClipped = needsDoing.slice(0, 4)
+
+    // On the floor — upcomingShifts filtered to "started, not ended".
+    const nowMs = now.getTime()
+    const onFloor = (upcomingShifts ?? []).filter((s) => {
+      const start = new Date(s.startTime).getTime()
+      const end = new Date(s.endTime).getTime()
+      return start <= nowMs && nowMs < end
+    })
+
+    // Inventory watchlist — server ships up to 6, sorted Out→Low→NoCount.
+    const watch = watchlist ?? []
+    const inv = inventory
+    const totalTracked = inv.totalItems
+    const outSeg = totalTracked > 0 ? (inv.outOfStockCount / totalTracked) * 100 : 0
+    const lowSeg = totalTracked > 0 ? (inv.lowStockCount / totalTracked) * 100 : 0
+
+    return (
+      <div
+        data-page
+        style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100vh', display: 'flex', flexDirection: 'column', background: '#fff', fontFamily: "'Geist', system-ui, sans-serif", color: B_INK }}
+      >
+        {/* HEADER BAND */}
+        <div style={{ flex: '0 0 auto', padding: '16px 24px 15px', borderBottom: `1px solid ${B_LINE}`, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 24, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h1 style={{ margin: 0, fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
+                {bandsDateLabel}
+              </h1>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: B_PAIR.success[0], color: B_PAIR.success[1], borderRadius: 999, padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10B981' }} />
+                {t('Open', 'Abierto')}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 9, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: B_MONO, fontSize: 34, fontWeight: 600, letterSpacing: '-0.05em', lineHeight: 1 }}>
+                {MONEY(sales.salesToday, true)}
+              </span>
+              <span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>{t('TAKEN TODAY', 'HOY')}</span>
+              {deltaPct !== null && (
+                <span style={{ fontFamily: B_MONO, fontSize: 12, fontWeight: 600, color: deltaPct >= 0 ? B_PAIR.success[1] : B_PAIR.danger[1] }}>
+                  {deltaPct >= 0 ? '↑' : '↓'} {Math.abs(deltaPct)}%
+                </span>
+              )}
+              <BandsTrail value={String(sales.ordersToday)} label={sales.ordersToday === 1 ? t('sale', 'venta') : t('sales', 'ventas')} />
+            </div>
+          </div>
+        </div>
+
+        {/* CONTENT — two flex rows, no page scroll. */}
+        <div style={{ flex: 1, minHeight: 0, padding: '14px 24px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* ROW 1 — Sales today (2fr) + Needs doing (1fr) */}
+          <div style={{ flex: 1.12, minHeight: 0, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
+
+            {/* SALES TODAY */}
+            <BandsCard title={t('Sales today', 'Ventas de hoy')}>
+              <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+                <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
+                  {!recentSales || recentSales.length === 0 ? (
+                    <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED }}>
+                      {t('No sales yet today.', 'Aún no hay ventas hoy.')}
+                    </div>
+                  ) : (
+                    recentSales.map((s, i) => {
+                      const isCard = s.paymentType === 'card'
+                      const isCash = s.paymentType === 'cash'
+                      const pair = isCard
+                        ? (['#EEF2FF', '#4F46E5'] as const)
+                        : isCash
+                          ? B_PAIR.success
+                          : B_PAIR.neutral
+                      return (
+                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === recentSales.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                          <BandsTile pair={pair}>{isCash ? <BandsCashGlyph /> : <BandsCardGlyph />}</BandsTile>
+                          <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta')}
+                            </span>
+                            <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>
+                              {fmtBandsTimeShort(s.createdAt)} · {s.itemCount} {s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+                            </span>
+                          </span>
+                          <span style={{ fontFamily: B_MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', flex: '0 0 auto' }}>{MONEY(s.amount, true)}</span>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+
+                {/* Side panel — how they paid + best seller + avg ticket */}
+                <div style={{ width: 186, flex: '0 0 186px', borderLeft: `1px solid ${B_LINE}`, background: B_PANEL, padding: '13px 15px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {topCards.sales.paymentMix && topCards.sales.paymentMix.total > 0 && (
+                    <div>
+                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('HOW THEY PAID', 'CÓMO PAGARON')}</div>
+                      <div style={{ display: 'flex', height: 7, borderRadius: 999, overflow: 'hidden', gap: 2, marginTop: 9 }}>
+                        <span style={{ width: `${(topCards.sales.paymentMix.card / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#6366F1' }} />
+                        <span style={{ width: `${(topCards.sales.paymentMix.cash / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#10B981' }} />
+                      </div>
+                      <BandsSplit color="#6366F1" label={t('Card', 'Tarjeta')} value={MONEY(topCards.sales.paymentMix.card, true)} top={9} />
+                      <BandsSplit color="#10B981" label={t('Cash', 'Efectivo')} value={MONEY(topCards.sales.paymentMix.cash, true)} top={5} />
+                    </div>
+                  )}
+                  {topCards.sales.bestSeller && (
+                    <div style={{ paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
+                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('BEST SELLER', 'MÁS VENDIDO')}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', marginTop: 6, lineHeight: 1.3 }}>{topCards.sales.bestSeller.name}</div>
+                      <div style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 3 }}>
+                        {topCards.sales.bestSeller.count} {topCards.sales.bestSeller.count === 1 ? t('sold', 'vendido') : t('sold', 'vendidos')}
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 'auto', paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
+                    <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('AVERAGE TICKET', 'TICKET PROMEDIO')}</div>
+                    <div style={{ fontFamily: B_MONO, fontSize: 17, fontWeight: 600, letterSpacing: '-0.03em', marginTop: 5 }}>
+                      {MONEY(topCards.sales.avgTicketToday, true)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </BandsCard>
+
+            {/* NEEDS DOING */}
+            <BandsCard
+              title={t('Needs doing', 'Por hacer')}
+              aside={<span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>{needsDoingClipped.length} {t('open', 'abiertos')}</span>}
+            >
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                {needsDoingClipped.length === 0 ? (
+                  <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED, textAlign: 'center' }}>
+                    {t('Nothing waiting.', 'Nada pendiente.')}
+                  </div>
+                ) : (
+                  needsDoingClipped.map((n, i) => (
+                    <div key={n.title + i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '13px 16px', flex: 1, minHeight: 0, borderBottom: i === needsDoingClipped.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                      <BandsTile pair={[B_FILL, B_INK]}>
+                        <BandsAreaGlyph area={n.area} />
+                      </BandsTile>
+                      <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                        <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.015em', lineHeight: 1.3 }}>{n.title}</span>
+                        <span style={{ display: 'block', fontSize: 11, color: B_FAINT, marginTop: 3, lineHeight: 1.4 }}>{n.detail}</span>
+                      </span>
+                      <span style={{ fontSize: 12, color: B_GHOST, flex: '0 0 auto' }}>›</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </BandsCard>
+          </div>
+
+          {/* ROW 2 — On the floor (1fr) + Inventory (2fr) */}
+          <div style={{ flex: 1, minHeight: 0, display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 14 }}>
+
+            {/* ON THE FLOOR */}
+            <BandsCard
+              title={t('On the floor', 'En operación')}
+              aside={
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: onFloor.length > 0 ? B_PAIR.success[0] : B_PAIR.neutral[0], color: onFloor.length > 0 ? B_PAIR.success[1] : B_PAIR.neutral[1], borderRadius: 999, padding: '2px 9px', fontSize: 10, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: onFloor.length > 0 ? '#10B981' : '#78716C' }} />
+                  {onFloor.length > 0 ? t('Covered', 'Cubierto') : t('Nobody in', 'Nadie')}
+                </span>
+              }
+            >
+              <div style={{ flex: '0 0 auto', padding: '12px 15px 11px', borderBottom: `1px solid ${B_LINE_SOFT}` }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontFamily: B_MONO, fontSize: 26, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>{onFloor.length}</span>
+                  <span style={{ fontSize: 12, color: B_MUTED }}>{t('working right now', 'trabajando ahora')}</span>
+                </div>
+              </div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+                {onFloor.length === 0 ? (
+                  <div style={{ padding: '20px 15px', fontSize: 12, color: B_MUTED }}>
+                    {t('No one is scheduled right now.', 'Nadie programado ahora.')}
+                  </div>
+                ) : (
+                  onFloor.map((f, i) => {
+                    const initials = f.employeeName.split(' ').map((w) => w[0] || '').join('').slice(0, 2) || '·'
+                    const color = '#3F3F46'
+                    return (
+                      <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 15px', flex: 1, minHeight: 0, borderBottom: i === onFloor.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 999, flex: '0 0 auto', background: `${color}1A`, color, fontFamily: B_MONO, fontSize: 10, fontWeight: 600 }}>
+                          {initials.toUpperCase()}
+                        </span>
+                        <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{f.employeeName}</span>
+                          <span style={{ display: 'block', fontSize: 11, marginTop: 1, color }}>{f.role}</span>
+                        </span>
+                        <span style={{ fontFamily: B_MONO, fontSize: 11, color: B_MUTED, flex: '0 0 auto' }}>
+                          {t('until', 'hasta')} {fmtBandsTimeShort(f.endTime)}
+                        </span>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </BandsCard>
+
+            {/* INVENTORY */}
+            <BandsCard
+              title={t('Inventory', 'Inventario')}
+              aside={<span style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT }}>{watch.length} {t('to restock', 'por reabastecer')}</span>}
+            >
+              <div style={{ flex: '0 0 auto', padding: '14px 16px 13px', borderBottom: `1px solid ${B_LINE_SOFT}` }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 9, flexWrap: 'wrap' }}>
+                  <span style={{ fontFamily: B_MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.05em', lineHeight: 1 }}>{totalTracked}</span>
+                  <span style={{ fontSize: 12, color: B_MUTED }}>{t('items tracked', 'artículos registrados')}</span>
+                  {(inv.outOfStockCount + inv.lowStockCount) > 0 && (
+                    <BandsTrail value={String(inv.outOfStockCount + inv.lowStockCount)} label={t('need restocking', 'requieren reabastecimiento')} tone={B_PAIR.warning[1]} />
+                  )}
+                </div>
+                {totalTracked > 0 && (
+                  <>
+                    <div style={{ display: 'flex', height: 9, borderRadius: 999, overflow: 'hidden', gap: 2, marginTop: 13 }}>
+                      {inv.outOfStockCount > 0 && (
+                        <span style={{ width: `${outSeg}%`, minWidth: 10, height: '100%', borderRadius: 999, background: '#DC2626' }} />
+                      )}
+                      {inv.lowStockCount > 0 && (
+                        <span style={{ width: `${lowSeg}%`, minWidth: 14, height: '100%', borderRadius: 999, background: '#D97706' }} />
+                      )}
+                      <span style={{ flex: 1, height: '100%', borderRadius: 999, background: B_GHOST }} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 10, flexWrap: 'wrap' }}>
+                      <BandsLegend color="#DC2626" value={String(inv.outOfStockCount)} label={t('out of stock', 'agotado')} ink={B_PAIR.danger[1]} />
+                      <BandsLegend color="#D97706" value={String(inv.lowStockCount)} label={t('running low', 'nivel bajo')} ink={B_PAIR.warning[1]} />
+                      <BandsLegend color={B_GHOST} value={String(inv.noCountCount)} label={t('never counted', 'sin conteo')} ink={B_PAIR.neutral[1]} />
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '12px 16px 14px' }}>
+                {watch.length === 0 ? (
+                  <div style={{ padding: '12px 0', fontSize: 12, color: B_MUTED }}>
+                    {t('Everything is above its restock point.', 'Todo está por encima del punto de reorden.')}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 20px' }}>
+                    {watch.slice(0, 6).map((it, i) => {
+                      const isOut = it.status === 'Out'
+                      const pair = isOut ? B_PAIR.danger : it.status === 'Low' ? B_PAIR.warning : B_PAIR.neutral
+                      const last = i >= watch.slice(0, 6).length - 2
+                      return (
+                        <div key={it.name + i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 0', borderBottom: last ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                          <BandsTile pair={pair} size={26}>
+                            {isOut ? <BandsOutGlyph /> : <BandsLowGlyph />}
+                          </BandsTile>
+                          <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                            <span style={{ display: 'block', fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>
+                          </span>
+                          <span style={{ fontFamily: B_MONO, fontSize: 12, fontWeight: 600, flex: '0 0 auto', color: pair[1] }}>
+                            {isOut ? t('Out', 'Agotado') : it.status === 'Low' ? t('Low', 'Bajo') : t('—', '—')}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </BandsCard>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     // Constrained content width — same family standard as Staffing,
@@ -1969,5 +2340,155 @@ function MovementRow({
         </p>
       )}
     </li>
+  )
+}
+
+// ================================================================
+// Bands (md+) pieces — only rendered by the isBands branch above.
+// ================================================================
+
+function BandsCard({ title, aside, children, footer }: {
+  title: string
+  aside?: React.ReactNode
+  children: React.ReactNode
+  footer?: React.ReactNode
+}) {
+  return (
+    <div style={{ border: `1px solid ${B_LINE}`, borderRadius: 12, background: '#fff', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
+      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '13px 16px 12px', borderBottom: `1px solid ${B_LINE}` }}>
+        <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.015em' }}>{title}</span>
+        {aside ?? <span style={{ fontSize: 12, color: B_GHOST }}>›</span>}
+      </div>
+      {children}
+      {footer && (
+        <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '10px 16px', borderTop: `1px solid ${B_LINE}`, background: B_SURFACE }}>
+          {footer}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BandsTile({ pair, children, size = 30 }: { pair: readonly [string, string]; children: React.ReactNode; size?: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, borderRadius: size > 28 ? 9 : 8, flex: '0 0 auto', background: pair[0], color: pair[1] }}>
+      {children}
+    </span>
+  )
+}
+
+function BandsTrail({ value, label, tone }: { value?: string; label: string; tone?: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: B_GHOST, alignSelf: 'center', marginRight: 5 }} />
+      {value && <span style={{ fontFamily: B_MONO, fontSize: 14, fontWeight: 600, color: tone ?? B_INK }}>{value}</span>}
+      <span style={{ fontSize: 12, color: tone ?? B_MUTED }}>{label}</span>
+    </span>
+  )
+}
+
+function BandsSplit({ color, label, value, top }: { color: string; label: string; value: string; top: number }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginTop: top }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: B_MUTED }}>
+        <span style={{ width: 7, height: 7, borderRadius: 2, background: color }} />
+        {label}
+      </span>
+      <span style={{ fontFamily: B_MONO, fontSize: 12, fontWeight: 600 }}>{value}</span>
+    </div>
+  )
+}
+
+function BandsLegend({ color, value, label, ink }: { color: string; value: string; label: string; ink: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
+      <span style={{ width: 7, height: 7, borderRadius: 2, background: color, alignSelf: 'center' }} />
+      <span style={{ fontFamily: B_MONO, fontSize: 12, fontWeight: 600, color: ink }}>{value}</span>
+      <span style={{ fontSize: 11, color: B_MUTED }}>{label}</span>
+    </span>
+  )
+}
+
+const B_STROKE = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const }
+
+function BandsCardGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 20 20" {...B_STROKE} strokeWidth={1.6}>
+      <rect x="1.5" y="4" width="17" height="12" rx="2.5" />
+      <path d="M1.5 8h17" />
+      <path d="M4.5 12.5h3" />
+    </svg>
+  )
+}
+
+function BandsCashGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" {...B_STROKE}>
+      <ellipse cx="10" cy="5.3" rx="6.4" ry="2.5" />
+      <path d="M3.6 5.3v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V5.3" />
+      <path d="M3.6 9.7v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V9.7" />
+    </svg>
+  )
+}
+
+function BandsOutGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" {...B_STROKE}>
+      <path d="M10 2.8l6.4 11H3.6l6.4-11z" />
+      <path d="M10 7v2.8" />
+      <circle cx="10" cy="11.6" r="0.75" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+function BandsLowGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 20 20" {...B_STROKE}>
+      <circle cx="10" cy="10" r="6.2" />
+      <path d="M10 6.4v3.8" />
+      <circle cx="10" cy="13.3" r="0.75" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
+/** Area icon for Needs-doing rows — same lucide-shaped paths as
+ *  the sidebar rail so the glyph names its destination. */
+function BandsAreaGlyph({ area }: { area: 'STOCK' | 'MONEY' | 'MENU' | 'STAFF' }) {
+  if (area === 'STOCK') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m7.5 4.27 9 5.15" />
+        <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+        <path d="m3.3 7 8.7 5 8.7-5" />
+        <path d="M12 22V12" />
+      </svg>
+    )
+  }
+  if (area === 'MONEY') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="12" y1="2" x2="12" y2="22" />
+        <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+      </svg>
+    )
+  }
+  if (area === 'MENU') {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="m16 2-2.3 2.3a3 3 0 0 0 0 4.2l1.8 1.8a3 3 0 0 0 4.2 0L22 8" />
+        <path d="M15 15 3.3 3.3a4.2 4.2 0 0 0 0 6l7.3 7.3c.7.7 2 .7 2.8 0L15 15Zm0 0 7 7" />
+        <path d="m2.1 21.8 6.4-6.3" />
+        <path d="m19 5-7 7" />
+      </svg>
+    )
+  }
+  // STAFF — Users
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+      <circle cx="9" cy="7" r="4" />
+      <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+      <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
   )
 }

@@ -92,7 +92,11 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, total_amount, created_at, locations ( name )')
+      // Bands dashboard's Sales-today card needs payment_type per row
+      // (for the card/cash tile hue) and a rough per-order item count
+      // (for the "4 items" meta line). order_items(count) uses
+      // Supabase's join-count shorthand — cheap when the FK exists.
+      .select('id, total_amount, created_at, payment_type, locations ( name ), order_items(count)')
       .eq('status', 'completed')
       .order('created_at', { ascending: false })
       .limit(5),
@@ -620,11 +624,28 @@ export default async function DashboardPage() {
     },
   }
 
+  // Bands "Sales today" card wants the last 5 completed orders with
+  // per-order item count and the payment type (drives the tile hue).
+  // order_items(count) comes back as `[{ count: N }]`; flatten to a
+  // single number per row.
+  const recentSales = (recentOrders ?? []).map((o) => {
+    const oi = (o as { order_items?: Array<{ count: number }> }).order_items
+    const itemCount = Array.isArray(oi) && oi.length > 0 ? Number(oi[0].count) || 0 : 0
+    return {
+      id: o.id as string,
+      amount: Number((o as { total_amount: number | string }).total_amount),
+      createdAt: (o as { created_at: string }).created_at,
+      paymentType: ((o as { payment_type: string | null }).payment_type ?? 'other') as 'card' | 'cash' | 'other',
+      itemCount,
+    }
+  })
+
   return (
     <DashboardClient
       lang={lang}
       firstName={firstName}
       renderedAt={renderedAt}
+      recentSales={recentSales}
       readiness={readinessPillars}
       bankConnectedUnsynced={bankConnectedUnsynced}
       inventoryWriteLive={inventoryWriteLive}

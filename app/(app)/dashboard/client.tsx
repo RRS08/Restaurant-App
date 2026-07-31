@@ -280,13 +280,19 @@ export default function DashboardClient(props: Props) {
   // Tailwind dashboard unchanged. At md+ the return branches into
   // a full-viewport 4-card grid matching the Claude Design spec.
   const [isBands, setIsBands] = useState(false)
+  const [isWide, setIsWide] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const mq = window.matchMedia('(min-width: 768px)')
-    const update = () => setIsBands(mq.matches)
+    const mqBands = window.matchMedia('(min-width: 768px)')
+    const mqWide = window.matchMedia('(min-width: 1280px)')
+    const update = () => { setIsBands(mqBands.matches); setIsWide(mqWide.matches) }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    mqBands.addEventListener('change', update)
+    mqWide.addEventListener('change', update)
+    return () => {
+      mqBands.removeEventListener('change', update)
+      mqWide.removeEventListener('change', update)
+    }
   }, [])
 
   // Today's Mon..Sun index (0=Mon, 6=Sun). Used by Operating
@@ -504,8 +510,11 @@ export default function DashboardClient(props: Props) {
           </div>
         </div>
 
-        {/* CONTENT — two flex rows, no page scroll. */}
-        <div style={{ flex: 1, minHeight: 0, padding: '14px 24px 22px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {/* CONTENT — two flex rows, no page scroll.
+            Capped at 1500 on browser widths (xl+) so the 4 cards
+            don't stretch across a wide monitor. Header above stays
+            full-bleed; only the card region narrows. */}
+        <div style={{ flex: 1, minHeight: 0, padding: '14px 24px 22px', display: 'flex', flexDirection: 'column', gap: 14, maxWidth: isWide ? 1500 : undefined, width: isWide ? '100%' : undefined, margin: isWide ? '0 auto' : undefined, alignSelf: isWide ? 'center' : undefined }}>
 
           {/* ROW 1 — Sales today (2fr) + Needs doing (1fr) */}
           <div style={{ flex: 1.12, minHeight: 0, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>

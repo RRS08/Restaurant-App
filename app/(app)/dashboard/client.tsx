@@ -83,16 +83,7 @@ interface Props {
     startTime: string
     endTime: string
   }[]
-  watchlist: {
-    name: string
-    status: 'Out' | 'Low' | 'No count'
-    quantity: number | null
-    threshold: number
-    unit: string
-  }[]
-  /** Most recent inventory count timestamp — powers the
-   *  "Last counted N ago" caption on the Inventory card. */
-  latestInventoryCountAt?: string | null
+  watchlist: { name: string; status: 'Out' | 'Low' | 'No count' }[]
   upcomingShifts: {
     id: string
     employeeName: string
@@ -282,7 +273,6 @@ export default function DashboardClient(props: Props) {
     recentSales,
     watchlist,
     attention,
-    latestInventoryCountAt,
   } = props
   const t = makeT(lang)
 
@@ -471,10 +461,7 @@ export default function DashboardClient(props: Props) {
     }
 
     notes.sort((a, b) => b.weight - a.weight)
-    // Cap at 4 so the card stays a 4-row band matching the spec —
-    // longer overflow tail collapses into the "N more" line the
-    // Dashboard doesn't show yet.
-    const needsDoingClipped = notes.slice(0, 4)
+    const needsDoingClipped = notes.slice(0, 6)
 
     // On the floor — upcomingShifts filtered to "started, not ended".
     const nowMs = now.getTime()
@@ -483,24 +470,6 @@ export default function DashboardClient(props: Props) {
       const end = new Date(s.endTime).getTime()
       return start <= nowMs && nowMs < end
     })
-    // "Next up" — shifts starting today after now, chronological.
-    // Feeds the On-the-floor footer's "Jonah 3:30p · Ines 4:00p"
-    // pattern. Cap at 2 so long tail doesn't wrap the footer.
-    const todayEndMs = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime()
-    const nextUp = (upcomingShifts ?? [])
-      .filter((s) => {
-        const start = new Date(s.startTime).getTime()
-        return start > nowMs && start < todayEndMs
-      })
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
-      .slice(0, 2)
-    // Latest end-time of any shift today (on floor or upcoming) —
-    // read as the day's effective "closes at". If nothing scheduled,
-    // stays null and the footer just omits it.
-    const allTodayShifts = [...onFloor, ...nextUp]
-    const closesAtMs = allTodayShifts.length > 0
-      ? Math.max(...allTodayShifts.map((s) => new Date(s.endTime).getTime()))
-      : null
 
     // Inventory watchlist — server ships up to 6, sorted Out→Low→NoCount.
     const watch = watchlist ?? []
@@ -550,71 +519,40 @@ export default function DashboardClient(props: Props) {
           {/* ROW 1 — Sales today (2fr) + Needs doing (1fr) */}
           <div style={{ flex: 1.12, minHeight: 0, display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
 
-            {/* SALES TODAY — orders list + side panel with payment
-                mix, best seller, and average ticket. */}
+            {/* SALES TODAY — recent-orders list only (side panel with
+                How they paid / Best seller / Average ticket was
+                removed on request; the same figures live on Analytics). */}
             <BandsCard title={t('Sales today', 'Ventas de hoy')}>
-              <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-                <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>
-                  {!recentSales || recentSales.length === 0 ? (
-                    <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED }}>
-                      {t('No sales yet today.', 'Aún no hay ventas hoy.')}
-                    </div>
-                  ) : (
-                    recentSales.map((s, i) => {
-                      const isCard = s.paymentType === 'card'
-                      const isCash = s.paymentType === 'cash'
-                      const pair = isCard
-                        ? (['#EEF2FF', '#4F46E5'] as const)
-                        : isCash
-                          ? B_PAIR.success
-                          : B_PAIR.neutral
-                      return (
-                        <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === recentSales.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
-                          <BandsTile pair={pair}>{isCash ? <BandsCashGlyph /> : <BandsCardGlyph />}</BandsTile>
-                          <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
-                            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta')}
-                            </span>
-                            <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>
-                              {fmtBandsTimeShort(s.createdAt)} · {s.itemCount} {s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
-                            </span>
-                          </span>
-                          <span style={{ fontFamily: B_MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', flex: '0 0 auto' }}>{MONEY(s.amount, true)}</span>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-
-                {/* Side panel — how they paid + best seller + avg ticket */}
-                <div style={{ width: 186, flex: '0 0 186px', borderLeft: `1px solid ${B_LINE}`, background: B_PANEL, padding: '13px 15px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {topCards.sales.paymentMix && topCards.sales.paymentMix.total > 0 && (
-                    <div>
-                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('HOW THEY PAID', 'CÓMO PAGARON')}</div>
-                      <div style={{ display: 'flex', height: 7, borderRadius: 999, overflow: 'hidden', gap: 2, marginTop: 9 }}>
-                        <span style={{ width: `${(topCards.sales.paymentMix.card / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#6366F1' }} />
-                        <span style={{ width: `${(topCards.sales.paymentMix.cash / topCards.sales.paymentMix.total) * 100}%`, height: '100%', borderRadius: 999, background: '#10B981' }} />
-                      </div>
-                      <BandsSplit color="#6366F1" label={t('Card', 'Tarjeta')} value={MONEY(topCards.sales.paymentMix.card, true)} top={9} />
-                      <BandsSplit color="#10B981" label={t('Cash', 'Efectivo')} value={MONEY(topCards.sales.paymentMix.cash, true)} top={5} />
-                    </div>
-                  )}
-                  {topCards.sales.bestSeller && (
-                    <div style={{ paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
-                      <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('BEST SELLER', 'MÁS VENDIDO')}</div>
-                      <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', marginTop: 6, lineHeight: 1.3 }}>{topCards.sales.bestSeller.name}</div>
-                      <div style={{ fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 3 }}>
-                        {topCards.sales.bestSeller.count} {topCards.sales.bestSeller.count === 1 ? t('sold', 'vendido') : t('sold', 'vendidos')}
-                      </div>
-                    </div>
-                  )}
-                  <div style={{ marginTop: 'auto', paddingTop: 13, borderTop: `1px solid ${B_LINE_SOFT}` }}>
-                    <div style={{ fontFamily: B_MONO, fontSize: 10, letterSpacing: '0.16em', color: B_FAINT }}>{t('AVERAGE TICKET', 'TICKET PROMEDIO')}</div>
-                    <div style={{ fontFamily: B_MONO, fontSize: 17, fontWeight: 600, letterSpacing: '-0.03em', marginTop: 5 }}>
-                      {MONEY(topCards.sales.avgTicketToday, true)}
-                    </div>
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+                {!recentSales || recentSales.length === 0 ? (
+                  <div style={{ padding: '20px 16px', fontSize: 12, color: B_MUTED }}>
+                    {t('No sales yet today.', 'Aún no hay ventas hoy.')}
                   </div>
-                </div>
+                ) : (
+                  recentSales.map((s, i) => {
+                    const isCard = s.paymentType === 'card'
+                    const isCash = s.paymentType === 'cash'
+                    const pair = isCard
+                      ? (['#EEF2FF', '#4F46E5'] as const)
+                      : isCash
+                        ? B_PAIR.success
+                        : B_PAIR.neutral
+                    return (
+                      <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 16px', borderBottom: i === recentSales.length - 1 ? undefined : `1px solid ${B_LINE_SOFT}` }}>
+                        <BandsTile pair={pair}>{isCash ? <BandsCashGlyph /> : <BandsCardGlyph />}</BandsTile>
+                        <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
+                          <span style={{ display: 'block', fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta')}
+                          </span>
+                          <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 11, color: B_FAINT, marginTop: 2 }}>
+                            {fmtBandsTimeShort(s.createdAt)} · {s.itemCount} {s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
+                          </span>
+                        </span>
+                        <span style={{ fontFamily: B_MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em', flex: '0 0 auto' }}>{MONEY(s.amount, true)}</span>
+                      </div>
+                    )
+                  })
+                )}
               </div>
             </BandsCard>
 
@@ -658,20 +596,6 @@ export default function DashboardClient(props: Props) {
                   {onFloor.length > 0 ? t('Covered', 'Cubierto') : t('Nobody in', 'Nadie')}
                 </span>
               }
-              footer={(nextUp.length > 0 || closesAtMs) ? (
-                <>
-                  <span style={{ fontSize: 11, color: B_MUTED }}>
-                    {nextUp.length > 0
-                      ? nextUp.map((s) => `${s.employeeName.split(' ')[0]} ${fmtBandsTimeShort(s.startTime)}`).join(' · ')
-                      : t('No one else scheduled today', 'Nadie más programado hoy')}
-                  </span>
-                  {closesAtMs && (
-                    <span style={{ fontFamily: B_MONO, fontSize: 11, fontWeight: 600 }}>
-                      {t('closes', 'cierra')} {fmtBandsTimeShort(new Date(closesAtMs).toISOString())}
-                    </span>
-                  )}
-                </>
-              ) : undefined}
             >
               <div style={{ flex: '0 0 auto', padding: '12px 15px 11px', borderBottom: `1px solid ${B_LINE_SOFT}` }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -735,11 +659,6 @@ export default function DashboardClient(props: Props) {
                       <BandsLegend color="#DC2626" value={String(inv.outOfStockCount)} label={t('out of stock', 'agotado')} ink={B_PAIR.danger[1]} />
                       <BandsLegend color="#D97706" value={String(inv.lowStockCount)} label={t('running low', 'nivel bajo')} ink={B_PAIR.warning[1]} />
                       <BandsLegend color={B_GHOST} value={String(inv.noCountCount)} label={t('never counted', 'sin conteo')} ink={B_PAIR.neutral[1]} />
-                      {latestInventoryCountAt && (
-                        <span style={{ fontSize: 11, color: B_FAINT, marginLeft: 'auto' }}>
-                          {t('Last counted', 'Último conteo')} {fmtRelative(latestInventoryCountAt, t)}
-                        </span>
-                      )}
                     </div>
                   </>
                 )}
@@ -756,15 +675,6 @@ export default function DashboardClient(props: Props) {
                       const isOut = it.status === 'Out'
                       const pair = isOut ? B_PAIR.danger : it.status === 'Low' ? B_PAIR.warning : B_PAIR.neutral
                       const last = i >= watch.slice(0, 6).length - 2
-                      const unit = it.unit || ''
-                      // Right-side value: literal "Out" when out of
-                      // stock; otherwise the estimated quantity + unit.
-                      // Never-counted rows show em-dash.
-                      const value = isOut
-                        ? t('Out', 'Agotado')
-                        : it.status === 'Low' && it.quantity !== null
-                          ? `${it.quantity.toFixed(2)}${unit ? ` ${unit}` : ''}`
-                          : '—'
                       return (
                         <div key={it.name + i} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '9px 0', borderBottom: last ? undefined : `1px solid ${B_LINE_SOFT}` }}>
                           <BandsTile pair={pair} size={26}>
@@ -772,12 +682,9 @@ export default function DashboardClient(props: Props) {
                           </BandsTile>
                           <span style={{ minWidth: 0, flexGrow: 1, flexShrink: 1, flexBasis: '0%' }}>
                             <span style={{ display: 'block', fontSize: 12, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.name}</span>
-                            <span style={{ display: 'block', fontFamily: B_MONO, fontSize: 10, color: B_FAINT, marginTop: 2 }}>
-                              {t('restock at', 'reabastecer a')} {it.threshold.toFixed(2)}{unit ? ` ${unit}` : ''}
-                            </span>
                           </span>
                           <span style={{ fontFamily: B_MONO, fontSize: 12, fontWeight: 600, flex: '0 0 auto', color: pair[1] }}>
-                            {value}
+                            {isOut ? t('Out', 'Agotado') : it.status === 'Low' ? t('Low', 'Bajo') : t('—', '—')}
                           </span>
                         </div>
                       )

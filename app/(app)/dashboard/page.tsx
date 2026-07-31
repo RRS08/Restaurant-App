@@ -132,9 +132,7 @@ export default async function DashboardPage() {
 
     supabase
       .from('inventory_items')
-      // Bands Inventory card wants unit_of_measure per row so it can
-      // render "0.40 lbs · restock at 5.00 lbs" alongside the name.
-      .select('id, name, low_stock_threshold, unit_of_measure')
+      .select('id, name, low_stock_threshold')
       .eq('active', true),
 
     supabase
@@ -307,40 +305,28 @@ export default async function DashboardPage() {
   let outOfStockCount = 0
   let lowStockCount = 0
   let noCountCount = 0
-  const watchlistItems: {
-    name: string
-    status: 'Out' | 'Low' | 'No count'
-    quantity: number | null
-    threshold: number
-    unit: string
-  }[] = []
+  const watchlistItems: { name: string; status: 'Out' | 'Low' | 'No count' }[] = []
   for (const item of inventoryItems ?? []) {
     const count = latestCount.get(item.id)
-    const threshold = Number(item.low_stock_threshold ?? 5)
-    const unit = (item.unit_of_measure as string | null) ?? ''
     if (!count) {
       noCountCount++
-      watchlistItems.push({ name: item.name, status: 'No count', quantity: null, threshold, unit })
+      watchlistItems.push({ name: item.name, status: 'No count' })
       continue
     }
     const estimated = count.qty + (postCountSum.get(item.id) ?? 0)
+    const threshold = Number(item.low_stock_threshold ?? 5)
     if (estimated <= 0) {
       outOfStockCount++
-      watchlistItems.push({ name: item.name, status: 'Out', quantity: estimated, threshold, unit })
+      watchlistItems.push({ name: item.name, status: 'Out' })
     } else if (estimated <= threshold) {
       lowStockCount++
-      watchlistItems.push({ name: item.name, status: 'Low', quantity: estimated, threshold, unit })
+      watchlistItems.push({ name: item.name, status: 'Low' })
     }
   }
   // Sort: Out first, then Low, then No count. Max 6 items.
   const statusOrder = { Out: 0, Low: 1, 'No count': 2 }
   watchlistItems.sort((a, b) => statusOrder[a.status] - statusOrder[b.status])
   const watchlist = watchlistItems.slice(0, 6)
-
-  // Most recent count across all items — powers the "Last counted
-  // N ago" caption on the Inventory card. Sorted desc when fetched,
-  // so we can just take the first row.
-  const latestInventoryCountAt = (inventoryCounts ?? [])[0]?.count_date ?? null
 
   // ---- Today's sales ----
   const ordersToday = (todayOrders ?? []).length
@@ -701,7 +687,6 @@ export default async function DashboardPage() {
         unpricedMenuItems,
         uncategorizedMenuItems,
       }}
-      latestInventoryCountAt={latestInventoryCountAt}
       readiness={readinessPillars}
       bankConnectedUnsynced={bankConnectedUnsynced}
       inventoryWriteLive={inventoryWriteLive}

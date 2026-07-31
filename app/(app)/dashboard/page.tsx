@@ -29,6 +29,7 @@ import {
   type PillarState,
 } from '@/lib/readiness'
 import { groupBankTransactions } from '@/lib/finance/matching'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -42,6 +43,28 @@ export default async function DashboardPage() {
     supabase.from('profiles').select('full_name').eq('id', user!.id).single(),
     supabase.from('user_roles').select('restaurant_id').eq('user_id', user!.id).single(),
   ])
+
+  // Restaurant timezone for business-date bucketing. Same lookup as
+  // Analytics uses. Without it, dashboards on Vercel (UTC) show
+  // fewer late-evening local sales than the local dev server does,
+  // because setHours(0,0,0,0) computes midnight in the server's
+  // timezone rather than in the restaurant's timezone.
+  let timezone: string | null = null
+  if (userRole?.restaurant_id) {
+    const { data: loc } = await supabase
+      .from('locations')
+      .select('timezone')
+      .eq('restaurant_id', userRole.restaurant_id)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+    timezone = (loc?.timezone as string | null) ?? null
+  }
+  // YYYY-MM-DD in the restaurant's local calendar — matches what
+  // Sales writes into orders.business_date at insert time. Using it
+  // as the filter for "today" makes Dashboard, Sales, and Analytics
+  // agree on which orders belong to today regardless of runtime TZ.
+  const todayBusinessDate = businessDateInTimezone(new Date(), timezone)
 
   // ---- Date boundaries ----
   const now = new Date()
@@ -161,12 +184,14 @@ export default async function DashboardPage() {
     // 11. Today's orders (for Sales card) — voided excluded.
     //     payment_type is included so we can compute the card/cash
     //     payment-mix metric.
+    //     Filter on business_date (restaurant-local calendar day)
+    //     instead of a naive created_at window so the count matches
+    //     Sales and Analytics.
     supabase
       .from('orders')
       .select('id, total_amount, payment_type')
       .eq('status', 'completed')
-      .gte('created_at', todayStart.toISOString())
-      .lt('created_at', todayEnd.toISOString()),
+      .eq('business_date', todayBusinessDate),
 
     // 12. Latest single expense — for the Recent Movement card.
     //     Compact pulse, not an expense feed.
@@ -244,12 +269,12 @@ export default async function DashboardPage() {
     //     We rely on the inner-join semantics of `orders!inner` to
     //     drop line items whose parent order isn't a today's
     //     completed order.
+    //     Same business_date fix as the todayOrders query above.
     supabase
       .from('order_items')
-      .select('quantity, menu_items ( name ), orders!inner ( status, created_at )')
+      .select('quantity, menu_items ( name ), orders!inner ( status, business_date )')
       .eq('orders.status', 'completed')
-      .gte('orders.created_at', todayStart.toISOString())
-      .lt('orders.created_at', todayEnd.toISOString()),
+      .eq('orders.business_date', todayBusinessDate),
   ])
 
   // ---- Metrics ----

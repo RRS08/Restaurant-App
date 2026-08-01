@@ -107,6 +107,14 @@ interface Props {
     unpricedMenuItems: number
     uncategorizedMenuItems: number
   }
+  /** YYYY-MM-DD in the restaurant's local calendar for the day the
+   *  page is actually showing. Falls back to today when no ?date
+   *  param is present. Powers the phone Home tab's date label + swipe. */
+  viewingDate?: string
+  /** YYYY-MM-DD for "today" in the restaurant's local calendar —
+   *  used to compare against viewingDate for the "TAKEN TODAY"
+   *  vs "TAKEN YESTERDAY" vs "TAKEN Aug 1" label. */
+  todayDate?: string
   latestSale: { amount: number; datetime: string } | null
   latestExpense: { amount: number; date: string } | null
   latestInventoryMovement: {
@@ -250,6 +258,37 @@ function fmtBandsTimeShort(iso: string): string {
 // the phone branch reads clearly without importing from bands.
 const fmtPhoneTime = fmtBandsTimeShort
 
+// Shift a YYYY-MM-DD business date by N days. UTC noon anchoring
+// dodges DST edges — same trick the Sales page uses.
+function shiftPhoneBusinessDate(iso: string, deltaDays: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const noon = Date.UTC(y, m - 1, d, 12, 0, 0)
+  const shifted = new Date(noon + deltaDays * 86_400_000)
+  const yy = shifted.getUTCFullYear()
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+// "Aug 1" / "1 ago" style day label for the phone unit line when
+// viewing a non-today date. Locale-driven.
+function fmtPhoneDayLabel(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const asUTC = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return asUTC.toLocaleDateString(locale, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
+// Ultra-defensive fallback if neither viewingDate nor todayDate
+// arrive from the server — computes today's YYYY-MM-DD in the
+// browser's local calendar. Should never be needed in practice.
+function businessDateFallback(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
 // ================================================================
 // Main client
 // ================================================================
@@ -277,6 +316,8 @@ export default function DashboardClient(props: Props) {
     recentSales,
     watchlist,
     attention,
+    viewingDate,
+    todayDate,
   } = props
   const t = makeT(lang)
 
@@ -368,30 +409,42 @@ export default function DashboardClient(props: Props) {
   if (isPhone) {
     // ============================================================
     // PHONE (<md) LAYOUT — Home tab per the Claude Design phone
-    // spec. Hero + stats + status chip; feed is "Today's sales"
-    // (recent orders) since the phone folds Dashboard + Sales
-    // into a single check-in destination. All wiring reuses the
-    // server props already fetched for the tablet dashboard.
+    // spec. Hero + stats + status chip; feed is TODAY'S SALES
+    // (or the selected day's sales — the header swipes through
+    // prior days). Wiring reuses the server props already fetched
+    // for the tablet dashboard; date param is respected server-
+    // side so hero + feed always describe the same day.
     // ============================================================
-    const now = new Date()
+    const view = viewingDate ?? todayDate ?? businessDateFallback()
+    const today = todayDate ?? businessDateFallback()
+    const isToday = view === today
+    const isYesterday = shiftPhoneBusinessDate(today, -1) === view
+    const isFuture = view > today
+    const dateLabel = isToday
+      ? t('TAKEN TODAY', 'HOY')
+      : isYesterday
+        ? t('TAKEN YESTERDAY', 'AYER').toUpperCase()
+        : `${t('TAKEN', 'DÍA')} ${fmtPhoneDayLabel(view, lang === 'es' ? 'es-ES' : 'en-US')}`.toUpperCase()
+
+    // Delta only makes sense against a 7-day rolling average today;
+    // on historical days there's no meaningful "vs" number, so hide.
     const avg7 = sales.ordersLast7Days > 0 ? sales.totalLast7Days / 7 : 0
-    const deltaPct = avg7 > 0 ? Math.round(((sales.salesToday - avg7) / avg7) * 100) : null
+    const deltaPct = isToday && avg7 > 0 ? Math.round(((sales.salesToday - avg7) / avg7) * 100) : null
     const heroDelta = deltaPct !== null ? `${deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(deltaPct)}%` : null
 
-    // Fold in the same signal set as Needs-doing here (top item)
-    // is a phone-later job; the phone Home is intentionally the
-    // sales pulse for now. Staff / Stock / Money tabs will carry
-    // their own attention lists in follow-up commits.
     const phoneStats: [string, string][] = [
       [String(sales.ordersToday), sales.ordersToday === 1 ? t('sale', 'venta') : t('sales', 'ventas')],
       [topCards.sales.avgTicketToday > 0 ? MONEY(topCards.sales.avgTicketToday, true) : '—', t('avg ticket', 'ticket promedio')],
     ]
 
+    const sectionLabel = isToday
+      ? t('TODAY’S SALES', 'VENTAS DE HOY')
+      : t('SALES', 'VENTAS')
+
     const phoneFeed: PhoneRow[] = []
-    // Section header — "TODAY'S SALES · N sales"
     phoneFeed.push({
       kind: 'section',
-      label: t('TODAY’S SALES', 'VENTAS DE HOY'),
+      label: sectionLabel,
       meta: sales.ordersToday > 0
         ? `${sales.ordersToday} ${sales.ordersToday === 1 ? t('sale', 'venta') : t('sales', 'ventas')}`
         : undefined,
@@ -399,7 +452,9 @@ export default function DashboardClient(props: Props) {
     if (!recentSales || recentSales.length === 0) {
       phoneFeed.push({
         kind: 'empty',
-        message: t('No sales yet today.', 'Aún no hay ventas hoy.'),
+        message: isToday
+          ? t('No sales yet today.', 'Aún no hay ventas hoy.')
+          : t('No sales that day.', 'No hubo ventas ese día.'),
       })
     } else {
       recentSales.forEach((s, i) => {
@@ -428,16 +483,27 @@ export default function DashboardClient(props: Props) {
       .slice(0, 2)
       .toUpperCase() || 'A'
 
+    const shiftDay = (delta: number) => {
+      if (delta > 0 && isToday) return  // can't view the future
+      const next = shiftPhoneBusinessDate(view, delta)
+      if (next > today) return
+      // Landing on today drops the ?date param so the URL is clean.
+      const url = next === today ? '/dashboard' : `/dashboard?date=${next}`
+      window.location.href = url
+    }
+
     return (
       <PhonePage
         hero={MONEY(sales.salesToday, true)}
-        unit={t('TAKEN TODAY', 'HOY')}
+        unit={dateLabel}
         delta={heroDelta}
         stats={phoneStats}
-        chip={t('Open', 'Abierto')}
-        chipPair={PHONE_PAIR.success}
+        chip={isFuture ? t('Not yet', 'Aún no') : isToday ? t('Open', 'Abierto') : t('Closed', 'Cerrado')}
+        chipPair={isToday ? PHONE_PAIR.success : PHONE_PAIR.neutral}
         avatarInitials={initials}
         feed={phoneFeed}
+        onShiftDay={shiftDay}
+        canGoNext={!isToday}
       />
     )
   }

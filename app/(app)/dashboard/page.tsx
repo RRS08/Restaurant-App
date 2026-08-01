@@ -31,9 +31,21 @@ import {
 import { groupBankTransactions } from '@/lib/finance/matching'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}) {
   const supabase = await createClient()
   const lang = await getLang()
+  const sp = await searchParams
+  // ?date=YYYY-MM-DD lets the phone Home tab swipe through prior
+  // days. Missing or malformed → today. All "today"-scoped queries
+  // (todayOrders, todayOrderItems, recentSales) filter on this
+  // resolved business_date so the hero, stats, and feed always
+  // describe the same day.
+  const rawDate = typeof sp?.date === 'string' ? sp.date : null
+  const isDateShape = rawDate !== null && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
 
   const {
     data: { user },
@@ -65,6 +77,8 @@ export default async function DashboardPage() {
   // as the filter for "today" makes Dashboard, Sales, and Analytics
   // agree on which orders belong to today regardless of runtime TZ.
   const todayBusinessDate = businessDateInTimezone(new Date(), timezone)
+  // The date the page is actually showing — either ?date or today.
+  const viewingBusinessDate = isDateShape ? (rawDate as string) : todayBusinessDate
 
   // ---- Date boundaries ----
   const now = new Date()
@@ -119,8 +133,12 @@ export default async function DashboardPage() {
       // (for the card/cash tile hue) and a rough per-order item count
       // (for the "4 items" meta line). order_items(count) uses
       // Supabase's join-count shorthand — cheap when the FK exists.
+      // Filtered to the viewing day so the feed matches the hero
+      // rather than showing "last 5 orders ever" (which would leak
+      // yesterday's sales onto today's Home tab).
       .select('id, total_amount, created_at, payment_type, locations ( name ), order_items(count)')
       .eq('status', 'completed')
+      .eq('business_date', viewingBusinessDate)
       .order('created_at', { ascending: false })
       .limit(5),
 
@@ -191,7 +209,7 @@ export default async function DashboardPage() {
       .from('orders')
       .select('id, total_amount, payment_type')
       .eq('status', 'completed')
-      .eq('business_date', todayBusinessDate),
+      .eq('business_date', viewingBusinessDate),
 
     // 12. Latest single expense — for the Recent Movement card.
     //     Compact pulse, not an expense feed.
@@ -274,7 +292,7 @@ export default async function DashboardPage() {
       .from('order_items')
       .select('quantity, menu_items ( name ), orders!inner ( status, business_date )')
       .eq('orders.status', 'completed')
-      .eq('orders.business_date', todayBusinessDate),
+      .eq('orders.business_date', viewingBusinessDate),
   ])
 
   // ---- Metrics ----
@@ -683,6 +701,8 @@ export default async function DashboardPage() {
       firstName={firstName}
       renderedAt={renderedAt}
       recentSales={recentSales}
+      viewingDate={viewingBusinessDate}
+      todayDate={todayBusinessDate}
       attention={{
         unpricedMenuItems,
         uncategorizedMenuItems,

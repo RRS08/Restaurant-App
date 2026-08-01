@@ -89,6 +89,8 @@ export function PhonePage({
   cta,
   onCtaClick,
   feed,
+  onShiftDay,
+  canGoNext = true,
 }: {
   hero: string
   unit: string
@@ -101,9 +103,29 @@ export function PhonePage({
   cta?: string | null
   onCtaClick?: () => void
   feed: PhoneRow[]
+  /** When set, the header responds to horizontal swipe by calling
+   *  `onShiftDay(-1)` (right → prev day) / `onShiftDay(+1)` (left
+   *  → next day). Threshold matches the Sales page (60px). */
+  onShiftDay?: (delta: number) => void
+  /** Prevents advancing past today — when false the +1 swipe no-ops. */
+  canGoNext?: boolean
 }) {
   const [profileOpen, setProfileOpen] = useState(false)
+  const [swipeX, setSwipeX] = useState<number | null>(null)
+  const [swipeDX, setSwipeDX] = useState(0)
   if (profileOpen) return <PhoneProfileSheet initials={avatarInitials} onBack={() => setProfileOpen(false)} />
+
+  const swipeHandlers = onShiftDay ? {
+    onPointerDown: (e: React.PointerEvent) => { setSwipeX(e.clientX); setSwipeDX(0) },
+    onPointerMove: (e: React.PointerEvent) => { if (swipeX !== null) setSwipeDX(e.clientX - swipeX) },
+    onPointerUp: () => {
+      if (swipeX === null) { setSwipeDX(0); return }
+      if (swipeDX <= -60 && canGoNext) onShiftDay(1)
+      else if (swipeDX >= 60) onShiftDay(-1)
+      setSwipeX(null); setSwipeDX(0)
+    },
+    onPointerLeave: () => { setSwipeX(null); setSwipeDX(0) },
+  } : {}
 
   return (
     <div style={{
@@ -116,8 +138,21 @@ export function PhonePage({
       paddingBottom: 'calc(78px + env(safe-area-inset-bottom))',
     }}>
 
-      {/* HEADER — fact, not title. Row 1: hero + avatar. Row 2: stats + chip. */}
-      <div style={{ flex: '0 0 auto', padding: '14px 20px 16px', borderBottom: `1px solid ${LINE}` }}>
+      {/* HEADER — fact, not title. Row 1: hero + avatar. Row 2:
+          stats + chip. Horizontal drag on the whole band navigates
+          days when the parent wires onShiftDay. */}
+      <div
+        {...swipeHandlers}
+        style={{
+          flex: '0 0 auto', padding: '14px 20px 16px',
+          borderBottom: `1px solid ${LINE}`,
+          touchAction: onShiftDay ? 'pan-y' : undefined,
+          cursor: swipeX !== null ? 'grabbing' : (onShiftDay ? 'grab' : undefined),
+          transform: swipeX !== null ? `translateX(${swipeDX / 6}px)` : undefined,
+          transition: swipeX === null ? 'transform 160ms ease-out' : undefined,
+          userSelect: onShiftDay ? 'none' : undefined,
+        }}
+      >
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: MONO, fontSize: 36, fontWeight: 600, letterSpacing: '-0.05em', lineHeight: 1, color: heroTone ?? INK }}>

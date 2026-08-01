@@ -483,10 +483,17 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   const DAYS = localizedDays(t)
 
   // ------------------------------------------------------------
-  // Phone (<md) Staff tab. Everything the tab needs is already in
-  // props (`shifts`, `employees`, `roleColors`, `roleWages`), so
-  // no server changes were required — the phone branch just
-  // derives from the same rows the tablet scheduler consumes.
+  // Phone (<md) Staff tab.
+  //
+  // The isPhone hooks (state + effect) MUST run every render, so
+  // they live at the top of the function alongside the other
+  // useState calls. The branch return happens at the very END of
+  // the function, right before the desktop return — otherwise the
+  // early return would skip the many useState / useMemo / useEffect
+  // calls below and React throws "Rendered fewer hooks than
+  // expected." All phone data derives from the same shifts /
+  // roleColors / roleWages props the tablet scheduler consumes;
+  // no server changes were required.
   // ------------------------------------------------------------
   const phoneSearchParams = useSearchParams()
   const phoneRouter = useRouter()
@@ -499,25 +506,6 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
     mq.addEventListener('change', update)
     return () => mq.removeEventListener('change', update)
   }, [])
-
-  if (isPhone) {
-    return (
-      <PhoneStaff
-        t={t}
-        lang={lang}
-        shifts={shifts}
-        roleColors={roleColors}
-        roleWages={roleWages}
-        dateParam={phoneSearchParams?.get('date') ?? null}
-        onShiftDay={(delta, current, today) => {
-          const next = shiftBusinessDateStr(current, delta)
-          if (next > today) return
-          const url = next === today ? '/staffing' : `/staffing?date=${next}`
-          phoneRouter.push(url)
-        }}
-      />
-    )
-  }
   const isUnified = houseModel === 'unified'
   const isByRole = schedulingStyle === 'by_role'
   const [locationId] = useState(defaultLocationId ?? '')
@@ -773,6 +761,29 @@ export default function StaffingClient({ lang, defaultLocationId, employees, shi
   // timeline board positions every shift by its start/end time, so
   // section_id=null shifts (one-offs or orphans from a deleted
   // block) render alongside the rest — no separate lane needed.
+
+  // Phone (<md) branch — MUST run after all the hooks above so the
+  // hook order stays stable across re-renders. See the isPhone
+  // hooks comment near the top of the function.
+  if (isPhone) {
+    return (
+      <PhoneStaff
+        t={t}
+        lang={lang}
+        shifts={shifts}
+        roleColors={roleColors}
+        roleWages={roleWages}
+        dateParam={phoneSearchParams?.get('date') ?? null}
+        onShiftDay={(delta, current, today) => {
+          const next = shiftBusinessDateStr(current, delta)
+          if (next > today) return
+          const url = next === today ? '/staffing' : `/staffing?date=${next}`
+          phoneRouter.push(url)
+        }}
+      />
+    )
+  }
+
   return (
     <RoleColorsContext.Provider value={roleColors}>
     {/* max-w cap drops at md+ so the schedule takes the full band

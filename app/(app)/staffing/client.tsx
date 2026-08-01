@@ -1,7 +1,8 @@
 'use client'
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState, useActionState, useTransition, type DragEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { PhonePage, PHONE_PAIR, type PhoneRow } from '@/components/phone-page'
 import {
   copyPreviousWeek,
   deleteShiftById,
@@ -480,6 +481,43 @@ function RoleColorPalette({ roles, t }: { roles: string[]; t: T }) {
 export default function StaffingClient({ lang, defaultLocationId, employees, shifts, sections, houseModel, schedulingStyle, fohRoles, bohRoles, roleColors, roleWages, businessHours, hoursOverrides }: Props) {
   const t = makeT(lang)
   const DAYS = localizedDays(t)
+
+  // ------------------------------------------------------------
+  // Phone (<md) Staff tab. Everything the tab needs is already in
+  // props (`shifts`, `employees`, `roleColors`, `roleWages`), so
+  // no server changes were required — the phone branch just
+  // derives from the same rows the tablet scheduler consumes.
+  // ------------------------------------------------------------
+  const phoneSearchParams = useSearchParams()
+  const phoneRouter = useRouter()
+  const [isPhone, setIsPhone] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(max-width: 767px)')
+    const update = () => setIsPhone(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
+  if (isPhone) {
+    return (
+      <PhoneStaff
+        t={t}
+        lang={lang}
+        shifts={shifts}
+        roleColors={roleColors}
+        roleWages={roleWages}
+        dateParam={phoneSearchParams?.get('date') ?? null}
+        onShiftDay={(delta, current, today) => {
+          const next = shiftBusinessDateStr(current, delta)
+          if (next > today) return
+          const url = next === today ? '/staffing' : `/staffing?date=${next}`
+          phoneRouter.push(url)
+        }}
+      />
+    )
+  }
   const isUnified = houseModel === 'unified'
   const isByRole = schedulingStyle === 'by_role'
   const [locationId] = useState(defaultLocationId ?? '')
@@ -3419,5 +3457,241 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
         </div>
       </div>
     </div>
+  )
+}
+
+// ================================================================
+// Phone Staff tab — inline sub-component so we don't split the
+// file. Reads from the same `shifts` / `roleColors` / `roleWages`
+// props StaffingClient already consumes.
+// ================================================================
+
+/** YYYY-MM-DD for a Date in the BROWSER's local calendar. A
+ *  restaurant device is presumed to be in the restaurant's
+ *  timezone; if it isn't, the phone view can drift by a day at
+ *  most, which is acceptable for a check-in surface. */
+function browserLocalDateKey(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
+function shiftBusinessDateStr(iso: string, deltaDays: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const noon = Date.UTC(y, m - 1, d, 12, 0, 0)
+  const shifted = new Date(noon + deltaDays * 86_400_000)
+  const yy = shifted.getUTCFullYear()
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, '0')
+  const dd = String(shifted.getUTCDate()).padStart(2, '0')
+  return `${yy}-${mm}-${dd}`
+}
+
+function phoneTimeShort(iso: string): string {
+  const d = new Date(iso)
+  let h = d.getHours()
+  const m = d.getMinutes().toString().padStart(2, '0')
+  const suffix = h >= 12 ? 'p' : 'a'
+  h = h % 12
+  if (h === 0) h = 12
+  return `${h}:${m}${suffix}`
+}
+
+function phoneDayLabel(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const asUTC = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return asUTC.toLocaleDateString(locale, { month: 'short', day: 'numeric', timeZone: 'UTC' })
+}
+
+/** ROLE_TONES gives {accent, bg, text}; PhonePage wants [bg, ink]. */
+function roleToPhonePair(role: string, roleColors: Record<string, string>): readonly [string, string] {
+  const slug = resolveRoleToneSlug(role, roleColors)
+  const tone = ROLE_TONES[slug] ?? ROLE_TONES.gray
+  return [tone.bg, tone.text] as const
+}
+
+function initialsFrom(name: string): string {
+  const clean = (name || '').trim()
+  if (!clean) return '·'
+  return clean.split(/\s+/).map((w) => w[0] ?? '').join('').slice(0, 2).toUpperCase()
+}
+
+function humanCountdown(msFromNow: number, t: T): string {
+  const totalMin = Math.max(0, Math.round(msFromNow / 60000))
+  if (totalMin < 1) return t('any minute', 'en cualquier momento')
+  if (totalMin < 60) return `${t('in', 'en')} ${totalMin}${t('m', 'm')}`
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  if (m === 0) return `${t('in', 'en')} ${h}h`
+  return `${t('in', 'en')} ${h}h ${m}m`
+}
+
+function PhoneStaff({
+  t, lang, shifts, roleColors, roleWages, dateParam, onShiftDay,
+}: {
+  t: T
+  lang: Lang
+  shifts: Shift[]
+  roleColors: Record<string, string>
+  roleWages: Record<string, number>
+  dateParam: string | null
+  onShiftDay: (delta: number, currentDate: string, todayDate: string) => void
+}) {
+  // Recompute "now" on a 60s tick so "in 45m" doesn't go stale
+  // while the tab sits open.
+  const [nowTick, setNowTick] = useState(0)
+  useEffect(() => {
+    const h = window.setInterval(() => setNowTick((n) => n + 1), 60_000)
+    return () => window.clearInterval(h)
+  }, [])
+  void nowTick
+
+  const now = new Date()
+  const today = browserLocalDateKey(now)
+  const view = dateParam && /^\d{4}-\d{2}-\d{2}$/.test(dateParam) ? dateParam : today
+  const isToday = view === today
+  const isYesterday = shiftBusinessDateStr(today, -1) === view
+  const isTomorrow = shiftBusinessDateStr(today, +1) === view
+
+  const viewShifts = shifts.filter((s) => browserLocalDateKey(new Date(s.startTime)) === view)
+
+  const nowMs = now.getTime()
+  const onFloor = viewShifts.filter((s) => {
+    const start = new Date(s.startTime).getTime()
+    const end = new Date(s.endTime).getTime()
+    return start <= nowMs && nowMs < end
+  })
+  const comingNext = viewShifts
+    .filter((s) => new Date(s.startTime).getTime() > nowMs)
+    .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+
+  const totalMinutes = viewShifts.reduce((n, s) => {
+    const dur = (new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 60000
+    return n + Math.max(0, dur - (s.breakMinutes ?? 0))
+  }, 0)
+  const hoursTotal = totalMinutes / 60
+  let laborTotal = 0
+  let ratedShiftCount = 0
+  for (const s of viewShifts) {
+    const wage = roleWages[normalizeNameKey(s.role)] ?? 0
+    if (wage > 0) {
+      const dur = (new Date(s.endTime).getTime() - new Date(s.startTime).getTime()) / 60000
+      const netHours = Math.max(0, dur - (s.breakMinutes ?? 0)) / 60
+      laborTotal += netHours * wage
+      ratedShiftCount++
+    }
+  }
+  const laborKnown = ratedShiftCount > 0
+
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
+  const dateUnit = isToday
+    ? t('WORKING RIGHT NOW', 'TRABAJANDO AHORA')
+    : isYesterday
+      ? t('YESTERDAY', 'AYER').toUpperCase()
+      : isTomorrow
+        ? t('TOMORROW', 'MAÑANA').toUpperCase()
+        : phoneDayLabel(view, locale).toUpperCase()
+
+  const hero = isToday ? String(onFloor.length) : String(viewShifts.length)
+
+  const feed: PhoneRow[] = []
+  if (isToday) {
+    feed.push({ kind: 'section', label: t('ON THE FLOOR', 'EN OPERACIÓN') })
+    if (onFloor.length === 0) {
+      feed.push({ kind: 'empty', message: t('Nobody is scheduled right now.', 'Nadie programado ahora.') })
+    } else {
+      onFloor.forEach((s, i) => {
+        const pair = roleToPhonePair(s.role, roleColors)
+        feed.push({
+          kind: 'row',
+          key: s.id,
+          initial: initialsFrom(s.employeeName),
+          pair,
+          title: s.employeeName,
+          sub: s.role,
+          subTone: pair[1],
+          value: phoneTimeShort(s.endTime),
+          trail: t('leaves', 'sale'),
+          last: i === onFloor.length - 1,
+        })
+      })
+    }
+
+    feed.push({ kind: 'section', label: t('COMING NEXT', 'PRÓXIMOS') })
+    if (comingNext.length === 0) {
+      feed.push({ kind: 'empty', message: t('No one else scheduled today.', 'Nadie más programado hoy.') })
+    } else {
+      comingNext.forEach((s, i) => {
+        const pair = roleToPhonePair(s.role, roleColors)
+        const inFrom = new Date(s.startTime).getTime() - nowMs
+        feed.push({
+          kind: 'row',
+          key: s.id,
+          initial: initialsFrom(s.employeeName),
+          pair,
+          title: s.employeeName,
+          sub: s.role,
+          subTone: pair[1],
+          value: phoneTimeShort(s.startTime),
+          trail: humanCountdown(inFrom, t),
+          trailTone: '#047857',
+          last: i === comingNext.length - 1,
+        })
+      })
+    }
+  } else {
+    feed.push({
+      kind: 'section',
+      label: t('SCHEDULED', 'PROGRAMADO'),
+      meta: `${viewShifts.length} ${viewShifts.length === 1 ? t('shift', 'turno') : t('shifts', 'turnos')}`,
+    })
+    if (viewShifts.length === 0) {
+      feed.push({ kind: 'empty', message: t('Nothing scheduled that day.', 'Nada programado ese día.') })
+    } else {
+      const sorted = [...viewShifts].sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+      sorted.forEach((s, i) => {
+        const pair = roleToPhonePair(s.role, roleColors)
+        feed.push({
+          kind: 'row',
+          key: s.id,
+          initial: initialsFrom(s.employeeName),
+          pair,
+          title: s.employeeName,
+          sub: s.role,
+          subTone: pair[1],
+          value: phoneTimeShort(s.startTime),
+          trail: `→ ${phoneTimeShort(s.endTime)}`,
+          last: i === sorted.length - 1,
+        })
+      })
+    }
+  }
+
+  const stats: [string, string][] = [
+    [`${hoursTotal.toFixed(1)}h`, t('scheduled', 'programado')],
+    laborKnown
+      ? [`$${laborTotal.toFixed(0)}`, t('labor', 'nómina')]
+      : ['—', t('labor', 'nómina')],
+  ]
+
+  const chip = isToday
+    ? (onFloor.length > 0 ? t('Covered', 'Cubierto') : t('Nobody in', 'Nadie'))
+    : (viewShifts.length > 0 ? t('Scheduled', 'Programado') : t('Empty', 'Vacío'))
+  const chipPair = isToday
+    ? (onFloor.length > 0 ? PHONE_PAIR.success : PHONE_PAIR.neutral)
+    : PHONE_PAIR.neutral
+
+  return (
+    <PhonePage
+      hero={hero}
+      unit={dateUnit}
+      stats={stats}
+      chip={chip}
+      chipPair={chipPair}
+      avatarInitials={initialsFrom('Account')}
+      feed={feed}
+      onShiftDay={(delta) => onShiftDay(delta, view, today)}
+      canGoNext={true}
+    />
   )
 }

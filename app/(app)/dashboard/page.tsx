@@ -133,14 +133,14 @@ export default async function DashboardPage({
       // (for the card/cash tile hue) and a rough per-order item count
       // (for the "4 items" meta line). order_items(count) uses
       // Supabase's join-count shorthand — cheap when the FK exists.
-      // Filtered to the viewing day so the feed matches the hero
-      // rather than showing "last 5 orders ever" (which would leak
-      // yesterday's sales onto today's Home tab).
+      // Filtered to the viewing day so the feed matches the hero.
+      // No limit — the day is a natural bound (a single date), and
+      // the phone Home / bands Sales-today cards both promise "13
+      // sales" in the meta; capping at 5 would leak that lie.
       .select('id, total_amount, created_at, payment_type, locations ( name ), order_items(count)')
       .eq('status', 'completed')
       .eq('business_date', viewingBusinessDate)
-      .order('created_at', { ascending: false })
-      .limit(5),
+      .order('created_at', { ascending: false }),
 
     supabase
       .from('orders')

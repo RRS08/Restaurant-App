@@ -140,11 +140,16 @@ export function PhonePage({
 
       {/* HEADER — fact, not title. Row 1: hero + avatar. Row 2:
           stats + chip. Horizontal drag on the whole band navigates
-          days when the parent wires onShiftDay. */}
+          days when the parent wires onShiftDay.
+          Sticky at top: 0 so it stays in view while the feed
+          scrolls; a soft fade below the border keeps content from
+          hitting the edge harshly on scroll. */}
       <div
         {...swipeHandlers}
         style={{
+          position: 'sticky', top: 0, zIndex: 10,
           flex: '0 0 auto', padding: '14px 20px 16px',
+          background: '#fff',
           borderBottom: `1px solid ${LINE}`,
           touchAction: onShiftDay ? 'pan-y' : undefined,
           cursor: swipeX !== null ? 'grabbing' : (onShiftDay ? 'grab' : undefined),
@@ -153,6 +158,16 @@ export function PhonePage({
           userSelect: onShiftDay ? 'none' : undefined,
         }}
       >
+        {/* Soft fade below the header so content bleeds in on
+            scroll rather than hitting the hairline abruptly. */}
+        <span
+          aria-hidden
+          style={{
+            position: 'absolute', left: 0, right: 0, bottom: -12,
+            height: 12, pointerEvents: 'none',
+            background: 'linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0))',
+          }}
+        />
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
           <span style={{ display: 'flex', alignItems: 'baseline', gap: 9, minWidth: 0, flexWrap: 'wrap' }}>
             <span style={{ fontFamily: MONO, fontSize: 36, fontWeight: 600, letterSpacing: '-0.05em', lineHeight: 1, color: heroTone ?? INK }}>

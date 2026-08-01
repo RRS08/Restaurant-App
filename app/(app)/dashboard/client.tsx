@@ -35,6 +35,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import type { PillarKey, PillarState } from '@/lib/readiness'
 import { makeT, type Lang } from '@/lib/i18n'
+import { PhonePage, PHONE_PAIR, type PhoneRow } from '@/components/phone-page'
 
 type T = (en: string, es?: string) => string
 
@@ -245,6 +246,9 @@ function fmtBandsTimeShort(iso: string): string {
   if (h === 0) h = 12
   return `${h}:${m}${suffix}`
 }
+// Phone reuses the same short-time format — kept as an alias so
+// the phone branch reads clearly without importing from bands.
+const fmtPhoneTime = fmtBandsTimeShort
 
 // ================================================================
 // Main client
@@ -281,17 +285,27 @@ export default function DashboardClient(props: Props) {
   // a full-viewport 4-card grid matching the Claude Design spec.
   const [isBands, setIsBands] = useState(false)
   const [isWide, setIsWide] = useState(false)
+  // Phone layout — matchMedia gate. Deliberately defaults to false
+  // so SSR renders the desktop shell and phone kicks in post-hydrate.
+  const [isPhone, setIsPhone] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const mqBands = window.matchMedia('(min-width: 768px)')
     const mqWide = window.matchMedia('(min-width: 1280px)')
-    const update = () => { setIsBands(mqBands.matches); setIsWide(mqWide.matches) }
+    const mqPhone = window.matchMedia('(max-width: 767px)')
+    const update = () => {
+      setIsBands(mqBands.matches)
+      setIsWide(mqWide.matches)
+      setIsPhone(mqPhone.matches)
+    }
     update()
     mqBands.addEventListener('change', update)
     mqWide.addEventListener('change', update)
+    mqPhone.addEventListener('change', update)
     return () => {
       mqBands.removeEventListener('change', update)
       mqWide.removeEventListener('change', update)
+      mqPhone.removeEventListener('change', update)
     }
   }, [])
 
@@ -350,6 +364,83 @@ export default function DashboardClient(props: Props) {
         : financeState === 'limited'
           ? t('Internal only', 'Solo interno')
           : t('Needs setup', 'Requiere configuración')
+
+  if (isPhone) {
+    // ============================================================
+    // PHONE (<md) LAYOUT — Home tab per the Claude Design phone
+    // spec. Hero + stats + status chip; feed is "Today's sales"
+    // (recent orders) since the phone folds Dashboard + Sales
+    // into a single check-in destination. All wiring reuses the
+    // server props already fetched for the tablet dashboard.
+    // ============================================================
+    const now = new Date()
+    const avg7 = sales.ordersLast7Days > 0 ? sales.totalLast7Days / 7 : 0
+    const deltaPct = avg7 > 0 ? Math.round(((sales.salesToday - avg7) / avg7) * 100) : null
+    const heroDelta = deltaPct !== null ? `${deltaPct >= 0 ? '↑' : '↓'} ${Math.abs(deltaPct)}%` : null
+
+    // Fold in the same signal set as Needs-doing here (top item)
+    // is a phone-later job; the phone Home is intentionally the
+    // sales pulse for now. Staff / Stock / Money tabs will carry
+    // their own attention lists in follow-up commits.
+    const phoneStats: [string, string][] = [
+      [String(sales.ordersToday), sales.ordersToday === 1 ? t('sale', 'venta') : t('sales', 'ventas')],
+      [topCards.sales.avgTicketToday > 0 ? MONEY(topCards.sales.avgTicketToday, true) : '—', t('avg ticket', 'ticket promedio')],
+    ]
+
+    const phoneFeed: PhoneRow[] = []
+    // Section header — "TODAY'S SALES · N sales"
+    phoneFeed.push({
+      kind: 'section',
+      label: t('TODAY’S SALES', 'VENTAS DE HOY'),
+      meta: sales.ordersToday > 0
+        ? `${sales.ordersToday} ${sales.ordersToday === 1 ? t('sale', 'venta') : t('sales', 'ventas')}`
+        : undefined,
+    })
+    if (!recentSales || recentSales.length === 0) {
+      phoneFeed.push({
+        kind: 'empty',
+        message: t('No sales yet today.', 'Aún no hay ventas hoy.'),
+      })
+    } else {
+      recentSales.forEach((s, i) => {
+        const isCard = s.paymentType === 'card'
+        const isCash = s.paymentType === 'cash'
+        const pair = isCard ? PHONE_PAIR.card : isCash ? PHONE_PAIR.success : PHONE_PAIR.neutral
+        phoneFeed.push({
+          kind: 'row',
+          key: s.id,
+          glyph: isCash ? 'cash' : 'card',
+          pair,
+          title: isCard ? t('Card sale', 'Venta con tarjeta') : isCash ? t('Cash sale', 'Venta en efectivo') : t('Sale', 'Venta'),
+          sub: `${fmtPhoneTime(s.createdAt)} · ${s.itemCount} ${s.itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}`,
+          subMono: true,
+          value: MONEY(s.amount, true),
+          last: i === recentSales.length - 1,
+        })
+      })
+    }
+
+    const initials = (firstName ?? 'A')
+      .trim()
+      .split(/\s+/)
+      .map((w) => w[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase() || 'A'
+
+    return (
+      <PhonePage
+        hero={MONEY(sales.salesToday, true)}
+        unit={t('TAKEN TODAY', 'HOY')}
+        delta={heroDelta}
+        stats={phoneStats}
+        chip={t('Open', 'Abierto')}
+        chipPair={PHONE_PAIR.success}
+        avatarInitials={initials}
+        feed={phoneFeed}
+      />
+    )
+  }
 
   if (isBands) {
     // ============================================================

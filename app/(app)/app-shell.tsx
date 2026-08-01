@@ -7,40 +7,28 @@
 //   xl+   (≥1280px) DESKTOP — the labeled 240px sidebar, sticky
 //                    flex item.
 //   md–xl (768–1279) TABLET — a 76px icon-only rail (IPadRail),
-//                    ALWAYS visible. Replaces the hamburger
-//                    overlay we used to render at these widths;
-//                    the rail saves ~164px of content room vs
-//                    the labeled sidebar so pages like /menu
-//                    stop wrapping.
-//   <md   (<768px)  MOBILE — the labeled sidebar slides in from
-//                    the left as an overlay when the top-left
-//                    Menu button is tapped. Kept for phone-sized
-//                    windows where 76px + content is too tight.
-//
-// z-index map (mobile overlay only — rail and desktop sidebar are
-// static flex items so they don't need z-index):
-//   menu trigger button : z-30
-//   backdrop scrim      : z-30
-//   sidebar overlay     : z-40
-//   page-level drawers  : z-50  (existing — unchanged)
+//                    ALWAYS visible.
+//   <md   (<768px)  PHONE  — a 4-tab bottom bar (Home / Staff /
+//                    Stock / Money). The old labeled-sidebar slide-
+//                    in overlay was removed on the phone pass — the
+//                    tab bar is the only phone navigation. Menu,
+//                    POS, Analytics, and Settings have no phone
+//                    destination on purpose (see phone spec §8:
+//                    read-only until proven otherwise).
 //
 // server/client boundary safety: `sidebar` and `rail` are both
 // React.ReactNode (pre-built JSX), not render-prop functions.
-// Functions can't cross the server→client boundary. The
-// mobile-overlay close callback flows through the React Context
-// below instead of a prop.
 // ----------------------------------------------------------------
 
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
-import { Menu } from 'lucide-react'
+import { PhoneTabBar } from '@/components/phone-tab-bar'
 
-const SidebarCloseContext = createContext<(() => void) | null>(null)
-
-/** Hook the labeled Sidebar uses to close the mobile overlay
- *  after a nav-item click. Returns null on desktop / tablet
- *  where the sidebar is always visible and doesn't need closing. */
+/** Kept as a null-returning stub for backwards compatibility with
+ *  the Sidebar component. Previously closed the phone slide-in
+ *  overlay; the overlay was replaced by the 4-tab bottom bar so
+ *  there's nothing left to close on nav-item click. Sidebar still
+ *  imports this hook — returning null means calling code no-ops. */
 export function useSidebarClose(): (() => void) | null {
-  return useContext(SidebarCloseContext)
+  return null
 }
 
 export default function AppShell({
@@ -48,112 +36,51 @@ export default function AppShell({
   rail,
   children,
 }: {
-  /** Labeled 240px sidebar. Rendered at <md (as slide-in overlay)
-   *  and xl+ (as static flex item). Same JSX in both spots. */
+  /** Labeled 240px sidebar. Rendered at xl+ (as static flex item). */
   sidebar: React.ReactNode
   /** 76px icon rail. Rendered at md–lt-xl only. */
   rail: React.ReactNode
   children: React.ReactNode
 }) {
-  const [isOpen, setIsOpen] = useState(false)
-  const close = useCallback(() => setIsOpen(false), [])
-  const open = useCallback(() => setIsOpen(true), [])
-
-  // Escape closes the mobile overlay. No-op on tablet / desktop.
-  useEffect(() => {
-    if (!isOpen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [isOpen, close])
-
-  // Lock body scroll while the mobile overlay is open so the
-  // page behind doesn't pan around under the finger.
-  useEffect(() => {
-    if (!isOpen) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [isOpen])
-
   return (
-    <SidebarCloseContext.Provider value={close}>
-      <div className="flex min-h-screen bg-white">
-        {/* ----------------------------------------------------------------
-            Mobile (<md) — labeled sidebar as a slide-in overlay.
-            Fixed-position so it sits above content when open, off-
-            screen otherwise. Hidden entirely on md+.
-        ---------------------------------------------------------------- */}
-        <div
-          className={`
-            md:hidden fixed inset-y-0 left-0 z-40 transition-transform duration-200 ease-out
-            ${isOpen ? 'translate-x-0' : '-translate-x-full'}
-          `}
-        >
-          {sidebar}
-        </div>
-
-        {/* ----------------------------------------------------------------
-            Tablet (md–lt-xl) — 56px icon rail. FIXED, not sticky,
-            so it never rubber-bands with content on iOS Safari's
-            overscroll. Out of flex flow — main compensates with
-            md:pl-14 (56px) below.
-        ---------------------------------------------------------------- */}
-        <div className="hidden md:block xl:hidden fixed inset-y-0 left-0 z-20">
-          {rail}
-        </div>
-
-        {/* ----------------------------------------------------------------
-            Desktop (xl+) — labeled 240px sidebar. Same fixed
-            treatment for the same reason (Mac trackpad rubber-
-            band). Main compensates with xl:pl-60 (240px) below.
-        ---------------------------------------------------------------- */}
-        <div className="hidden xl:block fixed inset-y-0 left-0 z-20">
-          {sidebar}
-        </div>
-
-        {/* Backdrop scrim — only visible when the mobile overlay
-            is open. Tap-to-close. */}
-        {isOpen && (
-          <button
-            type="button"
-            aria-label="Close menu"
-            onClick={close}
-            className="fixed inset-0 bg-zinc-900/30 z-30 md:hidden"
-          />
-        )}
-
-        {/* Main content.
-            • <md   pt-16 clears the fixed Menu button; small
-                     16px padding elsewhere so tap targets don't
-                     touch the viewport edge on a phone.
-            • md–xl NO padding except left = rail width (56px),
-                     since the rail is fixed and out of flow.
-            • xl+   NO padding except left = sidebar width (240px),
-                     since the sidebar is fixed and out of flow.
-            No overflow-y here — the WINDOW is the scroll
-            container so the fixed rail stays perfectly locked. */}
-        <main className="flex-1 min-w-0 p-4 pt-16 md:p-0 md:pl-14 xl:pl-60">
-          {children}
-        </main>
-
-        {/* Menu trigger — only <md. On tablet the rail is always
-            visible; on desktop the sidebar is always visible; so
-            there's nothing to open at md+. */}
-        <button
-          type="button"
-          onClick={open}
-          aria-label="Open navigation menu"
-          aria-expanded={isOpen}
-          className="md:hidden fixed top-3 left-3 z-30 inline-flex items-center justify-center w-11 h-11 rounded-lg bg-white border border-hairline shadow-sm text-zinc-700 hover:bg-zinc-50 transition-colors"
-        >
-          <Menu className="w-5 h-5" />
-        </button>
+    <div className="flex min-h-screen bg-white">
+      {/* ----------------------------------------------------------------
+          Tablet (md–lt-xl) — 76px icon rail. FIXED, not sticky, so it
+          never rubber-bands with content on iOS Safari's overscroll.
+          Out of flex flow — main compensates with md:pl-14 below.
+      ---------------------------------------------------------------- */}
+      <div className="hidden md:block xl:hidden fixed inset-y-0 left-0 z-20">
+        {rail}
       </div>
-    </SidebarCloseContext.Provider>
+
+      {/* ----------------------------------------------------------------
+          Desktop (xl+) — labeled 240px sidebar. Same fixed treatment
+          for the same reason (Mac trackpad rubber-band). Main
+          compensates with xl:pl-60 below.
+      ---------------------------------------------------------------- */}
+      <div className="hidden xl:block fixed inset-y-0 left-0 z-20">
+        {sidebar}
+      </div>
+
+      {/* Main content.
+          • <md   No top padding — the header of each phone page is
+                   flush against the viewport top. Bottom padding is
+                   applied INSIDE each phone page (PhonePage) to
+                   clear the fixed tab bar + safe area.
+          • md–xl NO padding except left = rail width (56px), since
+                   the rail is fixed and out of flow.
+          • xl+   NO padding except left = sidebar width (240px),
+                   since the sidebar is fixed and out of flow.
+          No overflow-y here — the WINDOW is the scroll container so
+          the fixed rail stays perfectly locked. */}
+      <main className="flex-1 min-w-0 md:p-0 md:pl-14 xl:pl-60">
+        {children}
+      </main>
+
+      {/* Phone (<md) — 4-tab bottom bar. Hidden on tablet + desktop. */}
+      <div className="md:hidden">
+        <PhoneTabBar />
+      </div>
+    </div>
   )
 }

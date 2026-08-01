@@ -28,6 +28,7 @@ import {
 } from '@/app/actions/inventory'
 import { cleanupDuplicateInventoryItems, mergeInventoryItems, runInventoryIntegrityChecks } from '@/app/actions/inventory-cleanup'
 import { makeT, type Lang } from '@/lib/i18n'
+import { PhonePage, type PhoneRow } from '@/components/phone-page'
 
 // Translator function shape — threaded as a prop to every child
 // component that renders user-visible English copy. Centralizes the
@@ -391,12 +392,18 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
   // header, filter, and item rows read as full-bleed bands
   // matching sales/analytics/staffing. Phone keeps the card.
   const [isBands, setIsBands] = useState(false)
+  const [isPhone, setIsPhone] = useState(false)
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 768px)')
-    const update = () => setIsBands(mq.matches)
+    const mqBands = window.matchMedia('(min-width: 768px)')
+    const mqPhone = window.matchMedia('(max-width: 767px)')
+    const update = () => { setIsBands(mqBands.matches); setIsPhone(mqPhone.matches) }
     update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
+    mqBands.addEventListener('change', update)
+    mqPhone.addEventListener('change', update)
+    return () => {
+      mqBands.removeEventListener('change', update)
+      mqPhone.removeEventListener('change', update)
+    }
   }, [])
 
   // Small helper for the header stat row ("12 items · 3 need
@@ -428,6 +435,14 @@ export default function InventoryClient({ items, transactions, restockOrders, cl
     { key: 'ok',       label: t('Healthy', 'Saludable'),        count: counts.ok,       tone: STATUS_TONE.ok    },
     { key: 'no_count', label: t('Never counted', 'Sin conteo'), count: counts.no_count, tone: STATUS_TONE.no_count },
   ]
+
+  // Phone (<md) Stock tab — MUST come after all hooks above so the
+  // hook order stays stable across re-renders (see the same fix in
+  // staffing/client.tsx). Uses the same server-computed item.status
+  // buckets the desktop table consumes.
+  if (isPhone) {
+    return <PhoneStock items={items} counts={counts} t={t} />
+  }
 
   return (
     <div style={{ maxWidth: isBands ? undefined : 1400, fontFamily: "'Geist', system-ui, sans-serif", color: INK }}>
@@ -6148,5 +6163,118 @@ function MergeItemsDrawer({
         </div>
       </aside>
     </>
+  )
+}
+
+// ================================================================
+// Phone Stock tab — inline sub-component.
+// Reads from the same server-computed `items` array (each row
+// already has `status: 'out' | 'low' | 'no_count' | 'ok'` and
+// numeric `estimated` / `threshold`) so no page.tsx changes are
+// needed.
+// ================================================================
+
+function PhoneStock({
+  items, counts, t,
+}: {
+  items: Item[]
+  counts: { total: number; out: number; low: number; ok: number; no_count: number }
+  t: T
+}) {
+  const out = items.filter((i) => i.status === 'out')
+  const low = items.filter((i) => i.status === 'low')
+
+  const feed: PhoneRow[] = []
+
+  // OUT OF STOCK — always renders when any exist; empty state
+  // when there are no out-of-stock items is desirable silence.
+  if (out.length > 0) {
+    feed.push({
+      kind: 'section',
+      label: t('OUT OF STOCK', 'AGOTADO'),
+      meta: out.length > 1 ? `${out.length} ${t('items', 'artículos')}` : undefined,
+    })
+    out.forEach((it, i) => {
+      feed.push({
+        kind: 'row',
+        key: it.id,
+        glyph: 'out',
+        pair: [STATUS_TONE.out.bg, STATUS_TONE.out.ink] as const,
+        title: it.name,
+        sub: `${t('restock at', 'reabastecer a')} ${it.threshold.toFixed(2)} ${it.unitOfMeasure}`,
+        subMono: true,
+        value: t('Out', 'Agotado'),
+        valueTone: STATUS_TONE.out.ink,
+        last: i === out.length - 1,
+      })
+    })
+  }
+
+  if (low.length > 0) {
+    feed.push({
+      kind: 'section',
+      label: t('RUNNING LOW', 'NIVEL BAJO'),
+      meta: `${low.length} ${low.length === 1 ? t('item', 'artículo') : t('items', 'artículos')}`,
+    })
+    low.forEach((it, i) => {
+      feed.push({
+        kind: 'row',
+        key: it.id,
+        glyph: 'low',
+        pair: [STATUS_TONE.low.bg, STATUS_TONE.low.ink] as const,
+        title: it.name,
+        sub: `${t('restock at', 'reabastecer a')} ${it.threshold.toFixed(2)} ${it.unitOfMeasure}`,
+        subMono: true,
+        value: it.estimated !== null ? it.estimated.toFixed(2) : '—',
+        valueTone: STATUS_TONE.low.ink,
+        trail: it.unitOfMeasure,
+        last: i === low.length - 1,
+      })
+    })
+  }
+
+  if (out.length === 0 && low.length === 0) {
+    feed.push({
+      kind: 'section',
+      label: t('WORTH KNOWING', 'VALE LA PENA SABER'),
+    })
+    feed.push({
+      kind: 'empty',
+      message: counts.total === 0
+        ? t('No inventory items yet.', 'Aún no hay artículos de inventario.')
+        : t('Everything is above its restock point.', 'Todo está por encima del punto de reorden.'),
+    })
+  }
+
+  const restockCount = out.length + low.length
+  const hero = String(counts.out)
+  const heroTone = counts.out > 0 ? STATUS_TONE.out.ink : undefined
+  const chip = restockCount === 0
+    ? t('All good', 'Todo bien')
+    : `${restockCount} ${t('to restock', 'por reabastecer')}`
+  const chipPair = restockCount === 0
+    ? (['#ECFDF5', '#047857'] as const)
+    : (['#FFFBEB', '#B45309'] as const)
+
+  const stats: [string, string][] = [
+    [String(counts.low), t('running low', 'nivel bajo')],
+    [String(counts.no_count), t('never counted', 'sin conteo')],
+  ]
+
+  return (
+    <PhonePage
+      hero={hero}
+      unit={t('OUT OF STOCK', 'AGOTADO')}
+      heroTone={heroTone}
+      stats={stats}
+      chip={chip}
+      chipPair={chipPair}
+      avatarInitials={'A'}
+      feed={feed}
+      cta={restockCount > 0
+        ? `${t('Build restock order', 'Crear orden')} · ${restockCount} ${restockCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}`
+        : undefined}
+      onCtaClick={() => { window.location.href = '/inventory' }}
+    />
   )
 }

@@ -26,6 +26,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isPlaidConfigured } from '@/lib/plaid/client'
 import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
 import { getLang } from '@/lib/i18n-server'
+import { groupBankTransactions, type GroupableTxn, type BankReviewGroup } from '@/lib/finance/matching'
 import FinanceDashboardClient from './client'
 
 // ----------------------------------------------------------------
@@ -451,6 +452,55 @@ export default async function FinancePage() {
       })()
     : null
 
+  // ---- Phone Money tab payload -----------------------------
+  // The tablet Finance page carries week metrics + a ledger; the
+  // phone Money tab answers "am I making money?" with a hero
+  // (net), a came-in/went-out split, an unreviewed-bank confirm
+  // queue, and a payment-source breakdown. All computed from data
+  // already fetched above.
+
+  // Payment-source breakdown for the current week — flat 3-bucket
+  // group (card / cash / other), sorted highest total first.
+  type SourceRow = { key: 'card' | 'cash' | 'other'; label: string; count: number; total: number }
+  const srcMap: Record<'card' | 'cash' | 'other', SourceRow> = {
+    card: { key: 'card', label: 'Card', count: 0, total: 0 },
+    cash: { key: 'cash', label: 'Cash', count: 0, total: 0 },
+    other: { key: 'other', label: 'Other', count: 0, total: 0 },
+  }
+  for (const o of weekOrdersTyped) {
+    const k = (o.payment_type ?? 'other').toLowerCase()
+    const row = k === 'card' ? srcMap.card : k === 'cash' ? srcMap.cash : srcMap.other
+    row.count += 1
+    row.total += Number(o.total_amount)
+  }
+  const paymentSources = (Object.values(srcMap) as SourceRow[])
+    .filter((r) => r.count > 0)
+    .sort((a, b) => b.total - a.total)
+
+  // Unreviewed bank groups — fetch the raw rows and let the
+  // matcher aggregate. Wrapped in a defensive block so a missing
+  // table / permission failure doesn't kill the whole page.
+  let reviewGroups: BankReviewGroup[] = []
+  try {
+    const { data: unreviewed } = await supabase
+      .from('bank_transactions')
+      .select('id, amount, direction, posted_at, merchant_name, description, raw_category')
+      .eq('review_state', 'unreviewed')
+      .order('posted_at', { ascending: false })
+    const groupable: GroupableTxn[] = (unreviewed ?? []).map((r) => ({
+      id: r.id as string,
+      postedAt: r.posted_at as string,
+      amount: Number(r.amount),
+      direction: (r.direction as 'inflow' | 'outflow'),
+      rawCategory: (r.raw_category as string | null) ?? null,
+      merchantName: (r.merchant_name as string | null) ?? null,
+      description: (r.description as string | null) ?? null,
+    }))
+    reviewGroups = groupBankTransactions(groupable)
+  } catch (err) {
+    console.warn('[finance/page] bank review-group compute failed:', err)
+  }
+
   return (
     <FinanceDashboardClient
       lang={lang}
@@ -481,6 +531,22 @@ export default async function FinancePage() {
       ledger={ledger}
       nudge={nudge}
       recap={recap}
+      phoneMoney={{
+        moneyIn,
+        moneyOut,
+        net: netThisWeek,
+        paymentSources,
+        reviewGroups: reviewGroups.slice(0, 6).map((g) => ({
+          key: g.key,
+          label: g.label,
+          direction: g.direction,
+          totalAmount: g.totalAmount,
+          txnCount: g.txnCount,
+          reason: g.reason,
+          firstTxnPostedAt: g.txns[0]?.postedAt ?? null,
+          firstTxnDescription: g.txns[0]?.description ?? g.txns[0]?.merchantName ?? null,
+        })),
+      }}
     />
   )
 }

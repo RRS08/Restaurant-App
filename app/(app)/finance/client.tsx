@@ -26,6 +26,7 @@ import Link from 'next/link'
 import { updateExpenseCategory } from '@/app/actions/finance'
 import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
 import { makeT, type Lang } from '@/lib/i18n'
+import { PhonePage, PHONE_PAIR, type PhoneRow } from '@/components/phone-page'
 
 // Duplicate small style helpers here so the component stays a
 // self-contained "read the file to understand it" surface.
@@ -78,6 +79,25 @@ interface Props {
   ledger: LedgerRow[]
   nudge: string | null
   recap: string | null
+  /** Phone-only Money tab payload. Present in every render but
+   *  only consumed at <md. Kept optional so any code path that
+   *  constructs FinanceDashboardClient without it still compiles. */
+  phoneMoney?: {
+    moneyIn: number
+    moneyOut: number
+    net: number
+    paymentSources: Array<{ key: 'card' | 'cash' | 'other'; label: string; count: number; total: number }>
+    reviewGroups: Array<{
+      key: string
+      label: string
+      direction: 'inflow' | 'outflow'
+      totalAmount: number
+      txnCount: number
+      reason: string
+      firstTxnPostedAt: string | null
+      firstTxnDescription: string | null
+    }>
+  }
 }
 
 // ----------------------------------------------------------------
@@ -169,9 +189,24 @@ function PageShell({ children }: { children: React.ReactNode }) {
 // Main component
 // ----------------------------------------------------------------
 export default function FinanceDashboardClient({
-  lang, bank, week, baselines, ledger, nudge, recap,
+  lang, bank, week, baselines, ledger, nudge, recap, phoneMoney,
 }: Props) {
   const t = makeT(lang)
+
+  // Phone (<md) — Money tab. Reuses the server props above plus
+  // the phoneMoney bundle. isPhone hooks live at the top so the
+  // hook order matches on every render (main function has no
+  // hooks after this block, so an early return is safe).
+  const [isPhone, setIsPhone] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(max-width: 767px)')
+    const update = () => setIsPhone(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+  if (isPhone) return <PhoneMoney t={t} money={phoneMoney ?? null} />
 
   return (
     <PageShell>
@@ -857,3 +892,126 @@ function formatTime(iso: string): string {
 // The `mono` helper is referenced from the shared style block; keep it
 // alive here to satisfy the linter even if unused directly today.
 export const _mono = mono
+
+// ================================================================
+// Phone Money tab — inline sub-component.
+// Renders the "am I making money?" check-in: hero net, in/out
+// stats, unreviewed-bank confirm queue, and payment-source split.
+// Reuses week-scoped server data (no ?date param on finance yet).
+// ================================================================
+
+type PhoneT = (en: string, es?: string) => string
+
+function PhoneMoney({
+  t, money,
+}: {
+  t: PhoneT
+  money: Props['phoneMoney'] | null
+}) {
+  if (!money) {
+    return (
+      <PhonePage
+        hero="—"
+        unit={t('THIS WEEK', 'ESTA SEMANA')}
+        stats={[]}
+        chip={t('Not connected', 'No conectado')}
+        chipPair={PHONE_PAIR.neutral}
+        avatarInitials={'A'}
+        feed={[
+          { kind: 'empty', message: t('Connect a bank to see the money picture.', 'Conecta un banco para ver el panorama.') },
+        ]}
+      />
+    )
+  }
+
+  const total = money.paymentSources.reduce((s, r) => s + r.total, 0)
+  const feed: PhoneRow[] = []
+
+  // NEEDS A YES OR NO — unreviewed bank groups. Buttons go to
+  // /finance/details where the full settle flow lives (the phone
+  // stays read-only until proven otherwise; a one-tap confirm
+  // silently writing a settled_kind would be too easy to mis-tap).
+  if (money.reviewGroups.length > 0) {
+    feed.push({
+      kind: 'section',
+      label: t('NEEDS A YES OR NO', 'REQUIERE UN SÍ O NO'),
+      meta: `${money.reviewGroups.length} ${money.reviewGroups.length === 1 ? t('left', 'pendiente') : t('left', 'pendientes')}`,
+    })
+    money.reviewGroups.forEach((g, i) => {
+      const dateStr = g.firstTxnPostedAt
+        ? new Date(g.firstTxnPostedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+        : ''
+      const detail = [
+        dateStr,
+        (g.firstTxnDescription ?? g.label).toUpperCase(),
+        `$${g.totalAmount.toFixed(2)}`,
+      ].filter(Boolean).join(' · ')
+      feed.push({
+        kind: 'confirm',
+        key: g.key,
+        title: g.reason || g.label,
+        sub: detail,
+        onYes: () => { window.location.href = '/finance/details' },
+        onNo: () => { window.location.href = '/finance/details' },
+        last: i === money.reviewGroups.length - 1,
+      })
+    })
+  }
+
+  // WHERE IT CAME FROM — payment-source split.
+  if (money.paymentSources.length > 0) {
+    feed.push({ kind: 'section', label: t('WHERE IT CAME FROM', 'DE DÓNDE VINO') })
+    money.paymentSources.forEach((s, i) => {
+      const pair = s.key === 'card' ? PHONE_PAIR.card
+        : s.key === 'cash' ? PHONE_PAIR.success
+          : PHONE_PAIR.neutral
+      const pct = total > 0 ? Math.round((s.total / total) * 100) : 0
+      feed.push({
+        kind: 'row',
+        key: `src-${s.key}`,
+        initial: s.key === 'card' ? 'C' : s.key === 'cash' ? '$' : '·',
+        pair,
+        title: s.label,
+        sub: `${s.count} ${s.count === 1 ? t('payment', 'pago') : t('payments', 'pagos')}`,
+        subMono: true,
+        value: `$${Math.round(s.total).toLocaleString('en-US')}`,
+        trail: `${pct}%`,
+        last: i === money.paymentSources.length - 1,
+      })
+    })
+  }
+
+  if (feed.length === 0) {
+    feed.push({ kind: 'empty', message: t('Nothing this week yet.', 'Nada esta semana todavía.') })
+  }
+
+  const netPositive = money.net >= 0
+  const heroVal = `$${Math.abs(Math.round(money.net)).toLocaleString('en-US')}`
+  const hero = netPositive ? heroVal : `-${heroVal}`
+
+  const stats: [string, string][] = [
+    [`$${Math.round(money.moneyIn).toLocaleString('en-US')}`, t('came in', 'entró')],
+    [`$${Math.round(money.moneyOut).toLocaleString('en-US')}`, t('went out', 'salió')],
+  ]
+
+  const chipCount = money.reviewGroups.length
+  const chip = chipCount > 0
+    ? `${chipCount} ${chipCount === 1 ? t('to confirm', 'por confirmar') : t('to confirm', 'por confirmar')}`
+    : (netPositive ? t('Making money', 'Ganando') : t('Behind', 'Atrás'))
+  const chipPair = chipCount > 0
+    ? PHONE_PAIR.warning
+    : (netPositive ? PHONE_PAIR.success : PHONE_PAIR.warning)
+
+  return (
+    <PhonePage
+      hero={hero}
+      unit={t('LEFT OVER THIS WEEK', 'RESTANTE ESTA SEMANA')}
+      heroTone={netPositive ? undefined : '#B45309'}
+      stats={stats}
+      chip={chip}
+      chipPair={chipPair}
+      avatarInitials={'A'}
+      feed={feed}
+    />
+  )
+}

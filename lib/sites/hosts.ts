@@ -14,16 +14,19 @@
 
 /** The apex domain the platform ships under. Every hosted site
  *  gets a free `<slug>.SITE_ROOT_HOSTNAME` subdomain. */
-export const SITE_ROOT_HOSTNAME = 'checked.app'
+export const SITE_ROOT_HOSTNAME = 'onchecked.app'
 
 /** Hosts that map to the main app (dashboard / menu / staffing /
  *  etc.), NOT to a hosted site. Comparisons are lowercase and
  *  port-stripped. Vercel preview URLs (`*.vercel.app`) are also
  *  considered main-app so we don't try to route them through the
- *  tenant matcher. */
+ *  tenant matcher. `checked.app` is included as a legacy alias in
+ *  case the original naming ever gets rehydrated as a redirect. */
 const MAIN_HOSTNAMES: readonly string[] = [
   SITE_ROOT_HOSTNAME,
   `www.${SITE_ROOT_HOSTNAME}`,
+  'checked.app',
+  'www.checked.app',
   'localhost',
   '127.0.0.1',
 ]

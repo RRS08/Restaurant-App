@@ -67,8 +67,25 @@ jobs:
           #   proxy.ts starts bouncing machine routes to /login
           #   again), the workflow should FAIL loud rather than
           #   silently follow the redirect and report success.
+          #
+          # Retry transient network failures IN-RUN so a single blip
+          # (e.g. `curl: (35) Recv failure: Connection reset by peer`,
+          # which failed run #176) auto-recovers instead of skipping
+          # that whole sync tick and emailing a failure:
+          #   --retry 4              up to 4 extra attempts
+          #   --retry-delay 5        wait 5s between attempts
+          #   --retry-all-errors     retry ANY error, incl. 5xx + resets
+          #   --retry-connrefused    also retry a refused connection
+          #   --connect-timeout 15   cap the TCP/TLS handshake per attempt
+          #   --max-time 60          cap each whole attempt
+          # Only the FINAL attempt's outcome decides pass/fail: if a
+          # retry succeeds, curl exits 0 with the winning HTTP_STATUS
+          # and the strict 200 check below still runs; if all attempts
+          # fail, curl's non-zero exit trips `set -e` and the job fails.
           RESPONSE_FILE=$(mktemp)
           HTTP_STATUS=$(curl -sS --fail-with-body \
+            --retry 4 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            --connect-timeout 15 --max-time 60 \
             -H "Authorization: Bearer $CRON_SECRET" \
             -H "Accept: application/json" \
             -o "$RESPONSE_FILE" \

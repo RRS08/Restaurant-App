@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 
 // ----------------------------------------------------------------
 // proxy.ts  (this is what Next.js 16 calls "middleware")
@@ -43,6 +44,24 @@ export default async function proxy(request: NextRequest) {
   const machinePath = request.nextUrl.pathname
   if (isMachineRoute(machinePath)) {
     return NextResponse.next()
+  }
+
+  // ---- Tenant-host routing (websites project) ----
+  //
+  // Anything not on the main app's host is a hosted customer site
+  // and needs to reach `app/(sites)/[siteHost]/[[...path]]/route.ts`.
+  // Visitors are anonymous — SKIP the Supabase session refresh + the
+  // login/kiosk redirects entirely; those are main-app-only concerns.
+  //
+  // The rewrite is invisible to the browser: the URL bar keeps
+  // showing `tea.checked.app/menu` while the app internally handles
+  // `/tea.checked.app/menu`. See [[websites-project]].
+  const host = normalizeHost(request.headers.get('host'))
+  if (!isMainHost(host)) {
+    const url = request.nextUrl.clone()
+    const currentPath = url.pathname === '/' ? '' : url.pathname
+    url.pathname = `/${host}${currentPath}`
+    return NextResponse.rewrite(url)
   }
 
   // We start with a plain "continue" response and may replace it with

@@ -101,6 +101,15 @@ const WIDE_SWEEP_STALE_MS  = 60 * 60 * 1000
 // to arrive — a bigger window is wasted API budget.
 const NOTIFICATION_REPLAY_WINDOW_MS = 48 * 60 * 60 * 1000
 
+// Webhook-health alert threshold. If we haven't seen a real
+// webhook_events row for a merchant in > this window, log a
+// warning so the silent-dead-hook failure mode surfaces in
+// Vercel logs instead of festering for months. 6h is generous —
+// even a low-volume merchant sees at least one order event
+// (ORDER_COMPLETED / TRANSACTION_CAPTURED / etc.) per business
+// day when the hook is actually working.
+const WEBHOOK_HEALTH_STALE_MS = 6 * 60 * 60 * 1000
+
 export async function syncGodaddyOrders(): Promise<SyncResult> {
   const { context: ctx, error: authError } = await getAuthContext()
   if (authError || !ctx) return { ...EMPTY, error: authError ?? 'Authentication error.' }
@@ -285,6 +294,21 @@ export async function runSyncForRestaurant(
       merged.notes.push(`notification-replay leg threw: ${msg}`)
     }
 
+    // 1d. Webhook health check — cheap SELECT that surfaces the
+    //     silent-dead-hook failure mode. If the last webhook_events
+    //     row for this restaurant is older than WEBHOOK_HEALTH_STALE_MS
+    //     (or there are no rows at all), emit a note that shows up
+    //     in the "Sync now" toast AND a console.error in Vercel
+    //     logs. The pilot merchant had a dead hook for months with
+    //     only console.warn breadcrumbs — this makes it loud.
+    try {
+      await checkWebhookHealth(supabase, restaurantId, merged)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[godaddy/sync] webhook health check threw', err)
+      merged.notes.push(`webhook health check threw: ${msg}`)
+    }
+
     // 2. /transactions — terminal charges + linked-transaction
     //    enrichment. 3-day rolling window instead of the 30-day
     //    default — enough to catch delayed captures + refunds
@@ -465,6 +489,52 @@ function isProductsStale(lastSyncedAt: string | null): boolean {
   if (!lastSyncedAt) return true
   const ageMs = Date.now() - new Date(lastSyncedAt).getTime()
   return ageMs >= PRODUCTS_STALE_MS
+}
+
+/** Check the most recent successfully-classified webhook event
+ *  for this restaurant. When the gap exceeds WEBHOOK_HEALTH_STALE_MS
+ *  (or no rows exist at all), log an error and append a note to
+ *  the sync result so the outcome shows up in the "Sync now" toast.
+ *
+ *  Filters `drop_reason IS NULL` because validation pings and
+ *  malformed payloads should NOT count as "the hook is working" —
+ *  the pilot's `payload_missing_required_fields` row from months
+ *  ago is exactly the noise this filter has to reject to be
+ *  useful. */
+async function checkWebhookHealth(
+  supabase: SupabaseClient,
+  restaurantId: string,
+  merged: SyncResult,
+): Promise<void> {
+  const { data: lastRow, error } = await supabase
+    .from('webhook_events')
+    .select('received_at')
+    .eq('provider', 'godaddy_poynt')
+    .eq('restaurant_id', restaurantId)
+    .is('drop_reason', null)
+    .order('received_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    console.warn('[godaddy/webhook-health] select failed', error)
+    return
+  }
+
+  const lastAt = (lastRow?.received_at as string | null) ?? null
+  const ageMs = lastAt ? Date.now() - new Date(lastAt).getTime() : Infinity
+  if (ageMs <= WEBHOOK_HEALTH_STALE_MS) return
+
+  const hours = lastAt ? Math.round(ageMs / (60 * 60 * 1000)) : null
+  const summary = lastAt
+    ? `Webhook silent for ~${hours}h (last valid event at ${lastAt}). Notification-replay is compensating; consider re-registering the hook.`
+    : 'Webhook has NEVER delivered a valid event for this restaurant. Notification-replay is compensating; re-register the hook in Settings.'
+  console.error('[godaddy/sync] webhook-health WARN', {
+    restaurantId,
+    lastValidEventAt: lastAt,
+    ageHours: hours,
+  })
+  merged.notes.push(summary)
 }
 
 function mergeIn(target: SyncResult, src: SyncResult) {

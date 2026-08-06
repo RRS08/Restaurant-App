@@ -45,6 +45,13 @@ interface Props {
 
 const FLAG_COPY: Record<string, { tone: 'ok' | 'err'; en: string }> = {
   connected:        { tone: 'ok',  en: 'Connected. Poynt is now sending sales into Checked.' },
+  // 'connected-hook-failed' — OAuth landed cleanly, webhook
+  // registration did not. Sync still works via cron +
+  // notification-replay; the owner should retry the register
+  // step so real-time push comes online. Was previously
+  // swallowed silently, leaving pilot merchants with a
+  // "Connected" card while events never arrived.
+  'connected-hook-failed': { tone: 'err', en: 'Connected, but the webhook registration failed. Sync will still work every 15 minutes, but real-time updates are off — click Re-register below to fix.' },
   declined:         { tone: 'err', en: 'The merchant declined the authorization.' },
   'stale-state':    { tone: 'err', en: 'That authorization link expired. Please try connecting again.' },
   'bad-code':       { tone: 'err', en: 'Poynt returned an unexpected code — try again.' },

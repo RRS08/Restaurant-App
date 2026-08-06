@@ -95,11 +95,13 @@ export async function GET(req: NextRequest) {
     })
 
     // Register the delivery webhook so future orders push in
-    // live. Fire-and-forget by intent: registration failure
-    // doesn't roll back the connect — manual "Sync now" still
-    // works while we sort out webhook wiring. The registration
-    // helper persists { webhook_id, webhook_secret } on the
-    // token row itself, so no plumbing here beyond the call.
+    // live. Registration failure doesn't roll back the connect —
+    // manual "Sync now" + the notification-replay leg still work
+    // — but we distinguish the outcome in the redirect flag so
+    // the Settings UI can nudge the owner to re-register instead
+    // of silently reading as "Connected." Was previously swallowed
+    // to console.warn, which left a pilot merchant with a
+    // permanently-broken hook for months.
     const deliveryUrl = `${origin}/api/godaddy/webhooks`
     const reg = await registerMerchantWebhook({
       restaurantId,
@@ -108,11 +110,13 @@ export async function GET(req: NextRequest) {
       deliveryUrl,
     })
     if ('error' in reg) {
-      console.warn('[godaddy/oauth/callback] webhook registration failed (manual sync still works)', reg.error)
-    } else {
-      console.info('[godaddy/oauth/callback] webhook registered', { businessId })
+      console.error('[godaddy/oauth/callback] webhook registration FAILED', {
+        businessId,
+        error: reg.error,
+      })
+      return redirectToSettings(req, 'connected-hook-failed')
     }
-
+    console.info('[godaddy/oauth/callback] webhook registered', { businessId })
     return redirectToSettings(req, 'connected')
   } catch (err) {
     console.error('[godaddy/oauth/callback] token exchange failed', err)

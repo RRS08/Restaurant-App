@@ -22,7 +22,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 
 export async function reregisterGodaddyWebhook(): Promise<
-  | { ok: true; businessId: string }
+  | { ok: true; businessId: string; oldHookDeleted: boolean }
   | { error: string }
 > {
   const { context: ctx, error: authError } = await getAuthContext()
@@ -37,9 +37,45 @@ export async function reregisterGodaddyWebhook(): Promise<
   const tok = await getValidAccessToken(ctx.restaurantId)
   if ('error' in tok) return { error: tok.error }
 
-  // Same URL shape the OAuth callback route registers with. The
-  // env var wins so preview / dev deployments target the right
-  // origin instead of hard-coding onchecked.app.
+  // 1. Best-effort DELETE the stale hook first. Missing this step
+  //    was the pilot merchant's silent failure: the stored hook_id
+  //    pointed to a registration made during the old proxy-307
+  //    era (when /api/godaddy/webhooks returned 307 → /login and
+  //    Poynt gave up delivering). Re-registering without deleting
+  //    left the stale hook in place — Poynt caps hooks per
+  //    (app, business), so the new registration either collided
+  //    or the merchant was left with two hooks fighting the same
+  //    slot. Ignore errors here: a 404 means Poynt already cleaned
+  //    it up; other failures are non-fatal because the register
+  //    step below is the load-bearing one.
+  let oldHookDeleted = false
+  if (stored.webhookId) {
+    const del = await deleteMerchantWebhook({
+      hookId: stored.webhookId,
+      accessToken: tok.accessToken,
+    })
+    if ('error' in del) {
+      console.warn('[godaddy/reregister] stale hook delete failed (proceeding)', {
+        hookId: stored.webhookId,
+        error: del.error,
+      })
+    } else {
+      oldHookDeleted = true
+    }
+    // Null the local id + secret before re-registering so a mid-
+    // flight crash doesn't leave a mismatched pair (Poynt has
+    // the new hook, we have the old id).
+    const admin = createAdminClient()
+    await admin
+      .from('godaddy_poynt_tokens')
+      .update({ webhook_id: null, webhook_secret: null, updated_at: new Date().toISOString() })
+      .eq('restaurant_id', ctx.restaurantId)
+      .eq('business_id', stored.businessId)
+  }
+
+  // 2. Same URL shape the OAuth callback route registers with. The
+  //    env var wins so preview / dev deployments target the right
+  //    origin instead of hard-coding onchecked.app.
   const origin = process.env.NEXT_PUBLIC_SITE_URL || 'https://onchecked.app'
   const deliveryUrl = `${origin}/api/godaddy/webhooks`
 
@@ -52,7 +88,7 @@ export async function reregisterGodaddyWebhook(): Promise<
   if ('error' in result) return { error: result.error }
 
   revalidatePath('/settings')
-  return { ok: true, businessId: stored.businessId }
+  return { ok: true, businessId: stored.businessId, oldHookDeleted }
 }
 
 // ----------------------------------------------------------------

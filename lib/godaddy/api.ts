@@ -458,6 +458,129 @@ export async function fetchSinglePoyntOrder(args: {
   return { businessId: tok.businessId, order: res.data }
 }
 
+// ================================================================
+// Notifications — Poynt's authoritative event log
+// ================================================================
+//
+// Poynt keeps a 30-day record of every event they'd fire via
+// webhooks, exposed at GET /notifications. This is our real
+// backstop against three failure modes at once:
+//
+//   1. Webhook is registered but the delivery URL was returning
+//      307 (proxy misconfig, since fixed) — Poynt gave up
+//      delivering; the notifications record still exists.
+//   2. Webhook is registered but subscribed to the wrong event
+//      types — no delivery attempted, but the notifications
+//      record is there.
+//   3. /orders LIST endpoint has read-side lag — an order
+//      created at T might not appear in LIST for hours; the
+//      notifications entry is created immediately.
+//
+// The notification-replay leg in godaddy-sync.ts lists these,
+// diffs against orders.external_id, and fetches missing
+// resources via fetchSinglePoyntOrder → ingestSinglePoyntOrder.
+// The endpoint's shape isn't fully documented in the spec
+// snippet we have; empirically it matches:
+//   [ { id, businessId, applicationId, eventType, resourceUri,
+//       resourceId?, createdAt, ... }, ... ]
+// We only need the identifying fields — everything else is
+// forwarded through to the ingest side without inspection.
+
+export interface PoyntNotification {
+  id?: string
+  eventType?: string
+  resourceId?: string
+  resourceUri?: string
+  businessId?: string
+  createdAt?: string | number
+  updatedAt?: string | number
+}
+
+interface FetchNotificationsArgs {
+  restaurantId: string
+  /** ISO timestamp — lower bound on createdAt. Defaults to 48h
+   *  ago when omitted. Beyond ~30d is pointless — Poynt purges
+   *  older notifications. */
+  startAt?: string
+  /** Cap per invocation. Notification volume is bounded (one
+   *  per event Poynt would have fired) so 500 is plenty. */
+  maxNotifications?: number
+}
+
+/** Pull Poynt notifications for the merchant with pagination.
+ *
+ *  Endpoint shape (per Poynt's docs):
+ *    GET /businesses/{businessId}/notifications?startAt={iso}
+ *  Response is either a bare array or `{ notifications: [], links: [] }`.
+ *  We accept both — bare-array response happens on some Poynt
+ *  deployments and pagination-shape happens on others. */
+export async function fetchPoyntNotifications(args: FetchNotificationsArgs): Promise<
+  | { businessId: string; notifications: PoyntNotification[] }
+  | { error: string }
+> {
+  const tok = await getValidAccessToken(args.restaurantId)
+  if ('error' in tok) return { error: tok.error }
+
+  const startAtIso =
+    args.startAt ?? new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+  const cap = args.maxNotifications ?? 500
+
+  const q = new URLSearchParams()
+  q.set('startAt', startAtIso)
+  const startingUrl =
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/notifications?${q.toString()}`
+
+  const notifications: PoyntNotification[] = []
+  let nextUrl: string | null = startingUrl
+  let safety = 60 // hard page cap — 60 × ~10 = ~600 notifications
+
+  while (nextUrl && notifications.length < cap && safety > 0) {
+    safety--
+    console.info('[godaddy/api] GET notifications', { url: nextUrl, businessId: tok.businessId })
+    const page = await getJson<unknown>(nextUrl, tok.accessToken)
+    if ('error' in page) return { error: page.error }
+
+    // Normalize the two response shapes we've seen.
+    const body = page.data as unknown
+    let pageItems: PoyntNotification[] = []
+    let pageLinks: PoyntLink[] = []
+    if (Array.isArray(body)) {
+      pageItems = body as PoyntNotification[]
+    } else if (body && typeof body === 'object') {
+      const b = body as { notifications?: PoyntNotification[]; items?: PoyntNotification[]; links?: PoyntLink[] }
+      pageItems = b.notifications ?? b.items ?? []
+      pageLinks = b.links ?? []
+    }
+
+    console.info('[godaddy/api] notifications page', {
+      shape: Array.isArray(body) ? 'array' : 'object',
+      itemsOnPage: pageItems.length,
+      hasLinks: pageLinks.length > 0,
+    })
+
+    for (const n of pageItems) {
+      notifications.push(n)
+      if (notifications.length >= cap) break
+    }
+
+    const next: PoyntLink | undefined = pageLinks.find(
+      (l) => (l.rel ?? '').toLowerCase() === 'next' && !!l.href,
+    )
+    const rawHref = next?.href ?? null
+    if (rawHref) {
+      try {
+        nextUrl = new URL(rawHref, baseUrl()).toString()
+      } catch {
+        nextUrl = null
+      }
+    } else {
+      nextUrl = null
+    }
+  }
+
+  return { businessId: tok.businessId, notifications }
+}
+
 async function getJson<T>(url: string, accessToken: string): Promise<
   | { data: T }
   | { error: string }

@@ -32,8 +32,8 @@
 // ----------------------------------------------------------------
 
 import { getAuthContext } from '@/lib/auth'
-import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts } from '@/lib/godaddy/api'
-import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, backfillOrdersFromApi, reconcileOrdersFromTransactions, type IngestBatchResult } from '@/lib/godaddy/ingest'
+import { fetchPoyntOrders, fetchPoyntTransactions, fetchPoyntProducts, fetchPoyntNotifications } from '@/lib/godaddy/api'
+import { ingestPoyntOrders, ingestPoyntTransactions, ingestPoyntProducts, enrichOrdersFromTransactions, backfillOrdersFromApi, reconcileOrdersFromTransactions, replayOrdersFromNotifications, type IngestBatchResult } from '@/lib/godaddy/ingest'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -79,15 +79,27 @@ const TRANSACTIONS_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
 // SELECT on an indexed column.
 const ORDERS_OVERLAP_MS = 30 * 60 * 1000
 
-// Wide /orders sweep: re-list the last 24h at most hourly.
+// Wide /orders sweep: re-list the last 72h at most hourly.
 // Recovers sales that appeared in Poynt's LIST after the
 // incremental cursor had already moved past them (Poynt's LIST
 // endpoint has documented "minutes-to-hours" read lag on some
 // sales). DB dedupe absorbs the ~all-overlap most ticks; ticks
 // that recover a laggy sale earn their keep. Every 4 cron ticks
 // at 15 min = every hour.
-const WIDE_SWEEP_WINDOW_MS = 24 * 60 * 60 * 1000
+//
+// Widened from 24h → 72h after diagnostic: a hobby-tier merchant
+// caught 5 orders that fell outside the 24h window in a single
+// manual sync. Poynt's LIST-side lag can exceed 24h in rare
+// cases; 72h costs a few extra dedupe SELECTs per hour and eats
+// no meaningful API budget.
+const WIDE_SWEEP_WINDOW_MS = 72 * 60 * 60 * 1000
 const WIDE_SWEEP_STALE_MS  = 60 * 60 * 1000
+
+// Notification-replay window. Poynt keeps notifications for
+// 30 days; we sweep the last 48h every cron tick. Anything older
+// that's still missing after 30 days of ticks was never going
+// to arrive — a bigger window is wasted API budget.
+const NOTIFICATION_REPLAY_WINDOW_MS = 48 * 60 * 60 * 1000
 
 export async function syncGodaddyOrders(): Promise<SyncResult> {
   const { context: ctx, error: authError } = await getAuthContext()
@@ -233,6 +245,44 @@ export async function runSyncForRestaurant(
         console.error('[godaddy/sync] wide sweep threw', err)
         merged.notes.push(`wide sweep threw: ${msg}`)
       }
+    }
+
+    // 1c. Notification-replay — the authoritative backstop.
+    //     Poynt's /orders LIST has documented "minutes-to-hours"
+    //     read lag; the webhook path has been unreliable in
+    //     practice (event-type mismatch, dead delivery URLs from
+    //     older proxy config, etc.). Notifications is the API
+    //     Poynt uses internally to fire hooks — pulling them
+    //     directly and diffing against orders.external_id
+    //     recovers anything the two LIST-based legs above missed.
+    //
+    //     Runs every tick, no throttle: the endpoint returns a
+    //     bounded set (notifications are 1 per event, capped at
+    //     30 days), the SELECT is one IN-clause on an indexed
+    //     column, and the actual fetches are capped inside
+    //     replayOrdersFromNotifications. Cheap even on ticks
+    //     with 0 missing.
+    try {
+      const notifStartAt = new Date(Date.now() - NOTIFICATION_REPLAY_WINDOW_MS).toISOString()
+      const pullNotif = await fetchPoyntNotifications({
+        restaurantId, startAt: notifStartAt, maxNotifications: 500,
+      })
+      if ('error' in pullNotif) {
+        merged.notes.push(`/notifications fetch failed: ${pullNotif.error}`)
+      } else {
+        const r = await replayOrdersFromNotifications({
+          supabase, restaurantId, notifications: pullNotif.notifications, cap: 15,
+        })
+        merged.notes.push(...r.notes)
+        // Fold the replayed count into the run's ordersInserted so
+        // the "Sync now" toast reflects the total impact honestly.
+        merged.ordersInserted += r.replayed
+        merged.ordersFailed += r.failed
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error('[godaddy/sync] notification-replay leg threw', err)
+      merged.notes.push(`notification-replay leg threw: ${msg}`)
     }
 
     // 2. /transactions — terminal charges + linked-transaction

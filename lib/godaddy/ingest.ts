@@ -298,6 +298,144 @@ export async function ingestSinglePoyntOrder(args: {
   })
 }
 
+/** Replay any order in Poynt's notification log that isn't
+ *  already in our DB.
+ *
+ *  Diff-and-replay pattern:
+ *    1. Take the notifications the caller pulled from Poynt.
+ *    2. Extract each ORDER-shaped notification's resourceId
+ *       (transactions, refunds, etc. are ignored — they get
+ *        picked up on the next /transactions leg).
+ *    3. SELECT external_id from orders WHERE
+ *       restaurant_id = ? AND external_id IN (…) — one round trip.
+ *    4. Any resourceId not returned by that query is an order
+ *       we're missing. Fetch each via GET /orders/{id}
+ *       (authoritative + immediate) and pipe into ingestSingle.
+ *    5. Cap per invocation so a first-run backfill drains over
+ *       several cron ticks instead of blowing the function budget.
+ *
+ *  Independent of whether the webhook fired, whether the event
+ *  type matched, or whether /orders LIST had read-lag — as long
+ *  as Poynt recorded the notification, we recover the order.
+ */
+export async function replayOrdersFromNotifications(args: {
+  supabase: SupabaseClient
+  restaurantId: string
+  notifications: Array<{ eventType?: string; resourceId?: string; resourceUri?: string }>
+  /** GET /orders/{id} cap per invocation. Vercel Hobby has a
+   *  ~10s function ceiling; each fetch + ingest is ~200-400ms
+   *  so 15 keeps us comfortably under. */
+  cap?: number
+}): Promise<{
+  considered: number
+  alreadyPresent: number
+  missing: number
+  replayed: number
+  failed: number
+  notes: string[]
+}> {
+  const { supabase, restaurantId, notifications } = args
+  const cap = args.cap ?? 15
+  const notes: string[] = []
+
+  // 1. Filter to notifications that name an order and carry a
+  //    usable id. Poynt's eventType alphabet varies by app version
+  //    ('ORDER_COMPLETED', 'ORDER_UPDATED', 'ORDER_CANCELLED', or
+  //    sometimes bare 'ORDER'), so match any type that starts
+  //    with 'ORDER' — anything narrower risks missing legitimate
+  //    orders.
+  //    Fallback: if eventType is missing but resourceUri contains
+  //    '/orders/', still consider it — some Poynt deployments
+  //    ship the type via URI only.
+  const orderIds: string[] = []
+  for (const n of notifications) {
+    const type = (n.eventType ?? '').toUpperCase()
+    const uri = n.resourceUri ?? ''
+    const looksOrderShaped = type.startsWith('ORDER') || /\/orders\//.test(uri)
+    if (!looksOrderShaped) continue
+    // resourceId can be present directly OR extractable from
+    // the URI's trailing segment (some Poynt notifications carry
+    // one, some the other).
+    const idFromUri = uri.match(/\/orders\/([^/?#]+)/)?.[1] ?? null
+    const id = (n.resourceId && n.resourceId.length > 0 ? n.resourceId : idFromUri) ?? null
+    if (!id) continue
+    orderIds.push(id)
+  }
+  const uniqueIds = Array.from(new Set(orderIds))
+  const considered = uniqueIds.length
+  if (considered === 0) {
+    return { considered: 0, alreadyPresent: 0, missing: 0, replayed: 0, failed: 0, notes: [] }
+  }
+
+  // 2. Diff against existing orders. In-clause is fine at these
+  //    volumes (Poynt caps notifications at 30 days; even a busy
+  //    merchant is under a few thousand).
+  const { data: existingRows, error: selErr } = await supabase
+    .from('orders')
+    .select('external_id')
+    .eq('restaurant_id', restaurantId)
+    .in('external_provider', ['godaddy_pos', 'godaddy_online'])
+    .in('external_id', uniqueIds)
+
+  if (selErr) {
+    notes.push(`Notification replay: dedupe SELECT failed — ${selErr.message}`)
+    return { considered, alreadyPresent: 0, missing: 0, replayed: 0, failed: 0, notes }
+  }
+
+  const existingSet = new Set(
+    (existingRows ?? []).map((r) => String((r as { external_id: string }).external_id)),
+  )
+  const alreadyPresent = existingSet.size
+  const missing = uniqueIds.filter((id) => !existingSet.has(id))
+
+  if (missing.length === 0) {
+    return { considered, alreadyPresent, missing: 0, replayed: 0, failed: 0, notes: [] }
+  }
+
+  // 3. Fetch + replay up to the cap. Left-over stragglers get
+  //    caught by the next cron tick — order irrelevant, dedupe
+  //    absorbs the repeat.
+  const targets = missing.slice(0, cap)
+  let replayed = 0
+  let failed = 0
+
+  for (const orderId of targets) {
+    try {
+      // Late import to keep this module's cold-start budget small.
+      const { fetchSinglePoyntOrder } = await import('./api')
+      const res = await fetchSinglePoyntOrder({ restaurantId, orderId })
+      if ('error' in res) {
+        failed++
+        console.warn('[godaddy/replay] fetchSingle failed', { orderId, error: res.error })
+        continue
+      }
+      const ing = await ingestSinglePoyntOrder({ restaurantId, order: res.order })
+      if (ing.ordersInserted > 0) replayed++
+      else if (ing.ordersFailed > 0) failed++
+      // ordersSkipped (dedupe) is a benign no-op — DB dedupe just
+      // absorbed a race where the /orders leg landed it between
+      // our SELECT and now.
+    } catch (err) {
+      failed++
+      console.error('[godaddy/replay] threw', { orderId, err })
+    }
+  }
+
+  if (replayed > 0) {
+    notes.push(
+      `Notification replay: recovered ${replayed} order${replayed === 1 ? '' : 's'} ` +
+      `Poynt's LIST/webhook path missed (${missing.length - targets.length} stragglers left for next tick).`,
+    )
+  } else if (missing.length > 0) {
+    notes.push(`Notification replay: ${missing.length} candidate${missing.length === 1 ? '' : 's'}, 0 replayed (all fetched but none new — likely just landed).`)
+  }
+  if (failed > 0) {
+    notes.push(`Notification replay: ${failed} fetch${failed === 1 ? '' : 'es'} failed — see server logs.`)
+  }
+
+  return { considered, alreadyPresent, missing: missing.length, replayed, failed, notes }
+}
+
 // ================================================================
 // Enrich existing orders from linked transactions
 // ================================================================

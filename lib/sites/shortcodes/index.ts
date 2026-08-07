@@ -23,6 +23,10 @@
 
 import type { SiteRow, SitePageRow } from '../types'
 import { renderLeadForm } from './widgets/lead-form'
+import { renderSiteHeader } from './widgets/site-header'
+import { renderSiteFooter } from './widgets/site-footer'
+import { renderAnnouncementBar } from './widgets/announcement-bar'
+import { renderCartCount } from './widgets/cart-count'
 
 export interface ShortcodeContext {
   site: SiteRow
@@ -45,6 +49,10 @@ export type ShortcodeRenderer = (args: ShortcodeArgs, ctx: ShortcodeContext) => 
  *  notice so authors see the typo instead of nothing at all. */
 const REGISTRY: Record<string, ShortcodeRenderer> = {
   'lead-form': renderLeadForm,
+  'site-header': renderSiteHeader,
+  'site-footer': renderSiteFooter,
+  'announcement-bar': renderAnnouncementBar,
+  'cart-count': renderCartCount,
 }
 
 const SHORTCODE_RE = /\{\{\s*([a-z][a-z0-9-]*)((?:\s+[a-z][a-z0-9-]*(?:=(?:"[^"]*"|'[^']*'|[^\s}]+))?)*)\s*\}\}/gi

@@ -100,6 +100,17 @@ export async function renderPageHTML(site: SiteRow, page: SitePageRow, host: str
   const inlineBody = typeof content?.js_body === 'string' ? content.js_body : ''
   const pageCss = typeof content?.css === 'string' ? content.css : ''
 
+  // Site-wide extras from sites.config. `global_css` is prepended to
+  // every page's <style> so shared rules (typography, layout, brand
+  // colors) live in one place. `head_extras` is a free-form HTML
+  // string dropped into <head> — the canonical use is external
+  // stylesheet <link> tags (Google Fonts) that don't fit the
+  // page-level js_head slot.
+  const config = (site.config ?? {}) as { global_css?: unknown; head_extras?: unknown }
+  const globalCss = typeof config.global_css === 'string' ? config.global_css : ''
+  const headExtras = typeof config.head_extras === 'string' ? config.head_extras : ''
+  const combinedCss = globalCss + pageCss
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -111,7 +122,8 @@ ${favicon ? `<link rel="icon" href="${escapeHtml(favicon)}" />` : ''}
 ${ogImage ? `<meta property="og:image" content="${escapeHtml(ogImage)}" />` : ''}
 <meta property="og:title" content="${escapeHtml(title)}" />
 ${description ? `<meta property="og:description" content="${escapeHtml(description)}" />` : ''}
-${pageCss ? `<style>${pageCss}</style>` : ''}
+${headExtras}
+${combinedCss ? `<style>${combinedCss}</style>` : ''}
 ${inlineHead}
 </head>
 <body>

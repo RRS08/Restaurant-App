@@ -51,7 +51,8 @@ export async function resolveSiteBySlug(slug: string): Promise<SiteRow | null> {
 }
 
 /** Fetch a live page by site + URL path. `path` should start with
- *  '/' and match `site_pages.path` exactly. */
+ *  '/' and match `site_pages.path` exactly. Static-only — for
+ *  dynamic (`:slug`) matching, use `resolvePageWithParams`. */
 export async function resolvePage(siteId: string, path: string): Promise<SitePageRow | null> {
   const supabase = createAdminClient()
   const { data, error } = await supabase
@@ -65,6 +66,71 @@ export async function resolvePage(siteId: string, path: string): Promise<SitePag
   return data as SitePageRow
 }
 
+export interface ResolvedPage {
+  page: SitePageRow
+  params: Record<string, string>
+}
+
+/** Resolve a page for a request path, trying an exact match first
+ *  and falling back to pattern matching on paths that contain
+ *  `:name` segments (e.g. `/shop/:slug`). Returns the matched page
+ *  plus any captured params from the pattern. */
+export async function resolvePageWithParams(siteId: string, path: string): Promise<ResolvedPage | null> {
+  const exact = await resolvePage(siteId, path)
+  if (exact) return { page: exact, params: {} }
+
+  const supabase = createAdminClient()
+  // Only consider rows whose stored path could conceivably be a
+  // pattern — a colon anywhere in the path is our syntax for a
+  // segment placeholder. Keeps the scan cheap on sites with many
+  // static pages.
+  const { data, error } = await supabase
+    .from('site_pages')
+    .select('id, site_id, path, title, content, seo, status, published_at')
+    .eq('site_id', siteId)
+    .eq('status', 'live')
+    .like('path', '%:%')
+  if (error || !data) return null
+
+  // Rank by number of static segments so a more-specific pattern
+  // wins over a broader one when both could match — e.g.
+  // `/shop/featured` beats `/shop/:slug` for the URL `/shop/featured`.
+  const candidates = (data as SitePageRow[])
+    .map(page => ({ page, match: matchPattern(page.path, path) }))
+    .filter((c): c is { page: SitePageRow; match: Record<string, string> } => c.match !== null)
+    .sort((a, b) => staticSegments(b.page.path) - staticSegments(a.page.path))
+
+  const first = candidates[0]
+  if (!first) return null
+  return { page: first.page, params: first.match }
+}
+
+/** Match a stored path pattern against a request path. Returns the
+ *  captured params on match, or null on mismatch. Segments starting
+ *  with `:` are wildcards; everything else must match literally. */
+function matchPattern(pattern: string, actual: string): Record<string, string> | null {
+  const pSegs = pattern.split('/')
+  const aSegs = actual.split('/')
+  if (pSegs.length !== aSegs.length) return null
+
+  const out: Record<string, string> = {}
+  for (let i = 0; i < pSegs.length; i++) {
+    const p = pSegs[i]
+    const a = aSegs[i]
+    if (p.startsWith(':')) {
+      if (a.length === 0) return null
+      out[p.slice(1)] = decodeURIComponent(a)
+    } else if (p !== a) {
+      return null
+    }
+  }
+  return out
+}
+
+function staticSegments(pattern: string): number {
+  return pattern.split('/').filter(s => s.length > 0 && !s.startsWith(':')).length
+}
+
 /** Build the final HTML for a page render.
  *
  *  Content shapes accepted (per the JSONB column):
@@ -74,7 +140,17 @@ export async function resolvePage(siteId: string, path: string): Promise<SitePag
  *  content.kind; the middleware and route handler don't need to
  *  know about the storage format.
  */
-export async function renderPageHTML(site: SiteRow, page: SitePageRow, host: string): Promise<string> {
+export interface RenderOpts {
+  query?: Record<string, string>
+  params?: Record<string, string>
+}
+
+export async function renderPageHTML(
+  site: SiteRow,
+  page: SitePageRow,
+  host: string,
+  opts: RenderOpts = {},
+): Promise<string> {
   const content = page.content as {
     kind?: string
     html?: string
@@ -83,7 +159,13 @@ export async function renderPageHTML(site: SiteRow, page: SitePageRow, host: str
     js_body?: string
   }
   const rawHtml = typeof content?.html === 'string' ? content.html : ''
-  const bodyHtml = await expandShortcodes(rawHtml, { site, page, host })
+  const bodyHtml = await expandShortcodes(rawHtml, {
+    site,
+    page,
+    host,
+    query: opts.query ?? {},
+    params: opts.params ?? {},
+  })
 
   const seo = { ...(site.seo ?? {}), ...(page.seo ?? {}) } as {
     title?: string

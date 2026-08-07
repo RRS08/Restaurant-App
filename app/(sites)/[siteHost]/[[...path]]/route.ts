@@ -22,14 +22,14 @@
 import { NextResponse } from 'next/server'
 import { headers } from 'next/headers'
 import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
-import { resolveSiteByHost, resolvePage, renderPageHTML, renderNotFoundHTML } from '@/lib/sites/render'
+import { resolveSiteByHost, resolvePageWithParams, renderPageHTML, renderNotFoundHTML } from '@/lib/sites/render'
 import { createLead } from '@/lib/sites/leads'
 
 interface Ctx {
   params: Promise<{ siteHost: string; path?: string[] }>
 }
 
-export async function GET(_req: Request, { params }: Ctx) {
+export async function GET(req: Request, { params }: Ctx) {
   const requestHost = normalizeHost((await headers()).get('host'))
   if (isMainHost(requestHost)) {
     return htmlResponse(renderNotFoundHTML(requestHost || 'unknown'), 404)
@@ -41,10 +41,21 @@ export async function GET(_req: Request, { params }: Ctx) {
   const site = await resolveSiteByHost(siteHost)
   if (!site) return htmlResponse(renderNotFoundHTML(siteHost), 404)
 
-  const page = await resolvePage(site.id, urlPath)
-  if (!page) return htmlResponse(renderNotFoundHTML(siteHost), 404)
+  const resolved = await resolvePageWithParams(site.id, urlPath)
+  if (!resolved) return htmlResponse(renderNotFoundHTML(siteHost), 404)
 
-  const html = await renderPageHTML(site, page, siteHost)
+  // Flatten the URL's search params into a plain map for shortcodes
+  // to read via `{{query.name}}` substitution. Repeated keys collapse
+  // to their last value — good enough for filter-strip use, and we
+  // can add explicit list semantics later if a widget needs them.
+  const url = new URL(req.url)
+  const query: Record<string, string> = {}
+  url.searchParams.forEach((value, key) => { query[key] = value })
+
+  const html = await renderPageHTML(site, resolved.page, siteHost, {
+    query,
+    params: resolved.params,
+  })
   return htmlResponse(html, 200)
 }
 

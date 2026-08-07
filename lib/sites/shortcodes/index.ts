@@ -28,6 +28,12 @@ export interface ShortcodeContext {
   site: SiteRow
   page: SitePageRow
   host: string
+  /** URL search params from the incoming request. Widgets that
+   *  react to `?category=…` read from here. */
+  query: Record<string, string>
+  /** Params captured from a dynamic path pattern (`/shop/:slug` →
+   *  `{ slug: 'passiflora-night' }`). Empty on static-path pages. */
+  params: Record<string, string>
 }
 
 export type ShortcodeArgs = Record<string, string | boolean>
@@ -55,7 +61,7 @@ export async function expandShortcodes(html: string, ctx: ShortcodeContext): Pro
       start: m.index,
       end: m.index + m[0].length,
       name: m[1].toLowerCase(),
-      args: parseArgs(m[2] ?? ''),
+      args: substituteArgs(parseArgs(m[2] ?? ''), ctx),
     })
   }
   if (matches.length === 0) return html
@@ -100,4 +106,33 @@ function parseArgs(raw: string): ShortcodeArgs {
  *  can't render. Visible in view-source, invisible on the page. */
 function inlineNotice(msg: string): string {
   return `<!-- checked-sites: ${msg.replace(/-->/g, '-- >')} -->`
+}
+
+/** Substitute request-context placeholders inside a shortcode's
+ *  attribute values. Only string values are touched — bare-flag
+ *  booleans pass through. Supported forms:
+ *
+ *    {{query.<name>}}   →  ctx.query[name]   (URL search params)
+ *    {{params.<name>}}  →  ctx.params[name]  (dynamic path captures)
+ *
+ *  A missing key substitutes to the empty string, so a widget with
+ *  `category="{{query.category}}"` on a URL without `?category=`
+ *  receives `category: ""` rather than the literal placeholder — the
+ *  widget can then treat empty as "no filter". */
+const PLACEHOLDER_RE = /\{\{\s*(query|params)\.([a-z][a-z0-9_-]*)\s*\}\}/gi
+
+function substituteArgs(args: ShortcodeArgs, ctx: ShortcodeContext): ShortcodeArgs {
+  const out: ShortcodeArgs = {}
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value !== 'string') {
+      out[key] = value
+      continue
+    }
+    out[key] = value.replace(PLACEHOLDER_RE, (_, kind: string, name: string) => {
+      const src = kind.toLowerCase() === 'query' ? ctx.query : ctx.params
+      const v = src[name]
+      return typeof v === 'string' ? v : ''
+    })
+  }
+  return out
 }

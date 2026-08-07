@@ -258,9 +258,19 @@ function formatPrice(n: number): string {
 const CHECKOUT_STYLE = `
 .co-layout{display:grid;grid-template-columns:1fr;gap:32px}
 .co-error{background:#fde8e8;color:#7a2323;border-radius:9px;padding:14px;font-size:14px;line-height:1.5;margin-bottom:20px}
-.co-progress{list-style:none;padding:0;margin:0 0 28px;display:flex;align-items:center;gap:8px;font-size:12.5px}
-.co-progress .co-step{display:flex;align-items:center;gap:8px;flex:0 0 auto}
-.co-progress .co-step + .co-step::before{content:"";display:block;height:1px;width:56px;background:#dfe3d8;margin-right:6px}
+/* Dividers flex-grow to fill remaining space instead of being
+   fixed 56px each — that overflowed narrow mobile viewports and
+   clipped step 3's label. Now the whole strip spans the container
+   naturally at any width. */
+.co-progress{list-style:none;padding:0;margin:0 0 28px;display:flex;align-items:center;font-size:12.5px}
+.co-progress .co-step{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
+.co-progress .co-step + .co-step::before{content:"";display:block;height:1px;background:#dfe3d8;flex:1;min-width:16px;margin:0 10px}
+@media(max-width:600px){
+  .co-progress{font-size:11px}
+  .co-progress .co-step{gap:6px}
+  .co-progress .co-step + .co-step::before{margin:0 6px;min-width:8px}
+  .co-step-num{width:24px;height:24px;font-size:11px}
+}
 .co-step-num{width:28px;height:28px;border-radius:50%;border:1.5px solid #dfe3d8;color:#9aa590;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;background:#fff}
 .co-step.is-active .co-step-num{background:#2f382a;color:#fff;border-color:#2f382a}
 .co-step.is-done .co-step-num{background:#2f382a;color:#fff;border-color:#2f382a}

@@ -31,6 +31,8 @@ import { renderMenu } from './widgets/menu'
 import { renderProduct } from './widgets/product'
 import { renderCart } from './widgets/cart'
 import { renderLocations } from './widgets/locations'
+import { renderCheckoutForm } from './widgets/checkout-form'
+import { renderOrderConfirmation } from './widgets/order-confirmation'
 
 export interface ShortcodeContext {
   site: SiteRow
@@ -70,6 +72,8 @@ const REGISTRY: Record<string, ShortcodeRenderer> = {
   'product': renderProduct,
   'cart': renderCart,
   'locations': renderLocations,
+  'checkout-form': renderCheckoutForm,
+  'order-confirmation': renderOrderConfirmation,
 }
 
 const SHORTCODE_RE = /\{\{\s*([a-z][a-z0-9-]*)((?:\s+[a-z][a-z0-9-]*(?:=(?:"[^"]*"|'[^']*'|[^\s}]+))?)*)\s*\}\}/gi

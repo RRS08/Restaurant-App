@@ -182,8 +182,17 @@ export async function renderPageHTML(
   const ogImage = seo.og_image_url ?? ''
   const favicon = seo.favicon_url ?? ''
 
-  const inlineHead = typeof content?.js_head === 'string' ? content.js_head : ''
-  const inlineBody = typeof content?.js_body === 'string' ? content.js_body : ''
+  // js_head / js_body carry raw JavaScript source, not HTML — the
+  // renderer wraps them in <script> tags on the way out. Emitting
+  // the raw source without wrapping puts JS text on the page as
+  // visible prose (which is exactly what shipped in v1 of this
+  // renderer — footer had drag-scroll IIFEs printed under it).
+  // Empty strings collapse to '' so a page without either doesn't
+  // stamp an empty <script></script>.
+  const rawJsHead = typeof content?.js_head === 'string' ? content.js_head : ''
+  const rawJsBody = typeof content?.js_body === 'string' ? content.js_body : ''
+  const inlineHead = rawJsHead ? `<script>${rawJsHead}</script>` : ''
+  const inlineBody = rawJsBody ? `<script>${rawJsBody}</script>` : ''
   const pageCss = typeof content?.css === 'string' ? content.css : ''
 
   // Site-wide extras from sites.config. `global_css` is prepended to

@@ -147,13 +147,17 @@ const FOOTER_STYLE = `
 .site-foot .foot-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
 .site-foot .foot-copyright{font-size:11px;color:#9aa590}
 @media(min-width:1024px){
-  /* Two-track grid on the footer itself so the brand block and the
-     link columns land in the same row. .foot-cols was rendering
-     below .foot-top because they're siblings — needs a shared
-     parent grid to align, not just column CSS on one of them. */
-  .site-foot{display:grid;grid-template-columns:1fr auto;column-gap:64px}
+  /* Three-track grid on the footer itself: brand takes ~1/3 on the
+     left, each link column takes ~1/3, spread across the full
+     width. Earlier ".foot-cols with justify-content:end" pinned
+     them to the right edge, leaving a big empty middle — Design's
+     footer distributes evenly instead. Cols aren't three sibling
+     elements (they're inside .foot-cols), so we grid .site-foot as
+     [brand | .foot-cols spanning 2 tracks] and grid .foot-cols
+     internally with two 1fr tracks that fill their share. */
+  .site-foot{display:grid;grid-template-columns:1fr 1fr 1fr;column-gap:48px}
   .site-foot .foot-top{grid-column:1;grid-row:1;margin-bottom:0;padding-bottom:0;border-bottom:0}
-  .site-foot .foot-cols{grid-column:2;grid-row:1;grid-template-columns:repeat(2,180px);justify-content:end}
+  .site-foot .foot-cols{grid-column:2 / span 2;grid-row:1;grid-template-columns:1fr 1fr;justify-content:stretch;gap:48px}
   .site-foot .foot-bar{grid-column:1 / -1;grid-row:2;margin-top:32px;padding-top:18px;border-top:1px solid #dee2d5}
   .site-foot .foot-brand img{height:52px}
   .site-foot .foot-brand-name strong{font-size:26px}

@@ -28,6 +28,29 @@ export interface SitePageRow {
   published_at: string | null
 }
 
+export interface SiteProductRow {
+  id: string
+  site_id: string
+  slug: string
+  name: string
+  secondary_name: string | null
+  price: number | string
+  sku: string | null
+  category: string | null
+  benefit: string | null
+  purpose: string | null
+  unit: string | null
+  short_description: string | null
+  long_description: string | null
+  ritual: string | null
+  ritual_label: string | null
+  ingredients: string | null
+  image_url: string | null
+  featured: boolean | null
+  status: string
+  sort_order: number | null
+}
+
 export interface SiteDomainRow {
   id: string
   site_id: string

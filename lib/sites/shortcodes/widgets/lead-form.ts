@@ -1,30 +1,38 @@
 // ----------------------------------------------------------------
 // {{lead-form}} widget.
 //
-// Renders a plain HTML form that POSTs back to the SAME URL — the
-// site's route handler picks up POSTs on any page and writes a
-// `site_leads` row keyed by `form_key`. No JavaScript required
-// on the client; works even with scripts blocked.
+// Renders a lead-capture form that POSTs back to the SAME URL —
+// the site's route handler picks up POSTs on any page and writes a
+// `site_leads` row keyed by `_form`. Works with JS off; the tiny
+// inline script only swaps the form for the thanks state after a
+// successful redirect back with ?lead-form-submitted=<form_key>.
 //
-// Supported attributes (all optional):
-//   form="customer"          form_key stored on the lead row
-//   title="Get a quote"      heading above the fields
-//   button="Submit"          submit button label
-//   fields="name,email,phone,message"
-//                            comma-separated field names to render.
-//                            Known keys get sensible input types +
-//                            placeholders; anything else falls back
-//                            to a plain text input.
-//   thanks="Thanks!"         message shown after a successful submit
-//                            (rendered by the route handler on
-//                            ?lead-form-submitted=<form_key>).
+// The markup here uses the `.lf` class family from the site's
+// global CSS — no inline <style> block anymore. If a widget renders
+// on a site that doesn't ship the .lf styles, the form still works
+// (all inputs render as plain HTML defaults); it just looks bare.
 //
-// Example:
-//   {{lead-form form="driver" title="Apply to drive"
-//               fields="name,email,phone,cdl_class,years_driving,message"}}
+// Attributes:
+//   form     "contact"                   — the _form key filed on
+//                                          the lead row
+//   fields   "name,email,phone,message"  — render order; known keys
+//                                          get typed inputs +
+//                                          placeholders, anything
+//                                          else falls back to a
+//                                          plain text input
+//   submit   "Send message"              — submit button label
+//   thanks   "Thanks — we'll be in touch soon."
+//                                        — success state message
+//
+// Field defaults per key (from Design's spec):
+//   name    text     required, "Your name"
+//   email   email    required, "you@email.com"
+//   phone   tel      optional, "(956) 000-0000"
+//   message textarea required, "What can we help with?"
 // ----------------------------------------------------------------
 
 import type { ShortcodeArgs, ShortcodeContext } from '../index'
+import { escapeAttr, escapeHtml } from '../utils'
 
 const DEFAULT_FIELDS = ['name', 'email', 'phone', 'message']
 
@@ -37,122 +45,78 @@ interface FieldSpec {
 }
 
 const KNOWN_FIELDS: Record<string, FieldSpec> = {
-  name:    { key: 'name',    label: 'Your name',      type: 'text',     placeholder: 'Jane Doe',              required: true },
-  email:   { key: 'email',   label: 'Email',          type: 'email',    placeholder: 'you@example.com',       required: true },
-  phone:   { key: 'phone',   label: 'Phone',          type: 'tel',      placeholder: '(555) 555-5555',        required: false },
-  company: { key: 'company', label: 'Company',        type: 'text',     placeholder: 'Acme Inc.',             required: false },
-  message: { key: 'message', label: 'How can we help?', type: 'textarea', placeholder: 'Tell us a bit…',        required: false },
+  name:    { key: 'name',    label: 'Name',    type: 'text',     placeholder: 'Your name',              required: true },
+  email:   { key: 'email',   label: 'Email',   type: 'email',    placeholder: 'you@email.com',          required: true },
+  phone:   { key: 'phone',   label: 'Phone',   type: 'tel',      placeholder: '(956) 000-0000',         required: false },
+  message: { key: 'message', label: 'Message', type: 'textarea', placeholder: 'What can we help with?', required: true },
+  company: { key: 'company', label: 'Company', type: 'text',     placeholder: 'Acme Inc.',              required: false },
 }
 
 function fieldSpec(key: string): FieldSpec {
-  return KNOWN_FIELDS[key] ?? {
-    key, label: titleize(key), type: 'text', placeholder: '', required: false,
-  }
+  return KNOWN_FIELDS[key] ?? { key, label: titleize(key), type: 'text', placeholder: '', required: false }
 }
 
 function titleize(key: string): string {
-  return key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  return key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
-export function renderLeadForm(args: ShortcodeArgs, ctx: ShortcodeContext): string {
+export function renderLeadForm(args: ShortcodeArgs, _ctx: ShortcodeContext): string {
   const formKey = String(args.form ?? 'default')
-  const title = String(args.title ?? 'Get in touch')
-  const buttonLabel = String(args.button ?? 'Send')
-  const thanksMsg = String(args.thanks ?? 'Thanks — we got it and will be in touch.')
+  const submitLabel = String(args.submit ?? args.button ?? 'Send message')
+  const thanksMsg = String(args.thanks ?? "Thanks — we'll be in touch soon.")
 
   const fieldKeys = typeof args.fields === 'string'
-    ? args.fields.split(',').map((s) => s.trim()).filter(Boolean)
+    ? args.fields.split(',').map(s => s.trim()).filter(Boolean)
     : DEFAULT_FIELDS
   const fields = fieldKeys.map(fieldSpec)
 
-  // The route handler sets ?lead-form-submitted=<form_key> after a
-  // successful POST. Rendering with that param shows the thanks
-  // state instead of the empty form so a user who refreshes the
-  // page doesn't see their fields still filled in.
-  // We render BOTH states server-side and let a tiny inline script
-  // toggle based on the query param. Falls back gracefully when
-  // JS is off — both blocks are visible, which is a fine outcome.
-  const thanksBlockId = `lf-thanks-${cssId(formKey)}`
   const formBlockId = `lf-form-${cssId(formKey)}`
+  const thanksBlockId = `lf-thanks-${cssId(formKey)}`
+  const fieldHTML = fields.map(renderField).join('\n')
 
-  const fieldHTML = fields.map((f) => renderField(formKey, f)).join('\n')
-
-  return `
-<section class="checked-lead-form" data-form-key="${escapeAttr(formKey)}">
-  <style>
-    .checked-lead-form { margin: 24px 0; padding: 20px; border: 1px solid #E7E6E2; border-radius: 12px; font-family: inherit; }
-    .checked-lead-form h3 { margin: 0 0 12px; font-size: 18px; letter-spacing: -0.01em; color: #18181B; }
-    .checked-lead-form .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
-    .checked-lead-form label { font-size: 12px; font-weight: 600; color: #52525B; }
-    .checked-lead-form input, .checked-lead-form textarea {
-      width: 100%; box-sizing: border-box;
-      padding: 10px 12px; font: inherit; font-size: 14px;
-      border: 1px solid #E7E6E2; border-radius: 8px; background: #fff; color: #18181B;
+  // Both blocks render; the inline script hides the form and shows
+  // the thanks state when the URL carries the submitted marker for
+  // this form key. Without JS, a submitter sees both blocks after
+  // the redirect — degraded but not broken.
+  return `<form class="lf" id="${escapeAttr(formBlockId)}" method="post" action="?">
+  <input type="hidden" name="_form" value="${escapeAttr(formKey)}">
+${fieldHTML}
+  <button type="submit">${escapeHtml(submitLabel)}</button>
+</form>
+<div class="lf-success" id="${escapeAttr(thanksBlockId)}" style="display:none">${escapeHtml(thanksMsg)}</div>
+<script>
+(function(){
+  try{
+    var q=new URLSearchParams(window.location.search);
+    if(q.get('lead-form-submitted')===${JSON.stringify(formKey)}){
+      var f=document.getElementById(${JSON.stringify(formBlockId)});
+      var t=document.getElementById(${JSON.stringify(thanksBlockId)});
+      if(f){f.style.display='none'}
+      if(t){t.style.display='block'}
     }
-    .checked-lead-form textarea { min-height: 100px; resize: vertical; }
-    .checked-lead-form button {
-      display: inline-block; padding: 10px 16px; font: inherit; font-size: 14px; font-weight: 600;
-      border: 0; border-radius: 10px; background: #18181B; color: #FAF9F6; cursor: pointer;
-    }
-    .checked-lead-form .thanks {
-      padding: 16px; border-radius: 8px; background: #ECFDF5; color: #047857; font-weight: 600;
-    }
-  </style>
-  <div id="${formBlockId}">
-    <h3>${escapeHtml(title)}</h3>
-    <form method="POST" action="?">
-      <input type="hidden" name="_form" value="${escapeAttr(formKey)}" />
-      ${fieldHTML}
-      <button type="submit">${escapeHtml(buttonLabel)}</button>
-    </form>
-  </div>
-  <div id="${thanksBlockId}" class="thanks" style="display:none;">
-    ${escapeHtml(thanksMsg)}
-  </div>
-  <script>
-    (function () {
-      try {
-        var q = new URLSearchParams(window.location.search);
-        if (q.get('lead-form-submitted') === ${JSON.stringify(formKey)}) {
-          var f = document.getElementById(${JSON.stringify(formBlockId)});
-          var t = document.getElementById(${JSON.stringify(thanksBlockId)});
-          if (f) f.style.display = 'none';
-          if (t) t.style.display = 'block';
-        }
-      } catch (e) { /* progressive enhancement — noop on failure */ }
-    })();
-  </script>
-</section>
-  `.trim()
+  }catch(e){}
+})();
+</script>`
 }
 
-function renderField(formKey: string, f: FieldSpec): string {
-  const id = `lf-${cssId(formKey)}-${cssId(f.key)}`
+function renderField(f: FieldSpec): string {
+  const id = `lf-${cssId(f.key)}`
+  const optionalLabel = f.required ? '' : ' <span class="opt">(optional)</span>'
+  const label = `<label for="${escapeAttr(id)}">${escapeHtml(f.label)}${optionalLabel}</label>`
+  const required = f.required ? ' required' : ''
+
   if (f.type === 'textarea') {
-    return `<div class="field">
-      <label for="${id}">${escapeHtml(f.label)}</label>
-      <textarea id="${id}" name="${escapeAttr(f.key)}" placeholder="${escapeAttr(f.placeholder)}"${f.required ? ' required' : ''}></textarea>
-    </div>`
+    return `  <div>
+    ${label}
+    <textarea id="${escapeAttr(id)}" name="${escapeAttr(f.key)}" placeholder="${escapeAttr(f.placeholder)}"${required}></textarea>
+  </div>`
   }
-  return `<div class="field">
-    <label for="${id}">${escapeHtml(f.label)}</label>
-    <input id="${id}" name="${escapeAttr(f.key)}" type="${escapeAttr(f.type)}" placeholder="${escapeAttr(f.placeholder)}"${f.required ? ' required' : ''} />
+  return `  <div>
+    ${label}
+    <input id="${escapeAttr(id)}" name="${escapeAttr(f.key)}" type="${escapeAttr(f.type)}" placeholder="${escapeAttr(f.placeholder)}"${required}>
   </div>`
 }
 
 function cssId(s: string): string {
   return s.replace(/[^a-z0-9-]/gi, '-').toLowerCase()
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
-function escapeAttr(s: string): string {
-  return escapeHtml(s)
 }

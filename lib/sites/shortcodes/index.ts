@@ -27,6 +27,10 @@ import { renderSiteHeader } from './widgets/site-header'
 import { renderSiteFooter } from './widgets/site-footer'
 import { renderAnnouncementBar } from './widgets/announcement-bar'
 import { renderCartCount } from './widgets/cart-count'
+import { renderMenu } from './widgets/menu'
+import { renderProduct } from './widgets/product'
+import { renderCart } from './widgets/cart'
+import { renderLocations } from './widgets/locations'
 
 export interface ShortcodeContext {
   site: SiteRow
@@ -53,6 +57,10 @@ const REGISTRY: Record<string, ShortcodeRenderer> = {
   'site-footer': renderSiteFooter,
   'announcement-bar': renderAnnouncementBar,
   'cart-count': renderCartCount,
+  'menu': renderMenu,
+  'product': renderProduct,
+  'cart': renderCart,
+  'locations': renderLocations,
 }
 
 const SHORTCODE_RE = /\{\{\s*([a-z][a-z0-9-]*)((?:\s+[a-z][a-z0-9-]*(?:=(?:"[^"]*"|'[^']*'|[^\s}]+))?)*)\s*\}\}/gi

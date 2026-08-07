@@ -104,14 +104,18 @@ function renderField(f: FieldSpec): string {
   const optionalLabel = f.required ? '' : ' <span class="opt">(optional)</span>'
   const label = `<label for="${escapeAttr(id)}">${escapeHtml(f.label)}${optionalLabel}</label>`
   const required = f.required ? ' required' : ''
+  // lf-field is the generic hook; lf-field-<key> lets site-specific
+  // CSS target individual fields (e.g. put Name + Phone on the same
+  // grid row on the contact page without touching the widget).
+  const wrapperClass = `lf-field lf-field-${cssId(f.key)}`
 
   if (f.type === 'textarea') {
-    return `  <div>
+    return `  <div class="${escapeAttr(wrapperClass)}">
     ${label}
     <textarea id="${escapeAttr(id)}" name="${escapeAttr(f.key)}" placeholder="${escapeAttr(f.placeholder)}"${required}></textarea>
   </div>`
   }
-  return `  <div>
+  return `  <div class="${escapeAttr(wrapperClass)}">
     ${label}
     <input id="${escapeAttr(id)}" name="${escapeAttr(f.key)}" type="${escapeAttr(f.type)}" placeholder="${escapeAttr(f.placeholder)}"${required}>
   </div>`

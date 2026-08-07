@@ -20,10 +20,11 @@
 // ----------------------------------------------------------------
 
 import { NextResponse } from 'next/server'
-import { headers } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 import { resolveSiteByHost, resolvePageWithParams, renderPageHTML, renderNotFoundHTML } from '@/lib/sites/render'
 import { createLead } from '@/lib/sites/leads'
+import { CART_COOKIE_NAME, loadCartCount } from '@/lib/sites/cart'
 
 interface Ctx {
   params: Promise<{ siteHost: string; path?: string[] }>
@@ -52,9 +53,18 @@ export async function GET(req: Request, { params }: Ctx) {
   const query: Record<string, string> = {}
   url.searchParams.forEach((value, key) => { query[key] = value })
 
+  // Read the cart session cookie once here so every {{cart-count}}
+  // on the page shares the same DB query instead of each widget
+  // hitting Supabase independently.
+  const cookieStore = await cookies()
+  const sessionId = cookieStore.get(CART_COOKIE_NAME)?.value ?? null
+  const cartCount = await loadCartCount(site.id, sessionId)
+
   const html = await renderPageHTML(site, resolved.page, siteHost, {
     query,
     params: resolved.params,
+    sessionId,
+    cartCount,
   })
   return htmlResponse(html, 200)
 }

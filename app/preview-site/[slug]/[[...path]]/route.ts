@@ -29,12 +29,14 @@
 // ----------------------------------------------------------------
 
 import { NextResponse } from 'next/server'
+import { cookies } from 'next/headers'
 import {
   resolveSiteBySlug,
   resolvePageWithParams,
   renderPageHTML,
   renderNotFoundHTML,
 } from '@/lib/sites/render'
+import { CART_COOKIE_NAME, loadCartCount } from '@/lib/sites/cart'
 
 interface Ctx {
   params: Promise<{ slug: string; path?: string[] }>
@@ -54,9 +56,15 @@ export async function GET(req: Request, { params }: Ctx) {
   const query: Record<string, string> = {}
   url.searchParams.forEach((value, key) => { query[key] = value })
 
+  const cookieStore = await cookies()
+  const sessionId = cookieStore.get(CART_COOKIE_NAME)?.value ?? null
+  const cartCount = await loadCartCount(site.id, sessionId)
+
   const rendered = await renderPageHTML(site, resolved.page, `${slug}.onchecked.app`, {
     query,
     params: resolved.params,
+    sessionId,
+    cartCount,
   })
 
   return htmlResponse(rewriteLinks(rendered, slug), 200)

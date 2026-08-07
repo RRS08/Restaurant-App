@@ -3,15 +3,14 @@
 //
 // Emits the badge span the header + client JS both read from. The
 // count itself is always rendered — never hidden — because the
-// design's transitions rely on the element being present.
-//
-// Server-side cart state doesn't exist yet (v1 uses a client-only
-// cart the /shop and PDP buttons prime via fetch), so the initial
-// value is `0`. When the server-side cart lands, this widget will
-// read the current count from the request context; the DOM shape
-// stays identical so no page change is needed.
+// design's transitions rely on the element being present. Value
+// comes from ctx.cartCount, which the route handler precomputes
+// once per pageview so multiple {{cart-count}} on the same page
+// share a single DB lookup.
 // ----------------------------------------------------------------
 
-export function renderCartCount(): string {
-  return '<span class="cart-count">0</span>'
+import type { ShortcodeContext } from '../index'
+
+export function renderCartCount(_args: unknown, ctx: ShortcodeContext): string {
+  return `<span class="cart-count">${ctx.cartCount}</span>`
 }

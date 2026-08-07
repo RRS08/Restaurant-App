@@ -42,6 +42,15 @@ export interface ShortcodeContext {
   /** Params captured from a dynamic path pattern (`/shop/:slug` →
    *  `{ slug: 'passiflora-night' }`). Empty on static-path pages. */
   params: Record<string, string>
+  /** Site-cart session UUID from the visitor's cookie, or null if
+   *  they've never added anything yet. Widgets that mutate the
+   *  cart don't need this — they POST to /api/site-cart/* — but
+   *  the {{cart}} widget reads it to look up their items. */
+  sessionId: string | null
+  /** Precomputed total item count for the current session so every
+   *  {{cart-count}} on the page shares one DB query. Zero when
+   *  there's no session or no items. */
+  cartCount: number
 }
 
 export type ShortcodeArgs = Record<string, string | boolean>

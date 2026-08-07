@@ -143,6 +143,8 @@ function staticSegments(pattern: string): number {
 export interface RenderOpts {
   query?: Record<string, string>
   params?: Record<string, string>
+  sessionId?: string | null
+  cartCount?: number
 }
 
 export async function renderPageHTML(
@@ -165,6 +167,8 @@ export async function renderPageHTML(
     host,
     query: opts.query ?? {},
     params: opts.params ?? {},
+    sessionId: opts.sessionId ?? null,
+    cartCount: opts.cartCount ?? 0,
   })
 
   const seo = { ...(site.seo ?? {}), ...(page.seo ?? {}) } as {

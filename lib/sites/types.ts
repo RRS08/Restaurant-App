@@ -51,6 +51,20 @@ export interface SiteProductRow {
   sort_order: number | null
 }
 
+export interface SiteCartItem {
+  slug: string
+  qty: number
+}
+
+export interface SiteCartRow {
+  id: string
+  site_id: string
+  session_id: string
+  items: SiteCartItem[]
+  created_at: string
+  updated_at: string
+}
+
 export interface SiteDomainRow {
   id: string
   site_id: string

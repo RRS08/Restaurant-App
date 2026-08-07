@@ -47,6 +47,9 @@ export function renderSiteFooter(_args: unknown, ctx: ShortcodeContext): string 
   const cols = rawCols.length > 0 ? rawCols : FALLBACK_COLS
 
   const siteName = ctx.site.name ?? ctx.site.slug
+  const logoUrl = readLogoUrl(config)
+  const brand = splitBrand(config, siteName)
+  const copyright = readCopyrightLine(config, siteName)
 
   const colsHtml = cols.map(col => {
     const links = Array.isArray(col.links) ? col.links : []
@@ -61,14 +64,23 @@ ${linkHtml}
   }).join('\n')
 
   return `<footer class="site-foot">
+  <style>${FOOTER_STYLE}</style>
   <div class="foot-top">
-    <strong>${escapeHtml(siteName)}</strong>
-    <p>${escapeHtml(tagline)}</p>
+    <div class="foot-brand-block">
+      <div class="foot-brand">
+        <img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(siteName)}">
+        <div class="foot-brand-name">
+          <strong>${escapeHtml(brand.mark)}</strong>${brand.kicker ? `<em>${escapeHtml(brand.kicker)}</em>` : ''}
+        </div>
+      </div>
+      <p class="foot-tag">${escapeHtml(tagline)}</p>
+    </div>
   </div>
   <div class="foot-cols">
 ${colsHtml}
   </div>
   <div class="foot-bar">
+    <span class="foot-copyright">${escapeHtml(copyright)}</span>
     <span class="by-checked">
       <span>Designed and hosted by</span>
       <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer">
@@ -85,3 +97,56 @@ ${colsHtml}
   </div>
 </footer>`
 }
+
+function readLogoUrl(config: Record<string, unknown>): string {
+  return typeof config.logo_url === 'string' ? config.logo_url : '/assets/logo-tree.png'
+}
+
+/** Split "Hatziri Tea & Botanicals" into { mark: "Hatziri",
+ *  kicker: "TEA & BOTANICALS" } so the footer can stack them the
+ *  way the header does. Honors an explicit config.brand_kicker
+ *  when set (same key the header widget reads), otherwise derives
+ *  the kicker from the words after the first. */
+function splitBrand(config: Record<string, unknown>, siteName: string): { mark: string; kicker: string } {
+  const explicit = typeof config.brand_kicker === 'string' ? config.brand_kicker : null
+  const idx = siteName.indexOf(' ')
+  const mark = idx === -1 ? siteName : siteName.slice(0, idx)
+  const derivedKicker = idx === -1 ? '' : siteName.slice(idx + 1)
+  return { mark, kicker: (explicit ?? derivedKicker).toUpperCase() }
+}
+
+/** Build "© YEAR Site Name · location suffix" from config. Falls
+ *  back to just year + site name when no locations_label is set. */
+function readCopyrightLine(config: Record<string, unknown>, siteName: string): string {
+  const year = new Date().getFullYear()
+  const footer = (config.footer ?? {}) as { locations_label?: unknown; copyright?: unknown }
+  if (typeof footer.copyright === 'string' && footer.copyright.length > 0) {
+    return `© ${year} ${footer.copyright}`
+  }
+  const label = typeof footer.locations_label === 'string' ? footer.locations_label : ''
+  return label ? `© ${year} ${siteName} · ${label}` : `© ${year} ${siteName}`
+}
+
+// Widget-local CSS. Overrides earlier footer rules from
+// sites.config.global_css by being emitted later (inline in body,
+// after the head <style>). Keeping the styling inside the widget
+// means a new site gets the fixed layout for free without a config
+// update.
+const FOOTER_STYLE = `
+.site-foot .foot-brand-block{display:flex;flex-direction:column;gap:14px;max-width:340px}
+.site-foot .foot-brand{display:flex;align-items:center;gap:12px}
+.site-foot .foot-brand img{height:44px;width:auto}
+.site-foot .foot-brand-name{line-height:1.05}
+.site-foot .foot-brand-name strong{display:block;font-size:22px;font-weight:600;letter-spacing:-.02em}
+.site-foot .foot-brand-name em{display:block;font-style:normal;font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:#7d8a6e;margin-top:4px}
+.site-foot .foot-tag{font-size:13.5px;color:#7d8a6e;line-height:1.65;margin:0}
+.site-foot .foot-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+.site-foot .foot-copyright{font-size:11px;color:#9aa590}
+@media(min-width:1024px){
+  .site-foot .foot-top{display:grid;grid-template-columns:1fr auto;gap:64px;align-items:start}
+  .site-foot .foot-cols{align-self:start}
+  .site-foot .foot-brand img{height:52px}
+  .site-foot .foot-brand-name strong{font-size:26px}
+  .site-foot .foot-brand-name em{font-size:10px}
+}
+`

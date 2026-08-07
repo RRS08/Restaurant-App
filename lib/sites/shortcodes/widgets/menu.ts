@@ -83,7 +83,12 @@ function renderCard(p: Card): string {
   const tag = p.benefit ? `<span class="card-tag">${escapeHtml(p.benefit)}</span>` : ''
   const purpose = p.purpose ? `<div class="card-purpose">${escapeHtml(p.purpose)}</div>` : ''
 
-  return `<div class="card">
+  // data-category lets client-side filters (chip strip on /shop)
+  // show/hide cards without a page reload. Server still filters
+  // when a category attr is passed on the shortcode — this attribute
+  // is additional metadata, not a replacement for server filtering.
+  const category = p.category ?? ''
+  return `<div class="card" data-category="${escapeAttr(category)}">
   <a class="card-tile" href="${escapeAttr(href)}">
     ${tag}
     <img src="${escapeAttr(p.image_url ?? '')}" alt="${escapeAttr(p.name)}">

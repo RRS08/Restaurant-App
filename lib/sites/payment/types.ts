@@ -52,8 +52,36 @@ export type PaymentAuthorizeResult =
   | { status: 'pending'; note: string }
   | { status: 'failed'; error: string }
 
+export interface HostedCheckoutRequest {
+  siteId: string
+  restaurantId: string
+  orderId: string
+  amount: number
+  currency: 'USD'
+  buyer: PaymentAuthorizeBuyer
+  /** Absolute URL the provider redirects back to on successful
+   *  payment. Provider appends its own params (transaction id etc.). */
+  successUrl: string
+  /** Absolute URL the provider redirects back to on failed/cancelled
+   *  payment. */
+  cancelUrl: string
+}
+
+export type HostedCheckoutResult =
+  /** Provider returned a URL — redirect the buyer there. Order was
+   *  created before this call; provider callback finalizes payment. */
+  | { url: string }
+  /** Adapter doesn't support hosted checkout (stub, misconfigured,
+   *  API unavailable). Caller falls back to the deferred-payment
+   *  path — order stays unpaid, buyer sees the email-a-link message. */
+  | { unavailable: true; reason: string }
+
 export interface PaymentAdapter {
   /** Matches `sites.config.payment_provider`. */
   name: string
   authorize(req: PaymentAuthorizeRequest): Promise<PaymentAuthorizeResult>
+  /** Optional hosted-checkout flow: return a URL to redirect the
+   *  buyer to for payment. When unavailable, caller falls back to
+   *  the deferred-payment message on /thanks. */
+  createHostedCheckout?(req: HostedCheckoutRequest): Promise<HostedCheckoutResult>
 }

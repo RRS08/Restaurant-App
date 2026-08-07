@@ -1,29 +1,36 @@
 // ----------------------------------------------------------------
-// Server-side checkout: validate the cart, dispatch to the site's
-// payment adapter, materialize an orders row + site_orders_link,
-// clear the cart. Provider-agnostic — the adapter interface hides
-// the per-provider mechanics.
+// Server-side checkout: validate the cart + form, resolve delivery
+// option, calculate total, dispatch to the site's payment adapter,
+// create orders row + site_orders_link, clear the cart. Returns
+// either a hosted-checkout URL (redirect the buyer to the
+// provider's payment page) or the created order id (fall back to
+// the deferred-payment /thanks flow when the adapter's hosted
+// checkout is unavailable / stubbed).
 //
-// Ordering matters: we call the payment adapter BEFORE creating
-// the order row. A payment 'failed' result never writes an order.
-// A 'pending' result (stub adapter, async payment link, whatever)
-// writes the order as unpaid and stores the provider's context on
-// the link row so a follow-up reconciliation can mark it paid.
+// Total = cart subtotal + delivery cost. Delivery option is looked
+// up in sites.config.delivery_options by key; unknown key rejects
+// the checkout rather than silently charging a wrong amount.
 //
 // Web orders leave `order_items` empty on purpose — the full
-// denormalized cart is on `site_orders_link.cart`. Menu/inventory
-// stay untouched per project rule ([[websites-project]]).
+// denormalized cart, plus buyer/delivery/notes/opt-in, live on
+// `site_orders_link`.
 // ----------------------------------------------------------------
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { loadCartWithItems, type CartSnapshot } from './cart'
 import { resolvePaymentAdapter } from './payment'
-import type { SiteRow } from './types'
+import type { SiteRow, SiteDeliveryOption } from './types'
 
 type Admin = ReturnType<typeof createAdminClient>
 
 export interface CheckoutInput {
-  contact: { name: string; email: string; phone?: string }
+  contact: {
+    email: string
+    first_name: string
+    last_name: string
+    phone?: string
+  }
+  delivery_option_key: string
   shipping?: {
     line1: string
     line2?: string
@@ -32,10 +39,13 @@ export interface CheckoutInput {
     postal: string
     country: string
   }
+  billing_same?: boolean
+  notes?: string
+  opt_in_marketing?: boolean
 }
 
 export type CheckoutResult =
-  | { orderId: string; paymentStatus: 'paid' | 'unpaid'; note?: string }
+  | { orderId: string; paymentStatus: 'paid' | 'unpaid'; note?: string; hostedUrl?: string }
   | { error: string }
 
 export async function performCheckout(
@@ -43,12 +53,23 @@ export async function performCheckout(
   sessionId: string | null,
   input: CheckoutInput,
 ): Promise<CheckoutResult> {
-  if (!input.contact.name) return { error: 'Name is required.' }
+  const fullName = `${input.contact.first_name} ${input.contact.last_name}`.trim()
+  if (!input.contact.first_name || !input.contact.last_name) return { error: 'Full name is required.' }
   if (!input.contact.email) return { error: 'Email is required.' }
   if (!sessionId) return { error: 'Your cart session expired — please add items again.' }
 
   const cart = await loadCartWithItems(site.id, sessionId)
   if (cart.items.length === 0) return { error: 'Your cart is empty.' }
+
+  const config = (site.config ?? {}) as Record<string, unknown>
+  const deliveryOption = resolveDeliveryOption(config, input.delivery_option_key)
+  if (!deliveryOption) return { error: 'Please choose a delivery option.' }
+
+  if (deliveryOption.requires_address) {
+    if (!input.shipping || !input.shipping.line1 || !input.shipping.city || !input.shipping.state || !input.shipping.postal) {
+      return { error: 'Shipping address is required for this delivery option.' }
+    }
+  }
 
   const admin = createAdminClient()
 
@@ -63,44 +84,28 @@ export async function performCheckout(
     return { error: `No payment adapter registered for provider '${providerName ?? 'none'}'.` }
   }
 
-  const authResult = await adapter.authorize({
-    siteId: site.id,
-    restaurantId: site.restaurant_id,
-    amount: cart.subtotal,
-    currency: 'USD',
-    buyer: input.contact,
-    cart: {
-      items: cart.items.map(i => ({ slug: i.slug, qty: i.qty, name: i.name, price: i.price })),
-      subtotal: cart.subtotal,
-    },
-    idempotencyKey: `site:${site.id}:session:${sessionId}`,
-  })
+  const total = round2(cart.subtotal + deliveryOption.price)
 
-  if (authResult.status === 'failed') {
-    return { error: authResult.error }
-  }
-
-  const paymentStatus: 'paid' | 'unpaid' = authResult.status === 'paid' ? 'paid' : 'unpaid'
-  const paymentReference = authResult.status === 'paid' ? authResult.reference : null
-  const cardBrand = authResult.status === 'paid' ? authResult.cardBrand ?? null : null
-  const cardLast4 = authResult.status === 'paid' ? authResult.cardLast4 ?? null : null
-  const pendingNote = authResult.status === 'pending' ? authResult.note : null
+  // Skip the (stubbed) direct authorize call — for the deferred-
+  // payment MVP, the adapter always returns 'pending' anyway and
+  // the real work is either the future hosted-checkout redirect or
+  // an out-of-band email. Save the order first, then attempt
+  // hosted checkout, then fall back to unpaid.
+  const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
 
   const { data: order, error: orderErr } = await admin
     .from('orders')
     .insert({
       restaurant_id: site.restaurant_id,
       location_id: locationId,
-      total_amount: cart.subtotal,
+      total_amount: total,
       source: 'web',
       payment_type: 'card',
-      payment_status: paymentStatus,
+      payment_status: 'unpaid',
       status: 'completed',
-      customer_name: input.contact.name,
+      customer_name: fullName,
       channel_source: providerName ?? 'web',
-      card_brand: cardBrand,
-      card_last4: cardLast4,
-      note: pendingNote,
+      note: input.notes ?? null,
     })
     .select('id')
     .single()
@@ -111,30 +116,62 @@ export async function performCheckout(
   }
 
   const orderId = order.id as string
-  const linkRow = await writeSiteLink(admin, {
+
+  // Try the hosted-checkout URL flow. When the adapter returns a
+  // URL, redirect the buyer there; the provider's callback (a
+  // follow-up webhook we haven't wired yet) marks the order paid.
+  // When unavailable (current stub for GoDaddy), leave the order
+  // unpaid and route to /thanks with the email-link message.
+  let hostedUrl: string | undefined
+  if (adapter.createHostedCheckout) {
+    const successUrl = `https://${site.slug}.onchecked.app/thanks?order=${encodeURIComponent(orderId)}`
+    const cancelUrl = `https://${site.slug}.onchecked.app/checkout?checkout_error=${encodeURIComponent('Payment cancelled — your order is still saved.')}`
+    const hosted = await adapter.createHostedCheckout({
+      siteId: site.id,
+      restaurantId: site.restaurant_id,
+      orderId,
+      amount: total,
+      currency: 'USD',
+      buyer,
+      successUrl,
+      cancelUrl,
+    })
+    if ('url' in hosted) hostedUrl = hosted.url
+    else console.info('[checkout] hosted checkout unavailable', { orderId, reason: hosted.reason })
+  }
+
+  await writeSiteLink(admin, {
     siteId: site.id,
     orderId,
     sessionId,
     cart,
-    contact: input.contact,
-    shipping: input.shipping,
+    contact: {
+      name: fullName,
+      first_name: input.contact.first_name,
+      last_name: input.contact.last_name,
+      email: input.contact.email,
+      phone: input.contact.phone ?? null,
+      opted_in_marketing: input.opt_in_marketing === true,
+    },
+    shipping: deliveryOption.requires_address ? input.shipping ?? null : null,
+    delivery: {
+      key: deliveryOption.key,
+      label: deliveryOption.label,
+      price: deliveryOption.price,
+    },
+    notes: input.notes ?? null,
+    billingSame: input.billing_same === true,
     providerName,
-    paymentReference,
+    paymentReference: null,
   })
-  if (!linkRow) {
-    // The order exists but the site link is missing. Log for
-    // reconciliation; do NOT surface as an error to the buyer —
-    // their order is captured and the merchant can still fulfill
-    // via the orders table. The link is a convenience index.
-    console.error('[checkout] site_orders_link write failed', { orderId })
-  }
 
   await clearCart(admin, site.id, sessionId)
 
   return {
     orderId,
-    paymentStatus,
-    note: pendingNote ?? undefined,
+    paymentStatus: 'unpaid',
+    note: hostedUrl ? undefined : 'Online payment pending — the merchant will email a secure payment link within one business day.',
+    hostedUrl,
   }
 }
 
@@ -158,35 +195,63 @@ function readPaymentProvider(site: SiteRow): string | null {
   return typeof config.payment_provider === 'string' ? config.payment_provider : null
 }
 
-async function writeSiteLink(admin: Admin, args: {
+function resolveDeliveryOption(config: Record<string, unknown>, key: string): SiteDeliveryOption | null {
+  if (!key) return null
+  const raw = config.delivery_options
+  if (!Array.isArray(raw)) return null
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const o = item as Partial<SiteDeliveryOption>
+    if (o.key === key && typeof o.label === 'string' && typeof o.price === 'number') {
+      return {
+        key: o.key,
+        label: o.label,
+        sublabel: typeof o.sublabel === 'string' ? o.sublabel : undefined,
+        note: typeof o.note === 'string' ? o.note : undefined,
+        price: o.price,
+        requires_address: o.requires_address === true,
+        default: o.default === true,
+      }
+    }
+  }
+  return null
+}
+
+interface LinkWriteArgs {
   siteId: string
   orderId: string
   sessionId: string
   cart: CartSnapshot
-  contact: CheckoutInput['contact']
-  shipping: CheckoutInput['shipping']
+  contact: Record<string, unknown>
+  shipping: CheckoutInput['shipping'] | null
+  delivery: { key: string; label: string; price: number }
+  notes: string | null
+  billingSame: boolean
   providerName: string | null
   paymentReference: string | null
-}): Promise<{ id: string } | null> {
-  const { data, error } = await admin
+}
+
+async function writeSiteLink(admin: Admin, args: LinkWriteArgs): Promise<void> {
+  const { error } = await admin
     .from('site_orders_link')
     .insert({
       site_id: args.siteId,
       order_id: args.orderId,
       session_id: args.sessionId,
-      cart: args.cart,
+      cart: {
+        ...args.cart,
+        delivery: args.delivery,
+        billing_same: args.billingSame,
+        notes: args.notes,
+      },
       contact: args.contact,
       shipping: args.shipping ?? null,
       payment_provider: args.providerName,
       payment_reference: args.paymentReference,
     })
-    .select('id')
-    .single()
   if (error) {
-    console.error('[checkout] site_orders_link insert failed', error)
-    return null
+    console.error('[checkout] site_orders_link insert failed', { orderId: args.orderId, error })
   }
-  return { id: data.id as string }
 }
 
 async function clearCart(admin: Admin, siteId: string, sessionId: string): Promise<void> {
@@ -196,4 +261,8 @@ async function clearCart(admin: Admin, siteId: string, sessionId: string): Promi
     .eq('site_id', siteId)
     .eq('session_id', sessionId)
   if (error) console.warn('[checkout] cart clear failed', error)
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
 }

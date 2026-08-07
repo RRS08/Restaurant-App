@@ -1,14 +1,12 @@
 // ----------------------------------------------------------------
 // POST /api/site-cart/checkout   (on tenant host)
 //
-// Target of the /checkout page's form submit. Consumes a
-// multipart/form-data body (name / email / phone / address_*),
-// runs performCheckout, and redirects with a 303 See Other:
-//   success → /thanks?order=<id>[&unpaid=1]
-//   error   → /checkout?checkout_error=<msg>
-//
-// 303 turns the POST into a GET on the next hop, so a refresh on
-// the confirmation page can't double-submit the order.
+// Consumes the multi-step checkout form's flat body (all steps
+// submit at once — the reveal is client-side only), runs
+// performCheckout, and 303-redirects:
+//   hosted URL returned → straight to the provider's payment page
+//   otherwise           → /thanks?order=<id>&unpaid=1
+//   error               → /checkout?checkout_error=<msg>
 // ----------------------------------------------------------------
 
 import { NextResponse } from 'next/server'
@@ -31,15 +29,20 @@ export async function POST(req: Request, { params }: Ctx) {
   if (!site) return new NextResponse('site not found', { status: 404 })
 
   const formData = await req.formData()
-  const name = firstString(formData, 'name') ?? ''
   const email = firstString(formData, 'email') ?? ''
+  const firstName = firstString(formData, 'first_name') ?? ''
+  const lastName = firstString(formData, 'last_name') ?? ''
   const phone = firstString(formData, 'phone')
+  const deliveryOptionKey = firstString(formData, 'delivery_option') ?? ''
   const line1 = firstString(formData, 'address_line1')
   const line2 = firstString(formData, 'address_line2')
   const city = firstString(formData, 'city')
   const state = firstString(formData, 'state')
   const postal = firstString(formData, 'postal')
   const country = firstString(formData, 'country') ?? 'US'
+  const notes = firstString(formData, 'notes')
+  const billingSame = firstString(formData, 'billing_same') === '1'
+  const optIn = firstString(formData, 'opt_in_marketing') === '1'
 
   const sessionId = (await cookies()).get(CART_COOKIE_NAME)?.value ?? null
 
@@ -48,8 +51,17 @@ export async function POST(req: Request, { params }: Ctx) {
     : undefined
 
   const result = await performCheckout(site, sessionId, {
-    contact: { name, email, phone },
+    contact: {
+      email,
+      first_name: firstName,
+      last_name: lastName,
+      phone,
+    },
+    delivery_option_key: deliveryOptionKey,
     shipping,
+    billing_same: billingSame,
+    notes,
+    opt_in_marketing: optIn,
   })
 
   const base = new URL(req.url)
@@ -58,6 +70,14 @@ export async function POST(req: Request, { params }: Ctx) {
     base.search = ''
     base.searchParams.set('checkout_error', result.error)
     return NextResponse.redirect(base, 303)
+  }
+
+  // Hosted-checkout URL beats the /thanks flow when the provider
+  // returned one — buyer pays there and comes back via the
+  // successUrl the adapter passed. When unavailable (stub), fall
+  // through to the deferred-payment /thanks message.
+  if (result.hostedUrl) {
+    return NextResponse.redirect(result.hostedUrl, 303)
   }
 
   base.pathname = `/${siteHost}/thanks`

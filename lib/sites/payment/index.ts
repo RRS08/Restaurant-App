@@ -30,4 +30,6 @@ export type {
   PaymentAuthorizeResult,
   PaymentAuthorizeBuyer,
   PaymentAuthorizeCartItem,
+  HostedCheckoutRequest,
+  HostedCheckoutResult,
 } from './types'

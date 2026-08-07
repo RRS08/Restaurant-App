@@ -51,6 +51,24 @@ export interface SiteProductRow {
   sort_order: number | null
 }
 
+export interface SiteDeliveryOption {
+  /** Stable machine key stored on the order + used for lookups. */
+  key: string
+  /** Display label (e.g. "Pick up in store", "Ship to me"). */
+  label: string
+  /** Secondary line under the label (e.g. address, carrier). */
+  sublabel?: string
+  /** Optional third line (e.g. "Usually ready in 2 hours"). */
+  note?: string
+  /** Cost in dollars added to the order total. */
+  price: number
+  /** When true, the buyer must fill in a shipping address on the
+   *  delivery step for this option. */
+  requires_address?: boolean
+  /** When true, this option is preselected on page load. */
+  default?: boolean
+}
+
 export interface SiteCartItem {
   slug: string
   qty: number

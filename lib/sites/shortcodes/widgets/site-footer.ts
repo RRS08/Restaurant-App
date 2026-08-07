@@ -158,6 +158,14 @@ const FOOTER_STYLE = `
 .site-foot .foot-tag{font-size:13.5px;color:#7d8a6e;line-height:1.65;margin:0}
 .site-foot .foot-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
 .site-foot .foot-copyright{font-size:11px;color:#9aa590}
+/* Phone footer: single divider (foot-top's border-bottom is
+   enough), no copyright line, checked mark alone on the right.
+   Overrides the global-CSS .foot-bar rules that stamp a second
+   border and space-between the two children. */
+@media(max-width:1023px){
+  .site-foot .foot-copyright{display:none}
+  .site-foot .foot-bar{justify-content:flex-end;border-top:0;padding-top:0;margin-top:12px}
+}
 @media(min-width:1024px){
   /* Two-track grid: brand block claims the left 1fr, link columns
      sit right-aligned. Cols internally use auto-sized tracks so

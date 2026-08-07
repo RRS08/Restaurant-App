@@ -20,6 +20,8 @@ import type {
   PaymentAdapter,
   PaymentAuthorizeRequest,
   PaymentAuthorizeResult,
+  HostedCheckoutRequest,
+  HostedCheckoutResult,
 } from './types'
 
 export const godaddyAdapter: PaymentAdapter = {
@@ -33,6 +35,22 @@ export const godaddyAdapter: PaymentAdapter = {
     return {
       status: 'pending',
       note: 'Online payment pending — the merchant will email a secure payment link within one business day.',
+    }
+  },
+  async createHostedCheckout(req: HostedCheckoutRequest): Promise<HostedCheckoutResult> {
+    // TODO: real GoDaddy / Poynt hosted-checkout integration. Blocked
+    // on confirming which endpoint exposes "create payment URL for
+    // this amount, redirect back on success" — Poynt's Transactions
+    // Authorize needs a card token, so a hosted flow is a separate
+    // API surface. Whole checkout UI + endpoint are already wired
+    // to consume the URL when this returns one.
+    console.info('[payment:godaddy] stub createHostedCheckout', {
+      orderId: req.orderId,
+      amount: req.amount,
+    })
+    return {
+      unavailable: true,
+      reason: 'hosted-checkout adapter not yet implemented for godaddy',
     }
   },
 }

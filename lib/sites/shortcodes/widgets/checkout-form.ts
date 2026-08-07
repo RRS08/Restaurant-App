@@ -268,6 +268,12 @@ const CHECKOUT_STYLE = `
 .co-step.is-active .co-step-label,.co-step.is-done .co-step-label{color:#2f382a}
 .co-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#7d8a6e;margin:0 0 16px}
 .co-panel{display:flex;flex-direction:column;gap:14px}
+/* Explicit display value clobbers the browser default
+   [hidden]{display:none}. Attribute selector has higher
+   specificity than the class rule above so it wins on the two
+   panels we hide via the hidden attribute. Same for the
+   conditional address block on step 2. */
+.co-panel[hidden],.co-address[hidden]{display:none}
 .co-field{display:flex;flex-direction:column;gap:6px}
 .co-field label{font-size:12px;font-weight:600;color:#5f6857}
 .co-field label .opt{font-weight:400;color:#9aa590}

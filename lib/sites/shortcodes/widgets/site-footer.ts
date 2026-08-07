@@ -63,7 +63,11 @@ ${linkHtml}
     </div>`
   }).join('\n')
 
-  return `<footer class="site-foot">
+  // Leading </div> closes the .page-enter wrapper opened by
+  // {{site-header}}. Header and footer themselves stay outside the
+  // animation — only the content in between fades up on load.
+  return `</div>
+<footer class="site-foot">
   <style>${FOOTER_STYLE}</style>
   <div class="foot-top">
     <div class="foot-brand-block">
@@ -143,8 +147,14 @@ const FOOTER_STYLE = `
 .site-foot .foot-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
 .site-foot .foot-copyright{font-size:11px;color:#9aa590}
 @media(min-width:1024px){
-  .site-foot .foot-top{display:grid;grid-template-columns:1fr auto;gap:64px;align-items:start}
-  .site-foot .foot-cols{align-self:start}
+  /* Two-track grid on the footer itself so the brand block and the
+     link columns land in the same row. .foot-cols was rendering
+     below .foot-top because they're siblings — needs a shared
+     parent grid to align, not just column CSS on one of them. */
+  .site-foot{display:grid;grid-template-columns:1fr auto;column-gap:64px}
+  .site-foot .foot-top{grid-column:1;grid-row:1;margin-bottom:0;padding-bottom:0;border-bottom:0}
+  .site-foot .foot-cols{grid-column:2;grid-row:1;grid-template-columns:repeat(2,180px);justify-content:end}
+  .site-foot .foot-bar{grid-column:1 / -1;grid-row:2;margin-top:32px;padding-top:18px;border-top:1px solid #dee2d5}
   .site-foot .foot-brand img{height:52px}
   .site-foot .foot-brand-name strong{font-size:26px}
   .site-foot .foot-brand-name em{font-size:10px}

@@ -53,6 +53,10 @@ export function renderSiteHeader(_args: unknown, ctx: ShortcodeContext): string 
   const desktopLinks = finalItems.map(i => `    <a href="${escapeAttr(i.href)}">${escapeHtml(i.label)}</a>`).join('\n')
   const drawerLinks = finalItems.map(i => `    <a href="${escapeAttr(i.href)}">${escapeHtml(i.label)}</a>`).join('\n')
 
+  // The trailing <div class="page-enter"> opens the fade-up wrapper
+  // Design specced for real navigation. {{site-footer}} closes it.
+  // Header stays outside the wrapper so it doesn't animate on every
+  // click — only content between header + footer fades up.
   return `<header class="site-head">
   <a class="brand" href="/">
     <img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(siteName)}">
@@ -70,8 +74,19 @@ ${desktopLinks}
 ${drawerLinks}
   </nav>
 </header>
-${HEADER_SCRIPT}`
+${HEADER_SCRIPT}
+<style>${PAGE_ENTER_STYLE}</style>
+<div class="page-enter">`
 }
+
+// Design's page-entry animation. @keyframes floatIn is already in
+// sites.config.global_css from the drawer animation; only .page-enter
+// and the reduced-motion guard are added here. The guard is not
+// optional — anyone with prefers-reduced-motion set gets no animation.
+const PAGE_ENTER_STYLE = `
+.page-enter{animation:floatIn .45s ease both}
+@media (prefers-reduced-motion: reduce){*{animation:none !important}}
+`
 
 // Ships with every page via the header widget so behaviour is
 // consistent regardless of what a specific page's js_body does:

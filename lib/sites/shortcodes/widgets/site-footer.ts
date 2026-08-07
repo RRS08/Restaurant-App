@@ -43,8 +43,12 @@ export function renderSiteFooter(_args: unknown, ctx: ShortcodeContext): string 
   const footer = (config.footer ?? {}) as { tagline?: string; cols?: unknown }
 
   const tagline = typeof footer.tagline === 'string' ? footer.tagline : FALLBACK_TAGLINE
-  const rawCols = Array.isArray(footer.cols) ? (footer.cols as FooterCol[]) : FALLBACK_COLS
-  const cols = rawCols.length > 0 ? rawCols : FALLBACK_COLS
+  // Explicit [] means "no link columns" — footer collapses to just
+  // brand + bar. Undefined means "site never set cols, use the
+  // Hatziri-shaped defaults so a fresh site works with zero config."
+  const cols: FooterCol[] = Array.isArray(footer.cols)
+    ? (footer.cols as FooterCol[])
+    : FALLBACK_COLS
 
   const siteName = ctx.site.name ?? ctx.site.slug
   const logoUrl = readLogoUrl(config)
@@ -63,11 +67,21 @@ ${linkHtml}
     </div>`
   }).join('\n')
 
+  // Only render the cols block when there ARE cols. Empty array
+  // means "no link columns" — the footer collapses to just brand +
+  // bar. The empty-marker class lets the grid stretch brand across
+  // both parent tracks so the copyright bar doesn't sit under a
+  // narrow-brand + empty-right layout.
+  const colsBlock = cols.length > 0
+    ? `<div class="foot-cols">\n${colsHtml}\n  </div>`
+    : ''
+  const emptyColsClass = cols.length === 0 ? ' site-foot-no-cols' : ''
+
   // Leading </div> closes the .page-enter wrapper opened by
   // {{site-header}}. Header and footer themselves stay outside the
   // animation — only the content in between fades up on load.
   return `</div>
-<footer class="site-foot">
+<footer class="site-foot${emptyColsClass}">
   <style>${FOOTER_STYLE}</style>
   <div class="foot-top">
     <div class="foot-brand-block">
@@ -80,9 +94,7 @@ ${linkHtml}
       <p class="foot-tag">${escapeHtml(tagline)}</p>
     </div>
   </div>
-  <div class="foot-cols">
-${colsHtml}
-  </div>
+  ${colsBlock}
   <div class="foot-bar">
     <span class="foot-copyright">${escapeHtml(copyright)}</span>
     <span class="by-checked">
@@ -159,5 +171,8 @@ const FOOTER_STYLE = `
   .site-foot .foot-brand img{height:52px}
   .site-foot .foot-brand-name strong{font-size:26px}
   .site-foot .foot-brand-name em{font-size:10px}
+  /* When cols are empty, let the brand block claim both parent
+     tracks so it doesn't sit under a phantom gap on the right. */
+  .site-foot.site-foot-no-cols .foot-top{grid-column:1 / -1}
 }
 `

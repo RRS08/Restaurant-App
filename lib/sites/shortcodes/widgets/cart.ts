@@ -119,14 +119,14 @@ const CART_STYLE = `
 .cart-line{grid-template-columns:66px 1fr}
 .cart-info{display:flex;flex-direction:column;gap:4px}
 .cart-info .cart-remove{align-self:flex-start;margin-top:6px}
-.cart-continue{display:inline-block;margin-top:20px;font-size:13.5px;color:#7d8a6e;border-bottom:1px solid transparent}
-.cart-continue:hover{color:#2f382a;border-bottom-color:#cdd3c4}
-.cart-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#7d8a6e;margin:0 0 14px}
-.cart-pickup{font-size:12.5px;color:#7d8a6e;line-height:1.6;margin-top:14px;text-wrap:pretty}
+.cart-continue{display:inline-block;margin-top:20px;font-size:13.5px;color:#55723e;border-bottom:1px solid transparent}
+.cart-continue:hover{color:#253b0e;border-bottom-color:#cdd3c4}
+.cart-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#55723e;margin:0 0 14px}
+.cart-pickup{font-size:12.5px;color:#55723e;line-height:1.6;margin-top:14px;text-wrap:pretty}
 /* Plain stepper — no pill border. Just the -, output, + with
    generous hit targets, matching Design's minimal cart stepper. */
 .stepper-plain{display:inline-flex;align-items:center;border:0;gap:2px}
-.stepper-plain button{width:32px;height:32px;background:none;border:0;font-size:18px;color:#2f382a;cursor:pointer;padding:0}
+.stepper-plain button{width:32px;height:32px;background:none;border:0;font-size:18px;color:#253b0e;cursor:pointer;padding:0}
 .stepper-plain output{min-width:22px;text-align:center;font-size:14.5px;font-weight:500}
 @media(min-width:1024px){
   .cart-line{grid-template-columns:96px 1fr auto auto;gap:32px;align-items:center}

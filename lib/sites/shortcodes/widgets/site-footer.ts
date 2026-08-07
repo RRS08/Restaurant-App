@@ -154,10 +154,10 @@ const FOOTER_STYLE = `
 .site-foot .foot-brand img{height:44px;width:auto}
 .site-foot .foot-brand-name{line-height:1.05}
 .site-foot .foot-brand-name strong{display:block;font-size:22px;font-weight:600;letter-spacing:-.02em}
-.site-foot .foot-brand-name em{display:block;font-style:normal;font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:#7d8a6e;margin-top:4px}
-.site-foot .foot-tag{font-size:13.5px;color:#7d8a6e;line-height:1.65;margin:0}
+.site-foot .foot-brand-name em{display:block;font-style:normal;font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:#55723e;margin-top:4px}
+.site-foot .foot-tag{font-size:13.5px;color:#55723e;line-height:1.65;margin:0}
 .site-foot .foot-bar{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
-.site-foot .foot-copyright{font-size:11px;color:#9aa590}
+.site-foot .foot-copyright{font-size:11px;color:#55723e}
 /* Phone footer: single divider (foot-top's border-bottom is
    enough), no copyright line, checked mark alone on the right.
    Overrides the global-CSS .foot-bar rules that stamp a second
@@ -175,7 +175,7 @@ const FOOTER_STYLE = `
   .site-foot{display:grid;grid-template-columns:1fr auto;column-gap:64px}
   .site-foot .foot-top{grid-column:1;grid-row:1;margin-bottom:0;padding-bottom:0;border-bottom:0}
   .site-foot .foot-cols{grid-column:2;grid-row:1;grid-template-columns:auto auto;justify-content:end;gap:64px}
-  .site-foot .foot-bar{grid-column:1 / -1;grid-row:2;margin-top:32px;padding-top:18px;border-top:1px solid #dee2d5}
+  .site-foot .foot-bar{grid-column:1 / -1;grid-row:2;margin-top:32px;padding-top:18px;border-top:1px solid #d0e3c4}
   .site-foot .foot-brand img{height:52px}
   .site-foot .foot-brand-name strong{font-size:26px}
   .site-foot .foot-brand-name em{font-size:10px}

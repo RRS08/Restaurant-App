@@ -257,26 +257,26 @@ function formatPrice(n: number): string {
 
 const CHECKOUT_STYLE = `
 .co-layout{display:grid;grid-template-columns:1fr;gap:32px}
-.co-error{background:#fde8e8;color:#7a2323;border-radius:9px;padding:14px;font-size:14px;line-height:1.5;margin-bottom:20px}
+.co-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:14px;font-size:14px;line-height:1.5;margin-bottom:20px}
 /* Dividers flex-grow to fill remaining space instead of being
    fixed 56px each — that overflowed narrow mobile viewports and
    clipped step 3's label. Now the whole strip spans the container
    naturally at any width. */
 .co-progress{list-style:none;padding:0;margin:0 0 28px;display:flex;align-items:center;font-size:12.5px}
 .co-progress .co-step{display:flex;align-items:center;gap:8px;flex:0 0 auto;min-width:0}
-.co-progress .co-step + .co-step::before{content:"";display:block;height:1px;background:#dfe3d8;flex:1;min-width:16px;margin:0 10px}
+.co-progress .co-step + .co-step::before{content:"";display:block;height:1px;background:#d4e7c7;flex:1;min-width:16px;margin:0 10px}
 @media(max-width:600px){
   .co-progress{font-size:11px}
   .co-progress .co-step{gap:6px}
   .co-progress .co-step + .co-step::before{margin:0 6px;min-width:8px}
   .co-step-num{width:24px;height:24px;font-size:11px}
 }
-.co-step-num{width:28px;height:28px;border-radius:50%;border:1.5px solid #dfe3d8;color:#9aa590;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;background:#fff}
-.co-step.is-active .co-step-num{background:#2f382a;color:#fff;border-color:#2f382a}
-.co-step.is-done .co-step-num{background:#2f382a;color:#fff;border-color:#2f382a}
-.co-step-label{color:#9aa590;font-weight:500}
-.co-step.is-active .co-step-label,.co-step.is-done .co-step-label{color:#2f382a}
-.co-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#7d8a6e;margin:0 0 16px}
+.co-step-num{width:28px;height:28px;border-radius:50%;border:1.5px solid #d4e7c7;color:#55723e;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;background:#fff}
+.co-step.is-active .co-step-num{background:#253b0e;color:#fff;border-color:#253b0e}
+.co-step.is-done .co-step-num{background:#253b0e;color:#fff;border-color:#253b0e}
+.co-step-label{color:#55723e;font-weight:500}
+.co-step.is-active .co-step-label,.co-step.is-done .co-step-label{color:#253b0e}
+.co-eyebrow{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#55723e;margin:0 0 16px}
 .co-panel{display:flex;flex-direction:column;gap:14px}
 /* Explicit display value clobbers the browser default
    [hidden]{display:none}. Attribute selector has higher
@@ -285,51 +285,51 @@ const CHECKOUT_STYLE = `
    conditional address block on step 2. */
 .co-panel[hidden],.co-address[hidden]{display:none}
 .co-field{display:flex;flex-direction:column;gap:6px}
-.co-field label{font-size:12px;font-weight:600;color:#5f6857}
-.co-field label .opt{font-weight:400;color:#9aa590}
-.co-field input,.co-field textarea{width:100%;background:#f7f8f4;border:1px solid #dfe3d8;border-radius:9px;padding:13px;font:inherit;font-size:14px;color:#2f382a}
-.co-field input::placeholder,.co-field textarea::placeholder{color:#a3ab98}
-.co-field input:focus,.co-field textarea:focus{outline:2px solid #5f6f52;outline-offset:1px;border-color:transparent}
+.co-field label{font-size:12px;font-weight:600;color:#445b2f}
+.co-field label .opt{font-weight:400;color:#55723e}
+.co-field input,.co-field textarea{width:100%;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:13px;font:inherit;font-size:14px;color:#253b0e}
+.co-field input::placeholder,.co-field textarea::placeholder{color:#758969}
+.co-field input:focus,.co-field textarea:focus{outline:2px solid #536f3b;outline-offset:1px;border-color:transparent}
 .co-field textarea{resize:vertical;min-height:96px}
 .co-row-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .co-row-3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
-.co-hint{font-size:12.5px;color:#7d8a6e;margin:0;line-height:1.55}
-.co-check{display:flex;align-items:center;gap:10px;font-size:13.5px;color:#5f6857;cursor:pointer}
-.co-check input{width:16px;height:16px;accent-color:#2f382a}
+.co-hint{font-size:12.5px;color:#55723e;margin:0;line-height:1.55}
+.co-check{display:flex;align-items:center;gap:10px;font-size:13.5px;color:#445b2f;cursor:pointer}
+.co-check input{width:16px;height:16px;accent-color:#253b0e}
 .co-actions{display:flex;align-items:center;gap:20px;margin-top:12px;flex-wrap:wrap}
 .co-actions .btn{padding:14px 26px}
-.co-back-link{font-size:13.5px;color:#7d8a6e;background:none;border:0;padding:0;cursor:pointer;text-decoration:none}
-.co-back-link:hover{color:#2f382a}
+.co-back-link{font-size:13.5px;color:#55723e;background:none;border:0;padding:0;cursor:pointer;text-decoration:none}
+.co-back-link:hover{color:#253b0e}
 .co-delivery{display:flex;flex-direction:column;gap:12px}
-.co-delivery-opt{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:16px 18px;border:1.5px solid #dfe3d8;border-radius:14px;cursor:pointer;transition:border-color .18s ease}
-.co-delivery-opt.is-selected{border-color:#2f382a;box-shadow:inset 0 0 0 1px #2f382a}
-.co-delivery-opt input[type=radio]{width:18px;height:18px;accent-color:#2f382a;margin:0}
-.co-delivery-label{font-size:15px;font-weight:600;color:#2f382a}
-.co-delivery-sub{font-size:13px;color:#7d8a6e;margin-top:3px;line-height:1.5}
-.co-delivery-note{font-size:12.5px;color:#7d8a6e;margin-top:2px}
-.co-delivery-price{font-size:14px;font-weight:600;color:#2f382a;white-space:nowrap}
-.co-delivery-notice{background:#eef1e8;color:#5f6857;font-size:13px;line-height:1.6;padding:14px 16px;border-radius:12px}
+.co-delivery-opt{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:16px 18px;border:1.5px solid #d4e7c7;border-radius:14px;cursor:pointer;transition:border-color .18s ease}
+.co-delivery-opt.is-selected{border-color:#253b0e;box-shadow:inset 0 0 0 1px #253b0e}
+.co-delivery-opt input[type=radio]{width:18px;height:18px;accent-color:#253b0e;margin:0}
+.co-delivery-label{font-size:15px;font-weight:600;color:#253b0e}
+.co-delivery-sub{font-size:13px;color:#55723e;margin-top:3px;line-height:1.5}
+.co-delivery-note{font-size:12.5px;color:#55723e;margin-top:2px}
+.co-delivery-price{font-size:14px;font-weight:600;color:#253b0e;white-space:nowrap}
+.co-delivery-notice{background:#e7f4de;color:#445b2f;font-size:13px;line-height:1.6;padding:14px 16px;border-radius:12px}
 .co-address{display:flex;flex-direction:column;gap:12px;padding-top:4px}
-.co-payment-message{background:#eef1e8;color:#3f4a37;border-radius:14px;padding:18px}
+.co-payment-message{background:#e7f4de;color:#354d1c;border-radius:14px;padding:18px}
 .co-payment-message strong{display:block;margin-bottom:6px;font-size:14.5px;font-weight:600}
-.co-payment-message p{font-size:13.5px;line-height:1.65;color:#5f6857;margin:0}
-.co-summary{background:#efece3;border-radius:16px;padding:22px;align-self:start}
-.co-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#7d8a6e;margin:0 0 14px}
-.co-sum-lines{display:flex;flex-direction:column;gap:14px;padding-bottom:16px;border-bottom:1px solid #ddd9cc;margin-bottom:14px}
+.co-payment-message p{font-size:13.5px;line-height:1.65;color:#445b2f;margin:0}
+.co-summary{background:#f4ebd5;border-radius:16px;padding:22px;align-self:start}
+.co-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#55723e;margin:0 0 14px}
+.co-sum-lines{display:flex;flex-direction:column;gap:14px;padding-bottom:16px;border-bottom:1px solid #e6d8b2;margin-bottom:14px}
 .co-sum-line{display:grid;grid-template-columns:52px 1fr auto;gap:12px;align-items:center}
 .co-sum-thumb{background:#fff;border-radius:10px;padding:6px}
 .co-sum-thumb img{width:100%;aspect-ratio:1;object-fit:contain}
-.co-sum-name{font-size:14px;font-weight:600;color:#2f382a}
-.co-sum-meta{font-size:12px;color:#7d8a6e;margin-top:2px}
-.co-sum-line-total{font-size:14px;font-weight:600;color:#2f382a}
+.co-sum-name{font-size:14px;font-weight:600;color:#253b0e}
+.co-sum-meta{font-size:12px;color:#55723e;margin-top:2px}
+.co-sum-line-total{font-size:14px;font-weight:600;color:#253b0e}
 .co-sum-totals{display:flex;flex-direction:column;gap:8px}
-.co-sum-totals .row{display:flex;justify-content:space-between;font-size:14px;color:#2f382a}
-.co-sum-totals .row.muted{color:#7d8a6e;font-size:13px}
-.co-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:14px;border-top:1px solid #ddd9cc}
+.co-sum-totals .row{display:flex;justify-content:space-between;font-size:14px;color:#253b0e}
+.co-sum-totals .row.muted{color:#55723e;font-size:13px}
+.co-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:14px;border-top:1px solid #e6d8b2}
 .co-total strong{font-size:22px;font-weight:600}
-.cart-note{font-size:11.5px;color:#9aa590;text-align:center;margin-top:12px}
+.cart-note{font-size:11.5px;color:#55723e;text-align:center;margin-top:12px}
 .co-empty{text-align:center;padding:32px 0}
-.co-empty p{font-size:16px;color:#7d8a6e;margin-bottom:16px}
+.co-empty p{font-size:16px;color:#55723e;margin-bottom:16px}
 .co-empty .btn{display:inline-block;padding:14px 32px}
 @media(min-width:1024px){
   .co-layout{grid-template-columns:1fr 380px;gap:56px}

@@ -112,7 +112,11 @@ export default async function proxy(request: NextRequest) {
   // and protect everything else. This way new modules are automatically
   // protected without editing this file.
 
-  const isPublicPage = path === '/'
+  // Site-preview URLs (/preview-site/<slug>/…) render a hosted
+  // tenant site on the main host. Same public read model as the
+  // tenant hostname itself — no login required. Safe: the preview
+  // route only surfaces sites already at status='live'.
+  const isPublicPage = path === '/' || path.startsWith('/preview-site/')
   // Pages logged-out users are allowed to reach as part of the auth
   // flow itself. /forgot-password starts a reset; /auth/callback
   // exchanges the magic-link code for a session; /reset-password

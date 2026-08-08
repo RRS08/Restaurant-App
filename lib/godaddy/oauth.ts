@@ -24,6 +24,7 @@
 
 import { decodeJwt } from 'jose'
 import { signPoyntAppJwt } from './jwt'
+import type { PoyntEnv } from './tokens'
 
 export interface PoyntTokenResponse {
   accessToken: string
@@ -33,11 +34,24 @@ export interface PoyntTokenResponse {
   tokenType: string
 }
 
-function baseUrl(): string {
+// Env-aware URL selection.
+//
+// Prod defaults preserved for backward compat — existing installs
+// don't need env vars set for anything to work. OTE routes use
+// Poynt's sandbox hosts. Both can still be overridden per-env by
+// explicit env vars if Poynt ever moves the endpoints (unlikely
+// but zero-cost to leave the escape hatch).
+function baseUrlForEnv(env: PoyntEnv): string {
+  if (env === 'ote') {
+    return process.env.GODADDY_POYNT_BASE_URL_OTE || 'https://services.ote-poynt.net'
+  }
   return process.env.GODADDY_POYNT_BASE_URL || 'https://services.poynt.net'
 }
 
-function authorizeHost(): string {
+function authorizeHostForEnv(env: PoyntEnv): string {
+  if (env === 'ote') {
+    return process.env.GODADDY_POYNT_AUTHORIZE_HOST_OTE || 'https://ote.poynt.net'
+  }
   return process.env.GODADDY_POYNT_AUTHORIZE_HOST || 'https://poynt.net'
 }
 
@@ -49,23 +63,30 @@ function appId(): string {
 
 /** Build the URL we redirect the merchant to for install/approval.
  *  `state` is the value we'll match against on the callback for
- *  CSRF protection — Poynt echoes it back as `context`. */
-export function authorizeUrl(args: { redirectUri: string; state: string }): string {
+ *  CSRF protection — Poynt echoes it back as `context`. `env`
+ *  drives whether the authorize screen is prod (real merchants)
+ *  or OTE (sandbox test merchants). */
+export function authorizeUrl(args: { redirectUri: string; state: string; env?: PoyntEnv }): string {
+  const env: PoyntEnv = args.env ?? 'prod'
   const params = new URLSearchParams({
     redirect_uri: args.redirectUri,
     client_id: appId(),
     context: args.state,
   })
-  return `${authorizeHost()}/applications/authorize?${params.toString()}`
+  return `${authorizeHostForEnv(env)}/applications/authorize?${params.toString()}`
 }
 
 /** POST /token with the merchant `code` (a JWT signed by Poynt) to
  *  receive the merchant's access + refresh tokens. Requires an
- *  Authorization: Bearer <self-signed app JWT> header (§3). */
+ *  Authorization: Bearer <self-signed app JWT> header (§3). Env
+ *  drives which base URL we exchange against — an OTE code MUST
+ *  hit services.ote-poynt.net or the exchange 401s. */
 export async function exchangeAuthorizationCode(args: {
   code: string
   redirectUri: string
+  env?: PoyntEnv
 }): Promise<PoyntTokenResponse> {
+  const env: PoyntEnv = args.env ?? 'prod'
   const assertion = await signPoyntAppJwt()
 
   const body = new URLSearchParams({
@@ -75,7 +96,7 @@ export async function exchangeAuthorizationCode(args: {
     code: args.code,
   })
 
-  const res = await fetch(`${baseUrl()}/token`, {
+  const res = await fetch(`${baseUrlForEnv(env)}/token`, {
     method: 'POST',
     cache: 'no-store',
     headers: {
@@ -91,16 +112,20 @@ export async function exchangeAuthorizationCode(args: {
 }
 
 /** POST /token with a REFRESH_TOKEN grant to renew the merchant's
- *  access token before the 24h expiry. §4 of the spec. */
+ *  access token before the 24h expiry. §4 of the spec. Env matches
+ *  the environment the original token was issued against — a prod
+ *  refresh_token doesn't work on services.ote-poynt.net. */
 export async function refreshMerchantToken(args: {
   refreshToken: string
+  env?: PoyntEnv
 }): Promise<PoyntTokenResponse> {
+  const env: PoyntEnv = args.env ?? 'prod'
   const body = new URLSearchParams({
     grantType: 'REFRESH_TOKEN',             // camelCase per §4
     refreshToken: args.refreshToken,
   })
 
-  const res = await fetch(`${baseUrl()}/token`, {
+  const res = await fetch(`${baseUrlForEnv(env)}/token`, {
     method: 'POST',
     cache: 'no-store',
     headers: {

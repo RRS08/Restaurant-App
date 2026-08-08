@@ -68,15 +68,21 @@ export type PoyntEnv = 'prod' | 'ote'
 // OAuth state (CSRF for the install redirect)
 // ================================================================
 
-/** Generate a random opaque state, persist {state, restaurant_id}
- *  with a 15-minute expiry, and return the state for the
- *  authorize-URL builder to embed. */
-export async function issueOAuthState(restaurantId: string): Promise<string> {
+/** Generate a random opaque state, persist {state, restaurant_id,
+ *  env} with a 15-minute expiry, and return the state for the
+ *  authorize-URL builder to embed. Env defaults to 'prod' — the
+ *  install route passes 'ote' explicitly when the merchant is
+ *  linking a sandbox test merchant. */
+export async function issueOAuthState(
+  restaurantId: string,
+  env: PoyntEnv = 'prod',
+): Promise<string> {
   const state = randomBytes(24).toString('base64url')
   const admin = createAdminClient()
   const { error } = await admin.from('godaddy_poynt_oauth_states').insert({
     state,
     restaurant_id: restaurantId,
+    env,
   })
   if (error) {
     throw new Error(`Could not issue OAuth state: ${error.message}`)
@@ -86,14 +92,15 @@ export async function issueOAuthState(restaurantId: string): Promise<string> {
 
 /** Look up a pending state, verify it's not expired, and delete
  *  it in the same round-trip (single-use). Returns the
- *  restaurant_id it was issued for, or null when the state is
- *  unknown, expired, or already consumed. */
-export async function consumeOAuthState(state: string): Promise<string | null> {
+ *  {restaurant_id, env} it was issued for, or null when the state
+ *  is unknown, expired, or already consumed. Env drives which
+ *  authorize host + token exchange base URL the callback uses. */
+export async function consumeOAuthState(state: string): Promise<{ restaurantId: string; env: PoyntEnv } | null> {
   if (!state) return null
   const admin = createAdminClient()
   const { data, error } = await admin
     .from('godaddy_poynt_oauth_states')
-    .select('restaurant_id, expires_at')
+    .select('restaurant_id, env, expires_at')
     .eq('state', state)
     .maybeSingle()
   if (error || !data) return null
@@ -102,7 +109,10 @@ export async function consumeOAuthState(state: string): Promise<string | null> {
   // expired garbage. Either way it shouldn't sit in the table.
   await admin.from('godaddy_poynt_oauth_states').delete().eq('state', state)
   if (expired) return null
-  return data.restaurant_id as string
+  return {
+    restaurantId: data.restaurant_id as string,
+    env: ((data.env as PoyntEnv | null) ?? 'prod'),
+  }
 }
 
 // ================================================================
@@ -212,7 +222,9 @@ export async function getValidAccessToken(restaurantId: string): Promise<
   // returning the stale token — a 401 downstream is worse than a
   // clear "reconnect required" message here.
   try {
-    const fresh = await refreshMerchantToken({ refreshToken: stored.refreshToken })
+    // Refresh must hit the SAME env the token was issued against —
+    // a prod refresh_token 401s on services.ote-poynt.net.
+    const fresh = await refreshMerchantToken({ refreshToken: stored.refreshToken, env: stored.env })
     await upsertMerchantToken({
       restaurantId: stored.restaurantId,
       businessId: stored.businessId,
@@ -222,7 +234,7 @@ export async function getValidAccessToken(restaurantId: string): Promise<
       tokenType: fresh.tokenType,
       expiresInSeconds: fresh.expiresIn,
       // Preserve the row's env — a refresh must never migrate a
-      // token between environments even if POYNT_ENV changed
+      // token between environments even if config changed
       // between issue and refresh.
       env: stored.env,
     })

@@ -68,10 +68,11 @@ export async function GET(req: NextRequest) {
     return redirectToSettings(req, 'declined')
   }
 
-  const restaurantId = await consumeOAuthState(context)
-  if (!restaurantId) {
+  const consumed = await consumeOAuthState(context)
+  if (!consumed) {
     return redirectToSettings(req, 'stale-state')
   }
+  const { restaurantId, env } = consumed
 
   const businessId = decodeBusinessId(code)
   if (!businessId) {
@@ -83,7 +84,11 @@ export async function GET(req: NextRequest) {
   const redirectUri = `${origin}/api/godaddy/oauth/callback`
 
   try {
-    const tokens = await exchangeAuthorizationCode({ code, redirectUri })
+    // Env from the state row drives which base URL we exchange
+    // against + which env the resulting token row is stamped with.
+    // Prod grants land as env='prod'; ?env=ote flows land as
+    // env='ote' — the two rows coexist per the widened uniqueness.
+    const tokens = await exchangeAuthorizationCode({ code, redirectUri, env })
     await upsertMerchantToken({
       restaurantId,
       businessId,
@@ -92,6 +97,7 @@ export async function GET(req: NextRequest) {
       scope: tokens.scope,
       tokenType: tokens.tokenType,
       expiresInSeconds: tokens.expiresIn,
+      env,
     })
 
     // Register the delivery webhook so future orders push in

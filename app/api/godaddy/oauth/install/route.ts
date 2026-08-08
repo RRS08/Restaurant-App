@@ -39,7 +39,15 @@ export async function GET(req: NextRequest) {
   }
 
   const restaurantId = role.restaurant_id as string
-  const state = await issueOAuthState(restaurantId)
+
+  // ?env=ote routes the whole flow (authorize URL + token exchange
+  // + resulting token row) to Poynt's sandbox. Absent or any other
+  // value = prod. Sandbox link is deliberately not exposed in the
+  // Settings UI — sandbox connects are a maintenance / testing
+  // action, initiated by hitting the URL directly with the query.
+  const envParam = new URL(req.url).searchParams.get('env')
+  const env: 'prod' | 'ote' = envParam === 'ote' ? 'ote' : 'prod'
+  const state = await issueOAuthState(restaurantId, env)
 
   // Redirect URI must match exactly what's configured in the
   // Poynt Developer Center → OAuth Settings. Derive from the
@@ -51,6 +59,6 @@ export async function GET(req: NextRequest) {
   const origin = configuredOrigin || new URL(req.url).origin
   const redirectUri = `${origin}/api/godaddy/oauth/callback`
 
-  const url = authorizeUrl({ redirectUri, state })
+  const url = authorizeUrl({ redirectUri, state, env })
   return NextResponse.redirect(url)
 }

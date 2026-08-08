@@ -209,7 +209,8 @@ async function getValidAccessTokenForEnv(
   }
 
   try {
-    const fresh = await refreshMerchantToken({ refreshToken: stored.refreshToken })
+    // Refresh in the same env the token was issued for.
+    const fresh = await refreshMerchantToken({ refreshToken: stored.refreshToken, env: stored.env })
     await upsertMerchantToken({
       restaurantId: stored.restaurantId,
       businessId: stored.businessId,

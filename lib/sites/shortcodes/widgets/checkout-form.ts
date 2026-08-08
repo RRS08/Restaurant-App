@@ -190,12 +190,12 @@ ${deliveryRadios}
         </div>
       </div>
 
+      ${renderPaymentBlock(collect, paymentMessage)}
+
       <div class="co-field">
         <label for="co-cardholder">Name on card</label>
         <input id="co-cardholder" name="cardholder_name" type="text" placeholder="As shown on the card" autocomplete="cc-name" required>
       </div>
-
-      ${renderPaymentBlock(collect, paymentMessage)}
 
       <label class="co-check">
         <input type="checkbox" name="billing_same" value="1" checked data-billing-toggle>
@@ -272,12 +272,11 @@ function renderPaymentBlock(collect: CollectClientConfig | null, fallbackMessage
   const sandboxBadge = collect.isSandbox
     ? '<div class="co-sandbox-badge">Sandbox mode — use Poynt test cards</div>'
     : ''
-  return `<div class="co-card-field">
-        <label>Card details</label>
-        <div id="poynt-card-mount" class="co-card-mount"></div>
-        <input type="hidden" name="poynt_collect_nonce" value="">
-        <div class="co-card-error" data-collect-error hidden></div>
-      </div>
+  // No wrapping label here — Poynt now renders per-field labels
+  // (Card number / Expiry / CVC) inside the iframe via displayComponents.
+  return `<div id="poynt-card-mount" class="co-card-mount"></div>
+      <input type="hidden" name="poynt_collect_nonce" value="">
+      <div class="co-card-error" data-collect-error hidden></div>
       ${sandboxBadge}`
 }
 
@@ -440,12 +439,14 @@ const CHECKOUT_STYLE = `
 .co-payment-message p{font-size:13.5px;line-height:1.65;color:#445b2f;margin:0}
 .co-card-field{display:flex;flex-direction:column;gap:8px}
 .co-card-field label{font-size:12px;font-weight:600;color:#445b2f}
-/* Container is a snug frame around Poynt's iframe. No padding —
-   the iframe drives its own internal padding + height (via the
-   iframe_height_change subscribe). Padding here would stack on
-   top and turn a tidy 48px card row into a 250px empty block. */
-.co-card-mount{background:#fff;border:1px solid #d4e7c7;border-radius:9px;min-height:52px;overflow:hidden;transition:border-color .15s ease,box-shadow .15s ease}
-.co-card-mount:focus-within{border-color:#536f3b;box-shadow:0 0 0 3px rgba(83,111,59,.15)}
+/* Wrapper around Poynt's iframe. Height is driven by the iframe
+   itself (via iframe_height_change) — Poynt renders Card number on
+   its own row and Expiry + CVC as a two-column row below, with our
+   customCss styling matching the surrounding form. Their inline
+   error text is hidden via customCss.errorText.base — validation
+   errors surface via our own [data-collect-error] below the mount,
+   so the container never balloons on a validation fail. */
+.co-card-mount{background:transparent;min-height:56px;transition:opacity .15s ease}
 .co-card-mount iframe{width:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -702,7 +703,36 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     if (tokenizer || !window.TokenizeJs) return;
     try {
       tokenizer = new window.TokenizeJs(cfg.businessId, cfg.applicationId);
-      tokenizer.mount('poynt-card-mount', document, {});
+      // Mount options — the whole point here is (a) turn on Poynt's
+      // per-field labels so the iframe renders "Card number / Expiry
+      // / CVC" as three distinct rows, (b) style each row + input
+      // to match the surrounding Hatziri form, and (c) hide Poynt's
+      // inline error text so their validation panel doesn't blow the
+      // iframe out to 250px+ of empty space (see [data-collect-error]
+      // outside the iframe for our own error surface).
+      //
+      // Layout trick: setting container to display:flex + flex-wrap
+      // lets rowCardNumber take 100% width and rowExpiration + rowCVV
+      // sit side-by-side underneath at 50% each.
+      tokenizer.mount('poynt-card-mount', document, {
+        displayComponents: { labels: true },
+        customCss: {
+          container: 'display:flex;flex-wrap:wrap;gap:14px;font-family:inherit;padding:0;margin:0;',
+          rowCardNumber: 'flex:1 0 100%;margin:0;padding:0;',
+          rowExpiration: 'flex:1 1 calc(50% - 7px);margin:0;padding:0;',
+          rowCVV: 'flex:1 1 calc(50% - 7px);margin:0;padding:0;',
+          inputLabel: 'display:block;font-size:12px;font-weight:600;color:#445b2f;margin:0 0 8px 0;font-family:inherit;',
+          inputDefault: 'width:100%;box-sizing:border-box;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;font-size:15px;color:#1a2010;font-family:inherit;line-height:1.35;outline:none;transition:border-color .15s ease,box-shadow .15s ease;',
+          input: {
+            cardNumber: 'width:100%;',
+            expiryDate: 'width:100%;',
+            cvc: 'width:100%;',
+          },
+          fieldWrapper: { errored: 'border-color:#c53131;' },
+          inputWrapper: { errored: 'border-color:#c53131;' },
+          errorText: { base: 'display:none;' },
+        },
+      });
     } catch (err) {
       var msg = err && err.message ? String(err.message) : 'Card entry failed to load. Refresh and try again.';
       showError(msg);

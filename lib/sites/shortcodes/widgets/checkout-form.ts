@@ -493,7 +493,11 @@ const CHECKOUT_STYLE = `
    Poynt from ballooning if they reserve room for their (hidden)
    error panel — validation errors surface via the external
    [data-collect-error] block below the mount. */
-.co-card-mount{background:transparent;min-height:120px;overflow:hidden}
+/* Small top margin so the gap above Card number matches the gap
+   below CVV — Poynt's iframe has more internal padding on the
+   bottom than the top, so without this the section reads tighter
+   on top than on the bottom. */
+.co-card-mount{background:transparent;min-height:120px;overflow:hidden;margin-top:6px}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -983,17 +987,15 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       showError(msg);
     });
     // Height-sync — clamp Poynt's reported height between a min
-    // that fits three collapsed rows and a max that stops any
-    // hidden error-panel reservation from blowing the container
-    // out. Now that customCss.errorText.base is display:none, the
-    // reported value should be the real content height, so this
-    // subscribe just makes the container hug the iframe tightly
-    // (no dead space between CVV and the billing checkbox).
+    // that fits three collapsed rows and a max wide enough that any
+    // realistic Poynt render fits without an inner scroll. The
+    // upper cap is only a safety net against pathological growth
+    // (e.g. Poynt reintroducing their error panel unexpectedly).
     safeSubscribe('iframe_height_change', function(e) {
       var mount = document.getElementById('poynt-card-mount');
       var h = e && e.data && e.data.height;
       if (mount && typeof h === 'number' && h > 0) {
-        mount.style.height = Math.min(Math.max(h, 120), 240) + 'px';
+        mount.style.height = Math.min(Math.max(h, 120), 320) + 'px';
       }
     });
     // If we got here, mount didn't throw — mark ready so submit

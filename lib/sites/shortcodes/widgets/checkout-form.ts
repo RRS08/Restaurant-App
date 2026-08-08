@@ -449,10 +449,10 @@ const CHECKOUT_STYLE = `
 /* Container height is driven live by iframe_height_change — the
    iframe reports its full content height and we mirror it, so
    neither the iframe nor the container ever needs a scrollbar.
-   iframe{height:100%} forces Poynt's iframe to obey container height
-   instead of its inline HTML `height` attribute (which was leaving
-   an inner scroll on the CVV row when their default height was
-   shorter than the stacked content). */
+   The iframe height:100% rule forces Poynt's iframe to obey the
+   container height instead of its inline HTML height attribute,
+   which was leaving an inner scroll on the CVV row when their
+   default height was shorter than the stacked content. */
 .co-card-mount{background:transparent;min-height:56px;transition:height .15s ease}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}

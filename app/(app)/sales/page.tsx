@@ -80,6 +80,14 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   // Order fetch scoped to the requested business_date. 500 cap kept
   // as a safety belt — a single day rarely produces that many rows
   // in pilot volumes, and a busy Costco-style day would still fit.
+  //
+  // NOTE: site_orders_link is fetched SEPARATELY below (not as a
+  // PostgREST embed) to prevent one broken relationship / RLS block
+  // on the child table from nuking the entire orders list. When we
+  // embedded it here, a schema-cache / RLS hiccup on
+  // site_orders_link silently returned zero orders on /sales while
+  // the dashboard (no such embed) kept working — user-visible bug
+  // where the sales page was empty for a merchant with 21 real sales.
   const { data: orders } = await supabase
     .from('orders')
     .select(`
@@ -89,8 +97,7 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
       card_brand, card_last4, customer_name, channel_source,
       location_id,
       locations ( name ),
-      order_items ( id, quantity, unit_price, total_price, variant_label, menu_items ( name ) ),
-      site_orders_link ( cart, contact, shipping, payment_provider, payment_reference )
+      order_items ( id, quantity, unit_price, total_price, variant_label, menu_items ( name ) )
     `)
     .eq('business_date', requestedDate)
     .order('created_at', { ascending: false })
@@ -107,20 +114,39 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
     return s.length > 0 ? s : null
   }
 
-  // site_orders_link is a 1:0..1 join keyed on order_id; PostgREST
-  // returns either an object or null depending on whether the row
-  // exists. Only web-source orders will have one attached — all
-  // other sources leave webDetail as null.
-  type WebLinkRow = {
+  // Fetch web-order details in a separate query, only for the
+  // handful of web orders in this day. Failure here degrades the
+  // drawer (no email/shipping/etc.) but does NOT hide any orders —
+  // the main list stays intact.
+  type WebLink = {
     cart: unknown
     contact: unknown
     shipping: unknown
     payment_provider: string | null
     payment_reference: string | null
-  } | null
+  }
+  const webOrderIds = (orders ?? [])
+    .filter((o) => (o.source ?? 'manual') === 'web')
+    .map((o) => o.id as string)
+  const webLinksById = new Map<string, WebLink>()
+  if (webOrderIds.length > 0) {
+    const { data: links } = await supabase
+      .from('site_orders_link')
+      .select('order_id, cart, contact, shipping, payment_provider, payment_reference')
+      .in('order_id', webOrderIds)
+    for (const row of (links ?? []) as Array<WebLink & { order_id: string }>) {
+      webLinksById.set(row.order_id, {
+        cart: row.cart,
+        contact: row.contact,
+        shipping: row.shipping,
+        payment_provider: row.payment_provider,
+        payment_reference: row.payment_reference,
+      })
+    }
+  }
 
   const normalized = (orders ?? []).map((o) => {
-    const link = (o.site_orders_link as unknown as WebLinkRow) ?? null
+    const link = webLinksById.get(o.id as string) ?? null
     return {
       id: o.id,
       total: Number(o.total_amount),

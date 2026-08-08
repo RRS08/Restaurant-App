@@ -1037,9 +1037,56 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       return;
     }
     e.preventDefault();
+
+    // Pre-flight validate every visible required text field. Without
+    // this Poynt's getNonce() silently does nothing when card fields
+    // are empty AND our own required fields (Name on card, etc.)
+    // don't fire native validation because the form has novalidate.
+    // Result: click Place order → nothing happens → confused buyer.
+    var invalid = [];
+    var required = form.querySelectorAll('input[required], textarea[required]');
+    for (var i = 0; i < required.length; i++) {
+      var el = required[i];
+      // Skip inputs inside hidden panels or hidden blocks
+      var hiddenAncestor = el.closest('[hidden]');
+      if (hiddenAncestor) continue;
+      if (!el.checkValidity()) {
+        invalid.push(el);
+        var field = el.closest('.co-field');
+        if (field) {
+          field.classList.add('is-error');
+          field.setAttribute('data-error-message',
+            el.validity.valueMissing ? 'Please fill this in'
+            : el.validity.typeMismatch && el.type === 'email' ? 'Enter a valid email'
+            : 'Check this field');
+        }
+      }
+    }
+    if (invalid.length) {
+      showError('Fill in the highlighted fields to place your order.');
+      if (invalid[0].focus) invalid[0].focus();
+      invalid[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
     clearError();
     awaitingSubmit = true;
-    try { tokenizer.getNonce(); } catch (err) { awaitingSubmit = false; showError('Card entry error. Refresh and try again.'); }
+    try {
+      tokenizer.getNonce();
+      // Fallback timeout — if Poynt doesn't dispatch 'nonce' or
+      // 'error' within 8 seconds (empty card fields on some SDK
+      // versions produce dead silence), show a message so the
+      // buyer isn't left staring at an unresponsive button.
+      setTimeout(function() {
+        if (awaitingSubmit) {
+          awaitingSubmit = false;
+          showError('Card details look incomplete — make sure the number, expiration, and CVV are all filled in.');
+        }
+      }, 8000);
+    } catch (err) {
+      awaitingSubmit = false;
+      showError('Card entry error. Refresh and try again.');
+    }
   });
 };
 `

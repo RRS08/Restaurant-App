@@ -89,7 +89,8 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
       card_brand, card_last4, customer_name, channel_source,
       location_id,
       locations ( name ),
-      order_items ( id, quantity, unit_price, total_price, variant_label, menu_items ( name ) )
+      order_items ( id, quantity, unit_price, total_price, variant_label, menu_items ( name ) ),
+      site_orders_link ( cart, contact, shipping, payment_provider, payment_reference )
     `)
     .eq('business_date', requestedDate)
     .order('created_at', { ascending: false })
@@ -106,36 +107,58 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
     return s.length > 0 ? s : null
   }
 
-  const normalized = (orders ?? []).map((o) => ({
-    id: o.id,
-    total: Number(o.total_amount),
-    createdAt: o.created_at,
-    source: (o.source ?? 'manual') as 'manual' | 'native_pos' | 'external_pos',
-    paymentType: (o.payment_type ?? 'cash') as 'cash' | 'card' | 'other',
-    paymentStatus: (o.payment_status ?? 'paid') as 'paid' | 'unpaid',
-    status: (o.status ?? 'completed') as 'completed' | 'voided',
-    note: o.note ?? null,
-    subtotal:      numOrNull(o.subtotal),
-    discountTotal: numOrNull(o.discount_total),
-    taxTotal:      numOrNull(o.tax_total),
-    cardBrand:     strOrNull(o.card_brand),
-    cardLast4:     strOrNull(o.card_last4),
-    customerName:  strOrNull(o.customer_name),
-    channelSource: strOrNull(o.channel_source),
-    locationName: (o.locations as unknown as { name: string } | null)?.name ?? null,
-    lineItems: ((o.order_items as unknown as Array<{
-      id: string; quantity: number; unit_price: number; total_price: number
-      variant_label: string | null
-      menu_items: { name: string } | null
-    }>) ?? []).map((li) => ({
-      id: li.id,
-      name: li.menu_items?.name ?? '—',
-      variantLabel: strOrNull(li.variant_label),
-      quantity: li.quantity,
-      unitPrice: Number(li.unit_price),
-      totalPrice: Number(li.total_price),
-    })),
-  }))
+  // site_orders_link is a 1:0..1 join keyed on order_id; PostgREST
+  // returns either an object or null depending on whether the row
+  // exists. Only web-source orders will have one attached — all
+  // other sources leave webDetail as null.
+  type WebLinkRow = {
+    cart: unknown
+    contact: unknown
+    shipping: unknown
+    payment_provider: string | null
+    payment_reference: string | null
+  } | null
+
+  const normalized = (orders ?? []).map((o) => {
+    const link = (o.site_orders_link as unknown as WebLinkRow) ?? null
+    return {
+      id: o.id,
+      total: Number(o.total_amount),
+      createdAt: o.created_at,
+      source: (o.source ?? 'manual') as 'manual' | 'native_pos' | 'external_pos' | 'web',
+      paymentType: (o.payment_type ?? 'cash') as 'cash' | 'card' | 'other',
+      paymentStatus: (o.payment_status ?? 'paid') as 'paid' | 'unpaid',
+      status: (o.status ?? 'completed') as 'completed' | 'voided',
+      note: o.note ?? null,
+      subtotal:      numOrNull(o.subtotal),
+      discountTotal: numOrNull(o.discount_total),
+      taxTotal:      numOrNull(o.tax_total),
+      cardBrand:     strOrNull(o.card_brand),
+      cardLast4:     strOrNull(o.card_last4),
+      customerName:  strOrNull(o.customer_name),
+      channelSource: strOrNull(o.channel_source),
+      locationName: (o.locations as unknown as { name: string } | null)?.name ?? null,
+      lineItems: ((o.order_items as unknown as Array<{
+        id: string; quantity: number; unit_price: number; total_price: number
+        variant_label: string | null
+        menu_items: { name: string } | null
+      }>) ?? []).map((li) => ({
+        id: li.id,
+        name: li.menu_items?.name ?? '—',
+        variantLabel: strOrNull(li.variant_label),
+        quantity: li.quantity,
+        unitPrice: Number(li.unit_price),
+        totalPrice: Number(li.total_price),
+      })),
+      webDetail: link ? {
+        contact: (link.contact as Record<string, unknown> | null) ?? null,
+        shipping: (link.shipping as Record<string, unknown> | null) ?? null,
+        cart: (link.cart as Record<string, unknown> | null) ?? null,
+        paymentProvider: link.payment_provider ?? null,
+        paymentReference: link.payment_reference ?? null,
+      } : null,
+    }
+  })
 
   return (
     <SalesClient

@@ -36,7 +36,7 @@ type T = (en: string, es?: string) => string
 // Domain types — unchanged. page.tsx feeds these verbatim.
 // ================================================================
 
-type Source = 'manual' | 'native_pos' | 'external_pos'
+type Source = 'manual' | 'native_pos' | 'external_pos' | 'web'
 type PaymentType = 'cash' | 'card' | 'other'
 type PaymentStatus = 'paid' | 'unpaid'
 type OrderStatus = 'completed' | 'voided'
@@ -49,6 +49,43 @@ interface LineItem {
   quantity: number
   unitPrice: number
   totalPrice: number
+}
+
+interface WebOrderDetail {
+  /** Buyer contact captured on /checkout step 1. */
+  contact: {
+    name?: string | null
+    email?: string | null
+    phone?: string | null
+    first_name?: string | null
+    last_name?: string | null
+    opted_in_marketing?: boolean | null
+  } | null
+  /** Structured shipping address when buyer picked a
+   *  requires_address delivery option; null for pickup orders. */
+  shipping: {
+    line1?: string | null
+    line2?: string | null
+    city?: string | null
+    state?: string | null
+    postal?: string | null
+    country?: string | null
+  } | null
+  /** Frozen cart snapshot + delivery choice + notes at time of
+   *  order. Line items live here (not in order_items — web orders
+   *  never touch menu_items). */
+  cart: {
+    items?: Array<{ slug: string; qty: number; name: string; price: number; unit?: string | null; line_total: number }>
+    subtotal?: number
+    delivery?: { key?: string; label?: string; price?: number }
+    notes?: string | null
+    billing_same?: boolean
+  } | null
+  /** Provider name (e.g. 'godaddy') and transaction reference from
+   *  the payment adapter. Reference is the Poynt transaction UUID
+   *  to look up on their POS for refunds. */
+  paymentProvider: string | null
+  paymentReference: string | null
 }
 
 interface Order {
@@ -69,6 +106,8 @@ interface Order {
   channelSource: string | null
   locationName: string | null
   lineItems: LineItem[]
+  /** Populated only for source='web' orders; null otherwise. */
+  webDetail: WebOrderDetail | null
 }
 
 // ================================================================
@@ -167,7 +206,8 @@ function sourceLine(order: Order, t: T): string {
   const base =
     order.source === 'native_pos' ? t('Native POS', 'POS nativo')
       : order.source === 'external_pos' ? t('External POS', 'POS externo')
-        : t('Manual entry', 'Entrada manual')
+        : order.source === 'web' ? t('Online store', 'Tienda en línea')
+          : t('Manual entry', 'Entrada manual')
   return order.locationName ? `${base} · ${order.locationName}` : base
 }
 
@@ -217,7 +257,7 @@ function OtherIcon() {
 // SalesClient — top-level page component.
 // ================================================================
 
-type FilterKey = 'all' | 'card' | 'cash' | 'voided'
+type FilterKey = 'all' | 'card' | 'cash' | 'web' | 'voided'
 
 export default function SalesClient({
   lang, orders, operatingMode, date, today,
@@ -274,6 +314,7 @@ export default function SalesClient({
     all: orders.length,
     card: orders.filter((o) => o.paymentType === 'card').length,
     cash: orders.filter((o) => o.paymentType === 'cash').length,
+    web: orders.filter((o) => o.source === 'web').length,
     voided: orders.filter((o) => o.status === 'voided').length,
   }
 
@@ -281,7 +322,8 @@ export default function SalesClient({
     const byFilter =
       filter === 'all' ? orders
         : filter === 'voided' ? orders.filter((o) => o.status === 'voided')
-          : orders.filter((o) => o.paymentType === filter)
+          : filter === 'web' ? orders.filter((o) => o.source === 'web')
+            : orders.filter((o) => o.paymentType === filter)
     const q = salesQuery.trim().toLowerCase()
     if (!q) return byFilter
     // Match customer / note / card last4 / short-id / any line item name.
@@ -480,21 +522,23 @@ export default function SalesClient({
           padding: isBands ? '10px 24px' : '10px 16px',
           flexWrap: 'wrap',
         }}>
-          {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
+          {(['all', 'card', 'cash', 'web', 'voided'] as const).map((f) => {
             const on = filter === f
             const label =
               f === 'all' ? t('All', 'Todo')
                 : f === 'card' ? t('Card', 'Tarjeta')
                   : f === 'cash' ? t('Cash', 'Efectivo')
-                    : t('Voided', 'Anuladas')
+                    : f === 'web' ? t('Online', 'En línea')
+                      : t('Voided', 'Anuladas')
             // Same treatment as inventory's filter row — a small
             // hue-coded dot so managers can scan the row by color
             // before reading the label. 'All' stays dotless.
             const dot =
               f === 'card' ? METHOD_TONES.card.dot
                 : f === 'cash' ? METHOD_TONES.cash.dot
-                  : f === 'voided' ? '#DC2626'
-                    : null
+                  : f === 'web' ? '#27306F'
+                    : f === 'voided' ? '#DC2626'
+                      : null
             return (
               <button
                 key={f}
@@ -1066,6 +1110,83 @@ function OrderDrawer({ order, onClose, t, locale }: {
               </div>
             </div>
           )}
+
+          {/* online order details — buyer contact + delivery choice +
+              shipping (if applicable) + note to shop + Poynt txn ref.
+              Rendered only for source='web' orders that have a
+              matching site_orders_link row (i.e. the full checkout
+              flow completed). */}
+          {order.source === 'web' && order.webDetail && (() => {
+            const d = order.webDetail
+            const c = (d.contact ?? {}) as Record<string, unknown>
+            const s = (d.shipping ?? {}) as Record<string, unknown>
+            const cart = (d.cart ?? {}) as Record<string, unknown>
+            const delivery = (cart.delivery ?? {}) as { key?: string; label?: string; price?: number }
+            const notes = typeof cart.notes === 'string' ? cart.notes : null
+            const email = typeof c.email === 'string' ? c.email : null
+            const phone = typeof c.phone === 'string' ? c.phone : null
+            const addressLine1 = typeof s.line1 === 'string' ? s.line1 : null
+            const addressLine2 = typeof s.line2 === 'string' ? s.line2 : null
+            const city = typeof s.city === 'string' ? s.city : null
+            const state = typeof s.state === 'string' ? s.state : null
+            const postal = typeof s.postal === 'string' ? s.postal : null
+            const addressStreet = [addressLine1, addressLine2].filter(Boolean).join(', ')
+            const addressCity = [city, state, postal].filter(Boolean).join(', ')
+            const hasAddress = Boolean(addressStreet || addressCity)
+            const deliveryLabel = delivery.label ?? (delivery.key ?? '—')
+            const deliveryPrice = typeof delivery.price === 'number' ? delivery.price : null
+            return (
+              <div style={{ marginBottom: 20 }}>
+                <div style={{ ...eyebrow, marginBottom: 4 }}>{t('ONLINE ORDER', 'PEDIDO EN LÍNEA')}</div>
+                {email && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Email', 'Correo')}</span>
+                    <span style={{ fontSize: 12, wordBreak: 'break-all' }}>{email}</span>
+                  </div>
+                )}
+                {phone && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Phone', 'Teléfono')}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 12 }}>{phone}</span>
+                  </div>
+                )}
+                <div style={metaRow}>
+                  <span style={{ fontSize: 12, color: MUTED }}>{t('Delivery', 'Entrega')}</span>
+                  <span style={{ fontSize: 12, textAlign: 'right' }}>
+                    {deliveryLabel}
+                    {deliveryPrice != null && (
+                      <span style={{ color: MUTED, marginLeft: 6 }}>
+                        {deliveryPrice === 0 ? t('· Free', '· Gratis') : `· ${fmtMoney(deliveryPrice)}`}
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {hasAddress && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Ship to', 'Envío a')}</span>
+                    <span style={{ fontSize: 12, textAlign: 'right', lineHeight: 1.45 }}>
+                      {addressStreet && <span style={{ display: 'block' }}>{addressStreet}</span>}
+                      {addressCity && <span style={{ display: 'block' }}>{addressCity}</span>}
+                    </span>
+                  </div>
+                )}
+                {notes && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Note to shop', 'Nota a la tienda')}</span>
+                    <span style={{ fontSize: 12, textAlign: 'right', lineHeight: 1.45, maxWidth: 240 }}>{notes}</span>
+                  </div>
+                )}
+                {d.paymentReference && (
+                  <div style={{ ...metaRow, borderBottom: 'none' }}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Poynt ref', 'Ref. Poynt')}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 11, color: '#3F3F46', wordBreak: 'break-all', textAlign: 'right', maxWidth: 220 }}>
+                      {d.paymentReference}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )
+          })()}
 
           {/* customer — only when captured */}
           {order.customerName && (

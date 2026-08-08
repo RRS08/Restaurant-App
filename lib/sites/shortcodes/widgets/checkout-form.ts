@@ -629,7 +629,7 @@ const CHECKOUT_SCRIPT = `
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
     // Button always mirrors the Total row. No independent math, no
-    // `total > 0` guard — a $0 cart never gets here (checkout blocks
+    // "total > 0" guard — a zero cart never gets here (checkout blocks
     // empty carts server-side) and syncing textContent keeps the
     // button and summary from ever disagreeing.
     syncButton();

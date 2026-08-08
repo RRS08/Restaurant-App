@@ -309,11 +309,16 @@ export default function SalesClient({
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
   // Filter counts — always across the full day so the pill numbers
-  // don't shift as the manager clicks filters.
+  // don't shift as the manager clicks filters. Card + Cash are
+  // "in-person only" (exclude source='web') so an online card sale
+  // doesn't show in both Card AND Online tabs — those three chips
+  // partition the day cleanly. Voided is a status axis that overlaps
+  // any of the above on purpose (a voided card sale still shows in
+  // Voided so it can be audited).
   const counts: Record<FilterKey, number> = {
     all: orders.length,
-    card: orders.filter((o) => o.paymentType === 'card').length,
-    cash: orders.filter((o) => o.paymentType === 'cash').length,
+    card: orders.filter((o) => o.paymentType === 'card' && o.source !== 'web').length,
+    cash: orders.filter((o) => o.paymentType === 'cash' && o.source !== 'web').length,
     web: orders.filter((o) => o.source === 'web').length,
     voided: orders.filter((o) => o.status === 'voided').length,
   }
@@ -323,7 +328,7 @@ export default function SalesClient({
       filter === 'all' ? orders
         : filter === 'voided' ? orders.filter((o) => o.status === 'voided')
           : filter === 'web' ? orders.filter((o) => o.source === 'web')
-            : orders.filter((o) => o.paymentType === filter)
+            : orders.filter((o) => o.paymentType === filter && o.source !== 'web')
     const q = salesQuery.trim().toLowerCase()
     if (!q) return byFilter
     // Match customer / note / card last4 / short-id / any line item name.
@@ -1009,21 +1014,41 @@ function OrderDrawer({ order, onClose, t, locale }: {
 
         {/* body */}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px 24px', display: 'block' }}>
-          {/* items + summary */}
+          {/* items + summary. For web orders order.lineItems is empty
+              (checkout leaves order_items blank on purpose — see
+              lib/sites/checkout.ts); the actual cart lives on
+              site_orders_link.cart.items. Fall back to that shape so
+              online orders show what was bought instead of a bare
+              "No line items" placeholder. */}
+          {(() => {
+            const webCart = order.source === 'web' && order.webDetail
+              ? ((order.webDetail.cart as { items?: Array<{ slug?: string; name?: string; qty?: number; line_total?: number; unit?: string | null }> } | null)?.items ?? [])
+              : []
+            const displayItems: Array<{ id: string; name: string; quantity: number; totalPrice: number; variantLabel: string | null }> =
+              order.lineItems.length > 0
+                ? order.lineItems
+                : webCart.map((c, i) => ({
+                    id: (c.slug ?? String(i)),
+                    name: c.name ?? '—',
+                    quantity: typeof c.qty === 'number' ? c.qty : 1,
+                    totalPrice: typeof c.line_total === 'number' ? c.line_total : 0,
+                    variantLabel: c.unit ?? null,
+                  }))
+            return (
           <div style={{ marginBottom: 20 }}>
             <div style={{ ...eyebrow, marginBottom: 8 }}>{t('ITEMS', 'ARTÍCULOS')}</div>
             <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
-              {order.lineItems.length === 0 ? (
+              {displayItems.length === 0 ? (
                 <div style={{ padding: '10px 12px', fontSize: 12, color: FAINT }}>
                   {t('No line items on this order.', 'Sin artículos en esta orden.')}
                 </div>
-              ) : order.lineItems.map((l, i) => (
+              ) : displayItems.map((l, i) => (
                 <div
                   key={l.id}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 11,
                     padding: '9px 12px',
-                    borderBottom: i === order.lineItems.length - 1 ? undefined : `1px solid ${LINE_SOFT}`,
+                    borderBottom: i === displayItems.length - 1 ? undefined : `1px solid ${LINE_SOFT}`,
                   }}
                 >
                   <span style={{
@@ -1071,6 +1096,8 @@ function OrderDrawer({ order, onClose, t, locale }: {
               ))}
             </div>
           </div>
+            )
+          })()}
 
           {/* payment — plain list, adapts to the method */}
           <div style={{ marginBottom: 20 }}>

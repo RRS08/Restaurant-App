@@ -42,7 +42,7 @@ export interface StoredPoyntToken {
    *  A restaurant can hold both simultaneously so the same
    *  merchant can be tested in sandbox without touching their
    *  live prod token. */
-  env: 'prod' | 'ote'
+  env: PoyntEnv
   /** Non-null once webhook registration with Poynt succeeded.
    *  If null, the merchant is connected but no real-time push is
    *  active — the manual Sync + GitHub Actions cron carry the
@@ -52,12 +52,17 @@ export interface StoredPoyntToken {
   webhookSecret: string | null
 }
 
-/** Read POYNT_ENV once per call. Callers that hit Poynt APIs pick
- *  the token row matching the current environment so prod ingest
- *  and OTE checkout can coexist on the same restaurant. */
-export function currentPoyntEnv(): 'prod' | 'ote' {
-  return (process.env.POYNT_ENV ?? '').toLowerCase() === 'ote' ? 'ote' : 'prod'
-}
+/** Poynt environment marker stored on token rows. Prior version
+ *  of this file exported a `currentPoyntEnv()` helper that read
+ *  POYNT_ENV globally — that was the wrong design: it made ALL
+ *  Poynt-touching code paths (POS ingest, webhooks, cron, checkout)
+ *  swap environments together, which took Hatziri's live POS sync
+ *  down the moment we tried to test checkout in OTE. Env is now
+ *  scoped per-caller: POS-side callers (webhooks, ingest) always
+ *  use 'prod'; the checkout adapter reads env from the site's
+ *  own config so one site can go sandbox without affecting anything
+ *  else on the platform. */
+export type PoyntEnv = 'prod' | 'ote'
 
 // ================================================================
 // OAuth state (CSRF for the install redirect)
@@ -106,9 +111,9 @@ export async function consumeOAuthState(state: string): Promise<string | null> {
 
 /** Insert or update the token row for (restaurant, business, env).
  *  The post-OAuth callback + refresh paths both land here. Env
- *  defaults to whatever POYNT_ENV says at the moment of the call —
- *  callers only pass it explicitly when refreshing a specific
- *  stored token whose env is already known. */
+ *  defaults to 'prod' — the OAuth callback triggered from the app's
+ *  Connect GoDaddy Commerce button is a production grant unless a
+ *  future sandbox-OAuth flow overrides it explicitly. */
 export async function upsertMerchantToken(args: {
   restaurantId: string
   businessId: string
@@ -117,11 +122,11 @@ export async function upsertMerchantToken(args: {
   scope: string | null
   tokenType: string
   expiresInSeconds: number
-  env?: 'prod' | 'ote'
+  env?: PoyntEnv
 }): Promise<void> {
   const admin = createAdminClient()
   const expiresAt = new Date(Date.now() + args.expiresInSeconds * 1000).toISOString()
-  const env = args.env ?? currentPoyntEnv()
+  const env: PoyntEnv = args.env ?? 'prod'
   const { error } = await admin
     .from('godaddy_poynt_tokens')
     .upsert(
@@ -143,22 +148,24 @@ export async function upsertMerchantToken(args: {
   }
 }
 
-/** Load the connection for a restaurant IN THE CURRENT ENVIRONMENT
- *  (`POYNT_ENV`). Returns null when the restaurant hasn't linked a
- *  Poynt merchant for this env yet — a prod-linked merchant looks
- *  unlinked while POYNT_ENV=ote, which is exactly what we want: it
- *  forces the sandbox test to grant against an OTE merchant instead
- *  of accidentally hitting the live one. */
+/** Load the PROD Poynt connection for a restaurant. All POS-side
+ *  callers (webhook processing, ingest cron, manual sync, order
+ *  fetches) use this — production Poynt is where real money and
+ *  real POS orders live, and defaulting there means an accidental
+ *  env var (or a future dev experimenting with sandbox) can never
+ *  take live POS ingest down. Checkout code paths that need to opt
+ *  into sandbox use `getStoredTokenForEnv(restaurantId, 'ote')`
+ *  explicitly. */
 export async function getStoredToken(restaurantId: string): Promise<StoredPoyntToken | null> {
-  return getStoredTokenForEnv(restaurantId, currentPoyntEnv())
+  return getStoredTokenForEnv(restaurantId, 'prod')
 }
 
-/** Explicit-env variant. Callers that need to reach across
- *  environments (e.g. a future admin tool that shows both prod
- *  and OTE connections) call this directly. */
+/** Explicit-env variant. The checkout adapter uses this with the
+ *  env derived from `sites.config.payment_env` so one site can go
+ *  sandbox without any other Poynt-touching code seeing OTE. */
 export async function getStoredTokenForEnv(
   restaurantId: string,
-  env: 'prod' | 'ote',
+  env: PoyntEnv,
 ): Promise<StoredPoyntToken | null> {
   const admin = createAdminClient()
   const { data, error } = await admin
@@ -179,7 +186,7 @@ export async function getStoredTokenForEnv(
     expiresAt: data.expires_at as string,
     connectedAt: data.connected_at as string,
     updatedAt: data.updated_at as string,
-    env: (data.env as 'prod' | 'ote') ?? 'prod',
+    env: (data.env as PoyntEnv) ?? 'prod',
     webhookId: (data.webhook_id as string | null) ?? null,
     webhookSecret: (data.webhook_secret as string | null) ?? null,
   }

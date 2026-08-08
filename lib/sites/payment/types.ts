@@ -54,6 +54,12 @@ export interface PaymentAuthorizeRequest {
   /** Reference the adapter can attach to the transaction on the
    *  provider side for reconciliation (typically the orders row id). */
   orderReference?: string
+  /** Which provider environment to charge against. Derived per-site
+   *  from `sites.config.payment_env` — 'prod' (default) hits the
+   *  live provider account, 'ote' hits Poynt sandbox. Global env
+   *  vars never drive this — one site's sandbox mode can never
+   *  affect another site's live integration. */
+  env: 'prod' | 'ote'
 }
 
 export type PaymentAuthorizeResult =

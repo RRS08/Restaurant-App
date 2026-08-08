@@ -91,6 +91,7 @@ export async function performCheckout(
   const total = round2(cart.subtotal + deliveryOption.price)
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
   const idempotencyKey = `site:${site.id}:session:${sessionId}:v2`
+  const env = readSitePaymentEnv(site)
 
   // Authorize FIRST. A failed charge never writes an order.
   const authResult = await adapter.authorize({
@@ -105,6 +106,7 @@ export async function performCheckout(
     },
     idempotencyKey,
     nonce: input.nonce,
+    env,
     // orderReference is populated post-hoc for reconciliation
     // — Poynt lets us reference the txn later without our order
     // id since idempotencyKey uniquely identifies the attempt.
@@ -207,6 +209,17 @@ async function resolveWebOrderLocation(admin: Admin, site: SiteRow): Promise<str
 function readPaymentProvider(site: SiteRow): string | null {
   const config = (site.config ?? {}) as { payment_provider?: unknown }
   return typeof config.payment_provider === 'string' ? config.payment_provider : null
+}
+
+/** Which provider environment this site charges against. Default is
+ *  'prod' — a site opts into sandbox by setting
+ *  `sites.config.payment_env = 'ote'`. Value flows through the
+ *  payment adapter → collect helpers → API base URL + token lookup.
+ *  Never derived from a global env var; per-site keeps one site's
+ *  sandbox mode from leaking into another site's live integration. */
+function readSitePaymentEnv(site: SiteRow): 'prod' | 'ote' {
+  const config = (site.config ?? {}) as { payment_env?: unknown }
+  return config.payment_env === 'ote' ? 'ote' : 'prod'
 }
 
 function resolveDeliveryOption(config: Record<string, unknown>, key: string): SiteDeliveryOption | null {

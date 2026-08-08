@@ -2,94 +2,85 @@
 // Poynt Collect — card-not-present (CNP) checkout helpers.
 //
 // The web flow is a two-step round-trip:
-//   1. Client: our /checkout page mounts Poynt's Collect iframe
-//      (from collect.commerce.godaddy.com/sdk.js). Buyer types card
-//      inside the iframe — PAN never touches our origin. On submit
-//      the SDK calls its own tokenize endpoint and hands us back
-//      a `nonce` (single-use, short-lived).
+//   1. Client: our /checkout page mounts Poynt's Collect iframe.
+//      Buyer types card inside the iframe — PAN never touches our
+//      origin. On submit the SDK calls its own tokenize endpoint
+//      and hands us back a `nonce` (single-use, short-lived).
 //   2. Server: this file. We POST the nonce to Poynt's
-//      /cards/tokenize endpoint to exchange it for a paymentToken
-//      (a JWT that references the card in Poynt's vault), then POST
-//      /transactions with action=SALE + paymentToken to charge the
-//      card. Money moves. We get back a transaction id + card brand
-//      + last4 to store on the order.
+//      /cards/tokenize/charge endpoint (SALE action) to exchange
+//      it for a payment token AND charge the card in one call.
+//      We get back a transaction id + card brand + last4 to store
+//      on the order.
 //
-// Everything hangs off the merchant's stored OAuth token (already
-// covers the tokenize + transactions scopes). Only new env vars:
+// Environment routing is PER-SITE, not global. Each site declares
+// `sites.config.payment_env` = 'prod' (default) | 'ote' (sandbox).
+// The value flows through every callable in this file as an `env`
+// parameter — never a global env var — so one site's sandbox mode
+// can never affect any other site's live integration.
 //
-//   GODADDY_POYNT_APP_ID    — our Checked app's ID (from the Poynt
-//                              dev portal). Same across all merchants.
-//   POYNT_ENV               — 'prod' (default) or 'ote' (Poynt's
-//                              sandbox for test-card flows).
-//
-// Prod vs OTE swaps two host names:
-//   services.poynt.net           ↔  services.ote-poynt.net       (API)
-//   collect.commerce.godaddy.com ↔  collect.commerce.ote-godaddy.com (SDK)
-// Everything else is identical.
+// URLs by env:
+//   prod → services.poynt.net              + collect.commerce.godaddy.com
+//   ote  → services.ote-poynt.net          + collect.commerce.ote-godaddy.com
 // ----------------------------------------------------------------
 
-import { getValidAccessToken } from './tokens'
+import { getStoredTokenForEnv, upsertMerchantToken, type PoyntEnv } from './tokens'
+import { refreshMerchantToken } from './oauth'
 
-function apiBase(): string {
-  const explicit = process.env.GODADDY_POYNT_BASE_URL
-  if (explicit) return explicit
-  return isOte() ? 'https://services.ote-poynt.net' : 'https://services.poynt.net'
+const REFRESH_SLACK_SECONDS = 300
+
+function apiBaseForEnv(env: PoyntEnv): string {
+  return env === 'ote' ? 'https://services.ote-poynt.net' : 'https://services.poynt.net'
 }
 
-function collectSdkUrl(): string {
-  return isOte()
+function collectSdkUrlForEnv(env: PoyntEnv): string {
+  return env === 'ote'
     ? 'https://collect.commerce.ote-godaddy.com/sdk.js'
     : 'https://collect.commerce.godaddy.com/sdk.js'
 }
 
-function isOte(): boolean {
-  return (process.env.POYNT_ENV ?? '').toLowerCase() === 'ote'
-}
-
 export interface CollectClientConfig {
-  /** URL of the Poynt Collect JS SDK. Loaded on /checkout to mount
-   *  the iframe that tokenizes the card client-side. */
+  /** URL of the Poynt Collect JS SDK, env-specific. */
   sdkUrl: string
-  /** Our Checked app's Poynt Application ID. Same for every
-   *  merchant using our site host — comes from the Poynt dev
-   *  portal, not per-tenant config. */
+  /** Our Checked app's Poynt Application ID — same value for every
+   *  merchant using this Checked build. */
   applicationId: string
-  /** Merchant-specific — the businessId Poynt uses to key the
-   *  iframe origin verification. Read from godaddy_poynt_tokens
-   *  per the site's restaurant_id. */
+  /** Merchant-specific — the businessId Poynt uses for iframe
+   *  origin verification. Pulled from the env-scoped token row. */
   businessId: string
-  /** True when running against Poynt's OTE sandbox — surfaces on
-   *  the checkout page as a badge so nobody accidentally ships a
-   *  test-mode build to production. */
+  /** True when this site is running in Poynt sandbox — surfaces on
+   *  the checkout page as a badge. */
   isSandbox: boolean
 }
 
-/** Resolve the client-side config a merchant needs to mount the
- *  Poynt Collect iframe. Returns null when the merchant hasn't
- *  linked GoDaddy Commerce yet, or when GODADDY_POYNT_APP_ID is
- *  unset — either case, the widget falls back to the deferred-
- *  payment "we'll email a link" message. */
-export async function loadCollectConfigForRestaurant(restaurantId: string): Promise<CollectClientConfig | null> {
+/** Resolve the client-side config for a specific site + env. Returns
+ *  null when the merchant hasn't linked a token for that env, or
+ *  when GODADDY_POYNT_APP_ID is unset. Widget falls back to the
+ *  deferred-payment "we'll email a link" message when null. */
+export async function loadCollectConfigForSite(args: {
+  restaurantId: string
+  env: PoyntEnv
+}): Promise<CollectClientConfig | null> {
   const applicationId = process.env.GODADDY_POYNT_APP_ID
   if (!applicationId) {
     console.warn('[godaddy/collect] GODADDY_POYNT_APP_ID not set — checkout will fall back to deferred payment')
     return null
   }
-  const tok = await getValidAccessToken(restaurantId)
-  if ('error' in tok) {
-    console.warn('[godaddy/collect] no merchant token', { restaurantId, error: tok.error })
+  const stored = await getStoredTokenForEnv(args.restaurantId, args.env)
+  if (!stored) {
+    console.warn('[godaddy/collect] no merchant token for env', { restaurantId: args.restaurantId, env: args.env })
     return null
   }
   return {
-    sdkUrl: collectSdkUrl(),
+    sdkUrl: collectSdkUrlForEnv(args.env),
     applicationId,
-    businessId: tok.businessId,
-    isSandbox: isOte(),
+    businessId: stored.businessId,
+    isSandbox: args.env === 'ote',
   }
 }
 
 export interface ChargeWithNonceArgs {
   restaurantId: string
+  env: PoyntEnv
   nonce: string
   /** Amount in dollars (e.g. 18.50). We convert to cents for Poynt. */
   amountDollars: number
@@ -101,37 +92,23 @@ export interface ChargeWithNonceArgs {
 }
 
 export type ChargeResult =
-  | {
-      status: 'paid'
-      transactionId: string
-      cardBrand?: string
-      cardLast4?: string
-    }
-  | {
-      status: 'declined'
-      message: string
-      code?: string
-    }
-  | {
-      status: 'error'
-      message: string
-    }
+  | { status: 'paid'; transactionId: string; cardBrand?: string; cardLast4?: string }
+  | { status: 'declined'; message: string; code?: string }
+  | { status: 'error'; message: string }
 
-/** Tokenize the Collect nonce + charge in one call to
- *  Poynt's /cards/tokenize/charge endpoint. One-shot beats
- *  the two-step (/tokenize then /transactions) for our flow —
- *  fewer round trips, and we don't hold onto the paymentToken
- *  server-side for anything else. */
+/** Tokenize the Collect nonce + charge in one call to Poynt's
+ *  /cards/tokenize/charge endpoint. Env determines both which token
+ *  row we look up AND which API base URL we hit. */
 export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<ChargeResult> {
-  const tok = await getValidAccessToken(args.restaurantId)
-  if ('error' in tok) return { status: 'error', message: tok.error }
+  const tokenResult = await getValidAccessTokenForEnv(args.restaurantId, args.env)
+  if ('error' in tokenResult) return { status: 'error', message: tokenResult.error }
 
   const amountCents = Math.round(args.amountDollars * 100)
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
     return { status: 'error', message: 'Invalid charge amount.' }
   }
 
-  const url = `${apiBase()}/businesses/${encodeURIComponent(tok.businessId)}/cards/tokenize/charge`
+  const url = `${apiBaseForEnv(args.env)}/businesses/${encodeURIComponent(tokenResult.businessId)}/cards/tokenize/charge`
   const body = {
     nonce: args.nonce,
     action: 'SALE',
@@ -143,11 +120,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     references: args.orderReference
       ? [{ type: 'CUSTOM', id: args.orderReference }]
       : undefined,
-    // context.source hints Poynt this is a web transaction rather
-    // than a device swipe — keeps merchant reporting clean.
-    context: {
-      source: 'WEB',
-    },
+    context: { source: 'WEB' },
   }
 
   let response: Response
@@ -155,7 +128,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     response = await fetch(url, {
       method: 'POST',
       headers: {
-        'authorization': `Bearer ${tok.accessToken}`,
+        'authorization': `Bearer ${tokenResult.accessToken}`,
         'content-type': 'application/json',
         'api-version': '1.2',
         'poynt-request-id': args.idempotencyKey,
@@ -188,11 +161,9 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
 
   if (!response.ok) {
     const msg = data.developerMessage || data.message || `Payment declined (${response.status}).`
-    // 4xx from the processor typically = declined card / bad CVV /
-    // insufficient funds. 5xx = provider hiccup — same buyer-facing
-    // copy either way, but log the distinction for us.
     console.warn('[godaddy/collect] charge rejected', {
       httpStatus: response.status,
+      env: args.env,
       code: data.code,
       message: msg,
     })
@@ -211,5 +182,47 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     transactionId: data.id ?? '',
     cardBrand: data.fundingSource?.card?.type,
     cardLast4: data.fundingSource?.card?.numberLast4,
+  }
+}
+
+/** Env-aware sibling of getValidAccessToken — POS ingest uses the
+ *  prod-locked helper in tokens.ts; checkout uses this one with
+ *  the site's declared env so sandbox testing never touches the
+ *  prod token flow. Preserves env on refresh (never migrates rows
+ *  between environments). */
+async function getValidAccessTokenForEnv(
+  restaurantId: string,
+  env: PoyntEnv,
+): Promise<{ accessToken: string; businessId: string } | { error: string }> {
+  const stored = await getStoredTokenForEnv(restaurantId, env)
+  if (!stored) {
+    return {
+      error: env === 'ote'
+        ? 'This site is in sandbox mode but no OTE Poynt merchant is linked yet.'
+        : 'This restaurant has not linked a GoDaddy Commerce merchant yet.',
+    }
+  }
+
+  const secondsLeft = Math.floor((new Date(stored.expiresAt).getTime() - Date.now()) / 1000)
+  if (secondsLeft > REFRESH_SLACK_SECONDS) {
+    return { accessToken: stored.accessToken, businessId: stored.businessId }
+  }
+
+  try {
+    const fresh = await refreshMerchantToken({ refreshToken: stored.refreshToken })
+    await upsertMerchantToken({
+      restaurantId: stored.restaurantId,
+      businessId: stored.businessId,
+      accessToken: fresh.accessToken,
+      refreshToken: fresh.refreshToken,
+      scope: fresh.scope,
+      tokenType: fresh.tokenType,
+      expiresInSeconds: fresh.expiresIn,
+      env: stored.env,
+    })
+    return { accessToken: fresh.accessToken, businessId: stored.businessId }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { error: `Refresh failed — the merchant may need to reconnect: ${msg}` }
   }
 }

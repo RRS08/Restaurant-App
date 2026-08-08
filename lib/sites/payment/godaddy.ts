@@ -46,6 +46,7 @@ export const godaddyAdapter: PaymentAdapter = {
 
     const result = await chargeWithNonce({
       restaurantId: req.restaurantId,
+      env: req.env,
       nonce: req.nonce,
       amountDollars: req.amount,
       idempotencyKey: req.idempotencyKey,

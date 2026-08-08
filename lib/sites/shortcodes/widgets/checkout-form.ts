@@ -35,7 +35,7 @@ import type { ShortcodeArgs, ShortcodeContext } from '../index'
 import { loadCartWithItems } from '../../cart'
 import type { SiteDeliveryOption } from '../../types'
 import { escapeAttr, escapeHtml } from '../utils'
-import { loadCollectConfigForRestaurant, type CollectClientConfig } from '@/lib/godaddy/collect'
+import { loadCollectConfigForSite, type CollectClientConfig } from '@/lib/godaddy/collect'
 
 export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeContext): Promise<string> {
   const snap = await loadCartWithItems(ctx.site.id, ctx.sessionId)
@@ -46,11 +46,15 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   const deliveryNotice = typeof config.delivery_notice === 'string' ? config.delivery_notice : ''
 
   // Resolve the Poynt Collect config for this merchant if the site's
-  // payment_provider is godaddy. Null when env is missing or merchant
-  // hasn't linked GoDaddy Commerce — checkout falls back to the
+  // payment_provider is godaddy. Env comes from the site's own
+  // config (sites.config.payment_env) — a site opts into sandbox
+  // without ever affecting another site's live integration. Null
+  // when merchant hasn't linked a token for this env yet or when
+  // GODADDY_POYNT_APP_ID is unset — widget falls back to the
   // deferred-payment "email a link" copy on step 3.
+  const paymentEnv: 'prod' | 'ote' = config.payment_env === 'ote' ? 'ote' : 'prod'
   const collect = readPaymentProvider(config) === 'godaddy'
-    ? await loadCollectConfigForRestaurant(ctx.site.restaurant_id)
+    ? await loadCollectConfigForSite({ restaurantId: ctx.site.restaurant_id, env: paymentEnv })
     : null
 
   const errorMsg = typeof ctx.query.checkout_error === 'string' ? ctx.query.checkout_error : ''

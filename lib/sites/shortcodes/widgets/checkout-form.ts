@@ -189,7 +189,7 @@ ${deliveryRadios}
         <textarea id="co-notes" name="notes" rows="4" placeholder="Anything we should know?"></textarea>
       </div>
       <div class="co-actions">
-        <button type="submit" class="btn btn-dark co-submit">Place order · <span data-summary-total-btn>${escapeHtml(formatPrice(initialTotal))}</span></button>
+        <button type="submit" class="btn btn-dark co-submit" data-initial-total="${initialTotal}">Place order · <span data-summary-total-btn>${escapeHtml(formatPrice(initialTotal))}</span></button>
         <button type="button" class="co-back-link" data-back="2">← Back</button>
       </div>
     </section>
@@ -202,7 +202,7 @@ ${summaryLines}
     </div>
     <div class="co-sum-totals" data-tax-rate="${taxRate}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
-      <div class="row"><span>Shipping</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? 'Free' : formatPrice(defaultDeliveryPrice))}</span></div>
+      <div class="row"><span data-summary-delivery-label>${escapeHtml(defaultDeliveryPrice === 0 ? 'Pickup' : 'Shipping')}</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? (defaultOption?.sublabel ?? 'In store') : formatPrice(defaultDeliveryPrice))}</span></div>
       ${taxRate > 0
         ? `<div class="row"><span>Tax</span><span data-summary-tax>${escapeHtml(formatPrice(initialTax))}</span></div>`
         : `<div class="row muted"><span>Tax</span><span>Not applied</span></div>`}
@@ -265,7 +265,7 @@ function renderDeliveryOption(opt: SiteDeliveryOption, forceDefault: boolean): s
   const requires = opt.requires_address === true ? '1' : '0'
 
   return `        <label class="co-delivery-opt${isDefault ? ' is-selected' : ''}">
-          <input type="radio" name="delivery_option" value="${escapeAttr(opt.key)}" data-price="${opt.price}" data-requires-address="${requires}"${isDefault ? ' checked' : ''}>
+          <input type="radio" name="delivery_option" value="${escapeAttr(opt.key)}" data-price="${opt.price}" data-requires-address="${requires}" data-label="${escapeAttr(opt.label)}" data-sublabel="${escapeAttr(opt.sublabel ?? '')}"${isDefault ? ' checked' : ''}>
           <div class="co-delivery-body">
             <div class="co-delivery-label">${escapeHtml(opt.label)}</div>
             ${opt.sublabel ? `<div class="co-delivery-sub">${escapeHtml(opt.sublabel)}</div>` : ''}
@@ -487,17 +487,31 @@ const CHECKOUT_SCRIPT = `
   });
 
   // Delivery selection: keep .is-selected on the chosen option,
-  // reveal/hide address block, update Shipping + Tax + Total lines
+  // reveal/hide address block, update Delivery/Tax/Total lines
   // and the "Place order · $X" button label.
   var subtotalEl = root.querySelector('[data-summary-subtotal]');
+  var deliveryLabelEl = root.querySelector('[data-summary-delivery-label]');
   var shippingEl = root.querySelector('[data-summary-shipping]');
   var taxEl = root.querySelector('[data-summary-tax]');
   var totalEl = root.querySelector('[data-summary-total]');
   var totalBtnEl = root.querySelector('[data-summary-total-btn]');
+  var submitBtn = root.querySelector('.co-submit');
   var totalsEl = root.querySelector('.co-sum-totals');
   var taxRate = totalsEl ? (parseFloat(totalsEl.dataset.taxRate || '0') || 0) : 0;
   var addressBlock = root.querySelector('[data-address]');
   var addressInputs = addressBlock ? addressBlock.querySelectorAll('input[name="address_line1"], input[name="city"], input[name="state"], input[name="postal"]') : [];
+
+  // Defensive: seed the button label from the server-computed
+  // initial total. Some interaction was leaving it at $0.00 in the
+  // first two test screenshots — until we've root-caused, this
+  // guarantees a sane value regardless of whether applyDelivery
+  // fires cleanly.
+  if (submitBtn && totalBtnEl) {
+    var initFromAttr = parseFloat(submitBtn.dataset.initialTotal || '0');
+    if (Number.isFinite(initFromAttr) && initFromAttr > 0) {
+      totalBtnEl.textContent = '$' + initFromAttr.toFixed(2);
+    }
+  }
 
   function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
   function round2(n){ return Math.round(n * 100) / 100; }
@@ -529,12 +543,16 @@ const CHECKOUT_SCRIPT = `
     var sub = currentSubtotal();
     var tax = round2((sub + price) * taxRate);
     var total = round2(sub + price + tax);
-    if (shippingEl) shippingEl.textContent = price === 0 ? 'Free' : money(price);
+    // Row label + value swap: pickup shows the store address instead
+    // of "Free"; shipping shows the price. Everything sourced from
+    // the radio's own data-attrs so future delivery options don't
+    // need widget changes.
+    var sublabel = radio.dataset.sublabel || '';
+    if (deliveryLabelEl) deliveryLabelEl.textContent = price === 0 ? 'Pickup' : 'Shipping';
+    if (shippingEl) shippingEl.textContent = price === 0 ? (sublabel || 'In store') : money(price);
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
-    if (totalBtnEl) totalBtnEl.textContent = money(total);
-    // Diagnostic for the "Place order · $0.00" symptom — leave in
-    // for a build or two, remove once we've seen a healthy log.
+    if (totalBtnEl && total > 0) totalBtnEl.textContent = money(total);
     if (typeof console !== 'undefined' && console.log) {
       console.log('[checkout] applyDelivery', {
         price: price, sub: sub, tax: tax, taxRate: taxRate, total: total,
@@ -589,52 +607,66 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     if (errorBox) errorBox.setAttribute('hidden', '');
   }
 
+  // Individually try/catch each subscribe. Poynt's TokenizeJs
+  // silently ignores unknown event names on some SDK versions but
+  // throws on others — subscribing to a name Poynt doesn't
+  // recognize (e.g. iframe_ready on the wrong version) would kill
+  // the whole init chain if we shared one try block. This shape
+  // keeps mount + the essential 'nonce' handler alive even if
+  // optional subscribes fail.
+  function safeSubscribe(evt, fn) {
+    if (!tokenizer) return;
+    try { tokenizer.subscribe(evt, fn); }
+    catch (err) {
+      if (typeof console !== 'undefined' && console.warn) {
+        console.warn('[checkout] Poynt subscribe rejected event', evt, err);
+      }
+    }
+  }
+
   function initTokenizer() {
     if (tokenizer || !window.TokenizeJs) return;
     try {
       tokenizer = new window.TokenizeJs(cfg.businessId, cfg.applicationId);
-      // Subscribe BEFORE mount. Poynt's SDK dispatches iframe_ready
-      // synchronously (or near-synchronously) as the iframe finishes
-      // loading — subscribing after mount misses the event and the
-      // "Card entry failed to load" error banner never clears even
-      // though the card fields visibly render.
-      tokenizer.subscribe('iframe_ready', function() {
-        iframeReady = true;
-        clearError();
-      });
-      // iframe_height_change fires as the iframe's internal content
-      // resizes (e.g. when a field turns red on validation error).
-      // Reflect the reported height on our mount div so the iframe
-      // never gets clipped or leaves an empty gap under it.
-      tokenizer.subscribe('iframe_height_change', function(e) {
-        var mount = document.getElementById('poynt-card-mount');
-        var h = e && e.data && e.data.height;
-        if (mount && typeof h === 'number' && h > 0) {
-          mount.style.height = h + 'px';
-        }
-      });
-      tokenizer.subscribe('nonce', function(e) {
-        var n = e && e.data && e.data.nonce;
-        if (nonceField) nonceField.value = n || '';
-        clearError();
-        if (awaitingSubmit && form) {
-          awaitingSubmit = false;
-          // Re-submit; the form now carries the nonce and skips
-          // this interceptor because nonceField.value is set.
-          form.submit();
-        }
-      });
-      tokenizer.subscribe('error', function(e) {
-        awaitingSubmit = false;
-        var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
-        showError(msg);
-      });
-      // Mount AFTER all subscribes so the iframe_ready fire doesn't
-      // race the handler registration.
       tokenizer.mount('poynt-card-mount', document, {});
     } catch (err) {
-      showError('Card entry failed to load. Refresh and try again.');
+      var msg = err && err.message ? String(err.message) : 'Card entry failed to load. Refresh and try again.';
+      showError(msg);
+      if (typeof console !== 'undefined' && console.error) {
+        console.error('[checkout] TokenizeJs constructor/mount failed', err);
+      }
+      return;
     }
+    // Mount succeeded — the card iframe should now be visible in
+    // #poynt-card-mount. Wire the mandatory 'nonce' + 'error'
+    // handlers, then attempt the optional resize handler. Missing
+    // resize just means the iframe won't auto-grow on validation
+    // errors; it doesn't block submission.
+    safeSubscribe('nonce', function(e) {
+      var n = e && e.data && e.data.nonce;
+      if (nonceField) nonceField.value = n || '';
+      clearError();
+      if (awaitingSubmit && form) {
+        awaitingSubmit = false;
+        form.submit();
+      }
+    });
+    safeSubscribe('error', function(e) {
+      awaitingSubmit = false;
+      var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
+      showError(msg);
+    });
+    safeSubscribe('iframe_height_change', function(e) {
+      var mount = document.getElementById('poynt-card-mount');
+      var h = e && e.data && e.data.height;
+      if (mount && typeof h === 'number' && h > 0) {
+        mount.style.height = h + 'px';
+      }
+    });
+    // If we got here, mount didn't throw — mark ready so submit
+    // works without waiting for an event Poynt may not dispatch.
+    iframeReady = true;
+    clearError();
   }
 
   if (window.TokenizeJs) initTokenizer();

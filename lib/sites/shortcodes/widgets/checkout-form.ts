@@ -70,15 +70,15 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
     : 'Send me new blends and shop news'
 
   const subtotalStr = formatPrice(snap.subtotal)
-  const defaultOption = deliveryOptions.find(o => o.default) ?? deliveryOptions[0]
-  const defaultDeliveryPrice = defaultOption?.price ?? 0
-  // Tax is applied to (subtotal + delivery) — matches Texas rules
-  // (shipping charges are taxable when the underlying items are).
-  // taxRate is a decimal in sites.config (e.g. 0.0825 for McAllen).
-  // Absent config = 0 = no tax line shown, existing sites unchanged.
+  // Initial paint has NO delivery option selected — buyer picks one
+  // on step 2. So the summary's Delivery row is hidden at load and
+  // initial tax/total are computed from the subtotal alone. Values
+  // repaint the moment applyDelivery fires. Buyer defaulting to
+  // pickup was letting people submit the wrong fulfillment mode
+  // when they meant to ship.
   const taxRate = readTaxRate(config)
-  const initialTax = round2((snap.subtotal + defaultDeliveryPrice) * taxRate)
-  const initialTotal = round2(snap.subtotal + defaultDeliveryPrice + initialTax)
+  const initialTax = round2(snap.subtotal * taxRate)
+  const initialTotal = round2(snap.subtotal + initialTax)
 
   const summaryLines = snap.items.map(i => `      <div class="co-sum-line">
         <div class="co-sum-thumb"><img src="${escapeAttr(i.image_url ?? '')}" alt="${escapeAttr(i.name)}"></div>
@@ -89,7 +89,7 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
         <div class="co-sum-line-total">${escapeHtml(formatPrice(i.line_total))}</div>
       </div>`).join('\n')
 
-  const deliveryRadios = deliveryOptions.map((opt, idx) => renderDeliveryOption(opt, idx === 0 && !defaultOption)).join('\n')
+  const deliveryRadios = deliveryOptions.map(opt => renderDeliveryOption(opt, false)).join('\n')
   const deliveryNoticeBlock = deliveryNotice
     ? `<div class="co-delivery-notice">${escapeHtml(deliveryNotice)}</div>`
     : ''
@@ -113,15 +113,9 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
         <label for="co-email">Email</label>
         <input id="co-email" name="email" type="email" placeholder="you@email.com" autocomplete="email" required>
       </div>
-      <div class="co-row-2">
-        <div class="co-field">
-          <label for="co-fn">First name</label>
-          <input id="co-fn" name="first_name" type="text" autocomplete="given-name" required>
-        </div>
-        <div class="co-field">
-          <label for="co-ln">Last name</label>
-          <input id="co-ln" name="last_name" type="text" autocomplete="family-name" required>
-        </div>
+      <div class="co-field">
+        <label for="co-name">Full name</label>
+        <input id="co-name" name="full_name" type="text" autocomplete="name" placeholder="First and last" required>
       </div>
       <div class="co-field">
         <label for="co-phone">Phone</label>
@@ -245,7 +239,7 @@ ${summaryLines}
     </div>
     <div class="co-sum-totals" data-tax-rate="${taxRate}" data-subtotal="${snap.subtotal}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
-      <div class="row"><span data-summary-delivery-label>${escapeHtml(defaultOption?.label ?? (defaultDeliveryPrice === 0 ? 'Pickup' : 'Shipping'))}</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? (defaultOption?.sublabel ?? 'In store') : formatPrice(defaultDeliveryPrice))}</span></div>
+      <div class="row" data-summary-delivery-row hidden><span data-summary-delivery-label></span><span data-summary-shipping></span></div>
       <div class="row row-shipto" data-summary-shipto-row hidden><span>Ship to</span><span data-summary-shipto></span></div>
       ${taxRate > 0
         ? `<div class="row"><span>Tax</span><span data-summary-tax>${escapeHtml(formatPrice(initialTax))}</span></div>`
@@ -302,13 +296,17 @@ function readPaymentProvider(config: Record<string, unknown>): string | null {
   return typeof v === 'string' ? v : null
 }
 
-function renderDeliveryOption(opt: SiteDeliveryOption, forceDefault: boolean): string {
-  const isDefault = opt.default === true || forceDefault
+function renderDeliveryOption(opt: SiteDeliveryOption, _forceDefault: boolean): string {
+  // No auto-checked / is-selected pre-paint any more. The buyer
+  // must pick their delivery method explicitly on step 2 — otherwise
+  // Continue on step 2 fails validation. This keeps the Order
+  // summary honest: pickup wasn't defaulting for buyers who really
+  // wanted delivery, only to have their address ignored.
   const priceLabel = opt.price === 0 ? 'Free' : formatPrice(opt.price)
   const requires = opt.requires_address === true ? '1' : '0'
 
-  return `        <label class="co-delivery-opt${isDefault ? ' is-selected' : ''}">
-          <input type="radio" name="delivery_option" value="${escapeAttr(opt.key)}" data-price="${opt.price}" data-requires-address="${requires}" data-label="${escapeAttr(opt.label)}" data-sublabel="${escapeAttr(opt.sublabel ?? '')}"${isDefault ? ' checked' : ''}>
+  return `        <label class="co-delivery-opt">
+          <input type="radio" name="delivery_option" value="${escapeAttr(opt.key)}" data-price="${opt.price}" data-requires-address="${requires}" data-label="${escapeAttr(opt.label)}" data-sublabel="${escapeAttr(opt.sublabel ?? '')}">
           <div class="co-delivery-body">
             <div class="co-delivery-label">${escapeHtml(opt.label)}</div>
             ${opt.sublabel ? `<div class="co-delivery-sub">${escapeHtml(opt.sublabel)}</div>` : ''}
@@ -433,6 +431,8 @@ const CHECKOUT_STYLE = `
 .co-back-link{font-size:13.5px;color:#55723e;background:none;border:0;padding:0;cursor:pointer;text-decoration:none}
 .co-back-link:hover{color:#253b0e}
 .co-delivery{display:flex;flex-direction:column;gap:12px}
+.co-delivery.is-error{padding:6px;border:1px dashed #c53131;border-radius:12px}
+.co-delivery.is-error::after{content:attr(data-error-message);display:block;font-size:12px;color:#c53131;margin-top:2px;font-weight:500;text-align:center}
 .co-delivery-opt{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center;padding:16px 18px;border:1.5px solid #d4e7c7;border-radius:14px;cursor:pointer;transition:border-color .18s ease}
 .co-delivery-opt.is-selected{border-color:#253b0e;box-shadow:inset 0 0 0 1px #253b0e}
 .co-delivery-opt input[type=radio]{width:18px;height:18px;accent-color:#253b0e;margin:0}
@@ -457,12 +457,12 @@ const CHECKOUT_STYLE = `
 /* Fixed container height — Poynt reports iframe heights that
    include reserved room for their (hidden) validation panel, so
    letting iframe_height_change drive height left ~150px of empty
-   space below the card row. Locking to 52px matches the single
-   card-row Poynt actually renders when labels are off; iframe
-   height:100% + overflow:hidden clips anything extra Poynt tries
-   to push in. Validation errors surface via the external
-   [data-collect-error] block, not from inside the iframe. */
-.co-card-mount{background:transparent;height:52px;overflow:hidden}
+   space below the card row. 64px matches Poynt's natural single-
+   row render (~54px input + 5px vertical padding on each side)
+   with no inner scroll. Anything Poynt tries to push in beyond
+   that gets clipped by overflow:hidden; validation errors surface
+   via the external [data-collect-error] block. */
+.co-card-mount{background:transparent;height:64px;overflow:hidden}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -536,13 +536,12 @@ const CHECKOUT_SCRIPT = `
       else if (n === step) m.classList.add('is-active');
     });
     if (progress) progress.dataset.currentStep = String(step);
-    // Re-apply the current delivery selection whenever a panel
-    // becomes visible. Cheap safety net for the "Place order · $0.00"
-    // symptom on step 3 — the button label + summary numbers get
-    // recomputed from the currently-checked radio every time,
-    // instead of relying on a single init-time apply.
-    var r = root.querySelector('input[name="delivery_option"]:checked')
-         || root.querySelector('input[name="delivery_option"]');
+    // Re-apply the current delivery selection when a panel becomes
+    // visible — only if one is ACTUALLY checked. Nothing is auto-
+    // checked at load, so this only fires after the buyer picks
+    // on step 2. Keeps the button + summary in sync as they navigate
+    // back and forth.
+    var r = root.querySelector('input[name="delivery_option"]:checked');
     if (r) applyDelivery(r);
   }
 
@@ -587,8 +586,26 @@ const CHECKOUT_SCRIPT = `
         clearFieldError(el);
       }
     });
+    // Step 2 has an extra rule: at least one delivery radio must be
+    // picked. No default is pre-checked any more, and required on
+    // radios doesn't play well with grouped inputs, so we check
+    // membership manually and paint a red banner if it's missing.
+    if (step === 2) {
+      var picked = panel.querySelector('input[name="delivery_option"]:checked');
+      var deliveryList = panel.querySelector('.co-delivery');
+      if (!picked) {
+        if (deliveryList) {
+          deliveryList.classList.add('is-error');
+          deliveryList.setAttribute('data-error-message', 'Pick a delivery option to continue');
+        }
+        if (!firstInvalid) firstInvalid = deliveryList;
+      } else if (deliveryList) {
+        deliveryList.classList.remove('is-error');
+        deliveryList.removeAttribute('data-error-message');
+      }
+    }
     if (firstInvalid) {
-      firstInvalid.focus();
+      if (firstInvalid.focus) firstInvalid.focus();
       firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return false;
     }
@@ -624,6 +641,7 @@ const CHECKOUT_SCRIPT = `
   // reveal/hide address block, update Delivery/Tax/Total lines
   // and the "Place order · $X" button label.
   var subtotalEl = root.querySelector('[data-summary-subtotal]');
+  var deliveryRowEl = root.querySelector('[data-summary-delivery-row]');
   var deliveryLabelEl = root.querySelector('[data-summary-delivery-label]');
   var shippingEl = root.querySelector('[data-summary-shipping]');
   var taxEl = root.querySelector('[data-summary-tax]');
@@ -701,6 +719,8 @@ const CHECKOUT_SCRIPT = `
     var label = radio.dataset.label || (price === 0 ? 'Pickup' : 'Shipping');
     if (deliveryLabelEl) deliveryLabelEl.textContent = label;
     if (shippingEl) shippingEl.textContent = price === 0 ? (sublabel || 'In store') : money(price);
+    // Reveal the Delivery row now that we have a real pick.
+    if (deliveryRowEl) deliveryRowEl.removeAttribute('hidden');
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
     // Refresh the Ship-to summary row so it appears/disappears the
@@ -749,16 +769,20 @@ const CHECKOUT_SCRIPT = `
   addressInputs.forEach(function(inp){ inp.addEventListener('input', syncShipto); });
 
   root.addEventListener('change', function(e){
-    if (e.target && e.target.name === 'delivery_option') applyDelivery(e.target);
+    if (e.target && e.target.name === 'delivery_option') {
+      applyDelivery(e.target);
+      // Clear the "Pick a delivery option" banner the moment they
+      // pick — no need to wait for Continue to fire again.
+      var list = root.querySelector('.co-delivery.is-error');
+      if (list) { list.classList.remove('is-error'); list.removeAttribute('data-error-message'); }
+    }
   });
 
-  // Kick off with whichever radio is initially checked, falling
-  // back to the first radio if the server's default-checked marker
-  // didn't stick for any reason. Guarantees the button label + totals
-  // reflect a real delivery choice from first paint.
-  var checkedRadio = root.querySelector('input[name="delivery_option"]:checked')
-                  || root.querySelector('input[name="delivery_option"]');
-  if (checkedRadio) applyDelivery(checkedRadio);
+  // No auto-apply at load — nothing is pre-checked, so the Delivery
+  // row stays hidden until the buyer picks on step 2. The show(step)
+  // handler still re-applies if a radio IS checked on later step
+  // transitions, so no state gets lost when the buyer navigates back
+  // to step 2 and forward again.
 })();
 `
 

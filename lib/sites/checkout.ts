@@ -75,7 +75,12 @@ export async function performCheckout(
   input: CheckoutInput,
 ): Promise<CheckoutResult> {
   const fullName = `${input.contact.first_name} ${input.contact.last_name}`.trim()
-  if (!input.contact.first_name || !input.contact.last_name) return { error: 'Full name is required.' }
+  // Widget captures a single Full-name field and the endpoint splits
+  // it on the first space; either half may be empty for buyers with
+  // a single-word name (mononym) or who type just their first name.
+  // Requiring the joined value keeps us from writing empty rows
+  // without forcing everyone to fabricate a last name.
+  if (!fullName) return { error: 'Please enter your name.' }
   if (!input.contact.email) return { error: 'Email is required.' }
   if (!sessionId) return { error: 'Your cart session expired — please add items again.' }
 

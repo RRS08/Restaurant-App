@@ -30,8 +30,15 @@ export async function POST(req: Request, { params }: Ctx) {
 
   const formData = await req.formData()
   const email = firstString(formData, 'email') ?? ''
-  const firstName = firstString(formData, 'first_name') ?? ''
-  const lastName = firstString(formData, 'last_name') ?? ''
+  // Widget renders a single Full-name field (works around a Chrome
+  // Address-autofill bug where the whole recipient name gets dumped
+  // into whichever of first/last name it decides to fill). We split
+  // on the first space so downstream code (orders.customer_name,
+  // site_orders_link.contact) still gets first + last.
+  const fullName = firstString(formData, 'full_name') ?? ''
+  const nameParts = fullName.split(/\s+/).filter(Boolean)
+  const firstName = nameParts[0] ?? ''
+  const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : ''
   const phone = firstString(formData, 'phone')
   const deliveryOptionKey = firstString(formData, 'delivery_option') ?? ''
   const line1 = firstString(formData, 'address_line1')

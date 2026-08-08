@@ -193,6 +193,13 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   }
   const cardBrand = tokenizeData.card?.type
   const cardLast4 = tokenizeData.card?.numberLast4
+  console.log('[godaddy/collect] tokenize ok', {
+    env: args.env,
+    hadAppIdHeader: !!appId,
+    appIdPrefix: appId ? appId.slice(0, 12) : null,
+    cardBrand,
+    cardLast4,
+  })
 
   // --- Step 2: paymentToken → AUTHORIZE transaction ---
   const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
@@ -253,6 +260,10 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
       env: args.env,
       code: data.code,
       message: msg,
+      hadAppIdHeader: !!appId,
+      appIdPrefix: appId ? appId.slice(0, 12) : null,
+      requestBody: { ...chargeBody, fundingSource: { cardToken: '<redacted>' } },
+      rawBody: raw,
     })
     return response.status >= 400 && response.status < 500
       ? { status: 'declined', message: msg, code: data.code }

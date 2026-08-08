@@ -502,11 +502,13 @@ const CHECKOUT_STYLE = `
    gap below CVV. overflow:hidden clips any pathological extra
    height; validation errors surface via the external
    [data-collect-error] block below the mount. */
-/* Negative margins cancel the 14px flex gap on either side of the
-   mount. The visible spacing above Card number and below CVV is
-   then just Poynt's iframe internal padding, which matches the
-   tight spacing Poynt uses BETWEEN its own rows. */
-.co-card-mount{background:transparent;height:170px;overflow:hidden;margin-top:-14px;margin-bottom:-14px}
+/* Negative margins shrink the 14px flex gap on either side of the
+   mount so the outer spacing (Name-on-card ↔ Card-number and
+   CVV ↔ Billing) reads close to Poynt's tight inner row gap.
+   margin-bottom is slightly less negative than margin-top so the
+   gap under CVV is a hair larger than above Card number — matches
+   the natural "section break" feel before the billing checkbox. */
+.co-card-mount{background:transparent;height:170px;overflow:hidden;margin-top:-14px;margin-bottom:-8px}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}

@@ -238,7 +238,7 @@ export default async function SettingsPage() {
     expiresAt: string
     webhookRegistered: boolean
   } | null = null
-  let godaddyOnlineScope: { businessId: string; scope: string | null } | null = null
+  let godaddyOnlineScope: { businessId: string; scope: string | null; connectedAt: string } | null = null
   if (isOwner && restaurantId) {
     const stored = await getStoredToken(restaurantId)
     if (stored) {
@@ -254,6 +254,7 @@ export default async function SettingsPage() {
       godaddyOnlineScope = {
         businessId: stored.businessId,
         scope: stored.scope,
+        connectedAt: stored.connectedAt,
       }
     }
   }

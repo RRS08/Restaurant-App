@@ -75,6 +75,14 @@ export async function GET(req: NextRequest) {
     })
   }
 
+  // Online-payments re-auth needs Poynt to show the consent screen
+  // even when the merchant already OAuth'd this app — otherwise
+  // Poynt silently re-issues a token with the old (narrower) scope
+  // set instead of broadening to include newly-added app scopes
+  // like Poynt Collect W. First-time POS installs skip the flag
+  // and get Poynt's default (auto-consent when previously granted).
+  const forceConsent = purpose === 'online'
+
   // Redirect URI must match exactly what's configured in the
   // Poynt Developer Center → OAuth Settings. Derive from the
   // request's own origin so preview deployments (and local dev)
@@ -85,6 +93,6 @@ export async function GET(req: NextRequest) {
   const origin = configuredOrigin || new URL(req.url).origin
   const redirectUri = `${origin}/api/godaddy/oauth/callback`
 
-  const url = authorizeUrl({ redirectUri, state, env })
+  const url = authorizeUrl({ redirectUri, state, env, forceConsent })
   return NextResponse.redirect(url)
 }

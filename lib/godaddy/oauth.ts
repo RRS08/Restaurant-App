@@ -66,13 +66,21 @@ function appId(): string {
  *  CSRF protection — Poynt echoes it back as `context`. `env`
  *  drives whether the authorize screen is prod (real merchants)
  *  or OTE (sandbox test merchants). */
-export function authorizeUrl(args: { redirectUri: string; state: string; env?: PoyntEnv }): string {
+export function authorizeUrl(args: { redirectUri: string; state: string; env?: PoyntEnv; forceConsent?: boolean }): string {
   const env: PoyntEnv = args.env ?? 'prod'
   const params = new URLSearchParams({
     redirect_uri: args.redirectUri,
     client_id: appId(),
     context: args.state,
   })
+  // Force Poynt's consent screen even when the merchant already
+  // OAuth'd this app before. Poynt skips consent on repeat installs
+  // when the requested scopes match the previously-consented set —
+  // which means a re-auth that's meant to broaden scope silently
+  // re-issues a token with the old scope set. Sending prompt=consent
+  // tells Poynt to always show the screen so the merchant can grant
+  // any newly-added app scopes.
+  if (args.forceConsent) params.set('prompt', 'consent')
   return `${authorizeHostForEnv(env)}/applications/authorize?${params.toString()}`
 }
 

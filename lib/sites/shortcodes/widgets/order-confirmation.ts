@@ -3,9 +3,8 @@
 //
 // Renders the /thanks page body from the order id in the URL. Reads
 // the snapshot from site_orders_link (frozen shape the buyer saw)
-// and joins on orders (real paid total, tax, card metadata) so the
-// copy can adapt to what actually happened — pickup vs shipping,
-// paid vs pending — while the UI stays minimal.
+// so the copy can adapt to what actually happened — pickup vs
+// shipping, paid vs pending — while the UI stays minimal.
 //
 // Buyer-facing surface is intentionally tight: checkmark, "Order
 // placed", one reassuring line, back-to-shelf CTA. Order id lives
@@ -32,7 +31,7 @@ export async function renderOrderConfirmation(_args: unknown, ctx: ShortcodeCont
   const orderId = typeof ctx.query.order === 'string' ? ctx.query.order : ''
   const isUnpaid = ctx.query.unpaid === '1'
 
-  if (!orderId) return renderShell({ title: 'Order placed', lead: defaultLead(), isUnpaid: false })
+  if (!orderId) return renderShell({ title: 'Order placed', lead: defaultLead() })
 
   const admin = createAdminClient()
   const { data } = await admin
@@ -50,7 +49,6 @@ export async function renderOrderConfirmation(_args: unknown, ctx: ShortcodeCont
   return renderShell({
     title: firstName ? `Thanks, ${escapeHtml(firstName)}` : 'Order placed',
     lead: leadFor({ isShipping, isUnpaid }),
-    isUnpaid,
   })
 }
 
@@ -68,7 +66,7 @@ function leadFor(args: { isShipping: boolean; isUnpaid: boolean }): string {
   return "We'll text you the moment it's ready. Thank you for letting us be part of your routine."
 }
 
-function renderShell(args: { title: string; lead: string; isUnpaid: boolean }): string {
+function renderShell(args: { title: string; lead: string }): string {
   return `<div class="order-confirm">
   <style>${ORDER_CONFIRM_STYLE}</style>
   <div class="oc-badge" aria-hidden="true">

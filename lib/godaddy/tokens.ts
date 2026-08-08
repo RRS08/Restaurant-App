@@ -36,6 +36,13 @@ export interface StoredPoyntToken {
   expiresAt: string
   connectedAt: string
   updatedAt: string
+  /** Which Poynt environment this token authorizes against.
+   *  'prod' = services.poynt.net (real merchants + real charges).
+   *  'ote'  = services.ote-poynt.net (sandbox test merchants).
+   *  A restaurant can hold both simultaneously so the same
+   *  merchant can be tested in sandbox without touching their
+   *  live prod token. */
+  env: 'prod' | 'ote'
   /** Non-null once webhook registration with Poynt succeeded.
    *  If null, the merchant is connected but no real-time push is
    *  active — the manual Sync + GitHub Actions cron carry the
@@ -43,6 +50,13 @@ export interface StoredPoyntToken {
    *  Settings UI. */
   webhookId: string | null
   webhookSecret: string | null
+}
+
+/** Read POYNT_ENV once per call. Callers that hit Poynt APIs pick
+ *  the token row matching the current environment so prod ingest
+ *  and OTE checkout can coexist on the same restaurant. */
+export function currentPoyntEnv(): 'prod' | 'ote' {
+  return (process.env.POYNT_ENV ?? '').toLowerCase() === 'ote' ? 'ote' : 'prod'
 }
 
 // ================================================================
@@ -90,8 +104,11 @@ export async function consumeOAuthState(state: string): Promise<string | null> {
 // Per-merchant tokens
 // ================================================================
 
-/** Insert or update the token row for (restaurant, business). The
- *  post-OAuth callback + refresh paths both land here. */
+/** Insert or update the token row for (restaurant, business, env).
+ *  The post-OAuth callback + refresh paths both land here. Env
+ *  defaults to whatever POYNT_ENV says at the moment of the call —
+ *  callers only pass it explicitly when refreshing a specific
+ *  stored token whose env is already known. */
 export async function upsertMerchantToken(args: {
   restaurantId: string
   businessId: string
@@ -100,15 +117,18 @@ export async function upsertMerchantToken(args: {
   scope: string | null
   tokenType: string
   expiresInSeconds: number
+  env?: 'prod' | 'ote'
 }): Promise<void> {
   const admin = createAdminClient()
   const expiresAt = new Date(Date.now() + args.expiresInSeconds * 1000).toISOString()
+  const env = args.env ?? currentPoyntEnv()
   const { error } = await admin
     .from('godaddy_poynt_tokens')
     .upsert(
       {
         restaurant_id: args.restaurantId,
         business_id: args.businessId,
+        env,
         access_token: args.accessToken,
         refresh_token: args.refreshToken,
         scope: args.scope,
@@ -116,21 +136,36 @@ export async function upsertMerchantToken(args: {
         expires_at: expiresAt,
         updated_at: new Date().toISOString(),
       },
-      { onConflict: 'restaurant_id,business_id' },
+      { onConflict: 'restaurant_id,business_id,env' },
     )
   if (error) {
     throw new Error(`Could not persist Poynt tokens: ${error.message}`)
   }
 }
 
-/** Load the connection for a restaurant. Returns null when the
- *  restaurant hasn't linked a Poynt merchant yet. */
+/** Load the connection for a restaurant IN THE CURRENT ENVIRONMENT
+ *  (`POYNT_ENV`). Returns null when the restaurant hasn't linked a
+ *  Poynt merchant for this env yet — a prod-linked merchant looks
+ *  unlinked while POYNT_ENV=ote, which is exactly what we want: it
+ *  forces the sandbox test to grant against an OTE merchant instead
+ *  of accidentally hitting the live one. */
 export async function getStoredToken(restaurantId: string): Promise<StoredPoyntToken | null> {
+  return getStoredTokenForEnv(restaurantId, currentPoyntEnv())
+}
+
+/** Explicit-env variant. Callers that need to reach across
+ *  environments (e.g. a future admin tool that shows both prod
+ *  and OTE connections) call this directly. */
+export async function getStoredTokenForEnv(
+  restaurantId: string,
+  env: 'prod' | 'ote',
+): Promise<StoredPoyntToken | null> {
   const admin = createAdminClient()
   const { data, error } = await admin
     .from('godaddy_poynt_tokens')
     .select('*')
     .eq('restaurant_id', restaurantId)
+    .eq('env', env)
     .maybeSingle()
   if (error || !data) return null
   return {
@@ -144,6 +179,7 @@ export async function getStoredToken(restaurantId: string): Promise<StoredPoyntT
     expiresAt: data.expires_at as string,
     connectedAt: data.connected_at as string,
     updatedAt: data.updated_at as string,
+    env: (data.env as 'prod' | 'ote') ?? 'prod',
     webhookId: (data.webhook_id as string | null) ?? null,
     webhookSecret: (data.webhook_secret as string | null) ?? null,
   }
@@ -178,6 +214,10 @@ export async function getValidAccessToken(restaurantId: string): Promise<
       scope: fresh.scope,
       tokenType: fresh.tokenType,
       expiresInSeconds: fresh.expiresIn,
+      // Preserve the row's env — a refresh must never migrate a
+      // token between environments even if POYNT_ENV changed
+      // between issue and refresh.
+      env: stored.env,
     })
     return { accessToken: fresh.accessToken, businessId: stored.businessId }
   } catch (err) {

@@ -393,6 +393,38 @@ const CHECKOUT_STYLE = `
   .co-progress .co-step{gap:6px}
   .co-progress .co-step + .co-step::before{margin:0 6px;min-width:8px}
   .co-step-num{width:24px;height:24px;font-size:11px}
+  /* Layout gap tightens up on mobile — the summary aside stacks
+     under the form and 32px of gap between them feels like a rift. */
+  .co-layout{gap:20px}
+  /* Address grid: city on its own row, state + ZIP share the next.
+     The desktop 3-col squeeze put each field to ~90px which was
+     nearly unusable on small screens. */
+  .co-row-3{grid-template-columns:1fr 1fr;grid-template-areas:"city city" "state zip"}
+  .co-row-3>*:nth-child(1){grid-area:city}
+  .co-row-3>*:nth-child(2){grid-area:state}
+  .co-row-3>*:nth-child(3){grid-area:zip}
+  /* Delivery option chip: less horizontal padding so the price
+     column doesn't shove into the label on 360px viewports. */
+  .co-delivery-opt{padding:14px 14px;gap:10px}
+  .co-delivery-label{font-size:14px}
+  .co-delivery-sub{font-size:12.5px}
+  /* Continue / Back stack full-width so both are equally tappable
+     without hunting between them. */
+  .co-actions{gap:12px;align-items:stretch}
+  .co-actions>.btn{width:100%;text-align:center;padding:15px 20px}
+  .co-back-link{text-align:center;padding:6px 0}
+  /* Summary aside is full-width on mobile — trim padding + font so
+     the totals row doesn't wrap when tax pushes it wide. */
+  .co-summary{padding:18px}
+  .co-total strong{font-size:20px}
+  /* Card brand pills wrap comfortably at any width; the "We accept"
+     label sits above them so brands don't crush. */
+  .co-cards-accepted{flex-direction:column;align-items:flex-start;gap:8px}
+  /* iOS Safari zooms into any input with font-size < 16px on focus.
+     Bumping to 16px on the small-viewport range keeps the page from
+     jumping every time the buyer taps a field. Poynt's iframe fields
+     already ship at 16px via customCss.inputDefault. */
+  .co-field input,.co-field textarea{font-size:16px}
 }
 .co-step-num{width:28px;height:28px;border-radius:50%;border:1.5px solid #d4e7c7;color:#55723e;display:inline-flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;background:#fff}
 .co-step.is-active .co-step-num{background:#253b0e;color:#fff;border-color:#253b0e}
@@ -912,7 +944,7 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
           rowCardNumber: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
           rowExpiration: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
           rowCVV: 'display:block;width:100%;margin:0;padding:0;',
-          inputDefault: 'width:100%;box-sizing:border-box;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;font-size:15px;color:#1a2010;font-family:inherit;line-height:1.35;outline:none;transition:border-color .15s ease,box-shadow .15s ease;',
+          inputDefault: 'width:100%;box-sizing:border-box;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;font-size:16px;color:#1a2010;font-family:inherit;line-height:1.35;outline:none;transition:border-color .15s ease,box-shadow .15s ease;',
           input: {
             cardNumber: 'width:100%;',
             expiryDate: 'width:100%;',

@@ -97,7 +97,7 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   return `<div class="co-layout">
   <style>${CHECKOUT_STYLE}</style>
 
-  <form class="co-form" method="post" action="/api/site-cart/checkout" data-checkout>
+  <form class="co-form" method="post" action="/api/site-cart/checkout" data-checkout novalidate>
     ${errorBlock}
 
     <ol class="co-progress" data-current-step="1">
@@ -111,21 +111,21 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
       <div class="co-eyebrow">Who's it for</div>
       <div class="co-field">
         <label for="co-email">Email</label>
-        <input id="co-email" name="email" type="email" placeholder="you@email.com" required>
+        <input id="co-email" name="email" type="email" placeholder="you@email.com" autocomplete="email" required>
       </div>
       <div class="co-row-2">
         <div class="co-field">
           <label for="co-fn">First name</label>
-          <input id="co-fn" name="first_name" type="text" required>
+          <input id="co-fn" name="first_name" type="text" autocomplete="given-name" required>
         </div>
         <div class="co-field">
           <label for="co-ln">Last name</label>
-          <input id="co-ln" name="last_name" type="text" required>
+          <input id="co-ln" name="last_name" type="text" autocomplete="family-name" required>
         </div>
       </div>
       <div class="co-field">
         <label for="co-phone">Phone</label>
-        <input id="co-phone" name="phone" type="tel" placeholder="(956) 000-0000">
+        <input id="co-phone" name="phone" type="tel" placeholder="(956) 000-0000" autocomplete="tel">
       </div>
       <p class="co-hint">We'll text you when your order is ready. No marketing unless you opt in below.</p>
       <label class="co-check">
@@ -245,7 +245,8 @@ ${summaryLines}
     </div>
     <div class="co-sum-totals" data-tax-rate="${taxRate}" data-subtotal="${snap.subtotal}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
-      <div class="row"><span data-summary-delivery-label>${escapeHtml(defaultDeliveryPrice === 0 ? 'Pickup' : 'Shipping')}</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? (defaultOption?.sublabel ?? 'In store') : formatPrice(defaultDeliveryPrice))}</span></div>
+      <div class="row"><span data-summary-delivery-label>${escapeHtml(defaultOption?.label ?? (defaultDeliveryPrice === 0 ? 'Pickup' : 'Shipping'))}</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? (defaultOption?.sublabel ?? 'In store') : formatPrice(defaultDeliveryPrice))}</span></div>
+      <div class="row row-shipto" data-summary-shipto-row hidden><span>Ship to</span><span data-summary-shipto></span></div>
       ${taxRate > 0
         ? `<div class="row"><span>Tax</span><span data-summary-tax>${escapeHtml(formatPrice(initialTax))}</span></div>`
         : `<div class="row muted"><span>Tax</span><span>Not applied</span></div>`}
@@ -415,6 +416,13 @@ const CHECKOUT_STYLE = `
 .co-field input::placeholder,.co-field textarea::placeholder{color:#758969}
 .co-field input:focus,.co-field textarea:focus{outline:2px solid #536f3b;outline-offset:1px;border-color:transparent}
 .co-field textarea{resize:vertical;min-height:96px}
+/* Inline field-level error. Painted by JS setting is-error +
+   data-error-message on the .co-field wrapper (see validatePanel).
+   Border turns red-brown; a small message appears under the input.
+   Reads cleaner than Chrome's native validation bubble and stays
+   in the page flow so it never covers the next field. */
+.co-field.is-error input,.co-field.is-error textarea{border-color:#c53131;background:#fff5f4}
+.co-field.is-error::after{content:attr(data-error-message);display:block;font-size:12px;color:#c53131;margin-top:2px;font-weight:500}
 .co-row-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .co-row-3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
 .co-hint{font-size:12.5px;color:#55723e;margin:0;line-height:1.55}
@@ -446,14 +454,15 @@ const CHECKOUT_STYLE = `
    error text is hidden via customCss.errorText.base — validation
    errors surface via our own [data-collect-error] below the mount,
    so the container never balloons on a validation fail. */
-/* Container height is driven live by iframe_height_change — the
-   iframe reports its full content height and we mirror it, so
-   neither the iframe nor the container ever needs a scrollbar.
-   The iframe height:100% rule forces Poynt's iframe to obey the
-   container height instead of its inline HTML height attribute,
-   which was leaving an inner scroll on the CVV row when their
-   default height was shorter than the stacked content. */
-.co-card-mount{background:transparent;min-height:56px;transition:height .15s ease}
+/* Fixed container height — Poynt reports iframe heights that
+   include reserved room for their (hidden) validation panel, so
+   letting iframe_height_change drive height left ~150px of empty
+   space below the card row. Locking to 52px matches the single
+   card-row Poynt actually renders when labels are off; iframe
+   height:100% + overflow:hidden clips anything extra Poynt tries
+   to push in. Validation errors surface via the external
+   [data-collect-error] block, not from inside the iframe. */
+.co-card-mount{background:transparent;height:52px;overflow:hidden}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -486,6 +495,14 @@ const CHECKOUT_STYLE = `
 .co-sum-totals{display:flex;flex-direction:column;gap:8px}
 .co-sum-totals .row{display:flex;justify-content:space-between;font-size:14px;color:#253b0e}
 .co-sum-totals .row.muted{color:#55723e;font-size:13px}
+/* Higher specificity than .co-sum-totals .row so [hidden] wins on
+   the Ship-to row until the buyer picks a shipping option and fills
+   the address block. */
+.co-sum-totals .row[hidden]{display:none}
+/* Ship-to sits directly under the delivery label — tighter type,
+   right-aligned so the (often longer) typed address wraps neatly. */
+.co-sum-totals .row-shipto{font-size:12.5px;color:#55723e;margin-top:-2px}
+.co-sum-totals .row-shipto>span:last-child{max-width:60%;text-align:right;line-height:1.4}
 .co-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:14px;border-top:1px solid #e6d8b2}
 .co-total strong{font-size:22px;font-weight:600}
 .cart-note{font-size:11.5px;color:#55723e;text-align:center;margin-top:12px}
@@ -532,15 +549,59 @@ const CHECKOUT_SCRIPT = `
   function requiredInputsIn(panel){
     return panel.querySelectorAll('input[required], textarea[required]');
   }
+  // Custom inline validation — form has the novalidate attr so
+  // Chrome's default bubble never fires (that bubble was ugly,
+  // browser-styled, and only landed on the LAST field we called
+  // reportValidity on instead of the FIRST invalid one). Here we
+  // mark every invalid field with .is-error (which CSS paints red
+  // border + inline "please fill this in" message), focus the first
+  // bad one, and clear the error class as the buyer starts typing.
+  function fieldErrorMessage(el) {
+    if (el.validity.valueMissing) return 'Please fill this in';
+    if (el.validity.typeMismatch && el.type === 'email') return 'Enter a valid email address';
+    if (el.validity.patternMismatch) return 'That format looks off';
+    return 'Please check this field';
+  }
+  function markInvalid(el) {
+    var field = el.closest && el.closest('.co-field');
+    if (!field) return;
+    field.classList.add('is-error');
+    field.setAttribute('data-error-message', fieldErrorMessage(el));
+  }
+  function clearFieldError(el) {
+    var field = el.closest && el.closest('.co-field');
+    if (field) {
+      field.classList.remove('is-error');
+      field.removeAttribute('data-error-message');
+    }
+  }
   function validatePanel(step){
     var panel = root.querySelector('[data-panel="' + step + '"]');
     if (!panel) return true;
-    var ok = true;
+    var firstInvalid = null;
     requiredInputsIn(panel).forEach(function(el){
-      if (!el.reportValidity()) ok = false;
+      if (!el.checkValidity()) {
+        markInvalid(el);
+        if (!firstInvalid) firstInvalid = el;
+      } else {
+        clearFieldError(el);
+      }
     });
-    return ok;
+    if (firstInvalid) {
+      firstInvalid.focus();
+      firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return false;
+    }
+    return true;
   }
+  // Live-clear a field's error as soon as it becomes valid — no need
+  // to make the buyer click Continue again to see the red go away.
+  root.addEventListener('input', function(e) {
+    var el = e.target;
+    if (!el || !el.closest) return;
+    var field = el.closest('.co-field.is-error');
+    if (field && el.checkValidity()) clearFieldError(el);
+  });
 
   root.addEventListener('click', function(e){
     var cont = e.target.closest && e.target.closest('[data-continue]');
@@ -580,6 +641,9 @@ const CHECKOUT_SCRIPT = `
   var addressInputs = addressBlock ? addressBlock.querySelectorAll('input[name="address_line1"], input[name="city"], input[name="state"], input[name="postal"]') : [];
   var billingToggle = root.querySelector('[data-billing-toggle]');
   var billingBlock = root.querySelector('[data-billing]');
+  var shiptoRow = root.querySelector('[data-summary-shipto-row]');
+  var shiptoEl = root.querySelector('[data-summary-shipto]');
+  var currentDeliveryNeedsAddr = false;
 
   function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
   function round2(n){ return Math.round(n * 100) / 100; }
@@ -608,6 +672,7 @@ const CHECKOUT_SCRIPT = `
   function applyDelivery(radio){
     var price = parseFloat(radio.dataset.price || '0') || 0;
     var needsAddr = radio.dataset.requiresAddress === '1';
+    currentDeliveryNeedsAddr = needsAddr;
     // paint selection state on all cards
     root.querySelectorAll('.co-delivery-opt').forEach(function(l){ l.classList.remove('is-selected'); });
     var wrapper = radio.closest('.co-delivery-opt');
@@ -627,21 +692,61 @@ const CHECKOUT_SCRIPT = `
     var sub = currentSubtotal();
     var tax = round2((sub + price) * taxRate);
     var total = round2(sub + price + tax);
-    // Row label + value swap: pickup shows the store address instead
-    // of "Free"; shipping shows the price. Everything sourced from
-    // the radio's own data-attrs so future delivery options don't
-    // need widget changes.
+    // Label comes from the option itself (data-label) so a "Ship
+    // to me" $0 option doesn't get mis-labeled "Pickup" — the old
+    // code branched on price alone and a free-shipping option would
+    // display the wrong word. Value in the second column stays
+    // sublabel-for-pickup / price-for-ship, unchanged.
     var sublabel = radio.dataset.sublabel || '';
-    if (deliveryLabelEl) deliveryLabelEl.textContent = price === 0 ? 'Pickup' : 'Shipping';
+    var label = radio.dataset.label || (price === 0 ? 'Pickup' : 'Shipping');
+    if (deliveryLabelEl) deliveryLabelEl.textContent = label;
     if (shippingEl) shippingEl.textContent = price === 0 ? (sublabel || 'In store') : money(price);
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
+    // Refresh the Ship-to summary row so it appears/disappears the
+    // moment delivery mode flips.
+    syncShipto();
     // Button always mirrors the Total row. No independent math, no
     // "total > 0" guard — a zero cart never gets here (checkout blocks
     // empty carts server-side) and syncing textContent keeps the
     // button and summary from ever disagreeing.
     syncButton();
   }
+
+  // Ship-to summary row. Only visible when the current delivery
+  // option requires an address AND the buyer has typed at least
+  // line1 + city. Live-updates as they type on step 2 so by the
+  // time they land on step 3 the summary already reflects their
+  // real destination, not the store pickup address.
+  function readShiptoText() {
+    if (!addressBlock) return '';
+    var l1 = (addressBlock.querySelector('input[name="address_line1"]') || {}).value || '';
+    var l2 = (addressBlock.querySelector('input[name="address_line2"]') || {}).value || '';
+    var c  = (addressBlock.querySelector('input[name="city"]') || {}).value || '';
+    var s  = (addressBlock.querySelector('input[name="state"]') || {}).value || '';
+    var z  = (addressBlock.querySelector('input[name="postal"]') || {}).value || '';
+    var street = [l1, l2].map(function(x){return (x||'').trim();}).filter(Boolean).join(', ');
+    var cityLine = [c, s, z].map(function(x){return (x||'').trim();}).filter(Boolean).join(', ');
+    if (!street || !cityLine.length) return '';
+    return street + ' · ' + cityLine;
+  }
+  function syncShipto() {
+    if (!shiptoRow || !shiptoEl) return;
+    if (!currentDeliveryNeedsAddr) {
+      shiptoRow.setAttribute('hidden', '');
+      shiptoEl.textContent = '';
+      return;
+    }
+    var txt = readShiptoText();
+    if (txt) {
+      shiptoEl.textContent = txt;
+      shiptoRow.removeAttribute('hidden');
+    } else {
+      shiptoRow.setAttribute('hidden', '');
+      shiptoEl.textContent = '';
+    }
+  }
+  addressInputs.forEach(function(inp){ inp.addEventListener('input', syncShipto); });
 
   root.addEventListener('change', function(e){
     if (e.target && e.target.name === 'delivery_option') applyDelivery(e.target);
@@ -770,13 +875,11 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
       showError(msg);
     });
-    safeSubscribe('iframe_height_change', function(e) {
-      var mount = document.getElementById('poynt-card-mount');
-      var h = e && e.data && e.data.height;
-      if (mount && typeof h === 'number' && h > 0) {
-        mount.style.height = h + 'px';
-      }
-    });
+    // NOTE: intentionally not subscribing to iframe_height_change —
+    // Poynt reports heights that include their reserved (hidden)
+    // error panel, which balloons the container. Height is pinned
+    // in CSS (.co-card-mount{height:52px}) instead. See comment
+    // in CHECKOUT_STYLE for the rationale.
     // If we got here, mount didn't throw — mark ready so submit
     // works without waiting for an event Poynt may not dispatch.
     iframeReady = true;

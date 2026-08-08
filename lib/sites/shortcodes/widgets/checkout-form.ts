@@ -983,20 +983,41 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     // handlers, then attempt the optional resize handler. Missing
     // resize just means the iframe won't auto-grow on validation
     // errors; it doesn't block submission.
-    safeSubscribe('nonce', function(e) {
-      var n = e && e.data && e.data.nonce;
+    function onNonce(e) {
+      if (typeof console !== 'undefined') console.log('[checkout] Poynt nonce event', e);
+      var n = (e && e.data && (e.data.nonce || e.data.token))
+           || (e && e.detail && (e.detail.nonce || e.detail.token))
+           || (typeof e === 'string' ? e : '');
       if (nonceField) nonceField.value = n || '';
       clearError();
-      if (awaitingSubmit && form) {
+      if (awaitingSubmit && form && nonceField && nonceField.value) {
         awaitingSubmit = false;
         form.submit();
+      } else if (awaitingSubmit && form && !nonceField.value) {
+        awaitingSubmit = false;
+        showError('Card tokenized but no token returned. Refresh and try again.');
+        if (typeof console !== 'undefined') console.error('[checkout] empty nonce in event', e);
       }
-    });
-    safeSubscribe('error', function(e) {
+    }
+    function onError(e) {
+      if (typeof console !== 'undefined') console.log('[checkout] Poynt error event', e);
       awaitingSubmit = false;
-      var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
-      showError(msg);
-    });
+      var d = (e && e.data) || (e && e.detail) || {};
+      var msg = d.message || d.reason || d.error || (typeof e === 'string' ? e : 'Please check your card details and try again.');
+      showError(String(msg));
+    }
+    // Subscribe to every event name variant Poynt might dispatch —
+    // 'nonce'/'error' are canonical, but SDK versions in the wild
+    // also emit tokenize/token/success and tokenize_error/nonceError.
+    safeSubscribe('nonce', onNonce);
+    safeSubscribe('tokenize', onNonce);
+    safeSubscribe('token', onNonce);
+    safeSubscribe('success', onNonce);
+    safeSubscribe('error', onError);
+    safeSubscribe('tokenize_error', onError);
+    safeSubscribe('nonceError', onError);
+    safeSubscribe('validationError', onError);
+    safeSubscribe('validation_error', onError);
     // Height-sync — Poynt's SDK dispatches under different event
     // names across versions (iframe_height_change / heightChange /
     // iframeHeightChange). Subscribe to all of them; unknown names
@@ -1071,21 +1092,57 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
 
     clearError();
     awaitingSubmit = true;
+    if (typeof console !== 'undefined') {
+      console.log('[checkout] triggering tokenize; tokenizer methods:',
+        Object.keys(tokenizer || {}).concat(
+          Object.getOwnPropertyNames(Object.getPrototypeOf(tokenizer || {}))
+        ));
+    }
     try {
-      tokenizer.getNonce();
-      // Fallback timeout — if Poynt doesn't dispatch 'nonce' or
-      // 'error' within 8 seconds (empty card fields on some SDK
-      // versions produce dead silence), show a message so the
+      // Try the canonical method first, then fall back to variants
+      // some Poynt SDK versions expose (tokenize / submit / getToken).
+      var triggered = false;
+      var methods = ['getNonce', 'tokenize', 'submit', 'getToken'];
+      for (var mi = 0; mi < methods.length; mi++) {
+        var m = methods[mi];
+        if (typeof tokenizer[m] === 'function') {
+          if (typeof console !== 'undefined') console.log('[checkout] calling tokenizer.' + m + '()');
+          var r = tokenizer[m]();
+          // Some SDK versions return a Promise resolving to the nonce
+          // instead of firing an event — handle both paths.
+          if (r && typeof r.then === 'function') {
+            r.then(function(res) {
+              if (typeof console !== 'undefined') console.log('[checkout] tokenize promise resolved', res);
+              onNonce({ data: res && (res.nonce || res.token) ? res : { nonce: res } });
+            }).catch(function(err) {
+              if (typeof console !== 'undefined') console.error('[checkout] tokenize promise rejected', err);
+              onError(err);
+            });
+          }
+          triggered = true;
+          break;
+        }
+      }
+      if (!triggered) {
+        awaitingSubmit = false;
+        showError('Card processor method unavailable — please refresh and try again.');
+        if (typeof console !== 'undefined') console.error('[checkout] no known tokenize method on tokenizer', tokenizer);
+        return;
+      }
+      // Fallback timeout — if Poynt doesn't dispatch nonce/error and
+      // no promise resolves within 10 seconds, show a message so the
       // buyer isn't left staring at an unresponsive button.
       setTimeout(function() {
         if (awaitingSubmit) {
           awaitingSubmit = false;
-          showError('Card details look incomplete — make sure the number, expiration, and CVV are all filled in.');
+          showError('Card details look incomplete or the card was declined. Double-check the number, expiration, and CVV, then try again.');
+          if (typeof console !== 'undefined') console.warn('[checkout] tokenize timed out after 10s with no nonce/error');
         }
-      }, 8000);
+      }, 10000);
     } catch (err) {
       awaitingSubmit = false;
       showError('Card entry error. Refresh and try again.');
+      if (typeof console !== 'undefined') console.error('[checkout] tokenize threw', err);
     }
   });
 };

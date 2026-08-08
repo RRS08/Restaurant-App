@@ -202,22 +202,39 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   })
 
   // --- Step 2: paymentToken → AUTHORIZE transaction ---
+  // Fetch the merchant's default store id — Poynt requires
+  // context.storeId on the AUTHORIZE call to attribute the txn to
+  // a physical/logical location. Businesses always have at least
+  // one store; we take the first one from GET /businesses/{id}/stores.
+  const storeId = await fetchDefaultStoreId({ base, businessId, bearer, appId })
+  if (!storeId) {
+    console.error('[godaddy/collect] could not resolve storeId for business', { businessId })
+    return { status: 'error', message: 'Could not resolve merchant store — try again in a moment.' }
+  }
+
   const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
-  const chargeBody = {
+  // Body matches Poynt's docs example exactly — no extra fields.
+  // Earlier attempts included context.source and amounts.taxAmount
+  // (both absent from Poynt's example) and got UNAUTHORIZED_ACCESS.
+  // taxAmount, when needed for reporting, goes elsewhere; for now
+  // the total is already inside transactionAmount so we skip it.
+  const chargeBody: Record<string, unknown> = {
     action: 'AUTHORIZE',
     authOnly: true,
+    context: { businessId, storeId },
     amounts: {
       transactionAmount: amountCents,
       orderAmount: amountCents,
-      taxAmount: taxCents,
       currency: 'USD',
     },
     fundingSource: { cardToken: paymentToken },
-    references: args.orderReference
-      ? [{ type: 'CUSTOM', id: args.orderReference }]
-      : undefined,
-    context: { source: 'WEB', businessId },
   }
+  if (args.orderReference) {
+    chargeBody.references = [{ type: 'CUSTOM', id: args.orderReference }]
+  }
+  // Preserve the tax value in a comment/log so future capture flows
+  // can surface it if Poynt reporting needs it.
+  void taxCents
   let response: Response
   try {
     response = await fetch(chargeUrl, {
@@ -281,6 +298,58 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     cardBrand,
     cardLast4,
   }
+}
+
+// In-process cache keyed by businessId so we don't hit
+// /businesses/{id}/stores on every checkout. Cheap Map, not
+// persisted — a fresh serverless instance re-fetches once.
+const storeIdCache = new Map<string, string>()
+
+async function fetchDefaultStoreId(args: {
+  base: string
+  businessId: string
+  bearer: string
+  appId: string | undefined
+}): Promise<string | null> {
+  const cached = storeIdCache.get(args.businessId)
+  if (cached) return cached
+  const url = `${args.base}/businesses/${encodeURIComponent(args.businessId)}/stores`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'authorization': `Bearer ${args.bearer}`,
+        'content-type': 'application/json',
+        'api-version': '1.2',
+        ...(args.appId ? { 'x-app-id': args.appId } : {}),
+      },
+    })
+  } catch (err) {
+    console.error('[godaddy/collect] fetch stores failed', err)
+    return null
+  }
+  const raw = await res.text()
+  if (!res.ok) {
+    console.warn('[godaddy/collect] stores endpoint rejected', { status: res.status, raw })
+    return null
+  }
+  let json: unknown
+  try { json = raw ? JSON.parse(raw) : {} }
+  catch { return null }
+  // Poynt returns { stores: [...] } — take the first one as default.
+  // Merchants with multiple physical stores would need per-order
+  // routing logic later; the pilot merchant has one, and the first
+  // is the primary in Poynt's ordering.
+  const data = (json ?? {}) as { stores?: Array<{ id?: string }> }
+  const first = Array.isArray(data.stores) && data.stores.length > 0 ? data.stores[0] : null
+  const id = first?.id
+  if (id) {
+    storeIdCache.set(args.businessId, id)
+    return id
+  }
+  console.warn('[godaddy/collect] no stores returned for business', args.businessId)
+  return null
 }
 
 /** Env-aware sibling of getValidAccessToken — POS ingest uses the

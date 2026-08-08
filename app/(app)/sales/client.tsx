@@ -1164,7 +1164,13 @@ function OrderDrawer({ order, onClose, t, locale }: {
                   <span style={{ fontSize: 12, color: MUTED }}>{t('Delivery', 'Entrega')}</span>
                   <span style={{ fontSize: 12, textAlign: 'right' }}>
                     {deliveryLabel}
-                    {deliveryPrice != null && (
+                    {/* Price suffix only when it's meaningful — a
+                        priced ship option ($1.00) or a free ship
+                        option (has address → "Free"). Zero-price
+                        pickup gets no suffix, since "Pick up in
+                        store · Free" reads like "free shipping"
+                        when the whole point is there's no shipping. */}
+                    {deliveryPrice != null && (hasAddress || deliveryPrice > 0) && (
                       <span style={{ color: MUTED, marginLeft: 6 }}>
                         {deliveryPrice === 0 ? t('· Free', '· Gratis') : `· ${fmtMoney(deliveryPrice)}`}
                       </span>

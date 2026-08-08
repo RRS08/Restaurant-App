@@ -518,7 +518,13 @@ const CHECKOUT_STYLE = `
 
 const CHECKOUT_SCRIPT = `
 (function(){
-  var root = document.querySelector('[data-checkout]');
+  // Scope every query to the whole checkout layout, NOT the form —
+  // the Order summary aside (subtotal / delivery / tax / total)
+  // sits OUTSIDE the form as a sibling under .co-layout, so a
+  // form-scoped root leaves every summary querySelector returning
+  // null. That's why the Delivery row never appeared and the summary
+  // label stayed on the initial value even after applyDelivery ran.
+  var root = document.querySelector('.co-layout');
   if (!root) return;
   var progress = root.querySelector('.co-progress');
   var panels = root.querySelectorAll('.co-panel');

@@ -308,18 +308,21 @@ export default function SalesClient({
   const orderCount = completed.length
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
-  // Filter counts — always across the full day so the pill numbers
-  // don't shift as the manager clicks filters. Card + Cash are
-  // "in-person only" (exclude source='web') so an online card sale
-  // doesn't show in both Card AND Online tabs — those three chips
-  // partition the day cleanly. Voided is a status axis that overlaps
-  // any of the above on purpose (a voided card sale still shows in
-  // Voided so it can be audited).
+  // Filter counts partition the day cleanly:
+  //   Card   = card + in-person + LIVE (not voided)
+  //   Cash   = cash + in-person + LIVE
+  //   Online = web + LIVE
+  //   Voided = voided (any source / payment type — audit view)
+  //   All    = raw total (includes voided, so counts add up to All)
+  // Voided orders never appear in Card / Cash / Online — moving to
+  // Voided is the only lane that surfaces them, so the manager can
+  // read Card/Cash/Online as "live sales in this lane" without
+  // seeing struck-through rows mixed in.
   const counts: Record<FilterKey, number> = {
     all: orders.length,
-    card: orders.filter((o) => o.paymentType === 'card' && o.source !== 'web').length,
-    cash: orders.filter((o) => o.paymentType === 'cash' && o.source !== 'web').length,
-    web: orders.filter((o) => o.source === 'web').length,
+    card: orders.filter((o) => o.paymentType === 'card' && o.source !== 'web' && o.status !== 'voided').length,
+    cash: orders.filter((o) => o.paymentType === 'cash' && o.source !== 'web' && o.status !== 'voided').length,
+    web: orders.filter((o) => o.source === 'web' && o.status !== 'voided').length,
     voided: orders.filter((o) => o.status === 'voided').length,
   }
 
@@ -327,8 +330,8 @@ export default function SalesClient({
     const byFilter =
       filter === 'all' ? orders
         : filter === 'voided' ? orders.filter((o) => o.status === 'voided')
-          : filter === 'web' ? orders.filter((o) => o.source === 'web')
-            : orders.filter((o) => o.paymentType === filter && o.source !== 'web')
+          : filter === 'web' ? orders.filter((o) => o.source === 'web' && o.status !== 'voided')
+            : orders.filter((o) => o.paymentType === filter && o.source !== 'web' && o.status !== 'voided')
     const q = salesQuery.trim().toLowerCase()
     if (!q) return byFilter
     // Match customer / note / card last4 / short-id / any line item name.

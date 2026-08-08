@@ -1125,6 +1125,8 @@ function OrderDrawer({ order, onClose, t, locale }: {
             const notes = typeof cart.notes === 'string' ? cart.notes : null
             const email = typeof c.email === 'string' ? c.email : null
             const phone = typeof c.phone === 'string' ? c.phone : null
+            const cardholderName = typeof c.cardholder_name === 'string' ? c.cardholder_name : null
+            const billing = (c.billing_address ?? null) as Record<string, unknown> | null
             const addressLine1 = typeof s.line1 === 'string' ? s.line1 : null
             const addressLine2 = typeof s.line2 === 'string' ? s.line2 : null
             const city = typeof s.city === 'string' ? s.city : null
@@ -1133,6 +1135,14 @@ function OrderDrawer({ order, onClose, t, locale }: {
             const addressStreet = [addressLine1, addressLine2].filter(Boolean).join(', ')
             const addressCity = [city, state, postal].filter(Boolean).join(', ')
             const hasAddress = Boolean(addressStreet || addressCity)
+            const billingLine1 = billing && typeof billing.line1 === 'string' ? billing.line1 : null
+            const billingLine2 = billing && typeof billing.line2 === 'string' ? billing.line2 : null
+            const billingCity = billing && typeof billing.city === 'string' ? billing.city : null
+            const billingState = billing && typeof billing.state === 'string' ? billing.state : null
+            const billingPostal = billing && typeof billing.postal === 'string' ? billing.postal : null
+            const billingStreet = [billingLine1, billingLine2].filter(Boolean).join(', ')
+            const billingCityLine = [billingCity, billingState, billingPostal].filter(Boolean).join(', ')
+            const hasBilling = Boolean(billingStreet || billingCityLine)
             const deliveryLabel = delivery.label ?? (delivery.key ?? '—')
             const deliveryPrice = typeof delivery.price === 'number' ? delivery.price : null
             return (
@@ -1174,6 +1184,21 @@ function OrderDrawer({ order, onClose, t, locale }: {
                   <div style={metaRow}>
                     <span style={{ fontSize: 12, color: MUTED }}>{t('Note to shop', 'Nota a la tienda')}</span>
                     <span style={{ fontSize: 12, textAlign: 'right', lineHeight: 1.45, maxWidth: 240 }}>{notes}</span>
+                  </div>
+                )}
+                {cardholderName && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Name on card', 'Nombre en tarjeta')}</span>
+                    <span style={{ fontSize: 12, textAlign: 'right' }}>{cardholderName}</span>
+                  </div>
+                )}
+                {hasBilling && (
+                  <div style={metaRow}>
+                    <span style={{ fontSize: 12, color: MUTED }}>{t('Billing', 'Facturación')}</span>
+                    <span style={{ fontSize: 12, textAlign: 'right', lineHeight: 1.45 }}>
+                      {billingStreet && <span style={{ display: 'block' }}>{billingStreet}</span>}
+                      {billingCityLine && <span style={{ display: 'block' }}>{billingCityLine}</span>}
+                    </span>
                   </div>
                 )}
                 {d.paymentReference && (

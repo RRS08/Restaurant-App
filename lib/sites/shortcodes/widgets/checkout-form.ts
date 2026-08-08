@@ -179,11 +179,54 @@ ${deliveryRadios}
     <!-- Step 3 Payment -->
     <section class="co-panel" data-panel="3" hidden>
       <div class="co-eyebrow">Payment</div>
+
+      <div class="co-cards-accepted">
+        <span class="co-cards-label">We accept</span>
+        <div class="co-brands">
+          <span class="co-brand co-brand-visa" aria-label="Visa">VISA</span>
+          <span class="co-brand co-brand-mc" aria-label="Mastercard">Mastercard</span>
+          <span class="co-brand co-brand-amex" aria-label="American Express">AMEX</span>
+          <span class="co-brand co-brand-disc" aria-label="Discover">Discover</span>
+        </div>
+      </div>
+
+      <div class="co-field">
+        <label for="co-cardholder">Name on card</label>
+        <input id="co-cardholder" name="cardholder_name" type="text" placeholder="As shown on the card" autocomplete="cc-name" required>
+      </div>
+
       ${renderPaymentBlock(collect, paymentMessage)}
+
       <label class="co-check">
-        <input type="checkbox" name="billing_same" value="1" checked>
-        <span>Billing address is the same</span>
+        <input type="checkbox" name="billing_same" value="1" checked data-billing-toggle>
+        <span>Billing address is the same as delivery</span>
       </label>
+
+      <div class="co-billing" data-billing hidden>
+        <div class="co-field">
+          <label for="co-bill-line1">Billing street address</label>
+          <input id="co-bill-line1" name="billing_line1" type="text" autocomplete="billing address-line1">
+        </div>
+        <div class="co-field">
+          <label for="co-bill-line2">Apt / Suite <span class="opt">(optional)</span></label>
+          <input id="co-bill-line2" name="billing_line2" type="text" autocomplete="billing address-line2">
+        </div>
+        <div class="co-row-3">
+          <div class="co-field">
+            <label for="co-bill-city">City</label>
+            <input id="co-bill-city" name="billing_city" type="text" autocomplete="billing address-level2">
+          </div>
+          <div class="co-field">
+            <label for="co-bill-state">State</label>
+            <input id="co-bill-state" name="billing_state" type="text" placeholder="TX" maxlength="2" autocomplete="billing address-level1">
+          </div>
+          <div class="co-field">
+            <label for="co-bill-postal">ZIP</label>
+            <input id="co-bill-postal" name="billing_postal" type="text" inputmode="numeric" autocomplete="billing postal-code">
+          </div>
+        </div>
+      </div>
+
       <div class="co-field">
         <label for="co-notes">Note to the shop <span class="opt">(optional)</span></label>
         <textarea id="co-notes" name="notes" rows="4" placeholder="Anything we should know?"></textarea>
@@ -200,7 +243,7 @@ ${deliveryRadios}
     <div class="co-sum-lines">
 ${summaryLines}
     </div>
-    <div class="co-sum-totals" data-tax-rate="${taxRate}">
+    <div class="co-sum-totals" data-tax-rate="${taxRate}" data-subtotal="${snap.subtotal}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
       <div class="row"><span data-summary-delivery-label>${escapeHtml(defaultDeliveryPrice === 0 ? 'Pickup' : 'Shipping')}</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? (defaultOption?.sublabel ?? 'In store') : formatPrice(defaultDeliveryPrice))}</span></div>
       ${taxRate > 0
@@ -397,10 +440,28 @@ const CHECKOUT_STYLE = `
 .co-payment-message p{font-size:13.5px;line-height:1.65;color:#445b2f;margin:0}
 .co-card-field{display:flex;flex-direction:column;gap:8px}
 .co-card-field label{font-size:12px;font-weight:600;color:#445b2f}
-.co-card-mount{min-height:56px;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:8px}
+.co-card-mount{min-height:64px;background:#fff;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;transition:border-color .15s ease,box-shadow .15s ease}
+.co-card-mount:focus-within{border-color:#536f3b;box-shadow:0 0 0 3px rgba(83,111,59,.15)}
 .co-card-mount iframe{width:100%;border:0}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
+/* "We accept" card brand row — sits above the Name on card + iframe
+   to reassure the buyer the site takes their card before they get
+   into the fields. Text-based pills with brand colors — no images,
+   no CDN dependency, renders in any browser. */
+.co-cards-accepted{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:2px 0 4px}
+.co-cards-label{font-size:11.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#55723e}
+.co-brands{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.co-brand{display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:800;letter-spacing:.06em;padding:6px 10px;border-radius:6px;color:#fff;font-family:system-ui,sans-serif;min-width:44px;text-align:center}
+.co-brand-visa{background:#1a1f71}
+.co-brand-mc{background:#eb001b;position:relative}
+.co-brand-amex{background:#006fcf}
+.co-brand-disc{background:#ff6000;color:#fff}
+/* Billing address reveal block — hidden by default (billing_same
+   checkbox is checked at load); slides in when the buyer unchecks
+   to enter a separate billing address for card verification. */
+.co-billing{display:flex;flex-direction:column;gap:12px;padding-top:4px;padding-left:14px;border-left:2px solid #d4e7c7;margin-left:4px}
+.co-billing[hidden]{display:none}
 .co-summary{background:#f4ebd5;border-radius:16px;padding:22px;align-self:start}
 .co-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#55723e;margin:0 0 14px}
 .co-sum-lines{display:flex;flex-direction:column;gap:14px;padding-bottom:16px;border-bottom:1px solid #e6d8b2;margin-bottom:14px}
@@ -497,28 +558,41 @@ const CHECKOUT_SCRIPT = `
   var totalBtnEl = root.querySelector('[data-summary-total-btn]');
   var submitBtn = root.querySelector('.co-submit');
   var totalsEl = root.querySelector('.co-sum-totals');
+  // Both taxRate and subtotal come from data attributes — server-
+  // side ground truth, immutable, no DOM-text parsing fragility.
+  // Fixes the $6.00 button symptom where currentSubtotal() from
+  // DOM textContent was returning something weird under some race.
   var taxRate = totalsEl ? (parseFloat(totalsEl.dataset.taxRate || '0') || 0) : 0;
+  var subtotalRaw = totalsEl ? (parseFloat(totalsEl.dataset.subtotal || '0') || 0) : 0;
   var addressBlock = root.querySelector('[data-address]');
   var addressInputs = addressBlock ? addressBlock.querySelectorAll('input[name="address_line1"], input[name="city"], input[name="state"], input[name="postal"]') : [];
-
-  // Defensive: seed the button label from the server-computed
-  // initial total. Some interaction was leaving it at $0.00 in the
-  // first two test screenshots — until we've root-caused, this
-  // guarantees a sane value regardless of whether applyDelivery
-  // fires cleanly.
-  if (submitBtn && totalBtnEl) {
-    var initFromAttr = parseFloat(submitBtn.dataset.initialTotal || '0');
-    if (Number.isFinite(initFromAttr) && initFromAttr > 0) {
-      totalBtnEl.textContent = '$' + initFromAttr.toFixed(2);
-    }
-  }
+  var billingToggle = root.querySelector('[data-billing-toggle]');
+  var billingBlock = root.querySelector('[data-billing]');
 
   function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
   function round2(n){ return Math.round(n * 100) / 100; }
-  function currentSubtotal(){
-    if (!subtotalEl) return 0;
-    var s = subtotalEl.textContent || '';
-    return parseFloat(s.replace(/[^0-9.]/g, '')) || 0;
+  function currentSubtotal(){ return subtotalRaw; }
+
+  // Seed the button label from the server-computed initial total —
+  // guarantees a sane value even if applyDelivery races.
+  if (submitBtn && totalBtnEl) {
+    var initFromAttr = parseFloat(submitBtn.dataset.initialTotal || '0');
+    if (Number.isFinite(initFromAttr) && initFromAttr > 0) {
+      totalBtnEl.textContent = money(initFromAttr);
+    }
+  }
+
+  // Billing address toggle. When "Billing address is the same as
+  // delivery" is UNCHECKED, reveal the billing fields so the buyer
+  // can enter a separate address for card verification.
+  function applyBillingToggle() {
+    if (!billingToggle || !billingBlock) return;
+    if (billingToggle.checked) billingBlock.setAttribute('hidden', '');
+    else billingBlock.removeAttribute('hidden');
+  }
+  if (billingToggle) {
+    billingToggle.addEventListener('change', applyBillingToggle);
+    applyBillingToggle();
   }
 
   function applyDelivery(radio){

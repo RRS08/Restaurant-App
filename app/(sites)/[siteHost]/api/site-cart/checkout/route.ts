@@ -41,14 +41,31 @@ export async function POST(req: Request, { params }: Ctx) {
   const postal = firstString(formData, 'postal')
   const country = firstString(formData, 'country') ?? 'US'
   const notes = firstString(formData, 'notes')
+  // billing_same checkbox is CHECKED by default in the widget and
+  // only reaches us when checked (unchecked checkboxes send nothing).
+  // Absent field = user unchecked it = billing address is separate.
   const billingSame = firstString(formData, 'billing_same') === '1'
   const optIn = firstString(formData, 'opt_in_marketing') === '1'
   const nonce = firstString(formData, 'poynt_collect_nonce')
+  const cardholderName = firstString(formData, 'cardholder_name')
+  const billingLine1 = firstString(formData, 'billing_line1')
+  const billingLine2 = firstString(formData, 'billing_line2')
+  const billingCity = firstString(formData, 'billing_city')
+  const billingState = firstString(formData, 'billing_state')
+  const billingPostal = firstString(formData, 'billing_postal')
 
   const sessionId = (await cookies()).get(CART_COOKIE_NAME)?.value ?? null
 
   const shipping = line1 && city && state && postal
     ? { line1, line2, city, state, postal, country }
+    : undefined
+
+  // Only forward billing when the buyer opted OUT of "same as delivery"
+  // AND the required fields came through. performCheckout drops it
+  // when billing_same is true, but guarding here keeps a stale hidden
+  // block (JS disabled edge case) from writing a half-populated addr.
+  const billing = !billingSame && billingLine1 && billingCity && billingState && billingPostal
+    ? { line1: billingLine1, line2: billingLine2, city: billingCity, state: billingState, postal: billingPostal }
     : undefined
 
   const result = await performCheckout(site, sessionId, {
@@ -61,6 +78,8 @@ export async function POST(req: Request, { params }: Ctx) {
     delivery_option_key: deliveryOptionKey,
     shipping,
     billing_same: billingSame,
+    cardholder_name: cardholderName,
+    billing,
     notes,
     opt_in_marketing: optIn,
     nonce,

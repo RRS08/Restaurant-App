@@ -43,6 +43,21 @@ export interface CheckoutInput {
     country: string
   }
   billing_same?: boolean
+  /** Buyer's name as printed on the card. Captured on step 3 next
+   *  to the Poynt Collect iframe so the merchant has it for chargeback
+   *  disputes — Poynt itself does not surface this from the token. */
+  cardholder_name?: string
+  /** Billing address for card verification. Only populated when the
+   *  buyer unchecks "Billing address is the same as delivery"; when
+   *  billing_same is true these stay undefined and the merchant uses
+   *  the shipping address instead. */
+  billing?: {
+    line1: string
+    line2?: string
+    city: string
+    state: string
+    postal: string
+  }
   notes?: string
   opt_in_marketing?: boolean
   /** Card nonce from Poynt Collect (or equivalent) on the client.
@@ -166,6 +181,9 @@ export async function performCheckout(
 
   const orderId = order.id as string
 
+  const billingSame = input.billing_same !== false
+  const billingAddress = billingSame ? null : (input.billing ?? null)
+
   await writeSiteLink(admin, {
     siteId: site.id,
     orderId,
@@ -178,6 +196,8 @@ export async function performCheckout(
       email: input.contact.email,
       phone: input.contact.phone ?? null,
       opted_in_marketing: input.opt_in_marketing === true,
+      cardholder_name: input.cardholder_name?.trim() || null,
+      billing_address: billingAddress,
     },
     shipping: deliveryOption.requires_address ? input.shipping ?? null : null,
     delivery: {
@@ -186,7 +206,7 @@ export async function performCheckout(
       price: deliveryOption.price,
     },
     notes: input.notes ?? null,
-    billingSame: input.billing_same === true,
+    billingSame,
     providerName,
     paymentReference,
   })

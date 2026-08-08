@@ -22,6 +22,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { loadCartWithItems, type CartSnapshot } from './cart'
 import { resolvePaymentAdapter } from './payment'
+import { queueOrderConfirmation } from './order-email'
 import type { SiteRow, SiteDeliveryOption } from './types'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
 
@@ -186,6 +187,18 @@ export async function performCheckout(
       card_last4: cardLast4,
       note: pendingNote ?? input.notes ?? null,
       business_date: businessDate,
+      // Dedup tag against the GoDaddy/Poynt sync. The sync keys on
+      // (restaurant_id, location_id, external_provider, external_id)
+      // — see lib/import/ingest.ts. By stamping the same Poynt txn id
+      // we hand it here, when the sync later fetches that transaction
+      // from Poynt's Transactions API it hits the backfill branch
+      // instead of inserting a duplicate row.
+      // 'godaddy_pos' matches the current sync's sourceId — Poynt
+      // Collect transactions without a context.source tag route
+      // through the POS adapter today. Only stamped on 'paid' since
+      // pending/deferred flows have no Poynt txn id yet.
+      external_provider: authResult.status === 'paid' ? 'godaddy_pos' : null,
+      external_id: authResult.status === 'paid' ? authResult.reference : null,
     })
     .select('id')
     .single()
@@ -209,7 +222,7 @@ export async function performCheckout(
   const billingSame = input.billing_same !== false
   const billingAddress = billingSame ? null : (input.billing ?? null)
 
-  await writeSiteLink(admin, {
+  const linkSaved = await writeSiteLink(admin, {
     siteId: site.id,
     orderId,
     sessionId,
@@ -237,6 +250,33 @@ export async function performCheckout(
   })
 
   await clearCart(admin, site.id, sessionId)
+
+  // Buyer confirmation. Gated on a real charge — an unpaid/pending
+  // order was promised a payment link instead, and a "confirmed and
+  // paid" receipt for money we never took is worse than no email.
+  //
+  // Deliberately NOT gated on linkSaved: the email is built from the
+  // values already in hand, so a failed link insert costs the buyer
+  // their receipt for no reason. linkSaved rides along in the log so
+  // a silent link failure is still visible from the send line.
+  //
+  // queueOrderConfirmation defers to after() and swallows everything
+  // — it cannot fail the order or delay the success page.
+  if (paymentStatus === 'paid') {
+    queueOrderConfirmation({
+      site,
+      orderId,
+      businessDate,
+      buyerEmail: input.contact.email,
+      buyerName: fullName,
+      cart,
+      delivery: deliveryOption,
+      shipping: deliveryOption.requires_address ? input.shipping ?? null : null,
+      taxAmount,
+      total,
+      linkSaved,
+    })
+  }
 
   return {
     orderId,
@@ -328,7 +368,11 @@ interface LinkWriteArgs {
   paymentReference: string | null
 }
 
-async function writeSiteLink(admin: Admin, args: LinkWriteArgs): Promise<void> {
+/** Returns false when the link row didn't land. Still non-fatal —
+ *  the orders row is the record of the sale — but the caller logs
+ *  the outcome on the confirmation email so a silent PGRST-class
+ *  failure here doesn't go unnoticed again. */
+async function writeSiteLink(admin: Admin, args: LinkWriteArgs): Promise<boolean> {
   const { error } = await admin
     .from('site_orders_link')
     .insert({
@@ -348,7 +392,9 @@ async function writeSiteLink(admin: Admin, args: LinkWriteArgs): Promise<void> {
     })
   if (error) {
     console.error('[checkout] site_orders_link insert failed', { orderId: args.orderId, error })
+    return false
   }
+  return true
 }
 
 async function clearCart(admin: Admin, siteId: string, sessionId: string): Promise<void> {

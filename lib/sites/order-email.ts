@@ -1,0 +1,334 @@
+// ----------------------------------------------------------------
+// Buyer-facing order confirmation for hosted tenant sites.
+//
+// Sent once per PAID web order, after the orders row and the
+// site_orders_link row are both written. Unpaid / 'pending' orders
+// are skipped on purpose — those buyers are promised a payment link
+// instead, and telling them "we got your order" next to a total
+// they haven't paid reads as a receipt for a charge that never
+// happened.
+//
+// Everything visible is driven off the site row, not hardcoded to
+// one tenant: name, palette, and the merchant's own contact address
+// all come from sites.config. A second tenant gets its own branding
+// with no changes here.
+//
+// Email HTML is deliberately old-fashioned — tables, inline styles,
+// no flexbox/grid/custom properties. Gmail, Outlook and Apple Mail
+// all strip or ignore modern layout CSS.
+// ----------------------------------------------------------------
+
+import { after } from 'next/server'
+import { sendEmail, escapeHtml } from '@/lib/email/resend'
+import type { SiteRow, SiteDeliveryOption } from './types'
+import type { CartSnapshot } from './cart'
+
+export interface OrderConfirmationArgs {
+  site: SiteRow
+  orderId: string
+  /** Restaurant-local calendar date (YYYY-MM-DD) already resolved by
+   *  the caller — reformatted here rather than recomputed so the
+   *  email always agrees with the sales page. */
+  businessDate: string
+  buyerEmail: string
+  buyerName: string
+  cart: CartSnapshot
+  delivery: SiteDeliveryOption
+  shipping: {
+    line1: string
+    line2?: string
+    city: string
+    state: string
+    postal: string
+    country: string
+  } | null
+  taxAmount: number
+  total: number
+  /** Whether the site_orders_link row landed. Does not gate the
+   *  send — only rides along in the log so a silent link failure is
+   *  visible from the same line that confirms the receipt went out. */
+  linkSaved: boolean
+}
+
+interface Palette {
+  ink: string
+  body: string
+  line: string
+  sand: string
+  muted: string
+  paper: string
+}
+
+const FALLBACK_PALETTE: Palette = {
+  ink: '#18181B',
+  body: '#52525B',
+  line: '#E4E4E7',
+  sand: '#F4F4F5',
+  muted: '#71717A',
+  paper: '#FFFFFF',
+}
+
+/** Queue the confirmation to go out after the response is flushed.
+ *
+ *  Non-blocking by construction: `after()` defers the work until the
+ *  buyer already has their success page, so a slow or dead Resend
+ *  cannot add latency to checkout, and sendEmail() resolves failures
+ *  to values rather than throwing. Nothing this function does can
+ *  fail the order.
+ *
+ *  Exactly-once: the Resend request carries an idempotency key
+ *  derived from the order id, so a replayed or retried checkout for
+ *  the same order sends one message, not two. */
+export function queueOrderConfirmation(args: OrderConfirmationArgs): void {
+  after(async () => {
+    try {
+      const result = await sendOrderConfirmation(args)
+      if (result.status === 'sent') {
+        console.log('[order-email] sent', { orderId: args.orderId, resendId: result.id, linkSaved: args.linkSaved })
+      } else if (result.status === 'skipped') {
+        console.warn('[order-email] skipped', { orderId: args.orderId, reason: result.reason, linkSaved: args.linkSaved })
+      } else {
+        console.error('[order-email] failed', { orderId: args.orderId, error: result.error, linkSaved: args.linkSaved })
+      }
+    } catch (err) {
+      // Belt-and-braces. sendEmail already swallows its own errors;
+      // this catches anything the body builders could throw on
+      // unexpected data so it can never surface as an unhandled
+      // rejection in the function log.
+      console.error('[order-email] threw', { orderId: args.orderId, err: String(err) })
+    }
+  })
+}
+
+async function sendOrderConfirmation(args: OrderConfirmationArgs) {
+  const siteName = args.site.name || 'Our shop'
+  const orderNumber = orderNumberFor(args.orderId)
+  return sendEmail({
+    to: args.buyerEmail,
+    // Replies go to the merchant's own inbox, not to the no-reply
+    // sender — a buyer answering "can I add to this order?" should
+    // reach the shop.
+    replyTo: merchantEmail(args.site),
+    idempotencyKey: `order-confirmation:${args.orderId}`,
+    subject: `Order ${orderNumber} confirmed — ${siteName}`,
+    text: buildText(args, orderNumber, siteName),
+    html: buildHtml(args, orderNumber, siteName),
+  })
+}
+
+/** Short, human-quotable order reference. Orders have no sequence
+ *  column, so the app's convention is the leading 8 of the uuid —
+ *  same slice the inventory + reconciliation logs use. */
+function orderNumberFor(orderId: string): string {
+  return orderId.slice(0, 8).toUpperCase()
+}
+
+function merchantEmail(site: SiteRow): string | null {
+  const contact = (site.config?.contact ?? {}) as { email?: unknown }
+  return typeof contact.email === 'string' && contact.email.includes('@') ? contact.email : null
+}
+
+function palette(site: SiteRow): Palette {
+  const raw = (site.config?.theme_colors ?? {}) as Record<string, unknown>
+  const pick = (k: keyof Palette): string =>
+    typeof raw[k] === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw[k] as string)
+      ? (raw[k] as string)
+      : FALLBACK_PALETTE[k]
+  return { ink: pick('ink'), body: pick('body'), line: pick('line'), sand: pick('sand'), muted: pick('muted'), paper: pick('paper') }
+}
+
+function money(n: number): string {
+  return `$${n.toFixed(2)}`
+}
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December']
+
+/** Format YYYY-MM-DD without going through Date — parsing a bare
+ *  date string yields UTC midnight, which renders as the previous
+ *  day for every timezone west of Greenwich. */
+function formatBusinessDate(businessDate: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(businessDate)
+  if (!m) return businessDate
+  const month = MONTHS[Number(m[2]) - 1] ?? ''
+  return `${month} ${Number(m[3])}, ${m[1]}`.trim()
+}
+
+function firstNameOf(fullName: string): string {
+  return fullName.trim().split(/\s+/)[0] ?? ''
+}
+
+/** Ordered money rows under the line items. Delivery is only shown
+ *  when it costs something; a free pickup line is noise. */
+function summaryRows(args: OrderConfirmationArgs): Array<[string, string, boolean]> {
+  const rows: Array<[string, string, boolean]> = [['Subtotal', money(args.cart.subtotal), false]]
+  if (args.delivery.price > 0) rows.push([args.delivery.label, money(args.delivery.price), false])
+  if (args.taxAmount > 0) rows.push(['Tax', money(args.taxAmount), false])
+  rows.push(['Total', money(args.total), true])
+  return rows
+}
+
+interface Fulfillment {
+  heading: string
+  lines: string[]
+}
+
+/** Pickup vs ship. The delivery option's own sublabel already
+ *  carries the store address for pickup and the carrier/ETA for
+ *  shipping, so it is shown in both branches. */
+function fulfillmentFor(args: OrderConfirmationArgs): Fulfillment {
+  const s = args.shipping
+  if (args.delivery.requires_address && s) {
+    const cityLine = [s.city, s.state].filter(Boolean).join(', ')
+    return {
+      heading: 'Shipping to',
+      lines: [
+        args.buyerName,
+        s.line1,
+        s.line2 || '',
+        [cityLine, s.postal].filter(Boolean).join(' '),
+        s.country && s.country.toUpperCase() !== 'US' ? s.country : '',
+        args.delivery.sublabel || '',
+      ].filter(Boolean),
+    }
+  }
+  return {
+    heading: 'Picking up',
+    lines: [args.delivery.label, args.delivery.sublabel || '', args.delivery.note || ''].filter(Boolean),
+  }
+}
+
+// ---------------------------------------------------------------- HTML
+
+function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: string): string {
+  const c = palette(args.site)
+  const first = firstNameOf(args.buyerName)
+  const fulfillment = fulfillmentFor(args)
+  const merchant = merchantEmail(args.site)
+  const phone = readPhone(args.site)
+
+  const itemRows = args.cart.items.map((i) => `
+      <tr>
+        <td style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;">
+          ${escapeHtml(i.name)}${i.qty > 1 ? `<span style="color:${c.muted};"> × ${i.qty}</span>` : ''}
+        </td>
+        <td style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;text-align:right;white-space:nowrap;">
+          ${money(i.line_total)}
+        </td>
+      </tr>`).join('')
+
+  const totalRows = summaryRows(args).map(([label, value, strong]) => `
+      <tr>
+        <td style="padding:${strong ? '12px 0 0' : '6px 0 0'};color:${strong ? c.ink : c.body};font-size:${strong ? '16px' : '14px'};font-weight:${strong ? '600' : '400'};">
+          ${escapeHtml(label)}
+        </td>
+        <td style="padding:${strong ? '12px 0 0' : '6px 0 0'};color:${strong ? c.ink : c.body};font-size:${strong ? '16px' : '14px'};font-weight:${strong ? '600' : '400'};text-align:right;white-space:nowrap;">
+          ${value}
+        </td>
+      </tr>`).join('')
+
+  const fulfillmentLines = fulfillment.lines
+    .map((l) => `<div style="color:${c.body};font-size:14px;line-height:1.6;">${escapeHtml(l)}</div>`)
+    .join('')
+
+  const footerBits = [
+    merchant ? `<a href="mailto:${escapeHtml(merchant)}" style="color:${c.body};text-decoration:underline;">${escapeHtml(merchant)}</a>` : '',
+    phone ? escapeHtml(phone) : '',
+  ].filter(Boolean).join('&nbsp;&nbsp;·&nbsp;&nbsp;')
+
+  return `
+<div style="margin:0;padding:24px 12px;background:${c.sand};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background:${c.paper};border-radius:14px;overflow:hidden;">
+    <tr>
+      <td style="padding:32px 32px 0;">
+        <div style="color:${c.ink};font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-weight:600;">
+          ${escapeHtml(siteName)}
+        </div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px 32px 0;">
+        <h1 style="margin:0;color:${c.ink};font-size:24px;line-height:1.3;font-weight:600;">
+          ${first ? `Thank you, ${escapeHtml(first)}.` : 'Thank you for your order.'}
+        </h1>
+        <p style="margin:10px 0 0;color:${c.body};font-size:15px;line-height:1.6;">
+          Your order is confirmed and paid. Here's what's coming.
+        </p>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px 32px 0;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${c.sand};border-radius:10px;">
+          <tr>
+            <td style="padding:14px 16px;">
+              <div style="color:${c.muted};font-size:11px;letter-spacing:0.1em;text-transform:uppercase;">Order</div>
+              <div style="color:${c.ink};font-size:15px;font-weight:600;margin-top:2px;">${orderNumber}</div>
+            </td>
+            <td style="padding:14px 16px;text-align:right;">
+              <div style="color:${c.muted};font-size:11px;letter-spacing:0.1em;text-transform:uppercase;">Placed</div>
+              <div style="color:${c.ink};font-size:15px;font-weight:600;margin-top:2px;">${escapeHtml(formatBusinessDate(args.businessDate))}</div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:28px 32px 0;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+          ${itemRows}
+          ${totalRows}
+        </table>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:28px 32px 0;">
+        <div style="color:${c.muted};font-size:11px;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px;">
+          ${escapeHtml(fulfillment.heading)}
+        </div>
+        ${fulfillmentLines}
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:28px 32px 32px;">
+        <div style="border-top:1px solid ${c.line};padding-top:18px;color:${c.muted};font-size:13px;line-height:1.7;">
+          Questions about this order? Just reply to this email.
+          ${footerBits ? `<div style="margin-top:6px;">${footerBits}</div>` : ''}
+        </div>
+      </td>
+    </tr>
+  </table>
+</div>`.trim()
+}
+
+function readPhone(site: SiteRow): string | null {
+  const contact = (site.config?.contact ?? {}) as { phone?: unknown }
+  return typeof contact.phone === 'string' && contact.phone.trim() ? contact.phone.trim() : null
+}
+
+// ---------------------------------------------------------------- text
+
+function buildText(args: OrderConfirmationArgs, orderNumber: string, siteName: string): string {
+  const first = firstNameOf(args.buyerName)
+  const fulfillment = fulfillmentFor(args)
+  const merchant = merchantEmail(args.site)
+  const lines: string[] = [
+    siteName,
+    '',
+    first ? `Thank you, ${first}.` : 'Thank you for your order.',
+    "Your order is confirmed and paid. Here's what's coming.",
+    '',
+    `Order ${orderNumber} · Placed ${formatBusinessDate(args.businessDate)}`,
+    '',
+  ]
+  for (const i of args.cart.items) {
+    lines.push(`${i.name}${i.qty > 1 ? ` x ${i.qty}` : ''}  ${money(i.line_total)}`)
+  }
+  lines.push('')
+  for (const [label, value] of summaryRows(args)) {
+    lines.push(`${label}: ${value}`)
+  }
+  lines.push('', fulfillment.heading, ...fulfillment.lines, '')
+  lines.push('Questions about this order? Just reply to this email.')
+  if (merchant) lines.push(merchant)
+  return lines.join('\n')
+}

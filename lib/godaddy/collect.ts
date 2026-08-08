@@ -101,16 +101,16 @@ export type ChargeResult =
   | { status: 'declined'; message: string; code?: string }
   | { status: 'error'; message: string }
 
-/** Two-step tokenize + authorize flow:
+/** Two-step charge flow:
  *  1) POST /cards/tokenize with the Collect nonce → get back a
- *     paymentToken (JWT) + card metadata (type, last4).
- *  2) POST /cards/tokenize/charge with cardToken + authOnly:true +
- *     action=AUTHORIZE → get back the transaction id.
- *  This shape matches the "Transactions Authorize" scope on the
- *  merchant OAuth grant. The shortcut single-call form (nonce +
- *  action=SALE|AUTHORIZE at top level) requires the broader Charge
- *  scope which we don't have; Poynt rejects it with "This principal
- *  does not have access to this resource". */
+ *     paymentToken (JWT) + card metadata (type, last4) + a status
+ *     field. Reject INVALID here before spending the charge call.
+ *  2) POST /cards/tokenize/charge with fundingSource.cardToken +
+ *     action=SALE + context.{businessId, storeId} → get back the
+ *     transaction id. SALE captures in one step (matches the
+ *     Poynt Collect W scope on the app). storeId is required to
+ *     attribute the transaction correctly.
+ */
 export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<ChargeResult> {
   const tokenResult = await getValidAccessTokenForEnv(args.restaurantId, args.env)
   if ('error' in tokenResult) return { status: 'error', message: tokenResult.error }
@@ -122,16 +122,18 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   const taxCents = args.taxDollars && args.taxDollars > 0
     ? Math.round(args.taxDollars * 100)
     : 0
+  void taxCents
 
   const businessId = tokenResult.businessId
   const bearer = tokenResult.accessToken
   const base = apiBaseForEnv(args.env)
-  // Application id from the env — Poynt uses this to figure out
-  // which app's granted scopes apply to the request. Same value the
-  // Collect JS SDK receives; falls back to omitting the header if
-  // the env isn't set (Poynt will then rely on the token alone,
-  // which is what we were doing before this fix).
   const appId = process.env.GODADDY_POYNT_APP_ID
+  const commonHeaders = {
+    'authorization': `Bearer ${bearer}`,
+    'content-type': 'application/json',
+    'api-version': '1.2',
+    ...(appId ? { 'x-app-id': appId } : {}),
+  }
 
   // Fetch the merchant's default storeId — /cards/tokenize/charge
   // needs context.storeId to attribute the transaction correctly.
@@ -141,75 +143,109 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     return { status: 'error', message: 'Could not resolve merchant store — try again in a moment.' }
   }
 
-  // Single-call shortcut: send the raw nonce directly. Skips a
-  // round-trip and matches the simpler flow Poynt Collect samples
-  // typically show. Two-step (tokenize → paymentToken → charge with
-  // cardToken) got the same 500 INTERNAL_ERROR from Poynt's DB, so
-  // the extra tokenize hop wasn't buying us anything. authOnly:true
-  // is dropped — action:"AUTHORIZE" already means "hold, don't
-  // capture", and the combination was a leading suspect for the
-  // Hibernate DataException we saw.
-  //
-  // Card brand + last4 aren't returned on the shortcut path — those
-  // populate on the /thanks receipt as null until we capture them
-  // from Poynt webhooks or move back to two-step post-verification.
-  const cardBrand: string | undefined = undefined
-  const cardLast4: string | undefined = undefined
+  // --- Step 1: nonce → paymentToken (+ card metadata + status) ---
+  const tokenizeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize`
+  let tokenizeRes: Response
+  try {
+    tokenizeRes = await fetch(tokenizeUrl, {
+      method: 'POST',
+      headers: { ...commonHeaders, 'poynt-request-id': args.idempotencyKey + ':tok' },
+      body: JSON.stringify({ nonce: args.nonce }),
+    })
+  } catch (err) {
+    console.error('[godaddy/collect] tokenize network failure', err)
+    return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
+  }
+
+  const tokenizeRaw = await tokenizeRes.text()
+  let tokenizeJson: unknown
+  try { tokenizeJson = tokenizeRaw ? JSON.parse(tokenizeRaw) : {} }
+  catch {
+    console.error('[godaddy/collect] tokenize non-JSON response', { status: tokenizeRes.status, raw: tokenizeRaw })
+    return { status: 'error', message: `Payment provider returned unreadable response (${tokenizeRes.status}).` }
+  }
+  const tokenizeData = (tokenizeJson ?? {}) as {
+    paymentToken?: string
+    status?: string
+    card?: { type?: string; numberLast4?: string }
+    developerMessage?: string
+    message?: string
+    code?: string
+  }
+  if (!tokenizeRes.ok) {
+    const msg = tokenizeData.developerMessage || tokenizeData.message || `Card tokenize failed (${tokenizeRes.status}).`
+    console.warn('[godaddy/collect] tokenize rejected', {
+      httpStatus: tokenizeRes.status,
+      env: args.env,
+      code: tokenizeData.code,
+      message: msg,
+      hadAppIdHeader: !!appId,
+      rawBody: tokenizeRaw,
+    })
+    return tokenizeRes.status >= 400 && tokenizeRes.status < 500
+      ? { status: 'declined', message: msg, code: tokenizeData.code }
+      : { status: 'error', message: msg }
+  }
+  // Reject INVALID status before spending the charge call — Poynt
+  // returns 200 on tokenize even when the card was refused by the
+  // network (bad number, expired, etc); the status field is what
+  // tells us it's not usable.
+  const tokStatus = (tokenizeData.status ?? '').toUpperCase()
+  if (tokStatus === 'INVALID' || tokStatus === 'FAILED') {
+    return { status: 'declined', message: 'That card was declined at the network. Try another card.' }
+  }
+  const paymentToken = tokenizeData.paymentToken
+  if (!paymentToken) {
+    console.error('[godaddy/collect] tokenize returned no paymentToken', tokenizeData)
+    return { status: 'error', message: 'Card tokenization returned no token.' }
+  }
+  const cardBrand = tokenizeData.card?.type
+  const cardLast4 = tokenizeData.card?.numberLast4
+  console.log('[godaddy/collect] tokenize ok', {
+    env: args.env,
+    hadAppIdHeader: !!appId,
+    appIdPrefix: appId ? appId.slice(0, 12) : null,
+    cardBrand,
+    cardLast4,
+    tokStatus,
+  })
+
+  // --- Step 2: paymentToken → SALE (auth + capture in one) ---
+  // SALE settles same-day via Poynt's processor; AUTHORIZE would
+  // reserve funds without ever capturing (broken behavior — the
+  // hold releases in 7 days and the merchant never gets paid).
   const chargeBody: Record<string, unknown> = {
-    action: 'AUTHORIZE',
-    nonce: args.nonce,
+    action: 'SALE',
     context: { businessId, storeId },
     amounts: {
       transactionAmount: amountCents,
       orderAmount: amountCents,
       currency: 'USD',
     },
+    fundingSource: { cardToken: paymentToken },
   }
   if (args.orderReference) {
     chargeBody.references = [{ type: 'CUSTOM', id: args.orderReference }]
   }
-  void taxCents
-
-  const chargeHeaders = {
-    'authorization': `Bearer ${bearer}`,
-    'content-type': 'application/json',
-    'api-version': '1.2',
-    'poynt-request-id': args.idempotencyKey,
-    ...(appId ? { 'x-app-id': appId } : {}),
-  }
-  // Use /cards/tokenize/charge — the Poynt Collect combined endpoint
-  // that's actually designed for CNP web charging. Previous attempts
-  // on this endpoint 401'd, but they were sending the wrong body
-  // (missing storeId, extra context.source + amounts.taxAmount).
-  // With the clean body matching Poynt's docs exactly + storeId
-  // resolved, this should now go through. If it still 401s, then
-  // it's a real merchant-token scope gap (re-OAuth needed).
-  //
-  // /transactions is NOT the alternative — it returned 500
-  // INTERNAL_ERROR (Hibernate DataException) because that endpoint
-  // is for RECORDING transactions after-the-fact (POS device flow),
-  // not initiating a card charge.
   const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
-  const usedEndpoint = 'tokenize-charge'
   let response: Response
   try {
     response = await fetch(chargeUrl, {
       method: 'POST',
-      headers: chargeHeaders,
+      headers: { ...commonHeaders, 'poynt-request-id': args.idempotencyKey },
       body: JSON.stringify(chargeBody),
     })
   } catch (err) {
-    console.error('[godaddy/collect] authorize network failure', err)
+    console.error('[godaddy/collect] charge network failure', err)
     return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
   }
-  void usedEndpoint
 
   const raw = await response.text()
   let json: unknown
   try {
     json = raw ? JSON.parse(raw) : {}
   } catch {
-    console.error('[godaddy/collect] authorize non-JSON response', { status: response.status, raw })
+    console.error('[godaddy/collect] charge non-JSON response', { status: response.status, raw })
     return { status: 'error', message: `Payment provider returned unreadable response (${response.status}).` }
   }
 
@@ -224,8 +260,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
 
   if (!response.ok) {
     const msg = data.developerMessage || data.message || `Payment declined (${response.status}).`
-    console.warn('[godaddy/collect] authorize rejected', {
-      endpoint: usedEndpoint,
+    console.warn('[godaddy/collect] charge rejected', {
       httpStatus: response.status,
       env: args.env,
       code: data.code,

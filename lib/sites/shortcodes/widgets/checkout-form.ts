@@ -1034,8 +1034,25 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     safeSubscribe('iframe_height_change', applyHeight);
     safeSubscribe('heightChange', applyHeight);
     safeSubscribe('iframeHeightChange', applyHeight);
-    // If we got here, mount didn't throw — mark ready so submit
-    // works without waiting for an event Poynt may not dispatch.
+    // Ready signal — the SDK fires 'ready' in the 2023-vintage docs
+    // and 'iframe_ready' in the live 2026 SDK build. Subscribe to
+    // both; whichever fires first clears the "Card entry failed to
+    // load" banner and unblocks Place Order. Without this handler
+    // the SDK's console emits "Callback for event type iframe_ready
+    // not found" and the loading state never clears even though the
+    // iframe is fully mounted and interactive.
+    function onReady(e) {
+      if (typeof console !== 'undefined') console.log('[checkout] Poynt ready event', e);
+      iframeReady = true;
+      clearError();
+    }
+    safeSubscribe('ready', onReady);
+    safeSubscribe('iframe_ready', onReady);
+    // Belt-and-suspenders: mark ready after mount() returns even if
+    // neither ready event lands on this SDK build. Kept from the
+    // prior implementation so submission isn't blocked in the
+    // event-name-mismatch case; the ready handlers above take
+    // precedence when they fire.
     iframeReady = true;
     clearError();
   }

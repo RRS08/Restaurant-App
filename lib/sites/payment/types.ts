@@ -60,6 +60,11 @@ export interface PaymentAuthorizeRequest {
    *  vars never drive this — one site's sandbox mode can never
    *  affect another site's live integration. */
   env: 'prod' | 'ote'
+  /** Tax portion of `amount`, in dollars. Some providers (Poynt
+   *  included) report this separately on the transaction for
+   *  merchant reporting even though it's already inside `amount`.
+   *  Missing / 0 means no tax. */
+  taxAmount?: number
 }
 
 export type PaymentAuthorizeResult =

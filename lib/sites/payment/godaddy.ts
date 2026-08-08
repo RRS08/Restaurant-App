@@ -49,6 +49,7 @@ export const godaddyAdapter: PaymentAdapter = {
       env: req.env,
       nonce: req.nonce,
       amountDollars: req.amount,
+      taxDollars: req.taxAmount,
       idempotencyKey: req.idempotencyKey,
       orderReference: req.orderReference,
     })

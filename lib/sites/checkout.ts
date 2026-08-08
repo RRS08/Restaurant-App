@@ -88,7 +88,13 @@ export async function performCheckout(
     return { error: `No payment adapter registered for provider '${providerName ?? 'none'}'.` }
   }
 
-  const total = round2(cart.subtotal + deliveryOption.price)
+  // Tax applied to (subtotal + delivery). Site config carries the
+  // rate as a decimal (0.0825 = 8.25%). Missing config = 0 = no tax.
+  // Client-side widget uses the same formula, so the amount buyer
+  // sees on the Place order button is exactly what we charge.
+  const taxRate = readSiteTaxRate(site)
+  const taxAmount = round2((cart.subtotal + deliveryOption.price) * taxRate)
+  const total = round2(cart.subtotal + deliveryOption.price + taxAmount)
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
   const idempotencyKey = `site:${site.id}:session:${sessionId}:v2`
   const env = readSitePaymentEnv(site)
@@ -107,6 +113,7 @@ export async function performCheckout(
     idempotencyKey,
     nonce: input.nonce,
     env,
+    taxAmount,
     // orderReference is populated post-hoc for reconciliation
     // — Poynt lets us reference the txn later without our order
     // id since idempotencyKey uniquely identifies the attempt.
@@ -128,6 +135,8 @@ export async function performCheckout(
       restaurant_id: site.restaurant_id,
       location_id: locationId,
       total_amount: total,
+      subtotal: cart.subtotal,
+      tax_total: taxAmount > 0 ? taxAmount : null,
       source: 'web',
       payment_type: 'card',
       payment_status: paymentStatus,
@@ -220,6 +229,22 @@ function readPaymentProvider(site: SiteRow): string | null {
 function readSitePaymentEnv(site: SiteRow): 'prod' | 'ote' {
   const config = (site.config ?? {}) as { payment_env?: unknown }
   return config.payment_env === 'ote' ? 'ote' : 'prod'
+}
+
+/** Site sales-tax rate as a decimal (0.0825 = 8.25%). Missing /
+ *  invalid = 0 = no tax. Applied server-side to (subtotal +
+ *  delivery) in performCheckout so the client-side widget's
+ *  computed total matches what we actually charge — same formula
+ *  runs in the widget's applyDelivery. */
+function readSiteTaxRate(site: SiteRow): number {
+  const config = (site.config ?? {}) as { tax_rate?: unknown }
+  const raw = config.tax_rate
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw
+  if (typeof raw === 'string') {
+    const parsed = parseFloat(raw)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return 0
 }
 
 function resolveDeliveryOption(config: Record<string, unknown>, key: string): SiteDeliveryOption | null {

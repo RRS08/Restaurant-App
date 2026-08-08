@@ -82,8 +82,13 @@ export interface ChargeWithNonceArgs {
   restaurantId: string
   env: PoyntEnv
   nonce: string
-  /** Amount in dollars (e.g. 18.50). We convert to cents for Poynt. */
+  /** Total amount to charge in dollars, INCLUDING tax. Poynt sees
+   *  this as transactionAmount + orderAmount. We convert to cents. */
   amountDollars: number
+  /** Tax portion of amountDollars. Reported separately on the
+   *  transaction body so it shows up in Poynt's merchant reporting;
+   *  the buyer is still charged amountDollars total. Missing = 0. */
+  taxDollars?: number
   /** Idempotency key so retries don't double-charge. */
   idempotencyKey: string
   /** Optional order reference stored on the transaction for
@@ -107,6 +112,9 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
     return { status: 'error', message: 'Invalid charge amount.' }
   }
+  const taxCents = args.taxDollars && args.taxDollars > 0
+    ? Math.round(args.taxDollars * 100)
+    : 0
 
   const url = `${apiBaseForEnv(args.env)}/businesses/${encodeURIComponent(tokenResult.businessId)}/cards/tokenize/charge`
   const body = {
@@ -115,6 +123,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     amounts: {
       transactionAmount: amountCents,
       orderAmount: amountCents,
+      taxAmount: taxCents,
       currency: 'USD',
     },
     references: args.orderReference

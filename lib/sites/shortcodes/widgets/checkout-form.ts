@@ -72,7 +72,13 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   const subtotalStr = formatPrice(snap.subtotal)
   const defaultOption = deliveryOptions.find(o => o.default) ?? deliveryOptions[0]
   const defaultDeliveryPrice = defaultOption?.price ?? 0
-  const initialTotal = snap.subtotal + defaultDeliveryPrice
+  // Tax is applied to (subtotal + delivery) — matches Texas rules
+  // (shipping charges are taxable when the underlying items are).
+  // taxRate is a decimal in sites.config (e.g. 0.0825 for McAllen).
+  // Absent config = 0 = no tax line shown, existing sites unchanged.
+  const taxRate = readTaxRate(config)
+  const initialTax = round2((snap.subtotal + defaultDeliveryPrice) * taxRate)
+  const initialTotal = round2(snap.subtotal + defaultDeliveryPrice + initialTax)
 
   const summaryLines = snap.items.map(i => `      <div class="co-sum-line">
         <div class="co-sum-thumb"><img src="${escapeAttr(i.image_url ?? '')}" alt="${escapeAttr(i.name)}"></div>
@@ -194,10 +200,12 @@ ${deliveryRadios}
     <div class="co-sum-lines">
 ${summaryLines}
     </div>
-    <div class="co-sum-totals">
+    <div class="co-sum-totals" data-tax-rate="${taxRate}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
       <div class="row"><span>Shipping</span><span data-summary-shipping>${escapeHtml(defaultDeliveryPrice === 0 ? 'Free' : formatPrice(defaultDeliveryPrice))}</span></div>
-      <div class="row muted"><span>Tax</span><span>Calculated next</span></div>
+      ${taxRate > 0
+        ? `<div class="row"><span>Tax</span><span data-summary-tax>${escapeHtml(formatPrice(initialTax))}</span></div>`
+        : `<div class="row muted"><span>Tax</span><span>Not applied</span></div>`}
     </div>
     <div class="co-total"><span>Total</span><strong data-summary-total>${escapeHtml(formatPrice(initialTotal))}</strong></div>
     <div class="cart-note">Card payments handled securely by Poynt</div>
@@ -307,6 +315,26 @@ const DEFAULT_DELIVERY: SiteDeliveryOption[] = [
 
 function formatPrice(n: number): string {
   return `$${n.toFixed(2)}`
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+/** Site's sales-tax rate as a decimal (0.0825 = 8.25%). Missing or
+ *  invalid config = 0 = no tax applied. Callers apply this to
+ *  (subtotal + delivery) — matches Texas convention where shipping
+ *  is taxable when the underlying items are. Sites in other states
+ *  can either set a blended rate or we'll extend later with a
+ *  tax_base config knob. */
+function readTaxRate(config: Record<string, unknown>): number {
+  const raw = config.tax_rate
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw
+  if (typeof raw === 'string') {
+    const parsed = parseFloat(raw)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return 0
 }
 
 const CHECKOUT_STYLE = `
@@ -459,16 +487,20 @@ const CHECKOUT_SCRIPT = `
   });
 
   // Delivery selection: keep .is-selected on the chosen option,
-  // reveal/hide address block, update Shipping + Total lines and
-  // the "Place order · $X" button label.
+  // reveal/hide address block, update Shipping + Tax + Total lines
+  // and the "Place order · $X" button label.
   var subtotalEl = root.querySelector('[data-summary-subtotal]');
   var shippingEl = root.querySelector('[data-summary-shipping]');
+  var taxEl = root.querySelector('[data-summary-tax]');
   var totalEl = root.querySelector('[data-summary-total]');
   var totalBtnEl = root.querySelector('[data-summary-total-btn]');
+  var totalsEl = root.querySelector('.co-sum-totals');
+  var taxRate = totalsEl ? (parseFloat(totalsEl.dataset.taxRate || '0') || 0) : 0;
   var addressBlock = root.querySelector('[data-address]');
   var addressInputs = addressBlock ? addressBlock.querySelectorAll('input[name="address_line1"], input[name="city"], input[name="state"], input[name="postal"]') : [];
 
   function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
+  function round2(n){ return Math.round(n * 100) / 100; }
   function currentSubtotal(){
     if (!subtotalEl) return 0;
     var s = subtotalEl.textContent || '';
@@ -492,18 +524,21 @@ const CHECKOUT_SCRIPT = `
       if (needsAddr) inp.setAttribute('required','');
       else inp.removeAttribute('required');
     });
-    // update summary numbers
+    // update summary numbers — tax applies to (subtotal + delivery),
+    // matching TX rules and the server-side calculation.
     var sub = currentSubtotal();
-    var total = sub + price;
+    var tax = round2((sub + price) * taxRate);
+    var total = round2(sub + price + tax);
     if (shippingEl) shippingEl.textContent = price === 0 ? 'Free' : money(price);
+    if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
     if (totalBtnEl) totalBtnEl.textContent = money(total);
     // Diagnostic for the "Place order · $0.00" symptom — leave in
     // for a build or two, remove once we've seen a healthy log.
     if (typeof console !== 'undefined' && console.log) {
       console.log('[checkout] applyDelivery', {
-        price: price, sub: sub, total: total,
-        hasSubtotalEl: !!subtotalEl, hasTotalEl: !!totalEl, hasTotalBtnEl: !!totalBtnEl,
+        price: price, sub: sub, tax: tax, taxRate: taxRate, total: total,
+        hasSubtotalEl: !!subtotalEl, hasTaxEl: !!taxEl, hasTotalEl: !!totalEl, hasTotalBtnEl: !!totalBtnEl,
       });
     }
   }

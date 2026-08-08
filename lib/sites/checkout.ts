@@ -1,19 +1,22 @@
 // ----------------------------------------------------------------
-// Server-side checkout: validate the cart + form, resolve delivery
-// option, calculate total, dispatch to the site's payment adapter,
-// create orders row + site_orders_link, clear the cart. Returns
-// either a hosted-checkout URL (redirect the buyer to the
-// provider's payment page) or the created order id (fall back to
-// the deferred-payment /thanks flow when the adapter's hosted
-// checkout is unavailable / stubbed).
+// Server-side checkout: validate form + cart, resolve delivery,
+// calculate total, dispatch to the site's payment adapter, then
+// materialize the orders row + site_orders_link. Cart clears last.
 //
-// Total = cart subtotal + delivery cost. Delivery option is looked
-// up in sites.config.delivery_options by key; unknown key rejects
-// the checkout rather than silently charging a wrong amount.
+// Ordering matters:
+//   1. validate everything cheap first (name, email, cart, delivery)
+//   2. call adapter.authorize() with the client-side nonce — if the
+//      card is declined we bail BEFORE writing any DB row. No
+//      phantom orders for failed charges.
+//   3. on 'paid' or 'pending' we write orders + link + clear cart.
 //
-// Web orders leave `order_items` empty on purpose — the full
-// denormalized cart, plus buyer/delivery/notes/opt-in, live on
-// `site_orders_link`.
+// 'pending' happens when the merchant has POYNT_APPLICATION_ID
+// unset or hasn't linked GoDaddy Commerce — adapter returns
+// pending, order lands unpaid with the "email a payment link" note.
+// 'failed' bounces the buyer back to /checkout with the reason.
+//
+// Web orders leave `order_items` empty on purpose — full receipt
+// lives on site_orders_link.cart.
 // ----------------------------------------------------------------
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -42,6 +45,9 @@ export interface CheckoutInput {
   billing_same?: boolean
   notes?: string
   opt_in_marketing?: boolean
+  /** Card nonce from Poynt Collect (or equivalent) on the client.
+   *  Missing nonce → adapter returns pending → order saves unpaid. */
+  nonce?: string
 }
 
 export type CheckoutResult =
@@ -74,9 +80,7 @@ export async function performCheckout(
   const admin = createAdminClient()
 
   const locationId = await resolveWebOrderLocation(admin, site)
-  if (!locationId) {
-    return { error: 'No fulfillment location configured for this site.' }
-  }
+  if (!locationId) return { error: 'No fulfillment location configured for this site.' }
 
   const providerName = readPaymentProvider(site)
   const adapter = resolvePaymentAdapter(providerName)
@@ -85,13 +89,36 @@ export async function performCheckout(
   }
 
   const total = round2(cart.subtotal + deliveryOption.price)
-
-  // Skip the (stubbed) direct authorize call — for the deferred-
-  // payment MVP, the adapter always returns 'pending' anyway and
-  // the real work is either the future hosted-checkout redirect or
-  // an out-of-band email. Save the order first, then attempt
-  // hosted checkout, then fall back to unpaid.
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
+  const idempotencyKey = `site:${site.id}:session:${sessionId}:v2`
+
+  // Authorize FIRST. A failed charge never writes an order.
+  const authResult = await adapter.authorize({
+    siteId: site.id,
+    restaurantId: site.restaurant_id,
+    amount: total,
+    currency: 'USD',
+    buyer,
+    cart: {
+      items: cart.items.map(i => ({ slug: i.slug, qty: i.qty, name: i.name, price: i.price })),
+      subtotal: cart.subtotal,
+    },
+    idempotencyKey,
+    nonce: input.nonce,
+    // orderReference is populated post-hoc for reconciliation
+    // — Poynt lets us reference the txn later without our order
+    // id since idempotencyKey uniquely identifies the attempt.
+  })
+
+  if (authResult.status === 'failed') {
+    return { error: authResult.error }
+  }
+
+  const paymentStatus: 'paid' | 'unpaid' = authResult.status === 'paid' ? 'paid' : 'unpaid'
+  const paymentReference = authResult.status === 'paid' ? authResult.reference : null
+  const cardBrand = authResult.status === 'paid' ? authResult.cardBrand ?? null : null
+  const cardLast4 = authResult.status === 'paid' ? authResult.cardLast4 ?? null : null
+  const pendingNote = authResult.status === 'pending' ? authResult.note : null
 
   const { data: order, error: orderErr } = await admin
     .from('orders')
@@ -101,44 +128,32 @@ export async function performCheckout(
       total_amount: total,
       source: 'web',
       payment_type: 'card',
-      payment_status: 'unpaid',
+      payment_status: paymentStatus,
       status: 'completed',
       customer_name: fullName,
       channel_source: providerName ?? 'web',
-      note: input.notes ?? null,
+      card_brand: cardBrand,
+      card_last4: cardLast4,
+      note: pendingNote ?? input.notes ?? null,
     })
     .select('id')
     .single()
 
   if (orderErr || !order) {
     console.error('[checkout] order insert failed', orderErr)
+    // If we got here after a real charge, the merchant will see the
+    // transaction on Poynt's side without a matching orders row —
+    // manual reconciliation. Log loud enough to catch this.
+    if (paymentStatus === 'paid') {
+      console.error('[checkout] ORPHAN CHARGE — reconcile Poynt txn against site_orders_link', {
+        siteId: site.id,
+        paymentReference,
+      })
+    }
     return { error: `Could not save your order: ${orderErr?.message ?? 'unknown error'}` }
   }
 
   const orderId = order.id as string
-
-  // Try the hosted-checkout URL flow. When the adapter returns a
-  // URL, redirect the buyer there; the provider's callback (a
-  // follow-up webhook we haven't wired yet) marks the order paid.
-  // When unavailable (current stub for GoDaddy), leave the order
-  // unpaid and route to /thanks with the email-link message.
-  let hostedUrl: string | undefined
-  if (adapter.createHostedCheckout) {
-    const successUrl = `https://${site.slug}.onchecked.app/thanks?order=${encodeURIComponent(orderId)}`
-    const cancelUrl = `https://${site.slug}.onchecked.app/checkout?checkout_error=${encodeURIComponent('Payment cancelled — your order is still saved.')}`
-    const hosted = await adapter.createHostedCheckout({
-      siteId: site.id,
-      restaurantId: site.restaurant_id,
-      orderId,
-      amount: total,
-      currency: 'USD',
-      buyer,
-      successUrl,
-      cancelUrl,
-    })
-    if ('url' in hosted) hostedUrl = hosted.url
-    else console.info('[checkout] hosted checkout unavailable', { orderId, reason: hosted.reason })
-  }
 
   await writeSiteLink(admin, {
     siteId: site.id,
@@ -162,16 +177,15 @@ export async function performCheckout(
     notes: input.notes ?? null,
     billingSame: input.billing_same === true,
     providerName,
-    paymentReference: null,
+    paymentReference,
   })
 
   await clearCart(admin, site.id, sessionId)
 
   return {
     orderId,
-    paymentStatus: 'unpaid',
-    note: hostedUrl ? undefined : 'Online payment pending — the merchant will email a secure payment link within one business day.',
-    hostedUrl,
+    paymentStatus,
+    note: pendingNote ?? undefined,
   }
 }
 

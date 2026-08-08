@@ -1,19 +1,24 @@
 // ----------------------------------------------------------------
 // GoDaddy Commerce (Poynt) payment adapter.
 //
-// STUB. The real integration calls Poynt's Transactions Authorize
-// endpoint (we already hold the scope on the dev app), but Authorize
-// needs a card token — Poynt's card-not-present flow requires their
-// tokenizer JS running client-side to turn a PAN into a token before
-// it ever touches our server. Building that blind (docs, SDK URLs,
-// iframe embedding) is worse than deferring: the order-capture side
-// of checkout still ships, and this adapter slots the real call in
-// later without any change to the caller.
+// authorize() takes the Collect nonce from the client, exchanges
+// it for a payment token + charges via
+// POST /businesses/{id}/cards/tokenize/charge (see
+// lib/godaddy/collect.ts for the transport). On success the order
+// lands as 'paid' with the transaction id + card metadata; on
+// declined the checkout endpoint bounces the buyer back to
+// /checkout with the reason.
 //
-// Until the real integration lands, authorize() returns 'pending' —
-// the order writes with payment_status='unpaid' and the confirmation
-// page surfaces "payment link will be emailed" copy. The merchant
-// collects payment out-of-band via their existing Poynt POS.
+// When no nonce reaches us (POYNT_APPLICATION_ID unset, merchant
+// not linked, or the client-side Collect SDK failed to mount),
+// authorize() returns 'pending' — the order still saves as unpaid
+// and the /thanks page surfaces the "we'll email a payment link"
+// message. Merchant can collect out-of-band via their Poynt POS
+// until the environment is configured.
+//
+// createHostedCheckout stays unavailable — Poynt does not ship a
+// hosted-checkout-URL product. The whole flow is iframe-based on
+// our own /checkout page.
 // ----------------------------------------------------------------
 
 import type {
@@ -23,34 +28,53 @@ import type {
   HostedCheckoutRequest,
   HostedCheckoutResult,
 } from './types'
+import { chargeWithNonce } from '@/lib/godaddy/collect'
 
 export const godaddyAdapter: PaymentAdapter = {
   name: 'godaddy',
+
   async authorize(req: PaymentAuthorizeRequest): Promise<PaymentAuthorizeResult> {
-    console.info('[payment:godaddy] stub authorize', {
-      siteId: req.siteId,
-      amount: req.amount,
-      idempotencyKey: req.idempotencyKey,
-    })
-    return {
-      status: 'pending',
-      note: 'Online payment pending — the merchant will email a secure payment link within one business day.',
+    if (!req.nonce) {
+      console.info('[payment:godaddy] no nonce — falling back to pending', {
+        siteId: req.siteId,
+      })
+      return {
+        status: 'pending',
+        note: 'Online payment pending — the merchant will email a secure payment link within one business day.',
+      }
     }
-  },
-  async createHostedCheckout(req: HostedCheckoutRequest): Promise<HostedCheckoutResult> {
-    // TODO: real GoDaddy / Poynt hosted-checkout integration. Blocked
-    // on confirming which endpoint exposes "create payment URL for
-    // this amount, redirect back on success" — Poynt's Transactions
-    // Authorize needs a card token, so a hosted flow is a separate
-    // API surface. Whole checkout UI + endpoint are already wired
-    // to consume the URL when this returns one.
-    console.info('[payment:godaddy] stub createHostedCheckout', {
-      orderId: req.orderId,
-      amount: req.amount,
+
+    const result = await chargeWithNonce({
+      restaurantId: req.restaurantId,
+      nonce: req.nonce,
+      amountDollars: req.amount,
+      idempotencyKey: req.idempotencyKey,
+      orderReference: req.orderReference,
     })
+
+    if (result.status === 'paid') {
+      return {
+        status: 'paid',
+        reference: result.transactionId,
+        cardBrand: result.cardBrand,
+        cardLast4: result.cardLast4,
+      }
+    }
+    // Both 'declined' and 'error' surface as failed to the caller
+    // — an order that couldn't be charged shouldn't be created.
+    // Distinct log lines in chargeWithNonce keep the buyer-facing
+    // message honest without leaking provider internals.
+    return { status: 'failed', error: result.message }
+  },
+
+  async createHostedCheckout(_req: HostedCheckoutRequest): Promise<HostedCheckoutResult> {
+    // Poynt has no hosted-checkout-URL product. The Collect iframe
+    // on /checkout is the actual CNP flow — no page to redirect
+    // to. Leaving this here so the interface is honored but the
+    // checkout code path never depends on it.
     return {
       unavailable: true,
-      reason: 'hosted-checkout adapter not yet implemented for godaddy',
+      reason: 'Poynt does not offer hosted checkout URLs; use the iframe flow on /checkout instead.',
     }
   },
 }

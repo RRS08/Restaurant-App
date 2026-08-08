@@ -43,6 +43,7 @@ export async function POST(req: Request, { params }: Ctx) {
   const notes = firstString(formData, 'notes')
   const billingSame = firstString(formData, 'billing_same') === '1'
   const optIn = firstString(formData, 'opt_in_marketing') === '1'
+  const nonce = firstString(formData, 'poynt_collect_nonce')
 
   const sessionId = (await cookies()).get(CART_COOKIE_NAME)?.value ?? null
 
@@ -62,6 +63,7 @@ export async function POST(req: Request, { params }: Ctx) {
     billing_same: billingSame,
     notes,
     opt_in_marketing: optIn,
+    nonce,
   })
 
   const base = new URL(req.url)

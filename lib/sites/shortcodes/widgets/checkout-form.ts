@@ -35,6 +35,7 @@ import type { ShortcodeArgs, ShortcodeContext } from '../index'
 import { loadCartWithItems } from '../../cart'
 import type { SiteDeliveryOption } from '../../types'
 import { escapeAttr, escapeHtml } from '../utils'
+import { loadCollectConfigForRestaurant, type CollectClientConfig } from '@/lib/godaddy/collect'
 
 export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeContext): Promise<string> {
   const snap = await loadCartWithItems(ctx.site.id, ctx.sessionId)
@@ -43,6 +44,14 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   const config = (ctx.site.config ?? {}) as Record<string, unknown>
   const deliveryOptions = readDeliveryOptions(config)
   const deliveryNotice = typeof config.delivery_notice === 'string' ? config.delivery_notice : ''
+
+  // Resolve the Poynt Collect config for this merchant if the site's
+  // payment_provider is godaddy. Null when env is missing or merchant
+  // hasn't linked GoDaddy Commerce — checkout falls back to the
+  // deferred-payment "email a link" copy on step 3.
+  const collect = readPaymentProvider(config) === 'godaddy'
+    ? await loadCollectConfigForRestaurant(ctx.site.restaurant_id)
+    : null
 
   const errorMsg = typeof ctx.query.checkout_error === 'string' ? ctx.query.checkout_error : ''
   const errorBlock = errorMsg
@@ -160,10 +169,7 @@ ${deliveryRadios}
     <!-- Step 3 Payment -->
     <section class="co-panel" data-panel="3" hidden>
       <div class="co-eyebrow">Payment</div>
-      <div class="co-payment-message">
-        <strong>You'll get a secure payment link by email.</strong>
-        <p>${escapeHtml(paymentMessage)}</p>
-      </div>
+      ${renderPaymentBlock(collect, paymentMessage)}
       <label class="co-check">
         <input type="checkbox" name="billing_same" value="1" checked>
         <span>Billing address is the same</span>
@@ -194,7 +200,51 @@ ${summaryLines}
   </aside>
 
   <script>${CHECKOUT_SCRIPT}</script>
+  ${renderCollectBootstrap(collect)}
 </div>`
+}
+
+/** Step 3 body: real Collect iframe when the merchant is wired,
+ *  falls back to the "email a link" copy when it isn't. Card
+ *  input styling lives in CHECKOUT_STYLE under .co-card-mount. */
+function renderPaymentBlock(collect: CollectClientConfig | null, fallbackMessage: string): string {
+  if (!collect) {
+    return `<div class="co-payment-message">
+        <strong>You'll get a secure payment link by email.</strong>
+        <p>${escapeHtml(fallbackMessage)}</p>
+      </div>`
+  }
+  const sandboxBadge = collect.isSandbox
+    ? '<div class="co-sandbox-badge">Sandbox mode — use Poynt test cards</div>'
+    : ''
+  return `<div class="co-card-field">
+        <label>Card details</label>
+        <div id="poynt-card-mount" class="co-card-mount"></div>
+        <input type="hidden" name="poynt_collect_nonce" value="">
+        <div class="co-card-error" data-collect-error hidden></div>
+      </div>
+      ${sandboxBadge}`
+}
+
+/** Inline SDK loader + tokenizer bootstrap. Only emitted when
+ *  Collect is available for this site — otherwise the fallback
+ *  message goes out and no external script is loaded. */
+function renderCollectBootstrap(collect: CollectClientConfig | null): string {
+  if (!collect) return ''
+  const cfg = JSON.stringify({
+    sdkUrl: collect.sdkUrl,
+    businessId: collect.businessId,
+    applicationId: collect.applicationId,
+  })
+  return `<script src="${escapeAttr(collect.sdkUrl)}" async></script>
+<script>${COLLECT_SCRIPT_PREAMBLE}
+window.__checkoutCollectBoot(${cfg});
+</script>`
+}
+
+function readPaymentProvider(config: Record<string, unknown>): string | null {
+  const v = config.payment_provider
+  return typeof v === 'string' ? v : null
 }
 
 function renderDeliveryOption(opt: SiteDeliveryOption, forceDefault: boolean): string {
@@ -313,6 +363,12 @@ const CHECKOUT_STYLE = `
 .co-payment-message{background:#e7f4de;color:#354d1c;border-radius:14px;padding:18px}
 .co-payment-message strong{display:block;margin-bottom:6px;font-size:14.5px;font-weight:600}
 .co-payment-message p{font-size:13.5px;line-height:1.65;color:#445b2f;margin:0}
+.co-card-field{display:flex;flex-direction:column;gap:8px}
+.co-card-field label{font-size:12px;font-weight:600;color:#445b2f}
+.co-card-mount{min-height:56px;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:8px}
+.co-card-mount iframe{width:100%;border:0}
+.co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
+.co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
 .co-summary{background:#f4ebd5;border-radius:16px;padding:22px;align-self:start}
 .co-summary-title{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:#55723e;margin:0 0 14px}
 .co-sum-lines{display:flex;flex-direction:column;gap:14px;padding-bottom:16px;border-bottom:1px solid #e6d8b2;margin-bottom:14px}
@@ -441,4 +497,79 @@ const CHECKOUT_SCRIPT = `
   var checkedRadio = root.querySelector('input[name="delivery_option"]:checked');
   if (checkedRadio) applyDelivery(checkedRadio);
 })();
+`
+
+// Poynt Collect bootstrap. Runs when Collect config is available
+// for the merchant. Waits for the async-loaded SDK, mounts the
+// card iframe into #poynt-card-mount, subscribes to the nonce
+// event, and intercepts the form submit — first submit collects
+// the nonce, populates the hidden field, then re-submits the form
+// so the server sees it in the normal POST body.
+//
+// Wrapped in a function that runs the config object we serialize
+// into the inline call site — keeps the SDK URL / businessId /
+// applicationId out of a global.
+const COLLECT_SCRIPT_PREAMBLE = `
+window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
+  var form = document.querySelector('.co-form[data-checkout]');
+  if (!form) return;
+  var nonceField = form.querySelector('[name="poynt_collect_nonce"]');
+  var errorBox = form.querySelector('[data-collect-error]');
+  var tokenizer = null;
+  var awaitingSubmit = false;
+
+  function showError(msg) {
+    if (!errorBox) return;
+    errorBox.textContent = msg;
+    errorBox.removeAttribute('hidden');
+  }
+  function clearError() {
+    if (errorBox) errorBox.setAttribute('hidden', '');
+  }
+
+  function initTokenizer() {
+    if (tokenizer || !window.TokenizeJs) return;
+    try {
+      tokenizer = new window.TokenizeJs(cfg.businessId, cfg.applicationId);
+      tokenizer.mount('poynt-card-mount', document, {});
+      tokenizer.subscribe('nonce', function(e) {
+        var n = e && e.data && e.data.nonce;
+        if (nonceField) nonceField.value = n || '';
+        clearError();
+        if (awaitingSubmit && form) {
+          awaitingSubmit = false;
+          // Re-submit; the form now carries the nonce and skips
+          // this interceptor because nonceField.value is set.
+          form.submit();
+        }
+      });
+      tokenizer.subscribe('error', function(e) {
+        awaitingSubmit = false;
+        var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
+        showError(msg);
+      });
+    } catch (err) {
+      showError('Card entry failed to load. Refresh and try again.');
+    }
+  }
+
+  if (window.TokenizeJs) initTokenizer();
+  else {
+    var tries = 0;
+    var poll = setInterval(function() {
+      tries += 1;
+      if (window.TokenizeJs) { clearInterval(poll); initTokenizer(); }
+      else if (tries > 60) { clearInterval(poll); showError('Card entry failed to load. Refresh and try again.'); }
+    }, 200);
+  }
+
+  form.addEventListener('submit', function(e) {
+    if (nonceField && nonceField.value) return; // already have nonce, native submit
+    if (!tokenizer) { e.preventDefault(); showError('Card entry still loading — try again in a moment.'); return; }
+    e.preventDefault();
+    clearError();
+    awaitingSubmit = true;
+    try { tokenizer.getNonce(); } catch (err) { awaitingSubmit = false; showError('Card entry error. Refresh and try again.'); }
+  });
+};
 `

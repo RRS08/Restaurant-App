@@ -45,6 +45,15 @@ export interface PaymentAuthorizeRequest {
    *  double-charging. Same session + same cart snapshot always
    *  produces the same key. */
   idempotencyKey: string
+  /** Client-side card nonce from the provider's tokenizer iframe
+   *  (Poynt Collect for godaddy, similar for other adapters). The
+   *  adapter exchanges it for a payment token + charges. Missing
+   *  nonce = no way to charge — adapter returns pending / failed
+   *  depending on its policy. */
+  nonce?: string
+  /** Reference the adapter can attach to the transaction on the
+   *  provider side for reconciliation (typically the orders row id). */
+  orderReference?: string
 }
 
 export type PaymentAuthorizeResult =

@@ -23,6 +23,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { loadCartWithItems, type CartSnapshot } from './cart'
 import { resolvePaymentAdapter } from './payment'
 import type { SiteRow, SiteDeliveryOption } from './types'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
 
 type Admin = ReturnType<typeof createAdminClient>
 
@@ -102,6 +103,19 @@ export async function performCheckout(
   const locationId = await resolveWebOrderLocation(admin, site)
   if (!locationId) return { error: 'No fulfillment location configured for this site.' }
 
+  // business_date has no SQL default or trigger — the sales page
+  // filters by `business_date = <today in restaurant tz>`, so
+  // missing this column would silently hide web orders from the
+  // sales list. Resolve the location's timezone once here and stamp
+  // it on the insert. Falls back to UTC if the location row is
+  // missing tz config (businessDateInTimezone handles the null).
+  const { data: locRow } = await admin
+    .from('locations')
+    .select('timezone')
+    .eq('id', locationId)
+    .maybeSingle()
+  const businessDate = businessDateInTimezone(new Date(), (locRow?.timezone as string | null | undefined) ?? null)
+
   const providerName = readPaymentProvider(site)
   const adapter = resolvePaymentAdapter(providerName)
   if (!adapter) {
@@ -166,6 +180,7 @@ export async function performCheckout(
       card_brand: cardBrand,
       card_last4: cardLast4,
       note: pendingNote ?? input.notes ?? null,
+      business_date: businessDate,
     })
     .select('id')
     .single()

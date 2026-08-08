@@ -454,13 +454,14 @@ const CHECKOUT_STYLE = `
    error text is hidden via customCss.errorText.base — validation
    errors surface via our own [data-collect-error] below the mount,
    so the container never balloons on a validation fail. */
-/* Fixed container height — Poynt renders three stacked rows now
-   (Card number / Expiration / CVV, each ~48px + 12px gap) so we
-   pin the mount at 190px which fits comfortably with no inner
-   scroll. Any extra room Poynt reserves for its (hidden) error
-   panel gets clipped by overflow:hidden; validation errors surface
-   via the external [data-collect-error] block below the mount. */
-.co-card-mount{background:transparent;height:190px;overflow:hidden}
+/* Mount container is a min-height frame; the actual height is
+   assigned live by the iframe_height_change subscribe (see
+   COLLECT_SCRIPT_PREAMBLE) so the mount hugs whatever Poynt
+   reports, no dead space below CVV. The min+max cap in JS keeps
+   Poynt from ballooning if they reserve room for their (hidden)
+   error panel — validation errors surface via the external
+   [data-collect-error] block below the mount. */
+.co-card-mount{background:transparent;min-height:120px;overflow:hidden}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -949,11 +950,20 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
       showError(msg);
     });
-    // NOTE: intentionally not subscribing to iframe_height_change —
-    // Poynt reports heights that include their reserved (hidden)
-    // error panel, which balloons the container. Height is pinned
-    // in CSS (.co-card-mount{height:52px}) instead. See comment
-    // in CHECKOUT_STYLE for the rationale.
+    // Height-sync — clamp Poynt's reported height between a min
+    // that fits three collapsed rows and a max that stops any
+    // hidden error-panel reservation from blowing the container
+    // out. Now that customCss.errorText.base is display:none, the
+    // reported value should be the real content height, so this
+    // subscribe just makes the container hug the iframe tightly
+    // (no dead space between CVV and the billing checkbox).
+    safeSubscribe('iframe_height_change', function(e) {
+      var mount = document.getElementById('poynt-card-mount');
+      var h = e && e.data && e.data.height;
+      if (mount && typeof h === 'number' && h > 0) {
+        mount.style.height = Math.min(Math.max(h, 120), 240) + 'px';
+      }
+    });
     // If we got here, mount didn't throw — mark ready so submit
     // works without waiting for an event Poynt may not dispatch.
     iframeReady = true;

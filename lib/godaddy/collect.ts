@@ -212,12 +212,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     return { status: 'error', message: 'Could not resolve merchant store — try again in a moment.' }
   }
 
-  const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
-  // Body matches Poynt's docs example exactly — no extra fields.
-  // Earlier attempts included context.source and amounts.taxAmount
-  // (both absent from Poynt's example) and got UNAUTHORIZED_ACCESS.
-  // taxAmount, when needed for reporting, goes elsewhere; for now
-  // the total is already inside transactionAmount so we skip it.
+  // Body matches Poynt's docs example. taxAmount lives in
+  // transactionAmount already for AUTHORIZE.
   const chargeBody: Record<string, unknown> = {
     action: 'AUTHORIZE',
     authOnly: true,
@@ -232,25 +228,52 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   if (args.orderReference) {
     chargeBody.references = [{ type: 'CUSTOM', id: args.orderReference }]
   }
-  // Preserve the tax value in a comment/log so future capture flows
-  // can surface it if Poynt reporting needs it.
   void taxCents
+
+  const chargeHeaders = {
+    'authorization': `Bearer ${bearer}`,
+    'content-type': 'application/json',
+    'api-version': '1.2',
+    'poynt-request-id': args.idempotencyKey,
+    ...(appId ? { 'x-app-id': appId } : {}),
+  }
+  // Try /businesses/{id}/transactions first — the pure Cloud API
+  // Transactions endpoint that "Transactions Authorize W" explicitly
+  // covers. /cards/tokenize/charge is the Poynt Collect combined
+  // endpoint and appears to need a separate "Poynt Collect Charge"
+  // sub-scope that Transactions Authorize alone doesn't grant.
+  // Fall back on 404 in case this Poynt account only exposes the
+  // combined endpoint. On any other error we return the response
+  // as-is so the log shows the actual rejection.
+  const transactionsUrl = `${base}/businesses/${encodeURIComponent(businessId)}/transactions`
   let response: Response
+  let usedEndpoint = 'transactions'
   try {
-    response = await fetch(chargeUrl, {
+    response = await fetch(transactionsUrl, {
       method: 'POST',
-      headers: {
-        'authorization': `Bearer ${bearer}`,
-        'content-type': 'application/json',
-        'api-version': '1.2',
-        'poynt-request-id': args.idempotencyKey,
-      },
+      headers: chargeHeaders,
       body: JSON.stringify(chargeBody),
     })
   } catch (err) {
     console.error('[godaddy/collect] authorize network failure', err)
     return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
   }
+  if (response.status === 404 || response.status === 405) {
+    console.warn('[godaddy/collect] /transactions unavailable, falling back to /cards/tokenize/charge', { status: response.status })
+    usedEndpoint = 'tokenize-charge'
+    const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
+    try {
+      response = await fetch(chargeUrl, {
+        method: 'POST',
+        headers: chargeHeaders,
+        body: JSON.stringify(chargeBody),
+      })
+    } catch (err) {
+      console.error('[godaddy/collect] authorize fallback network failure', err)
+      return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
+    }
+  }
+  void usedEndpoint
 
   const raw = await response.text()
   let json: unknown
@@ -273,6 +296,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   if (!response.ok) {
     const msg = data.developerMessage || data.message || `Payment declined (${response.status}).`
     console.warn('[godaddy/collect] authorize rejected', {
+      endpoint: usedEndpoint,
       httpStatus: response.status,
       env: args.env,
       code: data.code,

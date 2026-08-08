@@ -418,6 +418,14 @@ const CHECKOUT_SCRIPT = `
       else if (n === step) m.classList.add('is-active');
     });
     if (progress) progress.dataset.currentStep = String(step);
+    // Re-apply the current delivery selection whenever a panel
+    // becomes visible. Cheap safety net for the "Place order · $0.00"
+    // symptom on step 3 — the button label + summary numbers get
+    // recomputed from the currently-checked radio every time,
+    // instead of relying on a single init-time apply.
+    var r = root.querySelector('input[name="delivery_option"]:checked')
+         || root.querySelector('input[name="delivery_option"]');
+    if (r) applyDelivery(r);
   }
 
   function requiredInputsIn(panel){
@@ -490,15 +498,26 @@ const CHECKOUT_SCRIPT = `
     if (shippingEl) shippingEl.textContent = price === 0 ? 'Free' : money(price);
     if (totalEl) totalEl.textContent = money(total);
     if (totalBtnEl) totalBtnEl.textContent = money(total);
+    // Diagnostic for the "Place order · $0.00" symptom — leave in
+    // for a build or two, remove once we've seen a healthy log.
+    if (typeof console !== 'undefined' && console.log) {
+      console.log('[checkout] applyDelivery', {
+        price: price, sub: sub, total: total,
+        hasSubtotalEl: !!subtotalEl, hasTotalEl: !!totalEl, hasTotalBtnEl: !!totalBtnEl,
+      });
+    }
   }
 
   root.addEventListener('change', function(e){
     if (e.target && e.target.name === 'delivery_option') applyDelivery(e.target);
   });
 
-  // Kick off with whichever radio is initially checked so the
-  // address block + summary numbers match the default selection.
-  var checkedRadio = root.querySelector('input[name="delivery_option"]:checked');
+  // Kick off with whichever radio is initially checked, falling
+  // back to the first radio if the server's default-checked marker
+  // didn't stick for any reason. Guarantees the button label + totals
+  // reflect a real delivery choice from first paint.
+  var checkedRadio = root.querySelector('input[name="delivery_option"]:checked')
+                  || root.querySelector('input[name="delivery_option"]');
   if (checkedRadio) applyDelivery(checkedRadio);
 })();
 `
@@ -539,13 +558,11 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     if (tokenizer || !window.TokenizeJs) return;
     try {
       tokenizer = new window.TokenizeJs(cfg.businessId, cfg.applicationId);
-      tokenizer.mount('poynt-card-mount', document, {});
-      // iframe_ready fires after Poynt's card iframe fully loads
-      // inside our mount div. Without subscribing to it, our
-      // "still loading" state persisted forever and the SDK's own
-      // load-timeout surfaced as "Card entry failed to load" even
-      // when the iframe visibly mounted. Clearing the error here
-      // is what makes the card field actually usable.
+      // Subscribe BEFORE mount. Poynt's SDK dispatches iframe_ready
+      // synchronously (or near-synchronously) as the iframe finishes
+      // loading — subscribing after mount misses the event and the
+      // "Card entry failed to load" error banner never clears even
+      // though the card fields visibly render.
       tokenizer.subscribe('iframe_ready', function() {
         iframeReady = true;
         clearError();
@@ -577,6 +594,9 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
         var msg = (e && e.data && (e.data.message || e.data.reason)) || 'Please check your card details and try again.';
         showError(msg);
       });
+      // Mount AFTER all subscribes so the iframe_ready fire doesn't
+      // race the handler registration.
+      tokenizer.mount('poynt-card-mount', document, {});
     } catch (err) {
       showError('Card entry failed to load. Refresh and try again.');
     }

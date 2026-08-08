@@ -440,9 +440,13 @@ const CHECKOUT_STYLE = `
 .co-payment-message p{font-size:13.5px;line-height:1.65;color:#445b2f;margin:0}
 .co-card-field{display:flex;flex-direction:column;gap:8px}
 .co-card-field label{font-size:12px;font-weight:600;color:#445b2f}
-.co-card-mount{min-height:64px;background:#fff;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;transition:border-color .15s ease,box-shadow .15s ease}
+/* Container is a snug frame around Poynt's iframe. No padding —
+   the iframe drives its own internal padding + height (via the
+   iframe_height_change subscribe). Padding here would stack on
+   top and turn a tidy 48px card row into a 250px empty block. */
+.co-card-mount{background:#fff;border:1px solid #d4e7c7;border-radius:9px;min-height:52px;overflow:hidden;transition:border-color .15s ease,box-shadow .15s ease}
 .co-card-mount:focus-within{border-color:#536f3b;box-shadow:0 0 0 3px rgba(83,111,59,.15)}
-.co-card-mount iframe{width:100%;border:0}
+.co-card-mount iframe{width:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
 /* "We accept" card brand row — sits above the Name on card + iframe
@@ -572,14 +576,12 @@ const CHECKOUT_SCRIPT = `
   function money(n){ return '$' + (Math.round(n * 100) / 100).toFixed(2); }
   function round2(n){ return Math.round(n * 100) / 100; }
   function currentSubtotal(){ return subtotalRaw; }
-
-  // Seed the button label from the server-computed initial total —
-  // guarantees a sane value even if applyDelivery races.
-  if (submitBtn && totalBtnEl) {
-    var initFromAttr = parseFloat(submitBtn.dataset.initialTotal || '0');
-    if (Number.isFinite(initFromAttr) && initFromAttr > 0) {
-      totalBtnEl.textContent = money(initFromAttr);
-    }
+  // Single source of truth for the button label. Any time totalEl
+  // gets updated, syncButton() runs — no separate math, no chance
+  // of button drifting from the summary Total row.
+  function syncButton() {
+    if (!totalBtnEl || !totalEl) return;
+    totalBtnEl.textContent = totalEl.textContent || '';
   }
 
   // Billing address toggle. When "Billing address is the same as
@@ -626,13 +628,11 @@ const CHECKOUT_SCRIPT = `
     if (shippingEl) shippingEl.textContent = price === 0 ? (sublabel || 'In store') : money(price);
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
-    if (totalBtnEl && total > 0) totalBtnEl.textContent = money(total);
-    if (typeof console !== 'undefined' && console.log) {
-      console.log('[checkout] applyDelivery', {
-        price: price, sub: sub, tax: tax, taxRate: taxRate, total: total,
-        hasSubtotalEl: !!subtotalEl, hasTaxEl: !!taxEl, hasTotalEl: !!totalEl, hasTotalBtnEl: !!totalBtnEl,
-      });
-    }
+    // Button always mirrors the Total row. No independent math, no
+    // `total > 0` guard — a $0 cart never gets here (checkout blocks
+    // empty carts server-side) and syncing textContent keeps the
+    // button and summary from ever disagreeing.
+    syncButton();
   }
 
   root.addEventListener('change', function(e){

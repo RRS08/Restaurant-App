@@ -499,10 +499,12 @@ const CHECKOUT_STYLE = `
    the Ship-to row until the buyer picks a shipping option and fills
    the address block. */
 .co-sum-totals .row[hidden]{display:none}
-/* Ship-to sits directly under the delivery label — tighter type,
-   right-aligned so the (often longer) typed address wraps neatly. */
-.co-sum-totals .row-shipto{font-size:12.5px;color:#55723e;margin-top:-2px}
-.co-sum-totals .row-shipto>span:last-child{max-width:60%;text-align:right;line-height:1.4}
+/* Ship-to sits directly under the delivery label — one-liner
+   right-aligned; ellipsis takes over if the buyer typed something
+   improbably long, so the row never wraps. */
+.co-sum-totals .row-shipto{font-size:12px;color:#55723e;margin-top:-2px;align-items:baseline;gap:12px}
+.co-sum-totals .row-shipto>span:first-child{flex:0 0 auto;white-space:nowrap}
+.co-sum-totals .row-shipto>span:last-child{flex:1 1 auto;min-width:0;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .co-total{display:flex;justify-content:space-between;align-items:baseline;margin-top:14px;padding-top:14px;border-top:1px solid #e6d8b2}
 .co-total strong{font-size:22px;font-weight:600}
 .cart-note{font-size:11.5px;color:#55723e;text-align:center;margin-top:12px}
@@ -787,9 +789,12 @@ const CHECKOUT_SCRIPT = `
     var s  = (addressBlock.querySelector('input[name="state"]') || {}).value || '';
     var z  = (addressBlock.querySelector('input[name="postal"]') || {}).value || '';
     var street = [l1, l2].map(function(x){return (x||'').trim();}).filter(Boolean).join(', ');
-    var cityLine = [c, s, z].map(function(x){return (x||'').trim();}).filter(Boolean).join(', ');
-    if (!street || !cityLine.length) return '';
-    return street + ' · ' + cityLine;
+    // US convention: "123 Main St, Mission, TX 78572" — keeps the
+    // whole address to a single summary line at 12px.
+    var stateZip = [(s||'').trim(), (z||'').trim()].filter(Boolean).join(' ');
+    var cityLine = [(c||'').trim(), stateZip].filter(Boolean).join(', ');
+    if (!street || !cityLine) return '';
+    return street + ', ' + cityLine;
   }
   function syncShipto() {
     if (!shiptoRow || !shiptoEl) return;

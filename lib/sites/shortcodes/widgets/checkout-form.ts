@@ -542,13 +542,13 @@ const CHECKOUT_SCRIPT = `
       else if (n === step) m.classList.add('is-active');
     });
     if (progress) progress.dataset.currentStep = String(step);
-    // Re-apply the current delivery selection when a panel becomes
-    // visible — only if one is ACTUALLY checked. Nothing is auto-
-    // checked at load, so this only fires after the buyer picks
-    // on step 2. Keeps the button + summary in sync as they navigate
-    // back and forth.
-    var r = root.querySelector('input[name="delivery_option"]:checked');
-    if (r) applyDelivery(r);
+    // Summary state follows the step: step 3 shows the picked
+    // delivery + Ship-to (commitSummary), steps 1 and 2 keep the
+    // clean subtotal-only view (resetSummary). Buyer only sees the
+    // fully-priced Total after they explicitly click Continue to
+    // payment — no summary flicker while they browse step 2 options.
+    if (step === 3) commitSummary();
+    else resetSummary();
   }
 
   function requiredInputsIn(panel){
@@ -693,8 +693,15 @@ const CHECKOUT_SCRIPT = `
     applyBillingToggle();
   }
 
+  // The currently-picked delivery radio, if any. Set as soon as the
+  // buyer clicks a delivery option on step 2 so the address block
+  // can reveal, but the SUMMARY (label/price/tax/total/Ship-to)
+  // only paints from this on show(3) — see commitSummary. Keeps
+  // step 2 uncommitted until the buyer explicitly Continues.
+  var selectedRadio = null;
+
   function applyDelivery(radio){
-    var price = parseFloat(radio.dataset.price || '0') || 0;
+    selectedRadio = radio;
     var needsAddr = radio.dataset.requiresAddress === '1';
     currentDeliveryNeedsAddr = needsAddr;
     // paint selection state on all cards
@@ -702,7 +709,7 @@ const CHECKOUT_SCRIPT = `
     var wrapper = radio.closest('.co-delivery-opt');
     if (wrapper) wrapper.classList.add('is-selected');
     // toggle address block + required attrs (required-address so
-    // browser validation fires on Continue if fields are empty)
+    // validatePanel(2) fires on Continue if fields are empty)
     if (addressBlock) {
       if (needsAddr) addressBlock.removeAttribute('hidden');
       else addressBlock.setAttribute('hidden','');
@@ -711,31 +718,59 @@ const CHECKOUT_SCRIPT = `
       if (needsAddr) inp.setAttribute('required','');
       else inp.removeAttribute('required');
     });
-    // update summary numbers — tax applies to (subtotal + delivery),
-    // matching TX rules and the server-side calculation.
+    // Intentionally no summary paint here — resetSummary keeps the
+    // aside showing subtotal + subtotal-tax + subtotal-total until
+    // commitSummary runs on the transition to step 3.
+  }
+
+  // Repaint the summary aside for a specific state. resetSummary
+  // hides the delivery + ship-to rows and computes tax/total on the
+  // subtotal alone (used on steps 1 + 2). commitSummary reveals the
+  // delivery + ship-to rows and folds the picked option's price in
+  // (used on step 3 entrance). Splitting them means the buyer sees
+  // no summary flicker while they browse step 2 options — the
+  // aside only "commits" once they click Continue to payment.
+  function resetSummary() {
+    if (deliveryRowEl) deliveryRowEl.setAttribute('hidden', '');
+    if (shiptoRow) { shiptoRow.setAttribute('hidden', ''); if (shiptoEl) shiptoEl.textContent = ''; }
+    var sub = currentSubtotal();
+    var tax = round2(sub * taxRate);
+    var total = round2(sub + tax);
+    if (taxEl) taxEl.textContent = money(tax);
+    if (totalEl) totalEl.textContent = money(total);
+    syncButton();
+  }
+  function commitSummary() {
+    if (!selectedRadio) { resetSummary(); return; }
+    var radio = selectedRadio;
+    var price = parseFloat(radio.dataset.price || '0') || 0;
     var sub = currentSubtotal();
     var tax = round2((sub + price) * taxRate);
     var total = round2(sub + price + tax);
-    // Label comes from the option itself (data-label) so a "Ship
-    // to me" $0 option doesn't get mis-labeled "Pickup" — the old
-    // code branched on price alone and a free-shipping option would
-    // display the wrong word. Value in the second column stays
-    // sublabel-for-pickup / price-for-ship, unchanged.
+    // For pickup, the sublabel in site config is typically written
+    // as "Store Name · 123 Address St" — drop the store-name prefix
+    // for the summary so it just reads as the address. The store
+    // name is already implicit from the pickup option's label.
     var sublabel = radio.dataset.sublabel || '';
-    var label = radio.dataset.label || (price === 0 ? 'Pickup' : 'Shipping');
+    var addressOnly = sublabel;
+    var sepIdx = sublabel.indexOf(' · ');
+    if (sepIdx >= 0) addressOnly = sublabel.slice(sepIdx + 3).trim();
+    // Delivery row label: for shipping options (any option that
+    // requires an address) always show the generic "Shipping" — the
+    // option's own label like "Ship to me" reads awkwardly on the
+    // summary. For pickup, keep the option's label (e.g. "Pick up
+    // in store") since that's the buyer-friendly description.
+    var label = currentDeliveryNeedsAddr
+      ? 'Shipping'
+      : (radio.dataset.label || 'Pickup');
     if (deliveryLabelEl) deliveryLabelEl.textContent = label;
-    if (shippingEl) shippingEl.textContent = price === 0 ? (sublabel || 'In store') : money(price);
-    // Reveal the Delivery row now that we have a real pick.
+    if (shippingEl) shippingEl.textContent = currentDeliveryNeedsAddr
+      ? (price === 0 ? 'Free' : money(price))
+      : (addressOnly || 'In store');
     if (deliveryRowEl) deliveryRowEl.removeAttribute('hidden');
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
-    // Refresh the Ship-to summary row so it appears/disappears the
-    // moment delivery mode flips.
     syncShipto();
-    // Button always mirrors the Total row. No independent math, no
-    // "total > 0" guard — a zero cart never gets here (checkout blocks
-    // empty carts server-side) and syncing textContent keeps the
-    // button and summary from ever disagreeing.
     syncButton();
   }
 
@@ -772,7 +807,9 @@ const CHECKOUT_SCRIPT = `
       shiptoEl.textContent = '';
     }
   }
-  addressInputs.forEach(function(inp){ inp.addEventListener('input', syncShipto); });
+  // No live shipto listener on address inputs — syncShipto only
+  // runs from commitSummary (on show(3) transition), matching the
+  // "summary only appears after Continue to payment" behavior.
 
   root.addEventListener('change', function(e){
     if (e.target && e.target.name === 'delivery_option') {
@@ -784,11 +821,11 @@ const CHECKOUT_SCRIPT = `
     }
   });
 
-  // No auto-apply at load — nothing is pre-checked, so the Delivery
-  // row stays hidden until the buyer picks on step 2. The show(step)
-  // handler still re-applies if a radio IS checked on later step
-  // transitions, so no state gets lost when the buyer navigates back
-  // to step 2 and forward again.
+  // Initial paint — no delivery pick yet, so the aside shows a
+  // subtotal-only view. commitSummary will fold in the picked
+  // option's price + reveal the Delivery / Ship-to rows the moment
+  // the buyer lands on step 3.
+  resetSummary();
 })();
 `
 

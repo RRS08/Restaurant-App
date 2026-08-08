@@ -101,9 +101,16 @@ export type ChargeResult =
   | { status: 'declined'; message: string; code?: string }
   | { status: 'error'; message: string }
 
-/** Tokenize the Collect nonce + charge in one call to Poynt's
- *  /cards/tokenize/charge endpoint. Env determines both which token
- *  row we look up AND which API base URL we hit. */
+/** Two-step tokenize + authorize flow:
+ *  1) POST /cards/tokenize with the Collect nonce → get back a
+ *     paymentToken (JWT) + card metadata (type, last4).
+ *  2) POST /cards/tokenize/charge with cardToken + authOnly:true +
+ *     action=AUTHORIZE → get back the transaction id.
+ *  This shape matches the "Transactions Authorize" scope on the
+ *  merchant OAuth grant. The shortcut single-call form (nonce +
+ *  action=SALE|AUTHORIZE at top level) requires the broader Charge
+ *  scope which we don't have; Poynt rejects it with "This principal
+ *  does not have access to this resource". */
 export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<ChargeResult> {
   const tokenResult = await getValidAccessTokenForEnv(args.restaurantId, args.env)
   if ('error' in tokenResult) return { status: 'error', message: tokenResult.error }
@@ -116,43 +123,94 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     ? Math.round(args.taxDollars * 100)
     : 0
 
-  const url = `${apiBaseForEnv(args.env)}/businesses/${encodeURIComponent(tokenResult.businessId)}/cards/tokenize/charge`
-  // action=AUTHORIZE holds the funds without capturing — matches the
-  // "Transactions Authorize" scope the merchant has granted on the
-  // dev app. SALE (auth + capture in one call) requires the broader
-  // Transactions Charge scope which we don't have; Poynt returns
-  // "This principal does not have access to this resource" for SALE
-  // attempts under Authorize-only. Auto-settle behavior on Poynt's
-  // side captures the auth on the merchant's daily batch.
-  const body = {
-    nonce: args.nonce,
+  const businessId = tokenResult.businessId
+  const bearer = tokenResult.accessToken
+  const base = apiBaseForEnv(args.env)
+
+  // --- Step 1: nonce → paymentToken ---
+  const tokenizeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize`
+  let tokenizeRes: Response
+  try {
+    tokenizeRes = await fetch(tokenizeUrl, {
+      method: 'POST',
+      headers: {
+        'authorization': `Bearer ${bearer}`,
+        'content-type': 'application/json',
+        'api-version': '1.2',
+        'poynt-request-id': args.idempotencyKey + ':tok',
+      },
+      body: JSON.stringify({ nonce: args.nonce }),
+    })
+  } catch (err) {
+    console.error('[godaddy/collect] tokenize network failure', err)
+    return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
+  }
+
+  const tokenizeRaw = await tokenizeRes.text()
+  let tokenizeJson: unknown
+  try { tokenizeJson = tokenizeRaw ? JSON.parse(tokenizeRaw) : {} }
+  catch {
+    console.error('[godaddy/collect] tokenize non-JSON response', { status: tokenizeRes.status, raw: tokenizeRaw })
+    return { status: 'error', message: `Payment provider returned unreadable response (${tokenizeRes.status}).` }
+  }
+  const tokenizeData = (tokenizeJson ?? {}) as {
+    paymentToken?: string
+    card?: { type?: string; numberLast4?: string }
+    developerMessage?: string
+    message?: string
+    code?: string
+  }
+  if (!tokenizeRes.ok) {
+    const msg = tokenizeData.developerMessage || tokenizeData.message || `Card tokenize failed (${tokenizeRes.status}).`
+    console.warn('[godaddy/collect] tokenize rejected', {
+      httpStatus: tokenizeRes.status,
+      env: args.env,
+      code: tokenizeData.code,
+      message: msg,
+    })
+    return tokenizeRes.status >= 400 && tokenizeRes.status < 500
+      ? { status: 'declined', message: msg, code: tokenizeData.code }
+      : { status: 'error', message: msg }
+  }
+  const paymentToken = tokenizeData.paymentToken
+  if (!paymentToken) {
+    console.error('[godaddy/collect] tokenize succeeded but no paymentToken in body', tokenizeData)
+    return { status: 'error', message: 'Card tokenization returned no token.' }
+  }
+  const cardBrand = tokenizeData.card?.type
+  const cardLast4 = tokenizeData.card?.numberLast4
+
+  // --- Step 2: paymentToken → AUTHORIZE transaction ---
+  const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
+  const chargeBody = {
     action: 'AUTHORIZE',
+    authOnly: true,
     amounts: {
       transactionAmount: amountCents,
       orderAmount: amountCents,
       taxAmount: taxCents,
       currency: 'USD',
     },
+    fundingSource: { cardToken: paymentToken },
     references: args.orderReference
       ? [{ type: 'CUSTOM', id: args.orderReference }]
       : undefined,
-    context: { source: 'WEB' },
+    context: { source: 'WEB', businessId },
   }
-
   let response: Response
   try {
-    response = await fetch(url, {
+    response = await fetch(chargeUrl, {
       method: 'POST',
       headers: {
-        'authorization': `Bearer ${tokenResult.accessToken}`,
+        'authorization': `Bearer ${bearer}`,
         'content-type': 'application/json',
         'api-version': '1.2',
         'poynt-request-id': args.idempotencyKey,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(chargeBody),
     })
   } catch (err) {
-    console.error('[godaddy/collect] network failure charging card', err)
+    console.error('[godaddy/collect] authorize network failure', err)
     return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
   }
 
@@ -161,7 +219,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   try {
     json = raw ? JSON.parse(raw) : {}
   } catch {
-    console.error('[godaddy/collect] non-JSON response', { status: response.status, raw })
+    console.error('[godaddy/collect] authorize non-JSON response', { status: response.status, raw })
     return { status: 'error', message: `Payment provider returned unreadable response (${response.status}).` }
   }
 
@@ -169,7 +227,6 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     id?: string
     status?: string
     processorResponse?: { statusMessage?: string; statusCode?: string; approvedAmount?: number }
-    fundingSource?: { card?: { type?: string; numberLast4?: string } }
     developerMessage?: string
     message?: string
     code?: string
@@ -177,7 +234,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
 
   if (!response.ok) {
     const msg = data.developerMessage || data.message || `Payment declined (${response.status}).`
-    console.warn('[godaddy/collect] charge rejected', {
+    console.warn('[godaddy/collect] authorize rejected', {
       httpStatus: response.status,
       env: args.env,
       code: data.code,
@@ -196,8 +253,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   return {
     status: 'paid',
     transactionId: data.id ?? '',
-    cardBrand: data.fundingSource?.card?.type,
-    cardLast4: data.fundingSource?.card?.numberLast4,
+    cardBrand,
+    cardLast4,
   }
 }
 

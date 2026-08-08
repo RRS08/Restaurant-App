@@ -23,6 +23,7 @@
 //   ote  → services.ote-poynt.net          + collect.commerce.ote-godaddy.com
 // ----------------------------------------------------------------
 
+import { randomUUID } from 'crypto'
 import { getStoredTokenForEnv, upsertMerchantToken, type PoyntEnv } from './tokens'
 import { refreshMerchantToken } from './oauth'
 
@@ -89,7 +90,11 @@ export interface ChargeWithNonceArgs {
    *  transaction body so it shows up in Poynt's merchant reporting;
    *  the buyer is still charged amountDollars total. Missing = 0. */
   taxDollars?: number
-  /** Idempotency key so retries don't double-charge. */
+  /** OUR internal correlation id for this checkout attempt
+   *  (`site:{siteId}:session:{sessionId}:v2`). Logged on every line
+   *  in this file so a Vercel log search can stitch the tokenize and
+   *  charge halves of one attempt back together. It is NOT sent to
+   *  Poynt — see the Poynt-Request-Id note in chargeWithNonce. */
   idempotencyKey: string
   /** Optional order reference stored on the transaction for
    *  reconciliation against the orders table later. */
@@ -128,6 +133,16 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   const bearer = tokenResult.accessToken
   const base = apiBaseForEnv(args.env)
   const appId = process.env.GODADDY_POYNT_APP_ID
+
+  // Poynt-Request-Id MUST be a bare UUID, one per request. We used
+  // to send our own `site:{uuid}:session:{uuid}:v2` correlation key
+  // here (89 chars); Poynt persists this header on the transaction
+  // row and the oversized non-UUID value blew up their writer with
+  // a Hibernate "could not execute statement" DataException — a 500
+  // on every /cards/tokenize/charge. Generate a fresh UUID per call
+  // and keep our correlation key in OUR logs only.
+  const tokenizeRequestId = randomUUID()
+  const chargeRequestId = randomUUID()
   const commonHeaders = {
     'authorization': `Bearer ${bearer}`,
     'content-type': 'application/json',
@@ -149,7 +164,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   try {
     tokenizeRes = await fetch(tokenizeUrl, {
       method: 'POST',
-      headers: { ...commonHeaders, 'poynt-request-id': args.idempotencyKey + ':tok' },
+      headers: { ...commonHeaders, 'poynt-request-id': tokenizeRequestId },
       body: JSON.stringify({ nonce: args.nonce }),
     })
   } catch (err) {
@@ -180,6 +195,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
       code: tokenizeData.code,
       message: msg,
       hadAppIdHeader: !!appId,
+      correlationKey: args.idempotencyKey,
+      poyntRequestId: tokenizeRequestId,
       rawBody: tokenizeRaw,
     })
     return tokenizeRes.status >= 400 && tokenizeRes.status < 500
@@ -208,6 +225,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     cardBrand,
     cardLast4,
     tokStatus,
+    correlationKey: args.idempotencyKey,
+    poyntRequestId: tokenizeRequestId,
   })
 
   // --- Step 2: paymentToken → SALE (auth + capture in one) ---
@@ -232,7 +251,7 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   try {
     response = await fetch(chargeUrl, {
       method: 'POST',
-      headers: { ...commonHeaders, 'poynt-request-id': args.idempotencyKey },
+      headers: { ...commonHeaders, 'poynt-request-id': chargeRequestId },
       body: JSON.stringify(chargeBody),
     })
   } catch (err) {
@@ -267,6 +286,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
       message: msg,
       hadAppIdHeader: !!appId,
       appIdPrefix: appId ? appId.slice(0, 12) : null,
+      correlationKey: args.idempotencyKey,
+      poyntRequestId: chargeRequestId,
       requestBody: { ...chargeBody, fundingSource: { cardToken: '<redacted>' } },
       rawBody: raw,
     })

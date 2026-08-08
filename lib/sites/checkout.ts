@@ -130,6 +130,11 @@ export async function performCheckout(
   const taxAmount = round2((cart.subtotal + deliveryOption.price) * taxRate)
   const total = round2(cart.subtotal + deliveryOption.price + taxAmount)
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
+  // OUR correlation id for this checkout attempt — logged by the
+  // payment adapter on both halves of the Poynt round-trip. It is
+  // deliberately NOT sent as Poynt-Request-Id: that header has to be
+  // a bare UUID (this string is 89 chars) or Poynt 500s persisting
+  // the transaction. The adapter mints its own UUID per request.
   const idempotencyKey = `site:${site.id}:session:${sessionId}:v2`
   const env = readSitePaymentEnv(site)
 
@@ -149,8 +154,8 @@ export async function performCheckout(
     env,
     taxAmount,
     // orderReference is populated post-hoc for reconciliation
-    // — Poynt lets us reference the txn later without our order
-    // id since idempotencyKey uniquely identifies the attempt.
+    // — Poynt lets us reference the txn later without our order id,
+    // and the correlation key above ties the logs to the attempt.
   })
 
   if (authResult.status === 'failed') {

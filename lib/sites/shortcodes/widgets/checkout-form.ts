@@ -190,12 +190,12 @@ ${deliveryRadios}
         </div>
       </div>
 
-      ${renderPaymentBlock(collect, paymentMessage)}
-
       <div class="co-field">
         <label for="co-cardholder">Name on card</label>
         <input id="co-cardholder" name="cardholder_name" type="text" placeholder="As shown on the card" autocomplete="cc-name" required>
       </div>
+
+      ${renderPaymentBlock(collect, paymentMessage)}
 
       <label class="co-check">
         <input type="checkbox" name="billing_same" value="1" checked data-billing-toggle>
@@ -446,8 +446,15 @@ const CHECKOUT_STYLE = `
    error text is hidden via customCss.errorText.base — validation
    errors surface via our own [data-collect-error] below the mount,
    so the container never balloons on a validation fail. */
-.co-card-mount{background:transparent;min-height:56px;transition:opacity .15s ease}
-.co-card-mount iframe{width:100%;border:0;display:block}
+/* Container height is driven live by iframe_height_change — the
+   iframe reports its full content height and we mirror it, so
+   neither the iframe nor the container ever needs a scrollbar.
+   iframe{height:100%} forces Poynt's iframe to obey container height
+   instead of its inline HTML `height` attribute (which was leaving
+   an inner scroll on the CVV row when their default height was
+   shorter than the stacked content). */
+.co-card-mount{background:transparent;min-height:56px;transition:height .15s ease}
+.co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
 /* "We accept" card brand row — sits above the Name on card + iframe
@@ -714,14 +721,17 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       // Layout trick: setting container to display:flex + flex-wrap
       // lets rowCardNumber take 100% width and rowExpiration + rowCVV
       // sit side-by-side underneath at 50% each.
+      // Layout: three inputs stacked vertically — Card number, then
+      // Expiry, then CVV — each full-width, no field labels (the
+      // placeholders inside each input already say what it is).
+      // Our external "Name on card" input sits above the iframe.
       tokenizer.mount('poynt-card-mount', document, {
-        displayComponents: { labels: true },
+        displayComponents: { labels: false },
         customCss: {
-          container: 'display:flex;flex-wrap:wrap;gap:14px;font-family:inherit;padding:0;margin:0;',
-          rowCardNumber: 'flex:1 0 100%;margin:0;padding:0;',
-          rowExpiration: 'flex:1 1 calc(50% - 7px);margin:0;padding:0;',
-          rowCVV: 'flex:1 1 calc(50% - 7px);margin:0;padding:0;',
-          inputLabel: 'display:block;font-size:12px;font-weight:600;color:#445b2f;margin:0 0 8px 0;font-family:inherit;',
+          container: 'display:block;font-family:inherit;padding:0;margin:0;background:transparent;',
+          rowCardNumber: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
+          rowExpiration: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
+          rowCVV: 'display:block;width:100%;margin:0;padding:0;',
           inputDefault: 'width:100%;box-sizing:border-box;background:#f4f8f2;border:1px solid #d4e7c7;border-radius:9px;padding:12px 14px;font-size:15px;color:#1a2010;font-family:inherit;line-height:1.35;outline:none;transition:border-color .15s ease,box-shadow .15s ease;',
           input: {
             cardNumber: 'width:100%;',

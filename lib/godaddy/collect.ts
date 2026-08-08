@@ -237,19 +237,23 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     'poynt-request-id': args.idempotencyKey,
     ...(appId ? { 'x-app-id': appId } : {}),
   }
-  // Try /businesses/{id}/transactions first — the pure Cloud API
-  // Transactions endpoint that "Transactions Authorize W" explicitly
-  // covers. /cards/tokenize/charge is the Poynt Collect combined
-  // endpoint and appears to need a separate "Poynt Collect Charge"
-  // sub-scope that Transactions Authorize alone doesn't grant.
-  // Fall back on 404 in case this Poynt account only exposes the
-  // combined endpoint. On any other error we return the response
-  // as-is so the log shows the actual rejection.
-  const transactionsUrl = `${base}/businesses/${encodeURIComponent(businessId)}/transactions`
+  // Use /cards/tokenize/charge — the Poynt Collect combined endpoint
+  // that's actually designed for CNP web charging. Previous attempts
+  // on this endpoint 401'd, but they were sending the wrong body
+  // (missing storeId, extra context.source + amounts.taxAmount).
+  // With the clean body matching Poynt's docs exactly + storeId
+  // resolved, this should now go through. If it still 401s, then
+  // it's a real merchant-token scope gap (re-OAuth needed).
+  //
+  // /transactions is NOT the alternative — it returned 500
+  // INTERNAL_ERROR (Hibernate DataException) because that endpoint
+  // is for RECORDING transactions after-the-fact (POS device flow),
+  // not initiating a card charge.
+  const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
+  const usedEndpoint = 'tokenize-charge'
   let response: Response
-  let usedEndpoint = 'transactions'
   try {
-    response = await fetch(transactionsUrl, {
+    response = await fetch(chargeUrl, {
       method: 'POST',
       headers: chargeHeaders,
       body: JSON.stringify(chargeBody),
@@ -257,21 +261,6 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   } catch (err) {
     console.error('[godaddy/collect] authorize network failure', err)
     return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
-  }
-  if (response.status === 404 || response.status === 405) {
-    console.warn('[godaddy/collect] /transactions unavailable, falling back to /cards/tokenize/charge', { status: response.status })
-    usedEndpoint = 'tokenize-charge'
-    const chargeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
-    try {
-      response = await fetch(chargeUrl, {
-        method: 'POST',
-        headers: chargeHeaders,
-        body: JSON.stringify(chargeBody),
-      })
-    } catch (err) {
-      console.error('[godaddy/collect] authorize fallback network failure', err)
-      return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
-    }
   }
   void usedEndpoint
 

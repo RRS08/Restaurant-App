@@ -15,9 +15,17 @@
 // ----------------------------------------------------------------
 
 import { NextResponse, type NextRequest } from 'next/server'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { authorizeUrl } from '@/lib/godaddy/oauth'
 import { issueOAuthState } from '@/lib/godaddy/tokens'
+
+/** Short-lived cookie the callback route reads to decide which
+ *  settings card should surface the success/failure banner. Set
+ *  here when ?purpose=online is on the install URL; consumed and
+ *  deleted by the callback route. 15 min TTL matches the state
+ *  row's lifetime — either both survive or neither. */
+const OAUTH_PURPOSE_COOKIE = 'godaddy_oauth_purpose'
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient()
@@ -45,9 +53,27 @@ export async function GET(req: NextRequest) {
   // value = prod. Sandbox link is deliberately not exposed in the
   // Settings UI — sandbox connects are a maintenance / testing
   // action, initiated by hitting the URL directly with the query.
-  const envParam = new URL(req.url).searchParams.get('env')
+  const url0 = new URL(req.url)
+  const envParam = url0.searchParams.get('env')
   const env: 'prod' | 'ote' = envParam === 'ote' ? 'ote' : 'prod'
   const state = await issueOAuthState(restaurantId, env)
+
+  // Stash the purpose (if any) in a short-lived cookie so the
+  // callback can route the success/failure banner to the right
+  // settings card. 'online' → GoDaddyOnlinePaymentsCard shows a
+  // dedicated banner; absent → GoDaddyConnectCard (POS) shows the
+  // generic banner.
+  const purpose = url0.searchParams.get('purpose')
+  if (purpose === 'online') {
+    const jar = await cookies()
+    jar.set(OAUTH_PURPOSE_COOKIE, 'online', {
+      path: '/',
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: true,
+      maxAge: 60 * 15,
+    })
+  }
 
   // Redirect URI must match exactly what's configured in the
   // Poynt Developer Center → OAuth Settings. Derive from the

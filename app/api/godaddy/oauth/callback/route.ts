@@ -26,11 +26,39 @@
 // ----------------------------------------------------------------
 
 import { NextResponse, type NextRequest } from 'next/server'
+import { cookies } from 'next/headers'
 import { exchangeAuthorizationCode, decodeBusinessId } from '@/lib/godaddy/oauth'
 import { consumeOAuthState, upsertMerchantToken } from '@/lib/godaddy/tokens'
 import { registerMerchantWebhook } from '@/lib/godaddy/webhooks'
 
-function redirectToSettings(req: NextRequest, flag: string): NextResponse {
+const OAUTH_PURPOSE_COOKIE = 'godaddy_oauth_purpose'
+
+/** Purpose the install route stashed in a cookie — 'online' when the
+ *  merchant clicked the Online Payments card, absent otherwise. Read
+ *  once and cleared so a subsequent unrelated callback isn't tagged. */
+async function consumePurposeCookie(): Promise<'online' | null> {
+  const jar = await cookies()
+  const c = jar.get(OAUTH_PURPOSE_COOKIE)
+  if (!c) return null
+  jar.set(OAUTH_PURPOSE_COOKIE, '', { path: '/', maxAge: 0 })
+  return c.value === 'online' ? 'online' : null
+}
+
+/** Build the settings redirect. When purpose='online', use a
+ *  dedicated `godaddy-online` query flag so the online payments
+ *  card is the one that surfaces the banner (not the POS card). */
+function redirectToSettings(req: NextRequest, flag: string, purpose: 'online' | null): NextResponse {
+  if (purpose === 'online') {
+    // Map POS-oriented flags to the online-oriented banner set.
+    // 'connected' + 'connected-hook-failed' → 'ok' (from an online
+    // perspective the merchant token was refreshed with new scopes,
+    // the webhook state is a POS concern).
+    const onlineFlag =
+      flag === 'connected' || flag === 'connected-hook-failed' ? 'ok'
+      : flag === 'declined' ? 'declined'
+      : 'error'
+    return NextResponse.redirect(new URL(`/settings?godaddy-online=${onlineFlag}`, req.url))
+  }
   return NextResponse.redirect(new URL(`/settings?godaddy=${flag}`, req.url))
 }
 
@@ -61,22 +89,24 @@ export async function GET(req: NextRequest) {
     knownParams: [...url.searchParams.keys()],
   })
 
+  const purpose = await consumePurposeCookie()
+
   if (!code || !context) {
-    return redirectToSettings(req, 'missing-params')
+    return redirectToSettings(req, 'missing-params', purpose)
   }
   if (status && DECLINE_STATUSES.has(status.toLowerCase())) {
-    return redirectToSettings(req, 'declined')
+    return redirectToSettings(req, 'declined', purpose)
   }
 
   const consumed = await consumeOAuthState(context)
   if (!consumed) {
-    return redirectToSettings(req, 'stale-state')
+    return redirectToSettings(req, 'stale-state', purpose)
   }
   const { restaurantId, env } = consumed
 
   const businessId = decodeBusinessId(code)
   if (!businessId) {
-    return redirectToSettings(req, 'bad-code')
+    return redirectToSettings(req, 'bad-code', purpose)
   }
 
   const configuredOrigin = process.env.NEXT_PUBLIC_SITE_URL
@@ -120,12 +150,12 @@ export async function GET(req: NextRequest) {
         businessId,
         error: reg.error,
       })
-      return redirectToSettings(req, 'connected-hook-failed')
+      return redirectToSettings(req, 'connected-hook-failed', purpose)
     }
     console.info('[godaddy/oauth/callback] webhook registered', { businessId })
-    return redirectToSettings(req, 'connected')
+    return redirectToSettings(req, 'connected', purpose)
   } catch (err) {
     console.error('[godaddy/oauth/callback] token exchange failed', err)
-    return redirectToSettings(req, 'exchange-failed')
+    return redirectToSettings(req, 'exchange-failed', purpose)
   }
 }

@@ -37,6 +37,7 @@ import LanguageCard from './language-card'
 import GoDaddySalesImportCard from './godaddy-sales-import-card'
 import GoDaddyMenuImportCard from './godaddy-menu-import-card'
 import GoDaddyConnectCard from './godaddy-connect-card'
+import GoDaddyOnlinePaymentsCard from './godaddy-online-payments-card'
 import { getStoredToken } from '@/lib/godaddy/tokens'
 import { getLang, getT } from '@/lib/i18n-server'
 
@@ -237,6 +238,7 @@ export default async function SettingsPage() {
     expiresAt: string
     webhookRegistered: boolean
   } | null = null
+  let godaddyOnlineScope: { businessId: string; scope: string | null } | null = null
   if (isOwner && restaurantId) {
     const stored = await getStoredToken(restaurantId)
     if (stored) {
@@ -245,6 +247,13 @@ export default async function SettingsPage() {
         connectedAt: stored.connectedAt,
         expiresAt: stored.expiresAt,
         webhookRegistered: !!stored.webhookSecret,
+      }
+      // Pass the raw scope string to the online payments card so it
+      // can detect whether Poynt Collect W is granted on the current
+      // token and prompt for re-authorization if not.
+      godaddyOnlineScope = {
+        businessId: stored.businessId,
+        scope: stored.scope,
       }
     }
   }
@@ -335,6 +344,16 @@ export default async function SettingsPage() {
             since the API path is the preferred workflow. */}
         {(isOwner && restaurantId) && (
           <GoDaddyConnectCard connected={godaddyConnected} />
+        )}
+
+        {/* Online payments — separate re-auth surface. Renders only
+            when the merchant has already connected via the POS card
+            above. Fixes the pilot-shipped situation where the first
+            OAuth grant landed before Poynt Collect W was added to
+            the app scope list, leaving the token unable to charge
+            via the web checkout even though POS sync works. */}
+        {(isOwner && restaurantId) && (
+          <GoDaddyOnlinePaymentsCard connected={godaddyOnlineScope} />
         )}
 
         {/* GoDaddy CSV imports — owner-only. Two one-shot upload

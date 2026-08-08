@@ -912,19 +912,19 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     if (errorBox) errorBox.setAttribute('hidden', '');
   }
 
-  // Individually try/catch each subscribe. Poynt's TokenizeJs
-  // silently ignores unknown event names on some SDK versions but
-  // throws on others — subscribing to a name Poynt doesn't
-  // recognize (e.g. iframe_ready on the wrong version) would kill
-  // the whole init chain if we shared one try block. This shape
-  // keeps mount + the essential 'nonce' handler alive even if
-  // optional subscribes fail.
+  // Poynt SDK versions differ on the subscribe API — newer builds
+  // expose tokenizer.on(evt, fn) while older ones use
+  // tokenizer.subscribe(evt, fn). Try both; whichever exists wins.
+  // Individual try/catch so an unknown event name on either method
+  // never kills the whole init chain.
   function safeSubscribe(evt, fn) {
     if (!tokenizer) return;
-    try { tokenizer.subscribe(evt, fn); }
-    catch (err) {
+    try {
+      if (typeof tokenizer.on === 'function') tokenizer.on(evt, fn);
+      else if (typeof tokenizer.subscribe === 'function') tokenizer.subscribe(evt, fn);
+    } catch (err) {
       if (typeof console !== 'undefined' && console.warn) {
-        console.warn('[checkout] Poynt subscribe rejected event', evt, err);
+        console.warn('[checkout] Poynt event subscribe rejected', evt, err);
       }
     }
   }

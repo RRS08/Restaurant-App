@@ -126,6 +126,12 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   const businessId = tokenResult.businessId
   const bearer = tokenResult.accessToken
   const base = apiBaseForEnv(args.env)
+  // Application id from the env — Poynt uses this to figure out
+  // which app's granted scopes apply to the request. Same value the
+  // Collect JS SDK receives; falls back to omitting the header if
+  // the env isn't set (Poynt will then rely on the token alone,
+  // which is what we were doing before this fix).
+  const appId = process.env.GODADDY_POYNT_APP_ID
 
   // --- Step 1: nonce → paymentToken ---
   const tokenizeUrl = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize`
@@ -138,6 +144,12 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
         'content-type': 'application/json',
         'api-version': '1.2',
         'poynt-request-id': args.idempotencyKey + ':tok',
+        // x-app-id tells Poynt which application's scopes to check
+        // when resolving permissions. Omitting it can produce a
+        // generic "principal does not have access" even when the
+        // token itself is valid — the server doesn't know which
+        // app's grants to apply.
+        ...(appId ? { 'x-app-id': appId } : {}),
       },
       body: JSON.stringify({ nonce: args.nonce }),
     })
@@ -167,6 +179,8 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
       env: args.env,
       code: tokenizeData.code,
       message: msg,
+      hadAppIdHeader: !!appId,
+      rawBody: tokenizeRaw,
     })
     return tokenizeRes.status >= 400 && tokenizeRes.status < 500
       ? { status: 'declined', message: msg, code: tokenizeData.code }

@@ -313,42 +313,83 @@ async function fetchDefaultStoreId(args: {
 }): Promise<string | null> {
   const cached = storeIdCache.get(args.businessId)
   if (cached) return cached
-  const url = `${args.base}/businesses/${encodeURIComponent(args.businessId)}/stores`
+
+  const headers = {
+    'authorization': `Bearer ${args.bearer}`,
+    'content-type': 'application/json',
+    'api-version': '1.2',
+    ...(args.appId ? { 'x-app-id': args.appId } : {}),
+  }
+
+  // Try /businesses/{id}/stores first — canonical list endpoint.
+  const storesUrl = `${args.base}/businesses/${encodeURIComponent(args.businessId)}/stores`
+  const storeFromList = await tryExtractStoreId(storesUrl, headers, 'stores-list')
+  if (storeFromList) {
+    storeIdCache.set(args.businessId, storeFromList)
+    return storeFromList
+  }
+
+  // Fallback: /businesses/{id} — the business row usually embeds
+  // its stores as `stores: [...]` OR `store: {...}`, depending on
+  // the Poynt API version and account type.
+  const businessUrl = `${args.base}/businesses/${encodeURIComponent(args.businessId)}`
+  const storeFromBusiness = await tryExtractStoreId(businessUrl, headers, 'business-embedded')
+  if (storeFromBusiness) {
+    storeIdCache.set(args.businessId, storeFromBusiness)
+    return storeFromBusiness
+  }
+
+  return null
+}
+
+async function tryExtractStoreId(
+  url: string,
+  headers: Record<string, string>,
+  source: string,
+): Promise<string | null> {
   let res: Response
   try {
-    res = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'authorization': `Bearer ${args.bearer}`,
-        'content-type': 'application/json',
-        'api-version': '1.2',
-        ...(args.appId ? { 'x-app-id': args.appId } : {}),
-      },
-    })
+    res = await fetch(url, { method: 'GET', headers })
   } catch (err) {
-    console.error('[godaddy/collect] fetch stores failed', err)
+    console.error('[godaddy/collect] fetch failed', { source, err: String(err) })
     return null
   }
   const raw = await res.text()
   if (!res.ok) {
-    console.warn('[godaddy/collect] stores endpoint rejected', { status: res.status, raw })
+    console.warn('[godaddy/collect] store lookup rejected', { source, status: res.status, raw })
     return null
   }
   let json: unknown
   try { json = raw ? JSON.parse(raw) : {} }
-  catch { return null }
-  // Poynt returns { stores: [...] } — take the first one as default.
-  // Merchants with multiple physical stores would need per-order
-  // routing logic later; the pilot merchant has one, and the first
-  // is the primary in Poynt's ordering.
-  const data = (json ?? {}) as { stores?: Array<{ id?: string }> }
-  const first = Array.isArray(data.stores) && data.stores.length > 0 ? data.stores[0] : null
-  const id = first?.id
-  if (id) {
-    storeIdCache.set(args.businessId, id)
-    return id
+  catch {
+    console.warn('[godaddy/collect] store lookup non-JSON', { source, raw })
+    return null
   }
-  console.warn('[godaddy/collect] no stores returned for business', args.businessId)
+  // Poynt varies the shape by endpoint + account: could be a bare
+  // array, { stores: [...] }, { results: [...] }, or the business
+  // row with an embedded store field. Try each in turn; log the raw
+  // body when nothing matches so we can add the actual shape later.
+  const asArr = Array.isArray(json) ? json : null
+  const asObj = (json ?? {}) as Record<string, unknown>
+  const candidates: unknown[] = [
+    asArr,
+    asObj.stores,
+    asObj.results,
+    asObj.items,
+    asObj.data,
+    asObj.store ? [asObj.store] : null,
+  ]
+  for (const c of candidates) {
+    if (Array.isArray(c) && c.length > 0) {
+      const first = c[0] as { id?: string; storeId?: string } | undefined
+      const id = first?.id ?? first?.storeId
+      if (id) {
+        console.log('[godaddy/collect] resolved storeId', { source, id: id.slice(0, 8) + '…' })
+        return id
+      }
+    }
+  }
+  console.warn('[godaddy/collect] no store id in response', { source, raw: raw.slice(0, 500) })
   return null
 }
 

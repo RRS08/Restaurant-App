@@ -454,15 +454,13 @@ const CHECKOUT_STYLE = `
    error text is hidden via customCss.errorText.base — validation
    errors surface via our own [data-collect-error] below the mount,
    so the container never balloons on a validation fail. */
-/* Fixed container height — Poynt reports iframe heights that
-   include reserved room for their (hidden) validation panel, so
-   letting iframe_height_change drive height left ~150px of empty
-   space below the card row. 64px matches Poynt's natural single-
-   row render (~54px input + 5px vertical padding on each side)
-   with no inner scroll. Anything Poynt tries to push in beyond
-   that gets clipped by overflow:hidden; validation errors surface
-   via the external [data-collect-error] block. */
-.co-card-mount{background:transparent;height:64px;overflow:hidden}
+/* Fixed container height — Poynt renders three stacked rows now
+   (Card number / Expiration / CVV, each ~48px + 12px gap) so we
+   pin the mount at 190px which fits comfortably with no inner
+   scroll. Any extra room Poynt reserves for its (hidden) error
+   panel gets clipped by overflow:hidden; validation errors surface
+   via the external [data-collect-error] block below the mount. */
+.co-card-mount{background:transparent;height:190px;overflow:hidden}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}
@@ -899,13 +897,17 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
       // lets rowCardNumber take 100% width and rowExpiration + rowCVV
       // sit side-by-side underneath at 50% each.
       // Layout: three inputs stacked vertically — Card number, then
-      // Expiry, then CVV — each full-width, no field labels (the
-      // placeholders inside each input already say what it is).
-      // Our external "Name on card" input sits above the iframe.
+      // Expiration date, then CVV — each on its own full-width row.
+      // Poynt only exposes the rowCardNumber / rowExpiration / rowCVV
+      // selectors when displayComponents.labels is true, so labels
+      // are enabled to unlock the row structure, then hidden via
+      // customCss.inputLabel:display:none. The inline placeholders
+      // inside each input still name the field for the buyer.
       tokenizer.mount('poynt-card-mount', document, {
-        displayComponents: { labels: false },
+        displayComponents: { labels: true },
         customCss: {
           container: 'display:block;font-family:inherit;padding:0;margin:0;background:transparent;',
+          inputLabel: 'display:none;',
           rowCardNumber: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
           rowExpiration: 'display:block;width:100%;margin:0 0 12px 0;padding:0;',
           rowCVV: 'display:block;width:100%;margin:0;padding:0;',

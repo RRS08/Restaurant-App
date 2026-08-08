@@ -497,10 +497,12 @@ const CHECKOUT_STYLE = `
    number / Expiration / CVV) with their internal padding. Height-
    sync via iframe_height_change is unreliable across Poynt SDK
    versions (event name varies), so we lock the container instead.
-   overflow:hidden clips any pathological extra height Poynt tries
-   to push — validation errors surface via the external
+   Measured Poynt render is ~175-190px for three stacked rows —
+   200px gives us a small safety margin without leaving a visible
+   gap below CVV. overflow:hidden clips any pathological extra
+   height; validation errors surface via the external
    [data-collect-error] block below the mount. */
-.co-card-mount{background:transparent;height:260px;overflow:hidden}
+.co-card-mount{background:transparent;height:200px;overflow:hidden}
 .co-card-mount iframe{width:100%;height:100%;border:0;display:block}
 .co-card-error{background:#ffe3e3;color:#8a2320;border-radius:9px;padding:12px;font-size:13.5px;line-height:1.5}
 .co-sandbox-badge{align-self:flex-start;background:#fff3cd;color:#653a00;font-size:11.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;padding:5px 10px;border-radius:6px}

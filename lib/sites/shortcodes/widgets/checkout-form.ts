@@ -521,6 +521,10 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
   var errorBox = form.querySelector('[data-collect-error]');
   var tokenizer = null;
   var awaitingSubmit = false;
+  // Flipped true when Poynt fires iframe_ready — used by the submit
+  // interceptor so a click during the load window shows the right
+  // "still loading" message instead of falsely reporting a failure.
+  var iframeReady = false;
 
   function showError(msg) {
     if (!errorBox) return;
@@ -536,6 +540,27 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     try {
       tokenizer = new window.TokenizeJs(cfg.businessId, cfg.applicationId);
       tokenizer.mount('poynt-card-mount', document, {});
+      // iframe_ready fires after Poynt's card iframe fully loads
+      // inside our mount div. Without subscribing to it, our
+      // "still loading" state persisted forever and the SDK's own
+      // load-timeout surfaced as "Card entry failed to load" even
+      // when the iframe visibly mounted. Clearing the error here
+      // is what makes the card field actually usable.
+      tokenizer.subscribe('iframe_ready', function() {
+        iframeReady = true;
+        clearError();
+      });
+      // iframe_height_change fires as the iframe's internal content
+      // resizes (e.g. when a field turns red on validation error).
+      // Reflect the reported height on our mount div so the iframe
+      // never gets clipped or leaves an empty gap under it.
+      tokenizer.subscribe('iframe_height_change', function(e) {
+        var mount = document.getElementById('poynt-card-mount');
+        var h = e && e.data && e.data.height;
+        if (mount && typeof h === 'number' && h > 0) {
+          mount.style.height = h + 'px';
+        }
+      });
       tokenizer.subscribe('nonce', function(e) {
         var n = e && e.data && e.data.nonce;
         if (nonceField) nonceField.value = n || '';
@@ -569,7 +594,11 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
 
   form.addEventListener('submit', function(e) {
     if (nonceField && nonceField.value) return; // already have nonce, native submit
-    if (!tokenizer) { e.preventDefault(); showError('Card entry still loading — try again in a moment.'); return; }
+    if (!tokenizer || !iframeReady) {
+      e.preventDefault();
+      showError('Card entry still loading — try again in a moment.');
+      return;
+    }
     e.preventDefault();
     clearError();
     awaitingSubmit = true;

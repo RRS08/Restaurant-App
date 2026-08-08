@@ -117,9 +117,16 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
     : 0
 
   const url = `${apiBaseForEnv(args.env)}/businesses/${encodeURIComponent(tokenResult.businessId)}/cards/tokenize/charge`
+  // action=AUTHORIZE holds the funds without capturing — matches the
+  // "Transactions Authorize" scope the merchant has granted on the
+  // dev app. SALE (auth + capture in one call) requires the broader
+  // Transactions Charge scope which we don't have; Poynt returns
+  // "This principal does not have access to this resource" for SALE
+  // attempts under Authorize-only. Auto-settle behavior on Poynt's
+  // side captures the auth on the merchant's daily batch.
   const body = {
     nonce: args.nonce,
-    action: 'SALE',
+    action: 'AUTHORIZE',
     amounts: {
       transactionAmount: amountCents,
       orderAmount: amountCents,

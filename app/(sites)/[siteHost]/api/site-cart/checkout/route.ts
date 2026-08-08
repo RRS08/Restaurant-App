@@ -92,9 +92,14 @@ export async function POST(req: Request, { params }: Ctx) {
     nonce,
   })
 
+  // Redirect back to the tenant's own /checkout or /thanks — the
+  // browser is already on hatziri.onchecked.app, so the pathname
+  // must NOT include the site-host prefix. proxy.ts rewrites the
+  // internal request path to include it; the outgoing Location
+  // header the buyer sees needs the bare public path.
   const base = new URL(req.url)
   if ('error' in result) {
-    base.pathname = `/${siteHost}/checkout`
+    base.pathname = '/checkout'
     base.search = ''
     base.searchParams.set('checkout_error', result.error)
     return NextResponse.redirect(base, 303)
@@ -108,7 +113,7 @@ export async function POST(req: Request, { params }: Ctx) {
     return NextResponse.redirect(result.hostedUrl, 303)
   }
 
-  base.pathname = `/${siteHost}/thanks`
+  base.pathname = '/thanks'
   base.search = ''
   base.searchParams.set('order', result.orderId)
   if (result.paymentStatus === 'unpaid') base.searchParams.set('unpaid', '1')

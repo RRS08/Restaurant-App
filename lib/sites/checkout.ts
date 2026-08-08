@@ -10,7 +10,7 @@
 //      phantom orders for failed charges.
 //   3. on 'paid' or 'pending' we write orders + link + clear cart.
 //
-// 'pending' happens when the merchant has POYNT_APPLICATION_ID
+// 'pending' happens when the merchant has GODADDY_POYNT_APP_ID
 // unset or hasn't linked GoDaddy Commerce — adapter returns
 // pending, order lands unpaid with the "email a payment link" note.
 // 'failed' bounces the buyer back to /checkout with the reason.

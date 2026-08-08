@@ -17,7 +17,7 @@
 // Everything hangs off the merchant's stored OAuth token (already
 // covers the tokenize + transactions scopes). Only new env vars:
 //
-//   POYNT_APPLICATION_ID    — our Checked app's ID (from the Poynt
+//   GODADDY_POYNT_APP_ID    — our Checked app's ID (from the Poynt
 //                              dev portal). Same across all merchants.
 //   POYNT_ENV               — 'prod' (default) or 'ote' (Poynt's
 //                              sandbox for test-card flows).
@@ -66,13 +66,13 @@ export interface CollectClientConfig {
 
 /** Resolve the client-side config a merchant needs to mount the
  *  Poynt Collect iframe. Returns null when the merchant hasn't
- *  linked GoDaddy Commerce yet, or when POYNT_APPLICATION_ID is
+ *  linked GoDaddy Commerce yet, or when GODADDY_POYNT_APP_ID is
  *  unset — either case, the widget falls back to the deferred-
  *  payment "we'll email a link" message. */
 export async function loadCollectConfigForRestaurant(restaurantId: string): Promise<CollectClientConfig | null> {
-  const applicationId = process.env.POYNT_APPLICATION_ID
+  const applicationId = process.env.GODADDY_POYNT_APP_ID
   if (!applicationId) {
-    console.warn('[godaddy/collect] POYNT_APPLICATION_ID not set — checkout will fall back to deferred payment')
+    console.warn('[godaddy/collect] GODADDY_POYNT_APP_ID not set — checkout will fall back to deferred payment')
     return null
   }
   const tok = await getValidAccessToken(restaurantId)

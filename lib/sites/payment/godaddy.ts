@@ -9,7 +9,7 @@
 // declined the checkout endpoint bounces the buyer back to
 // /checkout with the reason.
 //
-// When no nonce reaches us (POYNT_APPLICATION_ID unset, merchant
+// When no nonce reaches us (GODADDY_POYNT_APP_ID unset, merchant
 // not linked, or the client-side Collect SDK failed to mount),
 // authorize() returns 'pending' — the order still saves as unpaid
 // and the /thanks page surfaces the "we'll email a payment link"

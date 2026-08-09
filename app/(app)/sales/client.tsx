@@ -641,17 +641,14 @@ export default function SalesClient({
             // pink + pickup orange), so its dot is one circle
             // diagonally split between the two channel colors —
             // one indicator slot like the other filters, but
-            // announcing both lanes.
+            // announcing both lanes. Hard-edge linear gradient
+            // renders sharper than conic at the shared 6px size.
             const dot =
               f === 'card' ? METHOD_TONES.card.dot
                 : f === 'cash' ? METHOD_TONES.cash.dot
-                  : f === 'web' ? `conic-gradient(from 45deg, ${CHANNEL_TONES.delivery.dot} 0deg 180deg, ${CHANNEL_TONES.pickup.dot} 180deg 360deg)`
+                  : f === 'web' ? `linear-gradient(135deg, ${CHANNEL_TONES.delivery.dot} 50%, ${CHANNEL_TONES.pickup.dot} 50%)`
                     : f === 'voided' ? '#DC2626'
                       : null
-            // Web needs a couple more pixels for the diagonal
-            // split to actually read; other dots stay at 6px so
-            // they don't overpower the label.
-            const dotSize = f === 'web' ? 9 : 6
             return (
               <button
                 key={f}
@@ -671,13 +668,13 @@ export default function SalesClient({
                   <span
                     aria-hidden
                     style={{
-                      width: dotSize, height: dotSize, borderRadius: '50%',
+                      width: 6, height: 6, borderRadius: '50%',
                       // background shorthand can be finicky with gradient
                       // strings in React inline styles — use the explicit
-                      // longhand so both flat colors and conic-gradients
-                      // apply reliably.
-                      backgroundImage: dot.startsWith('conic-gradient') ? dot : undefined,
-                      backgroundColor: dot.startsWith('conic-gradient') ? undefined : dot,
+                      // longhand so both flat colors and gradients apply
+                      // reliably.
+                      backgroundImage: dot.includes('gradient') ? dot : undefined,
+                      backgroundColor: dot.includes('gradient') ? undefined : dot,
                     }}
                   />
                 )}

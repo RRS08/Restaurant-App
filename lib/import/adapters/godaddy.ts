@@ -297,6 +297,13 @@ interface GodaddyFundingSource {
 }
 
 interface GodaddyTransaction {
+  /** Poynt's transaction UUID — DIFFERENT from the enclosing order
+   *  id. Our web checkout stores this value in orders.external_id
+   *  (it's what /cards/tokenize/charge returns as data.id); the
+   *  sync uses the ORDER id for external_id. Dedup on the sync side
+   *  matches against both to catch web-checkout siblings — see
+   *  lib/import/ingest.ts. */
+  id?: string
   action?: string
   status?: string // 'CAPTURED' | 'COMPLETED' | 'SUCCESS' | ...
   fundingSource?: GodaddyFundingSource
@@ -472,12 +479,21 @@ function normalizeOrders(
     const lineTotal = lineItems.reduce((sum, li) => sum + li.totalPrice, 0)
     const totalAmount = declaredTotal > 0 ? declaredTotal : lineTotal
 
+    // Collect transaction ids so the ingest dedup pass can catch
+    // rows that our web checkout already inserted (web checkout
+    // stores the Poynt TRANSACTION id in external_id, but this
+    // adapter uses the Poynt ORDER id — different key spaces).
+    const transactionIds = (o.transactions ?? [])
+      .map((t) => t.id)
+      .filter((v): v is string => typeof v === 'string' && v.length > 0)
+
     out.push({
       externalId: o.id,
       postedAt: new Date(tsMs).toISOString(),
       totalAmount,
       status,
       paymentType: inferPaymentType(o.transactions, channel, ctx),
+      transactionIds: transactionIds.length > 0 ? transactionIds : undefined,
       lineItems,
     })
   }

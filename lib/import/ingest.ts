@@ -453,12 +453,24 @@ export async function ingestOrders({
     .maybeSingle()
   const locationTimezone = (locationRow?.timezone as string | null) ?? null
 
-  // 5. Dedupe existing orders by
-  //    (restaurant_id, location_id, external_provider, external_id).
-  //    Location_id is REQUIRED — sources re-use external order ids
-  //    across stores, so skipping without location would drop valid
-  //    sales from other locations.
+  // 5. Dedupe existing orders. Two lookup passes so we catch both
+  //    - orders we already imported via THIS adapter (order-id key)
+  //    - orders our web checkout wrote directly (transaction-id key,
+  //      because /cards/tokenize/charge returns a transaction id, not
+  //      an order id — different id spaces, same real-world sale).
+  //    Location_id + external_provider narrow the pass (sources re-use
+  //    external order ids across stores; skipping location would drop
+  //    valid sales from other locations).
   const externalIds = orders.map((o) => o.externalId)
+  // Flatten every incoming order's transactions[].id into one list
+  // for the sibling lookup below. Deduped so a repeated txn id in
+  // the payload only queries once.
+  const incomingTxnIds = Array.from(
+    new Set(
+      orders.flatMap((o) => o.transactionIds ?? [])
+    )
+  )
+
   const { data: existingOrders } = await supabase
     .from('orders')
     .select('id, external_id')
@@ -472,6 +484,24 @@ export async function ingestOrders({
     existingIdByExternal.set(row.external_id as string, row.id as string)
   }
 
+  // Second lookup: orders whose external_id is one of the incoming
+  // orders' transaction ids. Scoped to the same restaurant+location+
+  // provider so a truly-different order that happens to share a UUID
+  // (astronomically unlikely, but) doesn't bleed across.
+  const existingIdByTxn = new Map<string, string>()
+  if (incomingTxnIds.length > 0) {
+    const { data: txnMatches } = await supabase
+      .from('orders')
+      .select('id, external_id')
+      .eq('restaurant_id', restaurantId)
+      .eq('location_id', locationId)
+      .eq('external_provider', sourceId)
+      .in('external_id', incomingTxnIds)
+    for (const row of txnMatches ?? []) {
+      existingIdByTxn.set(row.external_id as string, row.id as string)
+    }
+  }
+
   // 6. Insert each new order + its line items, conditionally deplete inventory.
   let ordersInserted = 0
   let ordersSkipped = 0
@@ -479,7 +509,17 @@ export async function ingestOrders({
   let inventoryDepletionsWritten = 0
 
   for (const o of orders) {
-    const existingOrderId = existingIdByExternal.get(o.externalId)
+    // Prefer the direct order-id hit; fall back to the transaction-id
+    // sibling lookup so a web-checkout row already in the DB (which
+    // uses a Poynt transaction id for external_id) is treated as
+    // existing and gets backfilled instead of duplicated.
+    let existingOrderId = existingIdByExternal.get(o.externalId)
+    if (!existingOrderId && o.transactionIds) {
+      for (const tid of o.transactionIds) {
+        const hit = existingIdByTxn.get(tid)
+        if (hit) { existingOrderId = hit; break }
+      }
+    }
     if (existingOrderId) {
       // Backfill pass: an order we've already imported still gets
       // its enriched fields refreshed on re-sync so historical

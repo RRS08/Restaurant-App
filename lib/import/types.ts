@@ -108,5 +108,15 @@ export interface NormalizedOrder {
    *  since the SourceId collapses several Poynt values into
    *  godaddy_pos / godaddy_online. */
   channelSource?: string
+  /** Sub-identifiers from inside the upstream order — for Poynt,
+   *  the ids of the transactions attached to the order. Used by
+   *  the ingest dedup pass to catch orders we already inserted
+   *  through a different key namespace (e.g. our web checkout
+   *  stores the Poynt transaction id in external_id, while the
+   *  sync stores the Poynt order id — these two never collide on
+   *  external_id alone but the transaction id inside the order's
+   *  transactions[] bridges them). Adapters that don't have a
+   *  sub-id concept leave it undefined. */
+  transactionIds?: string[]
   lineItems: NormalizedOrderLineItem[]
 }

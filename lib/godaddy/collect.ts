@@ -395,42 +395,45 @@ export async function refundParentTransaction(
   }
 
   if (voidRes.ok) {
-    // Any 2xx is a success — Poynt has accepted the reversal, even
-    // if the status field is empty, 'PROCESSED', 'PENDING', or
-    // something we don't specifically enumerate. Gating on a
-    // narrow status enum caused the reversal to succeed on Poynt
-    // but be reported as a fall-through here, leading the refund
-    // step to reject with "can only refund captured/partial" —
-    // which was actually confirming the void already worked.
+    // Strict success: status must be a terminal reversal state we
+    // recognize. Any 2xx that came back with empty / PENDING /
+    // PROCESSING is NOT enough — Poynt async-processes and can fail
+    // later, which previously caused Checked to flip to voided
+    // while the buyer's card was still charged.
     const st = (voidData.status ?? '').toUpperCase()
-    console.log('[godaddy/collect] void ok', {
-      env: args.env,
-      parentTransactionId: args.parentTransactionId,
-      reversalId: voidData.id,
-      status: st,
+    if (st === 'VOIDED' || st === 'REFUNDED' || st === 'CAPTURED') {
+      console.log('[godaddy/collect] void ok', {
+        env: args.env, parentTransactionId: args.parentTransactionId,
+        reversalId: voidData.id, status: st,
+      })
+      return { status: 'refunded', refundTransactionId: voidData.id ?? args.parentTransactionId }
+    }
+    // 2xx but unclear status → verify by reading the transaction's
+    // current state on Poynt. Only trust the write when the read
+    // confirms.
+    console.warn('[godaddy/collect] void 2xx with unclear status; verifying', {
+      env: args.env, status: st, rawBody: voidRaw,
     })
-    return { status: 'refunded', refundTransactionId: voidData.id ?? args.parentTransactionId }
+    const verified = await verifyReversed({ base, businessId, bearer, appId, transactionId: args.parentTransactionId })
+    if (verified.reversed) {
+      return { status: 'refunded', refundTransactionId: voidData.id ?? args.parentTransactionId }
+    }
+    console.warn('[godaddy/collect] void 2xx but verify says still active', { verified })
+    return { status: 'declined', message: 'Provider accepted the request but the transaction is still active — retry in a moment.' }
   }
 
-  // VOID failed. Two cases matter:
-  //   1. "Already reversed" — Poynt says the transaction is already
-  //      voided/refunded. That's success from our perspective; money
-  //      already moved. Return refunded so the local status flips
-  //      and the merchant isn't stuck retrying a no-op.
-  //   2. Genuine rejection (e.g. already captured/settled). Fall
-  //      through to the REFUND path, which is more permissive.
-  const voidMsg = (voidData.developerMessage || voidData.message || '').toLowerCase()
-  const looksAlreadyReversed =
-    voidMsg.includes('already void') ||
-    voidMsg.includes('already refund') ||
-    voidMsg.includes('already reversed') ||
-    voidMsg.includes('transaction is voided') ||
-    voidMsg.includes('transaction is refunded')
-  if (looksAlreadyReversed) {
-    console.log('[godaddy/collect] void reports already reversed — treating as success', {
-      env: args.env,
-      parentTransactionId: args.parentTransactionId,
-      message: voidMsg,
+  // VOID error. Do NOT trust error-message substring matching — a
+  // prior version of this code guessed "already voided" from message
+  // text and short-circuited to success, which silently marked
+  // Checked voided while Poynt still had the charge live in one
+  // observed case. Instead: verify by fetching current state. If
+  // Poynt actually shows the txn reversed, we accept it. Otherwise
+  // fall through to REFUND.
+  const verifiedAfterVoidError = await verifyReversed({ base, businessId, bearer, appId, transactionId: args.parentTransactionId })
+  if (verifiedAfterVoidError.reversed) {
+    console.log('[godaddy/collect] void error but verify confirms already reversed', {
+      env: args.env, parentTransactionId: args.parentTransactionId,
+      voidStatus: voidRes.status, voidMessage: voidData.developerMessage || voidData.message,
     })
     return { status: 'refunded', refundTransactionId: args.parentTransactionId }
   }
@@ -442,6 +445,7 @@ export async function refundParentTransaction(
     correlationKey: args.idempotencyKey,
     poyntRequestId: voidReqId,
     parentTransactionId: args.parentTransactionId,
+    verified: verifiedAfterVoidError,
     rawBody: voidRaw,
   })
 
@@ -480,23 +484,16 @@ export async function refundParentTransaction(
 
   if (!refundRes.ok) {
     const msg = data.developerMessage || data.message || `Refund declined (${refundRes.status}).`
-    const msgLower = msg.toLowerCase()
-    // Same idempotency handling as the void branch — if REFUND says
-    // "can only refund captured/partially refunded", the transaction
-    // is likely already voided by an earlier successful VOID call
-    // this cycle (or a stale one from a prior test). Money moved;
-    // report as success so the local flip happens.
-    const alreadyReversed =
-      msgLower.includes('already void') ||
-      msgLower.includes('already refund') ||
-      msgLower.includes('already reversed') ||
-      msgLower.includes('can only be done if transaction is currently either captured') ||
-      msgLower.includes('transaction is voided')
-    if (alreadyReversed) {
-      console.log('[godaddy/collect] refund reports already reversed — treating as success', {
-        env: args.env,
-        parentTransactionId: args.parentTransactionId,
-        message: msg,
+    // Verify by GET before short-circuiting to success — substring
+    // matching on the error message caused a silent-flip bug where
+    // Checked marked voided but Poynt still had the charge live.
+    // The transaction's actual current state is the only source of
+    // truth.
+    const verifiedAfterRefundError = await verifyReversed({ base, businessId, bearer, appId, transactionId: args.parentTransactionId })
+    if (verifiedAfterRefundError.reversed) {
+      console.log('[godaddy/collect] refund error but verify confirms already reversed', {
+        env: args.env, parentTransactionId: args.parentTransactionId,
+        refundStatus: refundRes.status, refundMessage: msg,
       })
       return { status: 'refunded', refundTransactionId: args.parentTransactionId }
     }
@@ -514,6 +511,7 @@ export async function refundParentTransaction(
       rawBody: raw,
       voidPriorStatus: voidRes.status,
       voidPriorBody: voidRaw,
+      verified: verifiedAfterRefundError,
     })
     return refundRes.status >= 400 && refundRes.status < 500
       ? { status: 'declined', message: msg, code: data.code }
@@ -522,13 +520,17 @@ export async function refundParentTransaction(
 
   const status = (data.status ?? '').toUpperCase()
   if (status !== 'REFUNDED' && status !== 'CAPTURED' && status !== 'AUTHORIZED') {
-    console.warn('[godaddy/collect] refund returned unexpected status', {
-      env: args.env,
-      status,
-      parentTransactionId: args.parentTransactionId,
-      rawBody: raw,
+    // 2xx but the returned status isn't a terminal reversal state.
+    // Verify before treating as success — Poynt async processing
+    // can accept the request and later fail.
+    console.warn('[godaddy/collect] refund 2xx with unclear status; verifying', {
+      env: args.env, status, rawBody: raw,
     })
-    return { status: 'declined', message: `Refund status from processor: ${status || 'unknown'}` }
+    const verified = await verifyReversed({ base, businessId, bearer, appId, transactionId: args.parentTransactionId })
+    if (verified.reversed) {
+      return { status: 'refunded', refundTransactionId: data.id ?? args.parentTransactionId }
+    }
+    return { status: 'declined', message: `Provider accepted the request but the transaction is still active (status: ${status || 'unknown'}) — retry in a moment.` }
   }
 
   console.log('[godaddy/collect] refund ok', {
@@ -538,6 +540,50 @@ export async function refundParentTransaction(
     status,
   })
   return { status: 'refunded', refundTransactionId: data.id ?? '' }
+}
+
+/** Read a transaction's current state on Poynt. Used to verify
+ *  whether a void/refund write actually landed before we mark the
+ *  local order voided — avoids the silent-flip class of bug where
+ *  a write returned 2xx or a misleading error message but Poynt
+ *  never actually reversed the charge. Cheap: one GET per verify. */
+async function verifyReversed(args: {
+  base: string
+  businessId: string
+  bearer: string
+  appId: string | undefined
+  transactionId: string
+}): Promise<{ reversed: boolean; status: string | null; httpStatus?: number }> {
+  const url = `${args.base}/businesses/${encodeURIComponent(args.businessId)}/transactions/${encodeURIComponent(args.transactionId)}`
+  const headers: Record<string, string> = {
+    'authorization': `Bearer ${args.bearer}`,
+    'content-type': 'application/json',
+    'api-version': '1.2',
+    ...(args.appId ? { 'x-app-id': args.appId } : {}),
+  }
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'GET', headers })
+  } catch (err) {
+    console.error('[godaddy/collect] verify fetch failed', err)
+    // On network failure we conservatively say "not reversed" so
+    // the caller doesn't wrongly flip local status.
+    return { reversed: false, status: null }
+  }
+  if (!res.ok) {
+    console.warn('[godaddy/collect] verify GET rejected', { httpStatus: res.status, transactionId: args.transactionId })
+    return { reversed: false, status: null, httpStatus: res.status }
+  }
+  const raw = await res.text()
+  let json: unknown
+  try { json = raw ? JSON.parse(raw) : {} } catch { return { reversed: false, status: null } }
+  const data = (json ?? {}) as { status?: string; action?: string }
+  const status = (data.status ?? '').toUpperCase()
+  // A transaction is considered reversed when Poynt reports the
+  // terminal states of a void/refund. AUTHORIZED / CAPTURED means
+  // still live (money with merchant).
+  const reversed = status === 'VOIDED' || status === 'REFUNDED' || status === 'REVERSED'
+  return { reversed, status }
 }
 
 // In-process cache keyed by businessId so we don't hit

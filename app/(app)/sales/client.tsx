@@ -637,10 +637,15 @@ export default function SalesClient({
             // Same treatment as inventory's filter row — a small
             // hue-coded dot so managers can scan the row by color
             // before reading the label. 'All' stays dotless.
+            // Online is a container for two sub-lanes (delivery
+            // pink + pickup orange), so its dot is split half-
+            // and-half rather than picking one channel's color
+            // arbitrarily — the pip visually announces that the
+            // lane holds both.
             const dot =
               f === 'card' ? METHOD_TONES.card.dot
                 : f === 'cash' ? METHOD_TONES.cash.dot
-                  : f === 'web' ? '#27306F'
+                  : f === 'web' ? `linear-gradient(90deg, ${CHANNEL_TONES.delivery.dot} 50%, ${CHANNEL_TONES.pickup.dot} 50%)`
                     : f === 'voided' ? '#DC2626'
                       : null
             return (

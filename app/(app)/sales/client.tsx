@@ -562,7 +562,16 @@ export default function SalesClient({
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-              <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 600, letterSpacing: '-0.045em', lineHeight: 1 }}>
+              {/* Voided lane: strike + red on the amount so the
+                  header speaks the same visual language as the
+                  struck-through rows below it — glance-read as
+                  "money reversed", not "money made". */}
+              <span style={{
+                fontFamily: MONO, fontSize: 30, fontWeight: 600,
+                letterSpacing: '-0.045em', lineHeight: 1,
+                color: filter === 'voided' ? DANGER : INK,
+                textDecoration: filter === 'voided' ? 'line-through' : undefined,
+              }}>
                 {fmtMoney(salesTotal)}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>

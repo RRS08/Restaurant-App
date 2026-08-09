@@ -685,12 +685,12 @@ function SaleRow({
   const tone = METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
   const itemCount = itemCountFor(order)
-  // Row title falls back to the web cart's first item name for
-  // web orders (order.lineItems is empty by design there).
-  const webFirstItem = order.source === 'web' && order.webDetail
-    ? ((order.webDetail.cart as { items?: Array<{ name?: string }> } | null)?.items?.[0]?.name ?? null)
-    : null
-  const title = order.lineItems[0]?.name ?? webFirstItem ?? t('Order', 'Orden')
+  // Row title stays the first POS line item name for in-person
+  // orders, or the generic "Order" label for web orders — the
+  // full item list lives in the drawer, so keeping the row title
+  // neutral for web sales avoids picking one item to represent
+  // a multi-item cart.
+  const title = order.lineItems[0]?.name ?? t('Order', 'Orden')
   const time = fmtRowTime(order.createdAt, locale)
   const methodLabels = paymentLabel(t)
 

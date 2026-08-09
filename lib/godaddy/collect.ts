@@ -395,35 +395,55 @@ export async function refundParentTransaction(
   }
 
   if (voidRes.ok) {
+    // Any 2xx is a success — Poynt has accepted the reversal, even
+    // if the status field is empty, 'PROCESSED', 'PENDING', or
+    // something we don't specifically enumerate. Gating on a
+    // narrow status enum caused the reversal to succeed on Poynt
+    // but be reported as a fall-through here, leading the refund
+    // step to reject with "can only refund captured/partial" —
+    // which was actually confirming the void already worked.
     const st = (voidData.status ?? '').toUpperCase()
-    if (st === 'VOIDED' || st === 'REFUNDED' || st === 'CAPTURED') {
-      console.log('[godaddy/collect] void ok', {
-        env: args.env,
-        parentTransactionId: args.parentTransactionId,
-        reversalId: voidData.id,
-        status: st,
-      })
-      return { status: 'refunded', refundTransactionId: voidData.id ?? '' }
-    }
-    console.warn('[godaddy/collect] void returned unexpected status; will try refund', {
-      env: args.env, status: st, rawBody: voidRaw,
-    })
-  } else {
-    // VOID failed. If the response looks like "already captured/
-    // settled" we fall through to REFUND. On any other failure we
-    // still fall through — REFUND is the strictly-more-permissive
-    // path, and if it also fails the caller sees the second error.
-    console.warn('[godaddy/collect] void rejected; will try refund', {
-      httpStatus: voidRes.status,
+    console.log('[godaddy/collect] void ok', {
       env: args.env,
-      code: voidData.code,
-      message: voidData.developerMessage || voidData.message,
-      correlationKey: args.idempotencyKey,
-      poyntRequestId: voidReqId,
       parentTransactionId: args.parentTransactionId,
-      rawBody: voidRaw,
+      reversalId: voidData.id,
+      status: st,
     })
+    return { status: 'refunded', refundTransactionId: voidData.id ?? args.parentTransactionId }
   }
+
+  // VOID failed. Two cases matter:
+  //   1. "Already reversed" — Poynt says the transaction is already
+  //      voided/refunded. That's success from our perspective; money
+  //      already moved. Return refunded so the local status flips
+  //      and the merchant isn't stuck retrying a no-op.
+  //   2. Genuine rejection (e.g. already captured/settled). Fall
+  //      through to the REFUND path, which is more permissive.
+  const voidMsg = (voidData.developerMessage || voidData.message || '').toLowerCase()
+  const looksAlreadyReversed =
+    voidMsg.includes('already void') ||
+    voidMsg.includes('already refund') ||
+    voidMsg.includes('already reversed') ||
+    voidMsg.includes('transaction is voided') ||
+    voidMsg.includes('transaction is refunded')
+  if (looksAlreadyReversed) {
+    console.log('[godaddy/collect] void reports already reversed — treating as success', {
+      env: args.env,
+      parentTransactionId: args.parentTransactionId,
+      message: voidMsg,
+    })
+    return { status: 'refunded', refundTransactionId: args.parentTransactionId }
+  }
+  console.warn('[godaddy/collect] void rejected; will try refund', {
+    httpStatus: voidRes.status,
+    env: args.env,
+    code: voidData.code,
+    message: voidData.developerMessage || voidData.message,
+    correlationKey: args.idempotencyKey,
+    poyntRequestId: voidReqId,
+    parentTransactionId: args.parentTransactionId,
+    rawBody: voidRaw,
+  })
 
   // --- Step 2: REFUND (post-settlement). fundingSource is required
   // per the docs — Poynt uses the parent transaction's stored card
@@ -460,6 +480,26 @@ export async function refundParentTransaction(
 
   if (!refundRes.ok) {
     const msg = data.developerMessage || data.message || `Refund declined (${refundRes.status}).`
+    const msgLower = msg.toLowerCase()
+    // Same idempotency handling as the void branch — if REFUND says
+    // "can only refund captured/partially refunded", the transaction
+    // is likely already voided by an earlier successful VOID call
+    // this cycle (or a stale one from a prior test). Money moved;
+    // report as success so the local flip happens.
+    const alreadyReversed =
+      msgLower.includes('already void') ||
+      msgLower.includes('already refund') ||
+      msgLower.includes('already reversed') ||
+      msgLower.includes('can only be done if transaction is currently either captured') ||
+      msgLower.includes('transaction is voided')
+    if (alreadyReversed) {
+      console.log('[godaddy/collect] refund reports already reversed — treating as success', {
+        env: args.env,
+        parentTransactionId: args.parentTransactionId,
+        message: msg,
+      })
+      return { status: 'refunded', refundTransactionId: args.parentTransactionId }
+    }
     console.warn('[godaddy/collect] refund rejected', {
       httpStatus: refundRes.status,
       env: args.env,

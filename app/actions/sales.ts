@@ -11,6 +11,7 @@ import {
   verifyAndLinkTerminalIntent,
 } from '@/app/actions/payments'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { resolvePaymentAdapter } from '@/lib/sites/payment'
 
 // Graceful wrapper around requireLocationAccess so we can keep the
 // existing { error: string } action-style returns without a broad
@@ -456,6 +457,24 @@ export async function voidOrder(
   if (locAuthErr) return { error: locAuthErr }
   if (order.status === 'voided') return null // idempotent — nothing to do
 
+  // Write-back to provider for web orders: reverse the Poynt charge
+  // BEFORE we flip local status. If the refund call fails, we bail
+  // and do NOT mark the row voided locally — otherwise Checked would
+  // read "voided" while the buyer's card was still charged.
+  //
+  // Only fires when:
+  //   - source is 'web' (POS-terminal voids are done on the terminal)
+  //   - the order has a Poynt txn id stamped on external_id (legacy
+  //     web rows pre-dedup-fix don't; those can only void locally)
+  //   - the site's linked payment_provider matches an adapter we
+  //     have + that adapter implements refund()
+  // Anything else — POS orders, non-godaddy providers, missing txn
+  // id — skips the refund call and voids locally as before.
+  const refundOutcome = await tryProviderRefund(ctx, order)
+  if (refundOutcome && refundOutcome.status === 'blocked') {
+    return { error: refundOutcome.message }
+  }
+
   // Cascade to sibling rows representing the same real-world
   // transaction. Both the web checkout (post-dedup-fix) and the
   // Poynt sync stamp the same Poynt txn id on orders.external_id;
@@ -593,6 +612,7 @@ export async function voidOrder(
     intents_needs_refund: intentsSummary.needsRefund,
     intents_warnings: intentsSummary.warnings,
     cascaded_to: siblingIds,
+    provider_refund: refundOutcome ?? { status: 'not_applicable' },
   })
   // Separate audit rows for each cascaded sibling so a per-order
   // history query surfaces the void on both. Reason field records
@@ -612,4 +632,75 @@ export async function voidOrder(
   revalidatePath('/finance')
   revalidatePath('/web/finance')
   return null
+}
+
+/** Outcome of the provider write-back attempt inside voidOrder.
+ *  - null  → not applicable (POS order / no provider / no txn id).
+ *            Caller proceeds to local void as before.
+ *  - ok    → provider accepted the refund. Caller flips local status.
+ *  - blocked → provider rejected. Caller returns the message and
+ *            does NOT flip local status. Never marks a row voided
+ *            while the buyer's card is still charged. */
+type RefundOutcome =
+  | { status: 'ok'; providerRefundId: string; provider: string; providerTxnId: string }
+  | { status: 'blocked'; message: string; provider: string; providerTxnId: string }
+
+async function tryProviderRefund(
+  ctx: Awaited<ReturnType<typeof getAuthContext>>['context'] & object,
+  order: { id: string; source: string | null; external_id: string | null; total_amount: number | string },
+): Promise<RefundOutcome | null> {
+  if (order.source !== 'web') return null
+  const providerTxnId = typeof order.external_id === 'string' && order.external_id.length > 0
+    ? order.external_id
+    : null
+  if (!providerTxnId) return null
+
+  // Provider + env come from the site row this order lives under.
+  // Joined via site_orders_link → sites so we don't have to guess.
+  const { data: link } = await ctx.supabase
+    .from('site_orders_link')
+    .select('site_id, payment_provider')
+    .eq('order_id', order.id)
+    .maybeSingle()
+  const provider = (link?.payment_provider as string | null) ?? null
+  if (!provider) return null
+
+  const adapter = resolvePaymentAdapter(provider)
+  if (!adapter || !adapter.refund) return null
+
+  let env: 'prod' | 'ote' = 'prod'
+  if (link?.site_id) {
+    const { data: site } = await ctx.supabase
+      .from('sites')
+      .select('config')
+      .eq('id', link.site_id)
+      .maybeSingle()
+    const cfg = (site?.config ?? {}) as { payment_env?: unknown }
+    if (cfg.payment_env === 'ote') env = 'ote'
+  }
+
+  const amountDollars = typeof order.total_amount === 'number'
+    ? order.total_amount
+    : Number(order.total_amount)
+  if (!Number.isFinite(amountDollars) || amountDollars <= 0) {
+    return { status: 'blocked', message: 'Order total is invalid; cannot refund.', provider, providerTxnId }
+  }
+
+  const result = await adapter.refund({
+    restaurantId: ctx.restaurantId,
+    env,
+    providerTransactionId: providerTxnId,
+    amountDollars,
+    // Deterministic per order — double-clicking Void dedupes on
+    // Poynt's side via poynt-request-id derived from this key.
+    idempotencyKey: `void:${order.id}:v1`,
+  })
+
+  if (result.status === 'refunded') {
+    return { status: 'ok', providerRefundId: result.providerRefundId, provider, providerTxnId }
+  }
+  const msg = result.status === 'declined'
+    ? `Refund declined by provider: ${result.message}`
+    : `Provider refund could not complete: ${result.message}`
+  return { status: 'blocked', message: msg, provider, providerTxnId }
 }

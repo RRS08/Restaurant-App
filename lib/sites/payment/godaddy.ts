@@ -25,10 +25,12 @@ import type {
   PaymentAdapter,
   PaymentAuthorizeRequest,
   PaymentAuthorizeResult,
+  PaymentRefundRequest,
+  PaymentRefundResult,
   HostedCheckoutRequest,
   HostedCheckoutResult,
 } from './types'
-import { chargeWithNonce } from '@/lib/godaddy/collect'
+import { chargeWithNonce, refundParentTransaction } from '@/lib/godaddy/collect'
 
 export const godaddyAdapter: PaymentAdapter = {
   name: 'godaddy',
@@ -78,5 +80,19 @@ export const godaddyAdapter: PaymentAdapter = {
       unavailable: true,
       reason: 'Poynt does not offer hosted checkout URLs; use the iframe flow on /checkout instead.',
     }
+  },
+
+  async refund(req: PaymentRefundRequest): Promise<PaymentRefundResult> {
+    const r = await refundParentTransaction({
+      restaurantId: req.restaurantId,
+      env: req.env,
+      parentTransactionId: req.providerTransactionId,
+      amountDollars: req.amountDollars,
+      idempotencyKey: req.idempotencyKey,
+    })
+    if (r.status === 'refunded') {
+      return { status: 'refunded', providerRefundId: r.refundTransactionId }
+    }
+    return r
   },
 }

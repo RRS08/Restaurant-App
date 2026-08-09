@@ -309,6 +309,145 @@ export async function chargeWithNonce(args: ChargeWithNonceArgs): Promise<Charge
   }
 }
 
+// ----------------------------------------------------------------
+// Refund flow
+// ----------------------------------------------------------------
+
+export interface RefundParentTransactionArgs {
+  restaurantId: string
+  env: PoyntEnv
+  /** The original SALE transaction id — what we stored on the
+   *  order's external_id at checkout time. Poynt reverses to the
+   *  same card, so no card token is needed. */
+  parentTransactionId: string
+  /** Full refund amount in dollars. Partial refunds would land here
+   *  too but no caller uses them yet. */
+  amountDollars: number
+  /** Deterministic key so a merchant clicking Void twice doesn't
+   *  refund twice — Poynt dedupes on Poynt-Request-Id and we hand
+   *  it a stable value derived from the order id. */
+  idempotencyKey: string
+}
+
+export type RefundResult =
+  | { status: 'refunded'; refundTransactionId: string }
+  | { status: 'declined'; message: string; code?: string }
+  | { status: 'error'; message: string }
+
+/** Issue a REFUND against a prior SALE. Uses the same
+ *  /cards/tokenize/charge endpoint we used to create the SALE
+ *  (Poynt's action field accepts REFUND alongside SALE/AUTHORIZE);
+ *  the merchant's "Transactions Refund W" scope covers it. */
+export async function refundParentTransaction(
+  args: RefundParentTransactionArgs,
+): Promise<RefundResult> {
+  const tokenResult = await getValidAccessTokenForEnv(args.restaurantId, args.env)
+  if ('error' in tokenResult) return { status: 'error', message: tokenResult.error }
+
+  const amountCents = Math.round(args.amountDollars * 100)
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    return { status: 'error', message: 'Invalid refund amount.' }
+  }
+
+  const businessId = tokenResult.businessId
+  const bearer = tokenResult.accessToken
+  const base = apiBaseForEnv(args.env)
+  const appId = process.env.GODADDY_POYNT_APP_ID
+  const requestId = randomUUID()
+
+  // storeId — required on the SALE call and almost certainly
+  // required here too for the transaction to be attributed
+  // correctly on the merchant's Poynt reports.
+  const storeId = await fetchDefaultStoreId({ base, businessId, bearer, appId })
+  if (!storeId) {
+    console.error('[godaddy/collect] refund could not resolve storeId', { businessId })
+    return { status: 'error', message: 'Could not resolve merchant store — try again in a moment.' }
+  }
+
+  const url = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
+  const body: Record<string, unknown> = {
+    action: 'REFUND',
+    parentId: args.parentTransactionId,
+    context: { businessId, storeId },
+    amounts: {
+      transactionAmount: amountCents,
+      orderAmount: amountCents,
+      currency: 'USD',
+    },
+  }
+  const headers: Record<string, string> = {
+    'authorization': `Bearer ${bearer}`,
+    'content-type': 'application/json',
+    'api-version': '1.2',
+    'poynt-request-id': requestId,
+    ...(appId ? { 'x-app-id': appId } : {}),
+  }
+
+  let response: Response
+  try {
+    response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
+  } catch (err) {
+    console.error('[godaddy/collect] refund network failure', err)
+    return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
+  }
+
+  const raw = await response.text()
+  let json: unknown
+  try { json = raw ? JSON.parse(raw) : {} }
+  catch {
+    console.error('[godaddy/collect] refund non-JSON response', { status: response.status, raw })
+    return { status: 'error', message: `Payment provider returned unreadable response (${response.status}).` }
+  }
+  const data = (json ?? {}) as {
+    id?: string
+    status?: string
+    developerMessage?: string
+    message?: string
+    code?: string
+  }
+
+  if (!response.ok) {
+    const msg = data.developerMessage || data.message || `Refund declined (${response.status}).`
+    console.warn('[godaddy/collect] refund rejected', {
+      httpStatus: response.status,
+      env: args.env,
+      code: data.code,
+      message: msg,
+      hadAppIdHeader: !!appId,
+      appIdPrefix: appId ? appId.slice(0, 12) : null,
+      correlationKey: args.idempotencyKey,
+      poyntRequestId: requestId,
+      parentTransactionId: args.parentTransactionId,
+      requestBody: body,
+      rawBody: raw,
+    })
+    return response.status >= 400 && response.status < 500
+      ? { status: 'declined', message: msg, code: data.code }
+      : { status: 'error', message: msg }
+  }
+
+  const status = (data.status ?? '').toUpperCase()
+  // A refund can settle as REFUNDED (POS accepted) or CAPTURED
+  // (posted to processor). Anything else is a failure worth logging.
+  if (status !== 'REFUNDED' && status !== 'CAPTURED' && status !== 'AUTHORIZED') {
+    console.warn('[godaddy/collect] refund returned unexpected status', {
+      env: args.env,
+      status,
+      parentTransactionId: args.parentTransactionId,
+      rawBody: raw,
+    })
+    return { status: 'declined', message: `Refund status from processor: ${status || 'unknown'}` }
+  }
+
+  console.log('[godaddy/collect] refund ok', {
+    env: args.env,
+    parentTransactionId: args.parentTransactionId,
+    refundTransactionId: data.id,
+    status,
+  })
+  return { status: 'refunded', refundTransactionId: data.id ?? '' }
+}
+
 // In-process cache keyed by businessId so we don't hit
 // /businesses/{id}/stores on every checkout. Cheap Map, not
 // persisted — a fresh serverless instance re-fetches once.

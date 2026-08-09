@@ -96,6 +96,28 @@ export type HostedCheckoutResult =
    *  path — order stays unpaid, buyer sees the email-a-link message. */
   | { unavailable: true; reason: string }
 
+export interface PaymentRefundRequest {
+  restaurantId: string
+  /** Which provider environment to refund against. Same value the
+   *  site was charged under; refunds MUST go to the environment that
+   *  ran the SALE or Poynt returns unknown-transaction. */
+  env: 'prod' | 'ote'
+  /** Provider-side transaction id of the parent SALE. For Poynt,
+   *  this is what we stored on the order's `external_id`. */
+  providerTransactionId: string
+  /** Full refund amount in dollars. Partial refunds not supported
+   *  yet — every void from Checked reverses the whole ticket. */
+  amountDollars: number
+  /** Deterministic key so a double-clicked Void doesn't refund
+   *  twice. Callers derive it from the order id. */
+  idempotencyKey: string
+}
+
+export type PaymentRefundResult =
+  | { status: 'refunded'; providerRefundId: string }
+  | { status: 'declined'; message: string; code?: string }
+  | { status: 'error'; message: string }
+
 export interface PaymentAdapter {
   /** Matches `sites.config.payment_provider`. */
   name: string
@@ -104,4 +126,9 @@ export interface PaymentAdapter {
    *  buyer to for payment. When unavailable, caller falls back to
    *  the deferred-payment message on /thanks. */
   createHostedCheckout?(req: HostedCheckoutRequest): Promise<HostedCheckoutResult>
+  /** Reverse a prior authorized charge. When absent, the caller
+   *  cannot propagate a Checked-side void to the provider — the
+   *  local void still succeeds, but money stays with the merchant
+   *  until they refund manually in the provider dashboard. */
+  refund?(req: PaymentRefundRequest): Promise<PaymentRefundResult>
 }

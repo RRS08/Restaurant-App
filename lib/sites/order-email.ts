@@ -316,14 +316,12 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
   const logoUrl = logoUrlFor(args.site, origin)
   const brand = brandMark(args.site)
 
-  // Header brand mark, right-aligned so the layout leads with the
-  // "thank you" line on the left. Logo on the left, wordmark +
-  // kicker stacked on the right — same treatment {{site-header}}
-  // uses on the storefront, just mirrored to sit on the top-right
-  // of the card. Rendered as a nested table so email clients that
-  // strip flex/inline-block still hold the alignment.
+  // Header brand mark, top-left. Logo image next to the wordmark +
+  // kicker — same treatment {{site-header}} uses on the storefront.
+  // Rendered as a nested table so email clients that strip
+  // flex/inline-block still hold the alignment.
   const headerBlock = `
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="border-collapse:collapse;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="left" style="border-collapse:collapse;">
           <tr>
             ${logoUrl ? `<td valign="middle" style="padding-right:10px;">
               <img src="${escapeHtml(logoUrl)}" alt="" width="40" height="40"

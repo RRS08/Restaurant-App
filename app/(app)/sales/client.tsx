@@ -562,15 +562,15 @@ export default function SalesClient({
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-              {/* Voided lane: strike + red on the amount so the
-                  header speaks the same visual language as the
-                  struck-through rows below it — glance-read as
-                  "money reversed", not "money made". */}
+              {/* Voided lane: muted red on the amount so the
+                  header telegraphs "money reversed" without
+                  screaming — DANGER + strike at 30px was too
+                  aggressive; a faded red carries the same
+                  semantic without the visual weight. */}
               <span style={{
                 fontFamily: MONO, fontSize: 30, fontWeight: 600,
                 letterSpacing: '-0.045em', lineHeight: 1,
-                color: filter === 'voided' ? DANGER : INK,
-                textDecoration: filter === 'voided' ? 'line-through' : undefined,
+                color: filter === 'voided' ? '#C97878' : INK,
               }}>
                 {fmtMoney(salesTotal)}
               </span>
@@ -585,6 +585,7 @@ export default function SalesClient({
                 <Stat
                   value={String(orderCount)}
                   label={orderCount === 1 ? t('voided', 'anulada') : t('voided', 'anuladas')}
+                  tone="#C97878"
                 />
               ) : (
                 <>
@@ -1482,11 +1483,11 @@ function OrderDrawer({ order, onClose, t, locale }: {
 // Small primitives — Stat, Dot, NavBtn.
 // ================================================================
 
-function Stat({ value, label }: { value: string; label: string }) {
+function Stat({ value, label, tone }: { value: string; label: string; tone?: string }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
-      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600 }}>{value}</span>
-      <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: tone ?? INK }}>{value}</span>
+      <span style={{ fontSize: 12, color: tone ?? MUTED }}>{label}</span>
     </span>
   )
 }

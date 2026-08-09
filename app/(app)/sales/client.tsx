@@ -638,16 +638,20 @@ export default function SalesClient({
             // hue-coded dot so managers can scan the row by color
             // before reading the label. 'All' stays dotless.
             // Online is a container for two sub-lanes (delivery
-            // pink + pickup orange), so its indicator is two
-            // small dots side by side. A single 6px gradient
-            // dot blurred the two hues into one at that scale;
-            // two adjacent pips read cleanly.
-            const dots: string[] =
-              f === 'card' ? [METHOD_TONES.card.dot]
-                : f === 'cash' ? [METHOD_TONES.cash.dot]
-                  : f === 'web' ? [CHANNEL_TONES.delivery.dot, CHANNEL_TONES.pickup.dot]
-                    : f === 'voided' ? ['#DC2626']
-                      : []
+            // pink + pickup orange), so its dot is one circle
+            // diagonally split between the two channel colors —
+            // one indicator slot like the other filters, but
+            // announcing both lanes.
+            const dot =
+              f === 'card' ? METHOD_TONES.card.dot
+                : f === 'cash' ? METHOD_TONES.cash.dot
+                  : f === 'web' ? `conic-gradient(from 45deg, ${CHANNEL_TONES.delivery.dot} 0deg 180deg, ${CHANNEL_TONES.pickup.dot} 180deg 360deg)`
+                    : f === 'voided' ? '#DC2626'
+                      : null
+            // Web needs a couple more pixels for the diagonal
+            // split to actually read; other dots stay at 6px so
+            // they don't overpower the label.
+            const dotSize = f === 'web' ? 9 : 6
             return (
               <button
                 key={f}
@@ -663,12 +667,19 @@ export default function SalesClient({
                   fontWeight: on ? 600 : 500,
                 }}
               >
-                {dots.length > 0 && (
-                  <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-                    {dots.map((d, i) => (
-                      <span key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: d }} />
-                    ))}
-                  </span>
+                {dot && (
+                  <span
+                    aria-hidden
+                    style={{
+                      width: dotSize, height: dotSize, borderRadius: '50%',
+                      // background shorthand can be finicky with gradient
+                      // strings in React inline styles — use the explicit
+                      // longhand so both flat colors and conic-gradients
+                      // apply reliably.
+                      backgroundImage: dot.startsWith('conic-gradient') ? dot : undefined,
+                      backgroundColor: dot.startsWith('conic-gradient') ? undefined : dot,
+                    }}
+                  />
                 )}
                 {label}
                 <span style={{

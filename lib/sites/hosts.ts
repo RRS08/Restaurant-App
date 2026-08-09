@@ -84,6 +84,16 @@ export function absoluteAssetUrl(origin: string, path: string | null | undefined
   return `${origin}${path.startsWith('/') ? '' : '/'}${path}`
 }
 
+/** Canonical https URL for the Checked wordmark glyph. Every
+ *  Checked-produced surface (order confirmation emails, future PDF
+ *  receipts, invoices, in-app notifications, transactional messages)
+ *  should sign off with this same asset — the equivalent of a
+ *  painter's signature. Served from public/ on the platform root
+ *  so a single URL works across every tenant subdomain. */
+export function checkedMarkUrl(): string {
+  return `https://${SITE_ROOT_HOSTNAME}/checked-mark.svg`
+}
+
 /** For a `<slug>.checked.app` host, return the leading slug. */
 export function extractPlatformSlug(host: string | null | undefined): string | null {
   const h = normalizeHost(host)

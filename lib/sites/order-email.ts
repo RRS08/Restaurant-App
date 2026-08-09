@@ -20,7 +20,7 @@
 
 import { after } from 'next/server'
 import { sendEmail, escapeHtml } from '@/lib/email/resend'
-import { platformOriginForSlug, absoluteAssetUrl } from './hosts'
+import { platformOriginForSlug, absoluteAssetUrl, checkedMarkUrl } from './hosts'
 import type { SiteRow, SiteDeliveryOption } from './types'
 import type { CartSnapshot } from './cart'
 
@@ -407,12 +407,17 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
 }
 
 /** "Sent through Checked" attribution — bottom-right of the card,
- *  muted so it doesn't compete with the shop's own branding. Same
- *  clipboard-checkmark glyph {{site-footer}} uses on the storefront,
- *  scaled down for email. Inline SVG works in Gmail, Apple Mail, and
- *  most webmail; Outlook may render as blank, in which case the "Sent
- *  through checked" text still tells the story. */
+ *  muted so it doesn't compete with the shop's own branding.
+ *
+ *  Glyph is served as a real hosted image (public/checked-mark.svg
+ *  at the platform root) instead of inline SVG so Gmail actually
+ *  renders it — Gmail's rendering pipeline strips inline SVG on
+ *  many accounts, but proxies hosted images without issue.
+ *
+ *  Same asset should be reused on every Checked-produced surface
+ *  (invoices, receipts, notifications) — this is our signature. */
 function checkedMark(c: Palette): string {
+  const markSrc = checkedMarkUrl()
   return `
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="border-collapse:collapse;">
           <tr>
@@ -421,13 +426,8 @@ function checkedMark(c: Palette): string {
             </td>
             <td valign="middle" style="padding:0 5px 0 0;">
               <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer" style="text-decoration:none;line-height:0;display:inline-block;">
-                <svg width="8" height="14" viewBox="18 8 28 48" role="img" aria-label="Checked" style="display:block;">
-                  <path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#18181B"></path>
-                  <rect x="26" y="16" width="14" height="3" rx="1.5" fill="#FAF9F6"></rect>
-                  <rect x="26" y="23" width="11" height="3" rx="1.5" fill="#FAF9F6"></rect>
-                  <rect x="26" y="30" width="8" height="3" rx="1.5" fill="#FAF9F6"></rect>
-                  <path d="M27 41l4 4 8-9" fill="none" stroke="#FAF9F6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
-                </svg>
+                <img src="${markSrc}" alt="" width="8" height="14"
+                     style="display:block;width:8px;height:14px;border:0;" />
               </a>
             </td>
             <td valign="middle">

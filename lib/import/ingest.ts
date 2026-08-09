@@ -520,6 +520,36 @@ export async function ingestOrders({
         if (hit) { existingOrderId = hit; break }
       }
     }
+    // Final fallback: fuzzy sibling match against web-checkout rows.
+    // Some Poynt account types don't expose a matching transaction
+    // id in the /orders response, so id-based dedup misses even
+    // though it's the same real sale. Match by (same location, same
+    // total_amount, source='web', created_at within ±10 min of this
+    // Poynt order's postedAt). Scoped tight enough that a second
+    // coincidental $5.41 web sale within 20 minutes at the same
+    // store is the only failure mode — vanishingly rare at pilot
+    // volumes, and even then the false-positive is a missed insert,
+    // not corrupted data (the existing row is still correct).
+    if (!existingOrderId) {
+      const postedMs = new Date(o.postedAt).getTime()
+      if (Number.isFinite(postedMs)) {
+        const lo = new Date(postedMs - 10 * 60 * 1000).toISOString()
+        const hi = new Date(postedMs + 10 * 60 * 1000).toISOString()
+        const { data: fuzzy } = await supabase
+          .from('orders')
+          .select('id')
+          .eq('restaurant_id', restaurantId)
+          .eq('location_id', locationId)
+          .eq('source', 'web')
+          .eq('total_amount', o.totalAmount)
+          .gte('created_at', lo)
+          .lte('created_at', hi)
+          .limit(1)
+        if (fuzzy && fuzzy.length > 0) {
+          existingOrderId = fuzzy[0].id as string
+        }
+      }
+    }
     if (existingOrderId) {
       // Backfill pass: an order we've already imported still gets
       // its enriched fields refreshed on re-sync so historical

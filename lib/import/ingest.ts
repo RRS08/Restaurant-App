@@ -556,10 +556,19 @@ export async function ingestOrders({
       // rows synced before those columns existed pick up subtotal
       // / discount / tax / card / customer / channel the next time
       // "Sync now" fires. We deliberately do NOT touch total_amount,
-      // status, line items, or business_date — those are locked
-      // at first import so reporting stays stable. Payment_type
-      // does get refreshed because early syncs stored 'other' for
-      // every card sale (transactions weren't inspected yet).
+      // line items, or business_date — those are locked at first
+      // import so reporting stays stable. Payment_type does get
+      // refreshed because early syncs stored 'other' for every card
+      // sale (transactions weren't inspected yet).
+      //
+      // Status propagates ONE-WAY: completed → voided when the
+      // incoming order is voided upstream (merchant voided/refunded
+      // on Poynt's side). Never voided → completed — Checked-side
+      // voids are terminal by design; if the merchant un-refunds
+      // on Poynt afterwards, that's a manual reconciliation task,
+      // not something we auto-flip back. Requires looking up the
+      // existing row's current status since the map only carried
+      // the id.
       const refreshedType = o.paymentType ?? undefined
       const patch: Record<string, unknown> = {}
       if (refreshedType && refreshedType !== 'other') patch.payment_type = refreshedType
@@ -570,6 +579,17 @@ export async function ingestOrders({
       if (o.cardLast4)                   patch.card_last4 = o.cardLast4
       if (o.customerName)                patch.customer_name = o.customerName
       if (o.channelSource)               patch.channel_source = o.channelSource
+      if (o.status === 'voided') {
+        const { data: existingRow } = await supabase
+          .from('orders')
+          .select('status')
+          .eq('id', existingOrderId)
+          .maybeSingle()
+        if (existingRow && existingRow.status !== 'voided') {
+          patch.status = 'voided'
+          patch.voided_at = o.postedAt
+        }
+      }
       if (Object.keys(patch).length > 0) {
         await supabase.from('orders').update(patch).eq('id', existingOrderId)
       }

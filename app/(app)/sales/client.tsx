@@ -306,6 +306,28 @@ function PickupIcon() {
   )
 }
 
+// Small inline spinner for the "Voiding…" state on the void
+// submit button. Rendered white to sit on the DANGER-red fill;
+// keyframes are stamped via a style tag inline so the whole
+// component is self-contained (no global CSS dependency).
+function VoidSpinner() {
+  return (
+    <>
+      <style>{'@keyframes voidspin{to{transform:rotate(360deg)}}'}</style>
+      <span
+        aria-hidden
+        style={{
+          width: 12, height: 12, borderRadius: '50%',
+          border: '2px solid rgba(255,255,255,0.35)',
+          borderTopColor: '#fff',
+          animation: 'voidspin 0.7s linear infinite',
+          display: 'inline-block',
+        }}
+      />
+    </>
+  )
+}
+
 // Delivery — envelope. Rect body + peaked flap, matches the
 // pickup glyph's stroke weight so the two channels sit at the
 // same optical size in the tile.
@@ -1053,15 +1075,41 @@ function OrderDrawer({ order, onClose, t, locale }: {
 }) {
   const [state, action, pending] = useActionState(voidOrder, null)
   const [confirming, setConfirming] = useState(false)
+  // Latch that flips true the moment the form fires and never
+  // resets. Combined with `pending` it distinguishes "an in-
+  // flight void is running" from "nothing has happened yet" so
+  // downstream feedback (spinner, close-lock, auto-close on
+  // success) fires only after the user actually triggered it.
+  const submittedRef = useRef(false)
   const canVoid = order.status === 'completed'
   const isVoided = order.status === 'voided'
   const tone = METHOD_TONES[order.paymentType]
   const methodLabels = paymentLabel(t)
   const itemCount = itemCountFor(order)
 
-  // Escape closes + body scroll lock while open.
+  // Auto-close on successful void: watch the transition from
+  // pending=true → pending=false with no error. Without this,
+  // a successful void just quietly updates the footer text
+  // ("Already voided") — subtle enough that a manager can
+  // miss it and click void on a *different* order thinking
+  // the first one didn't fire. Auto-close is the loudest
+  // possible "done" signal short of a toast, and it prevents
+  // the double-order footgun that showed up in the ledger.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    if (!submittedRef.current) return
+    if (pending) return
+    if (state && 'error' in state && state.error) return
+    const timer = setTimeout(onClose, 350)
+    return () => clearTimeout(timer)
+  }, [pending, state, onClose])
+
+  // Escape closes + body scroll lock while open. Escape is
+  // no-op while a void is in flight so the manager can't
+  // stray-key their way out mid-network-call.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !pending) onClose()
+    }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
@@ -1069,7 +1117,7 @@ function OrderDrawer({ order, onClose, t, locale }: {
       document.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [onClose])
+  }, [onClose, pending])
 
   // Sale-summary rows — only render lines with meaningful values.
   type SummaryRow = { label: string; value: string; strong?: boolean }
@@ -1103,7 +1151,17 @@ function OrderDrawer({ order, onClose, t, locale }: {
       position: 'fixed', inset: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end',
       fontFamily: "'Geist', system-ui, sans-serif", color: INK,
     }}>
-      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(24,24,27,0.28)' }} />
+      {/* Backdrop click closes — but never while a void is
+          mid-network so an accidental miss-click can't tear
+          down the drawer while the request is still resolving. */}
+      <div
+        onClick={pending ? undefined : onClose}
+        style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(24,24,27,0.28)',
+          cursor: pending ? 'wait' : 'pointer',
+        }}
+      />
 
       <div style={{
         position: 'relative', width: 440, maxWidth: '100%', flex: '0 0 440px',
@@ -1145,11 +1203,14 @@ function OrderDrawer({ order, onClose, t, locale }: {
           <button
             type="button"
             onClick={onClose}
+            disabled={pending}
             aria-label={t('Close', 'Cerrar')}
             style={{
               border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
               width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-              font: 'inherit', fontSize: 15, color: MUTED, cursor: 'pointer', flex: '0 0 auto',
+              font: 'inherit', fontSize: 15, color: MUTED,
+              cursor: pending ? 'not-allowed' : 'pointer', flex: '0 0 auto',
+              opacity: pending ? 0.4 : 1,
             }}
           >
             ×
@@ -1432,25 +1493,37 @@ function OrderDrawer({ order, onClose, t, locale }: {
               <button
                 type="button"
                 onClick={() => setConfirming(false)}
+                disabled={pending}
                 style={{
                   border: `1px solid ${LINE}`, background: '#fff', borderRadius: 9,
                   padding: '9px 14px', font: 'inherit', fontSize: 13, fontWeight: 500,
-                  color: '#3F3F46', cursor: 'pointer',
+                  color: '#3F3F46',
+                  cursor: pending ? 'not-allowed' : 'pointer',
+                  opacity: pending ? 0.5 : 1,
                 }}
               >
                 {t('Keep it', 'Conservar')}
               </button>
-              <form action={action}>
+              {/* Wrap the form so the click that fires the void
+                  also latches submittedRef, then the confirm
+                  button hard-disables on pending (also handles
+                  React's own submitter guard on double-clicks). */}
+              <form
+                action={action}
+                onSubmit={() => { submittedRef.current = true }}
+              >
                 <input type="hidden" name="order_id" value={order.id} />
                 <button
                   type="submit"
                   disabled={pending}
                   style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 8,
                     border: 0, background: DANGER, color: '#fff', borderRadius: 9,
                     padding: '10px 16px', font: 'inherit', fontSize: 13, fontWeight: 600,
-                    cursor: 'pointer', opacity: pending ? 0.6 : 1,
+                    cursor: pending ? 'wait' : 'pointer', opacity: pending ? 0.75 : 1,
                   }}
                 >
+                  {pending && <VoidSpinner />}
                   {pending ? t('Voiding…', 'Anulando…') : t('Void order', 'Anular orden')}
                 </button>
               </form>

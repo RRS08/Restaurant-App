@@ -558,8 +558,14 @@ const CHECKOUT_STYLE = `
 .co-empty p{font-size:16px;color:#55723e;margin-bottom:16px}
 .co-empty .btn{display:inline-block;padding:14px 32px}
 @media(min-width:1024px){
-  .co-layout{grid-template-columns:1fr 380px;gap:56px}
-  .co-summary{position:sticky;top:24px}
+  .co-layout{grid-template-columns:1fr 380px;gap:56px;align-items:center}
+  /* Vertically center the summary against whatever step's form is
+     currently visible so the two columns feel balanced instead of
+     the summary hovering near the top while a taller step (step 3
+     with card fields + billing + note) trails way below. Sticky
+     kicks in once the buyer starts scrolling so the summary follows
+     the field being filled. */
+  .co-summary{position:sticky;top:24px;align-self:center}
   .co-actions{gap:26px}
 }
 `

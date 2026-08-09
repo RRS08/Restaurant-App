@@ -512,12 +512,15 @@ export async function ingestOrders({
     // Prefer the direct order-id hit; fall back to the transaction-id
     // sibling lookup so a web-checkout row already in the DB (which
     // uses a Poynt transaction id for external_id) is treated as
-    // existing and gets backfilled instead of duplicated.
+    // existing and gets backfilled instead of duplicated. Track
+    // whether the match was exact — the fuzzy fallback below is
+    // deliberately less trusted and cannot flip status.
     let existingOrderId = existingIdByExternal.get(o.externalId)
+    let matchedExact = !!existingOrderId
     if (!existingOrderId && o.transactionIds) {
       for (const tid of o.transactionIds) {
         const hit = existingIdByTxn.get(tid)
-        if (hit) { existingOrderId = hit; break }
+        if (hit) { existingOrderId = hit; matchedExact = true; break }
       }
     }
     // Final fallback: fuzzy sibling match against web-checkout rows.
@@ -525,12 +528,17 @@ export async function ingestOrders({
     // id in the /orders response, so id-based dedup misses even
     // though it's the same real sale. Match by (same location, same
     // total_amount, source='web', created_at within ±10 min of this
-    // Poynt order's postedAt). Scoped tight enough that a second
-    // coincidental $5.41 web sale within 20 minutes at the same
-    // store is the only failure mode — vanishingly rare at pilot
-    // volumes, and even then the false-positive is a missed insert,
-    // not corrupted data (the existing row is still correct).
-    if (!existingOrderId) {
+    // Poynt order's postedAt).
+    //
+    // Skipped when the incoming order is voided: two distinct real
+    // sales at the same total within a few minutes (same amount
+    // paid twice; original then a void of a separate second sale)
+    // would collapse onto each other, and worse, the voided one
+    // would flip the live one to voided via the status-propagation
+    // block below. Letting a voided incoming through as a new insert
+    // preserves the audit trail — the actual voided event lands as
+    // its own row instead of silently overwriting a live sibling.
+    if (!existingOrderId && o.status !== 'voided') {
       const postedMs = new Date(o.postedAt).getTime()
       if (Number.isFinite(postedMs)) {
         const lo = new Date(postedMs - 10 * 60 * 1000).toISOString()
@@ -547,6 +555,7 @@ export async function ingestOrders({
           .limit(1)
         if (fuzzy && fuzzy.length > 0) {
           existingOrderId = fuzzy[0].id as string
+          // matchedExact stays false — fuzzy match cannot flip status.
         }
       }
     }
@@ -579,7 +588,13 @@ export async function ingestOrders({
       if (o.cardLast4)                   patch.card_last4 = o.cardLast4
       if (o.customerName)                patch.customer_name = o.customerName
       if (o.channelSource)               patch.channel_source = o.channelSource
-      if (o.status === 'voided') {
+      // Status flip is gated on an EXACT id/txn match. A fuzzy
+      // sibling isn't confident enough to reverse a live sale —
+      // and with the fuzzy path above now skipping voided incoming,
+      // this branch is only reachable via a real id match anyway.
+      // The gate stays as defense-in-depth in case the fuzzy path
+      // ever loosens.
+      if (o.status === 'voided' && matchedExact) {
         const { data: existingRow } = await supabase
           .from('orders')
           .select('status')

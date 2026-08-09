@@ -63,6 +63,27 @@ export function isPlatformSubdomain(host: string | null | undefined): boolean {
   return label.length > 0 && !label.includes('.')
 }
 
+/** Public https origin for a hosted site, e.g.
+ *  `https://hatziri.onchecked.app`.
+ *
+ *  Every tenant always answers on its platform subdomain even when a
+ *  custom domain is also attached, so this is the safe origin to bake
+ *  into content that outlives the request — email bodies especially,
+ *  which have no request host to resolve a relative path against and
+ *  may be opened months later. */
+export function platformOriginForSlug(slug: string): string {
+  return `https://${slug}.${SITE_ROOT_HOSTNAME}`
+}
+
+/** Absolutize a site-relative asset path against a site origin.
+ *  Already-absolute URLs pass through untouched, so a site that
+ *  moves its images to a CDN keeps working with no change here. */
+export function absoluteAssetUrl(origin: string, path: string | null | undefined): string | null {
+  if (!path) return null
+  if (/^https?:\/\//i.test(path)) return path
+  return `${origin}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
 /** For a `<slug>.checked.app` host, return the leading slug. */
 export function extractPlatformSlug(host: string | null | undefined): string | null {
   const h = normalizeHost(host)

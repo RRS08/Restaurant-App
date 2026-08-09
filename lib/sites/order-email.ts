@@ -20,6 +20,7 @@
 
 import { after } from 'next/server'
 import { sendEmail, escapeHtml } from '@/lib/email/resend'
+import { platformOriginForSlug, absoluteAssetUrl } from './hosts'
 import type { SiteRow, SiteDeliveryOption } from './types'
 import type { CartSnapshot } from './cart'
 
@@ -55,18 +56,38 @@ interface Palette {
   body: string
   line: string
   sand: string
+  sage: string
   muted: string
   paper: string
+  accent: string
 }
 
+// Neutral stand-ins only — every key is overridden by the site's own
+// theme_colors when present. Kept greyscale on purpose so a site
+// that hasn't set a palette looks plain rather than wrongly-branded.
 const FALLBACK_PALETTE: Palette = {
   ink: '#18181B',
   body: '#52525B',
   line: '#E4E4E7',
   sand: '#F4F4F5',
+  sage: '#FAFAFA',
   muted: '#71717A',
   paper: '#FFFFFF',
+  accent: '#18181B',
 }
+
+// The storefront loads Outfit from Google Fonts via sites.config
+// .head_extras, and global_css sets
+//   font-family:"Outfit",ui-sans-serif,system-ui,sans-serif
+// on body. We mirror that stack exactly.
+//
+// The <link>/@import below is best-effort: Apple Mail and iOS Mail
+// honour it, Gmail and Outlook strip it. That's fine — the fallback
+// chain is a geometric-ish system sans in every client, which is the
+// same thing the site falls back to before the webfont lands. Nothing
+// depends on Outlook resolving a webfont.
+const FONT_STACK = `'Outfit',ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif`
+const FONT_HREF = 'https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap'
 
 /** Queue the confirmation to go out after the response is flushed.
  *
@@ -134,7 +155,34 @@ function palette(site: SiteRow): Palette {
     typeof raw[k] === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(raw[k] as string)
       ? (raw[k] as string)
       : FALLBACK_PALETTE[k]
-  return { ink: pick('ink'), body: pick('body'), line: pick('line'), sand: pick('sand'), muted: pick('muted'), paper: pick('paper') }
+  return {
+    ink: pick('ink'), body: pick('body'), line: pick('line'), sand: pick('sand'),
+    sage: pick('sage'), muted: pick('muted'), paper: pick('paper'), accent: pick('accent'),
+  }
+}
+
+/** Same brand-mark split {{site-header}} uses: first word is the
+ *  wordmark, the rest becomes the letterspaced kicker under it, with
+ *  config.brand_kicker overriding. Kept in step with
+ *  lib/sites/shortcodes/widgets/site-header.ts. */
+function brandMark(site: SiteRow): { wordmark: string; kicker: string } {
+  const config = (site.config ?? {}) as Record<string, unknown>
+  const siteName = site.name ?? site.slug
+  const idx = siteName.indexOf(' ')
+  const wordmark = idx === -1 ? siteName : siteName.slice(0, idx)
+  const kicker = typeof config.brand_kicker === 'string'
+    ? config.brand_kicker
+    : (idx === -1 ? '' : siteName.slice(idx + 1))
+  return { wordmark, kicker }
+}
+
+/** Logo resolution mirrors {{site-header}} — config.logo_url, else
+ *  the packaged tree mark — then absolutized against the site's own
+ *  origin because an email has no base URL to resolve against. */
+function logoUrlFor(site: SiteRow, origin: string): string | null {
+  const config = (site.config ?? {}) as Record<string, unknown>
+  const raw = typeof config.logo_url === 'string' ? config.logo_url : '/assets/logo-tree.png'
+  return absoluteAssetUrl(origin, raw)
 }
 
 function money(n: number): string {

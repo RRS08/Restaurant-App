@@ -562,19 +562,27 @@ export default function SalesClient({
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
-              {/* Voided lane: muted red on the amount so the
-                  header telegraphs "money reversed" without
-                  screaming — DANGER + strike at 30px was too
-                  aggressive; a faded red carries the same
-                  semantic without the visual weight. */}
               <span style={{
                 fontFamily: MONO, fontSize: 30, fontWeight: 600,
-                letterSpacing: '-0.045em', lineHeight: 1,
-                color: filter === 'voided' ? '#C97878' : INK,
+                letterSpacing: '-0.045em', lineHeight: 1, color: INK,
               }}>
                 {fmtMoney(salesTotal)}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
+              {/* Voided lane: a small pill next to the amount
+                  carries the "reversed" semantic without
+                  tinting the number itself. Matches the row
+                  chip's red so the header and rows read as
+                  one visual language. */}
+              {filter === 'voided' && (
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+                  padding: '2px 9px', fontSize: 10, fontWeight: 600,
+                  background: '#FEE2E2', color: '#B91C1C', letterSpacing: '0.01em',
+                }}>
+                  {t('Voided', 'Anulado')}
+                </span>
+              )}
               <Dot />
               {/* Count noun follows the filter: "sales" for live
                   lanes, "voided" for the audit lane. Avg ticket
@@ -585,7 +593,6 @@ export default function SalesClient({
                 <Stat
                   value={String(orderCount)}
                   label={orderCount === 1 ? t('voided', 'anulada') : t('voided', 'anuladas')}
-                  tone="#C97878"
                 />
               ) : (
                 <>

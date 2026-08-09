@@ -390,15 +390,51 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
       </td>
     </tr>
     <tr>
-      <td style="padding:28px 32px 32px;">
+      <td style="padding:28px 32px 20px;">
         <div style="border-top:1px solid ${c.line};padding-top:18px;color:${c.muted};font-size:13px;line-height:1.7;">
           Questions about this order? Just reply to this email.
           ${footerBits ? `<div style="margin-top:6px;">${footerBits}</div>` : ''}
         </div>
       </td>
     </tr>
+    <tr>
+      <td style="padding:0 32px 20px;">
+        ${checkedMark(c)}
+      </td>
+    </tr>
   </table>
 </div>`.trim()
+}
+
+/** "Sent through Checked" attribution — bottom-right of the card,
+ *  muted so it doesn't compete with the shop's own branding. Same
+ *  clipboard-checkmark glyph {{site-footer}} uses on the storefront,
+ *  scaled down for email. Inline SVG works in Gmail, Apple Mail, and
+ *  most webmail; Outlook may render as blank, in which case the "Sent
+ *  through checked" text still tells the story. */
+function checkedMark(c: Palette): string {
+  return `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="border-collapse:collapse;">
+          <tr>
+            <td valign="middle" style="padding:0 6px 0 0;color:${c.muted};font-size:11px;letter-spacing:0.04em;">
+              Sent through
+            </td>
+            <td valign="middle" style="padding:0 4px 0 0;">
+              <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer" style="text-decoration:none;line-height:0;display:inline-block;">
+                <svg width="8.75" height="15" viewBox="18 8 28 48" role="img" aria-label="Checked" style="display:block;">
+                  <path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#18181B"></path>
+                  <rect x="26" y="16" width="14" height="3" rx="1.5" fill="#FAF9F6"></rect>
+                  <rect x="26" y="23" width="11" height="3" rx="1.5" fill="#FAF9F6"></rect>
+                  <rect x="26" y="30" width="8" height="3" rx="1.5" fill="#FAF9F6"></rect>
+                  <path d="M27 41l4 4 8-9" fill="none" stroke="#FAF9F6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+                </svg>
+              </a>
+            </td>
+            <td valign="middle">
+              <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer" style="color:${c.muted};font-size:11px;text-decoration:none;letter-spacing:0.04em;">checked</a>
+            </td>
+          </tr>
+        </table>`
 }
 
 function readPhone(site: SiteRow): string | null {

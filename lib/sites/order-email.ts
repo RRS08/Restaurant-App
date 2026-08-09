@@ -254,20 +254,44 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
   const fulfillment = fulfillmentFor(args)
   const merchant = merchantEmail(args.site)
   const phone = readPhone(args.site)
+  // Site's own https origin. Any image_url that comes back as a
+  // site-relative path (e.g. "/images/tea.jpg") has to be absolutized
+  // before it goes in an email — mail clients have no base URL to
+  // resolve relative paths against and would just show a broken image.
+  const origin = platformOriginForSlug(args.site.slug)
 
-  const itemRows = args.cart.items.map((i) => `
+  const itemRows = args.cart.items.map((i) => {
+    const thumb = absoluteAssetUrl(origin, i.image_url)
+    // Fixed 56×56 thumb — width/height attributes belt-and-suspender
+    // the inline style so mail clients that strip CSS (Outlook,
+    // Gmail's stricter rendering paths) still pin the layout size.
+    // Source image transfer size is a separate concern — the shop
+    // may want to store scaled variants alongside the full-res
+    // originals so this doesn't pull ~2 MB per item. See the
+    // follow-up note in the commit body.
+    const thumbCell = thumb
+      ? `<td valign="top" width="72" style="padding:10px 0;border-bottom:1px solid ${c.line};width:72px;">
+            <img src="${escapeHtml(thumb)}" alt="" width="56" height="56"
+                 style="display:block;width:56px;height:56px;border-radius:8px;object-fit:cover;background:${c.sand};border:0;" />
+          </td>`
+      : `<td valign="top" width="72" style="padding:10px 0;border-bottom:1px solid ${c.line};width:72px;">
+            <div style="width:56px;height:56px;border-radius:8px;background:${c.sand};"></div>
+          </td>`
+    return `
       <tr>
-        <td style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;">
+        ${thumbCell}
+        <td valign="middle" style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;">
           ${escapeHtml(i.name)}${i.qty > 1 ? `<span style="color:${c.muted};"> × ${i.qty}</span>` : ''}
         </td>
-        <td style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;text-align:right;white-space:nowrap;">
+        <td valign="middle" style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;text-align:right;white-space:nowrap;">
           ${money(i.line_total)}
         </td>
-      </tr>`).join('')
+      </tr>`
+  }).join('')
 
   const totalRows = summaryRows(args).map(([label, value, strong]) => `
       <tr>
-        <td style="padding:${strong ? '12px 0 0' : '6px 0 0'};color:${strong ? c.ink : c.body};font-size:${strong ? '16px' : '14px'};font-weight:${strong ? '600' : '400'};">
+        <td colspan="2" style="padding:${strong ? '12px 0 0' : '6px 0 0'};color:${strong ? c.ink : c.body};font-size:${strong ? '16px' : '14px'};font-weight:${strong ? '600' : '400'};">
           ${escapeHtml(label)}
         </td>
         <td style="padding:${strong ? '12px 0 0' : '6px 0 0'};color:${strong ? c.ink : c.body};font-size:${strong ? '16px' : '14px'};font-weight:${strong ? '600' : '400'};text-align:right;white-space:nowrap;">

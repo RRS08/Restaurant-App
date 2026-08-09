@@ -134,6 +134,28 @@ const METHOD_TONES: Record<PaymentType, { tile: string; ink: string; dot: string
   other: { tile: '#F4F4F5', ink: '#52525B', dot: '#71717A' },
 }
 
+// Fulfillment channel for online orders. Wins over the payment
+// tone on web rows so a manager scanning the ledger sees "how it
+// leaves the shop" (bag = pickup, envelope = delivery) instead of
+// "how it was paid" — every online order is card-not-present, so
+// the payment tone is redundant on web rows.
+type Channel = 'pickup' | 'delivery'
+const CHANNEL_TONES: Record<Channel, { tile: string; ink: string; dot: string }> = {
+  pickup:   { tile: '#FDF1EA', ink: '#C2410C', dot: '#EA580C' },
+  delivery: { tile: '#FDF2F8', ink: '#DB2777', dot: '#EC4899' },
+}
+
+// Distinguish pickup vs delivery on a web order. Shipping address
+// captured on checkout step 2 is the authoritative signal — the
+// buyer only supplies it when they picked a requires_address
+// option; pickup leaves it null.
+function channelFor(order: Order): Channel | null {
+  if (order.source !== 'web' || !order.webDetail) return null
+  const shipping = order.webDetail.shipping
+  if (shipping && (shipping.line1 ?? '').trim().length > 0) return 'delivery'
+  return 'pickup'
+}
+
 // ================================================================
 // Formatting helpers — kept from the prior build so downstream
 // values (rows, drawer, filter counts) all agree.
@@ -269,6 +291,35 @@ function OtherIcon() {
   )
 }
 
+// Pickup — shopping bag with squared handle. Same 17px optical
+// weight as CashIcon so the row's left tile reads consistently
+// whether the order was paid in cash, on card, or picked up in
+// person.
+function PickupIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M4.5 7h11l-.9 9.1a1.5 1.5 0 0 1-1.5 1.35H6.9a1.5 1.5 0 0 1-1.5-1.35L4.5 7z"
+        stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M7.5 7V5.5a2.5 2.5 0 0 1 5 0V7"
+        stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+// Delivery — envelope. Rect body + peaked flap, matches the
+// pickup glyph's stroke weight so the two channels sit at the
+// same optical size in the tile.
+function DeliveryIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect x="2.6" y="5.5" width="14.8" height="10" rx="1.6"
+        stroke="currentColor" strokeWidth="1.6" />
+      <path d="M3.2 6.3l6.8 5.1 6.8-5.1"
+        stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // ================================================================
 // SalesClient — top-level page component.
 // ================================================================
@@ -318,10 +369,19 @@ export default function SalesClient({
 
   const selected = openId ? orders.find((o) => o.id === openId) ?? null : null
 
-  // Day-scoped metrics — page already narrowed to one business_date.
-  const completed = useMemo(() => orders.filter((o) => o.status === 'completed'), [orders])
-  const salesTotal = useMemo(() => completed.reduce((s, o) => s + o.total, 0), [completed])
-  const orderCount = completed.length
+  // Day-scoped metrics, then re-scoped by the active filter so
+  // the hero row always matches the ledger below it. If a
+  // manager taps "Card", the total, count, and avg all collapse
+  // to card sales — otherwise the filter row's tile counts and
+  // the header's numbers contradict each other.
+  const scoped = useMemo(() => {
+    if (filter === 'all') return orders.filter((o) => o.status === 'completed')
+    if (filter === 'voided') return orders.filter((o) => o.status === 'voided')
+    if (filter === 'web') return orders.filter((o) => o.source === 'web' && o.status !== 'voided')
+    return orders.filter((o) => o.paymentType === filter && o.source !== 'web' && o.status !== 'voided')
+  }, [orders, filter])
+  const salesTotal = useMemo(() => scoped.reduce((s, o) => s + o.total, 0), [scoped])
+  const orderCount = scoped.length
   const avgTicket = orderCount > 0 ? salesTotal / orderCount : 0
 
   // Filter counts partition the day cleanly:
@@ -507,9 +567,26 @@ export default function SalesClient({
               </span>
               <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
               <Dot />
-              <Stat value={String(orderCount)} label={orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')} />
-              <Dot />
-              <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
+              {/* Count noun follows the filter: "sales" for live
+                  lanes, "voided" for the audit lane. Avg ticket
+                  is meaningless on voided (they aren't sales),
+                  so it drops off entirely rather than showing a
+                  misleading number. */}
+              {filter === 'voided' ? (
+                <Stat
+                  value={String(orderCount)}
+                  label={orderCount === 1 ? t('voided', 'anulada') : t('voided', 'anuladas')}
+                />
+              ) : (
+                <>
+                  <Stat
+                    value={String(orderCount)}
+                    label={orderCount === 1 ? t('sale', 'venta') : t('sales', 'ventas')}
+                  />
+                  <Dot />
+                  <Stat value={fmtMoney(avgTicket)} label={t('avg ticket', 'ticket promedio')} />
+                </>
+              )}
             </div>
           </div>
           {/* Export — solid-ink pill, sized to match inventory's
@@ -682,7 +759,14 @@ function SaleRow({
   locale: string
   isBands: boolean
 }) {
-  const tone = METHOD_TONES[order.paymentType]
+  // Channel wins over method on web rows: an online sale reads
+  // as "leaves the shop by delivery / picked up in person" first,
+  // and its payment is always card-not-present anyway. In-store
+  // rows still get the payment tone since the fulfillment there
+  // is trivially "handed over the counter" and doesn't need a
+  // dedicated visual lane.
+  const channel = channelFor(order)
+  const tone = channel ? CHANNEL_TONES[channel] : METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
   const itemCount = itemCountFor(order)
   // Row title stays the first POS line item name for in-person
@@ -693,6 +777,10 @@ function SaleRow({
   const title = order.lineItems[0]?.name ?? t('Order', 'Orden')
   const time = fmtRowTime(order.createdAt, locale)
   const methodLabels = paymentLabel(t)
+  const chipLabel =
+    channel === 'delivery' ? t('Delivery', 'Envío')
+      : channel === 'pickup' ? t('Pickup', 'Recoger')
+        : methodLabels[order.paymentType]
 
   return (
     <div
@@ -722,9 +810,11 @@ function SaleRow({
         width: 34, height: 34, borderRadius: 10, flex: '0 0 auto',
         background: tone.tile, color: tone.ink,
       }}>
-        {order.paymentType === 'card' ? <CardIcon />
-          : order.paymentType === 'cash' ? <CashIcon />
-            : <OtherIcon />}
+        {channel === 'delivery' ? <DeliveryIcon />
+          : channel === 'pickup' ? <PickupIcon />
+            : order.paymentType === 'card' ? <CardIcon />
+              : order.paymentType === 'cash' ? <CashIcon />
+                : <OtherIcon />}
       </span>
       <span style={{ minWidth: 0, flex: 1 }}>
         <span style={{
@@ -741,16 +831,15 @@ function SaleRow({
           <span style={{ fontSize: 11, color: FAINT }}>
             {itemCount} {itemCount === 1 ? t('item', 'artículo') : t('items', 'artículos')}
           </span>
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            borderRadius: 999, padding: '1px 8px',
-            fontSize: 10, fontWeight: 600,
-            background: tone.tile, color: tone.ink,
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
-            {methodLabels[order.paymentType]}
-          </span>
-          {isVoided && (
+          {/* One chip per row — never chained. Voided is the
+              audit signal and takes precedence; otherwise the
+              chip mirrors the tile: channel on online rows,
+              method on in-store rows. Unpaid is elevated to
+              this slot only on live in-store orders where it's
+              actionable (a web sale is settled at checkout;
+              its unpaid state is impossible in practice, and
+              voided rows don't need the extra pill). */}
+          {isVoided ? (
             <span style={{
               display: 'inline-flex', alignItems: 'center', borderRadius: 999,
               padding: '1px 8px', fontSize: 10, fontWeight: 600,
@@ -758,14 +847,23 @@ function SaleRow({
             }}>
               {t('Voided', 'Anulada')}
             </span>
-          )}
-          {order.paymentStatus === 'unpaid' && !isVoided && (
+          ) : order.paymentStatus === 'unpaid' && !channel ? (
             <span style={{
               display: 'inline-flex', alignItems: 'center', borderRadius: 999,
               padding: '1px 8px', fontSize: 10, fontWeight: 600,
               background: '#FFFBEB', color: '#B45309',
             }}>
               {t('Unpaid', 'No pagada')}
+            </span>
+          ) : (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              borderRadius: 999, padding: '1px 8px',
+              fontSize: 10, fontWeight: 600,
+              background: tone.tile, color: tone.ink,
+            }}>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
+              {chipLabel}
             </span>
           )}
         </span>

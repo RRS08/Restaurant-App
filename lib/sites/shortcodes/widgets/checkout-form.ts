@@ -1001,10 +1001,28 @@ window.__checkoutCollectBoot = window.__checkoutCollectBoot || function(cfg) {
     }
     function onError(e) {
       if (typeof console !== 'undefined') console.log('[checkout] Poynt error event', e);
+      // Some Poynt SDK builds fire benign "focus lost with no card"
+      // events during typing that aren't real submission errors —
+      // only surface a banner if the user was actively trying to
+      // submit. Otherwise log and swallow so the buyer isn't hit
+      // with a red bar mid-typing.
+      var wasSubmitting = awaitingSubmit;
       awaitingSubmit = false;
+      if (!wasSubmitting) return;
+      // Poynt's error events have inconsistent shapes across
+      // versions — dig for a string message, and if every candidate
+      // is an object (which was rendering as the literal text
+      // "[object Object]"), fall back to a safe generic message
+      // instead of coercing the object to a string.
       var d = (e && e.data) || (e && e.detail) || {};
-      var msg = d.message || d.reason || d.error || (typeof e === 'string' ? e : 'Please check your card details and try again.');
-      showError(String(msg));
+      var pickString = function (v) { return typeof v === 'string' && v.length > 0 ? v : ''; };
+      var msg =
+        pickString(d.message) ||
+        pickString(d.reason) ||
+        pickString(d.error) ||
+        pickString(typeof e === 'string' ? e : '') ||
+        'Please check your card details and try again.';
+      showError(msg);
     }
     // Subscribe to every event name variant Poynt might dispatch —
     // 'nonce'/'error' are canonical, but SDK versions in the wild

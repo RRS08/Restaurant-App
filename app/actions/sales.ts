@@ -447,7 +447,7 @@ export async function voidOrder(
   // Load the order (RLS already scopes by restaurant)
   const { data: order, error: orderError } = await ctx.supabase
     .from('orders')
-    .select('id, location_id, status, source, total_amount, created_at, payment_reference, external_id')
+    .select('id, location_id, status, source, total_amount, created_at, external_id')
     .eq('id', orderId)
     .single()
 
@@ -457,28 +457,28 @@ export async function voidOrder(
   if (order.status === 'voided') return null // idempotent — nothing to do
 
   // Cascade to sibling rows representing the same real-world
-  // transaction. When the Poynt sync imports a transaction we
-  // already inserted via web checkout (dedup miss, e.g. location_id
-  // divergence), we end up with two rows for one payment. Voiding
-  // one should void the other — otherwise a merchant clicks Void,
-  // sees the row struck-through in this filter, and the other row
-  // stays live in another filter, inflating totals for the same
-  // money. Match by payment_reference OR external_id (either is a
-  // Poynt txn id in our data), same restaurant, still live.
-  const dedupTokens = [order.payment_reference as string | null, order.external_id as string | null]
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+  // transaction. Both the web checkout (post-dedup-fix) and the
+  // Poynt sync stamp the same Poynt txn id on orders.external_id;
+  // when a dedup miss produces two rows for one payment, voiding
+  // one should flip the other so a struck-through row doesn't
+  // linger in another filter inflating totals for money that
+  // already went back. Match on external_id only — payment_reference
+  // lives on site_orders_link (not on orders), so we can't use it
+  // here directly. Legacy web orders written before the dedup
+  // commit have external_id=NULL and can't cascade; they need a
+  // manual void.
+  const cascadeToken = typeof order.external_id === 'string' && order.external_id.length > 0
+    ? order.external_id
+    : null
   let siblingIds: string[] = []
-  if (dedupTokens.length > 0) {
-    const filter = dedupTokens
-      .flatMap((t) => [`payment_reference.eq.${t}`, `external_id.eq.${t}`])
-      .join(',')
+  if (cascadeToken) {
     const { data: siblings } = await ctx.supabase
       .from('orders')
       .select('id')
       .eq('restaurant_id', ctx.restaurantId)
+      .eq('external_id', cascadeToken)
       .neq('id', order.id)
       .neq('status', 'voided')
-      .or(filter)
     siblingIds = (siblings ?? []).map((s) => s.id as string)
   }
 

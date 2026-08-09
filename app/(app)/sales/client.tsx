@@ -188,6 +188,22 @@ function shortId(id: string): string {
   return cleaned.slice(-6).toUpperCase()
 }
 
+// Total quantity across an order's items. For web orders the real
+// items live on site_orders_link.cart.items (order_items is empty
+// on purpose — see lib/sites/checkout.ts). Fall back to that so
+// the list row and the drawer header both show the true count
+// instead of "0 items" for every online sale.
+function itemCountFor(order: Order): number {
+  if (order.lineItems.length > 0) {
+    return order.lineItems.reduce((s, l) => s + l.quantity, 0)
+  }
+  if (order.source === 'web' && order.webDetail) {
+    const items = ((order.webDetail.cart as { items?: Array<{ qty?: number }> } | null)?.items) ?? []
+    return items.reduce((s, it) => s + (typeof it.qty === 'number' ? it.qty : 0), 0)
+  }
+  return 0
+}
+
 // Poynt's terse SCREAM_CASE channel values → human strings.
 function channelLabel(raw: string, t: T): string {
   switch (raw.toUpperCase()) {
@@ -668,8 +684,13 @@ function SaleRow({
 }) {
   const tone = METHOD_TONES[order.paymentType]
   const isVoided = order.status === 'voided'
-  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
-  const title = order.lineItems[0]?.name ?? t('Order', 'Orden')
+  const itemCount = itemCountFor(order)
+  // Row title falls back to the web cart's first item name for
+  // web orders (order.lineItems is empty by design there).
+  const webFirstItem = order.source === 'web' && order.webDetail
+    ? ((order.webDetail.cart as { items?: Array<{ name?: string }> } | null)?.items?.[0]?.name ?? null)
+    : null
+  const title = order.lineItems[0]?.name ?? webFirstItem ?? t('Order', 'Orden')
   const time = fmtRowTime(order.createdAt, locale)
   const methodLabels = paymentLabel(t)
 
@@ -916,7 +937,7 @@ function OrderDrawer({ order, onClose, t, locale }: {
   const isVoided = order.status === 'voided'
   const tone = METHOD_TONES[order.paymentType]
   const methodLabels = paymentLabel(t)
-  const itemCount = order.lineItems.reduce((s, l) => s + l.quantity, 0)
+  const itemCount = itemCountFor(order)
 
   // Escape closes + body scroll lock while open.
   useEffect(() => {

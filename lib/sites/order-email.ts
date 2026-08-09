@@ -70,7 +70,12 @@ const FALLBACK_PALETTE: Palette = {
   body: '#52525B',
   line: '#E4E4E7',
   sand: '#F4F4F5',
-  sage: '#FAFAFA',
+  // Soft mint that reads as "brand background" even without a
+  // theme_colors override — was greyscale before, so sites that
+  // hadn't set sage in config got a neutral gray outer background
+  // instead of anything branded. Sites with sage configured will
+  // still override this.
+  sage: '#E8F0E1',
   muted: '#71717A',
   paper: '#FFFFFF',
   accent: '#18181B',
@@ -308,14 +313,40 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
     phone ? escapeHtml(phone) : '',
   ].filter(Boolean).join('&nbsp;&nbsp;·&nbsp;&nbsp;')
 
+  const logoUrl = logoUrlFor(args.site, origin)
+  const brand = brandMark(args.site)
+
+  // Header brand mark, right-aligned so the layout leads with the
+  // "thank you" line on the left. Logo on the left, wordmark +
+  // kicker stacked on the right — same treatment {{site-header}}
+  // uses on the storefront, just mirrored to sit on the top-right
+  // of the card. Rendered as a nested table so email clients that
+  // strip flex/inline-block still hold the alignment.
+  const headerBlock = `
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="border-collapse:collapse;">
+          <tr>
+            ${logoUrl ? `<td valign="middle" style="padding-right:10px;">
+              <img src="${escapeHtml(logoUrl)}" alt="" width="40" height="40"
+                   style="display:block;width:40px;height:40px;border:0;" />
+            </td>` : ''}
+            <td valign="middle" style="text-align:left;">
+              <div style="color:${c.ink};font-size:18px;font-weight:600;line-height:1.1;font-family:${FONT_STACK};">
+                ${escapeHtml(brand.wordmark)}
+              </div>
+              ${brand.kicker ? `<div style="color:${c.muted};font-size:10px;letter-spacing:0.14em;text-transform:uppercase;margin-top:3px;font-family:${FONT_STACK};">
+                ${escapeHtml(brand.kicker)}
+              </div>` : ''}
+            </td>
+          </tr>
+        </table>`
+
   return `
-<div style="margin:0;padding:24px 12px;background:${c.sand};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
+<div style="margin:0;padding:24px 12px;background:${c.sage};font-family:${FONT_STACK};">
+  <link rel="stylesheet" href="${FONT_HREF}" />
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width:560px;margin:0 auto;background:${c.paper};border-radius:14px;overflow:hidden;">
     <tr>
-      <td style="padding:32px 32px 0;">
-        <div style="color:${c.ink};font-size:13px;letter-spacing:0.14em;text-transform:uppercase;font-weight:600;">
-          ${escapeHtml(siteName)}
-        </div>
+      <td style="padding:24px 32px 0;">
+        ${headerBlock}
       </td>
     </tr>
     <tr>

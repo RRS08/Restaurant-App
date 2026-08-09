@@ -334,10 +334,19 @@ export type RefundResult =
   | { status: 'declined'; message: string; code?: string }
   | { status: 'error'; message: string }
 
-/** Issue a REFUND against a prior SALE. Uses the same
- *  /cards/tokenize/charge endpoint we used to create the SALE
- *  (Poynt's action field accepts REFUND alongside SALE/AUTHORIZE);
- *  the merchant's "Transactions Refund W" scope covers it. */
+/** Reverse a prior SALE. Tries VOID first (pre-settlement, empty
+ *  body, id in URL path), falls back to REFUND (post-settlement,
+ *  parentId in body + fundingSource) when Poynt reports the parent
+ *  has already been captured/settled.
+ *
+ *  Source: Poynt Cloud Apps "Post-Transaction Actions" docs.
+ *   - VOID:  POST /businesses/{id}/transactions/{txnId}/void   body: {}
+ *   - REFUND: POST /businesses/{id}/transactions              body: { parentId, action:'REFUND', fundingSource:{ type:'CREDIT_DEBIT' } [, amounts (partial)] }
+ *
+ *  Both endpoints return a Transaction object; the reversal's own id
+ *  is the top-level `id` field. Neither endpoint honors a documented
+ *  Idempotency-Key header — we guard against double-refund upstream
+ *  by checking `orders.status !== 'voided'` before calling. */
 export async function refundParentTransaction(
   args: RefundParentTransactionArgs,
 ): Promise<RefundResult> {
@@ -353,82 +362,125 @@ export async function refundParentTransaction(
   const bearer = tokenResult.accessToken
   const base = apiBaseForEnv(args.env)
   const appId = process.env.GODADDY_POYNT_APP_ID
-  const requestId = randomUUID()
 
-  // storeId — required on the SALE call and almost certainly
-  // required here too for the transaction to be attributed
-  // correctly on the merchant's Poynt reports.
-  const storeId = await fetchDefaultStoreId({ base, businessId, bearer, appId })
-  if (!storeId) {
-    console.error('[godaddy/collect] refund could not resolve storeId', { businessId })
-    return { status: 'error', message: 'Could not resolve merchant store — try again in a moment.' }
-  }
-
-  const url = `${base}/businesses/${encodeURIComponent(businessId)}/cards/tokenize/charge`
-  const body: Record<string, unknown> = {
-    action: 'REFUND',
-    parentId: args.parentTransactionId,
-    context: { businessId, storeId },
-    amounts: {
-      transactionAmount: amountCents,
-      orderAmount: amountCents,
-      currency: 'USD',
-    },
-  }
-  const headers: Record<string, string> = {
+  const commonHeaders: Record<string, string> = {
     'authorization': `Bearer ${bearer}`,
     'content-type': 'application/json',
     'api-version': '1.2',
-    'poynt-request-id': requestId,
     ...(appId ? { 'x-app-id': appId } : {}),
   }
 
-  let response: Response
+  // --- Step 1: try VOID (pre-settlement reversal). Cheaper than
+  // refund, works when the parent hasn't settled to the processor
+  // yet (typical for same-batch transactions before nightly close). ---
+  const voidUrl = `${base}/businesses/${encodeURIComponent(businessId)}/transactions/${encodeURIComponent(args.parentTransactionId)}/void`
+  const voidReqId = randomUUID()
+  let voidRes: Response
   try {
-    response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) })
+    voidRes = await fetch(voidUrl, {
+      method: 'POST',
+      headers: { ...commonHeaders, 'poynt-request-id': voidReqId },
+      body: '{}',
+    })
+  } catch (err) {
+    console.error('[godaddy/collect] void network failure', err)
+    return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
+  }
+  const voidRaw = await voidRes.text()
+  let voidJson: unknown
+  try { voidJson = voidRaw ? JSON.parse(voidRaw) : {} }
+  catch { voidJson = {} }
+  const voidData = (voidJson ?? {}) as {
+    id?: string; status?: string; developerMessage?: string; message?: string; code?: string
+  }
+
+  if (voidRes.ok) {
+    const st = (voidData.status ?? '').toUpperCase()
+    if (st === 'VOIDED' || st === 'REFUNDED' || st === 'CAPTURED') {
+      console.log('[godaddy/collect] void ok', {
+        env: args.env,
+        parentTransactionId: args.parentTransactionId,
+        reversalId: voidData.id,
+        status: st,
+      })
+      return { status: 'refunded', refundTransactionId: voidData.id ?? '' }
+    }
+    console.warn('[godaddy/collect] void returned unexpected status; will try refund', {
+      env: args.env, status: st, rawBody: voidRaw,
+    })
+  } else {
+    // VOID failed. If the response looks like "already captured/
+    // settled" we fall through to REFUND. On any other failure we
+    // still fall through — REFUND is the strictly-more-permissive
+    // path, and if it also fails the caller sees the second error.
+    console.warn('[godaddy/collect] void rejected; will try refund', {
+      httpStatus: voidRes.status,
+      env: args.env,
+      code: voidData.code,
+      message: voidData.developerMessage || voidData.message,
+      correlationKey: args.idempotencyKey,
+      poyntRequestId: voidReqId,
+      parentTransactionId: args.parentTransactionId,
+      rawBody: voidRaw,
+    })
+  }
+
+  // --- Step 2: REFUND (post-settlement). fundingSource is required
+  // per the docs — Poynt uses the parent transaction's stored card
+  // when type is CREDIT_DEBIT. amounts omitted = full refund. ---
+  const refundUrl = `${base}/businesses/${encodeURIComponent(businessId)}/transactions`
+  const refundReqId = randomUUID()
+  const refundBody: Record<string, unknown> = {
+    parentId: args.parentTransactionId,
+    action: 'REFUND',
+    fundingSource: { type: 'CREDIT_DEBIT' },
+  }
+  let refundRes: Response
+  try {
+    refundRes = await fetch(refundUrl, {
+      method: 'POST',
+      headers: { ...commonHeaders, 'poynt-request-id': refundReqId },
+      body: JSON.stringify(refundBody),
+    })
   } catch (err) {
     console.error('[godaddy/collect] refund network failure', err)
     return { status: 'error', message: 'Payment network unavailable — try again in a moment.' }
   }
 
-  const raw = await response.text()
+  const raw = await refundRes.text()
   let json: unknown
   try { json = raw ? JSON.parse(raw) : {} }
   catch {
-    console.error('[godaddy/collect] refund non-JSON response', { status: response.status, raw })
-    return { status: 'error', message: `Payment provider returned unreadable response (${response.status}).` }
+    console.error('[godaddy/collect] refund non-JSON response', { status: refundRes.status, raw })
+    return { status: 'error', message: `Payment provider returned unreadable response (${refundRes.status}).` }
   }
   const data = (json ?? {}) as {
-    id?: string
-    status?: string
-    developerMessage?: string
-    message?: string
-    code?: string
+    id?: string; status?: string; developerMessage?: string; message?: string; code?: string
   }
 
-  if (!response.ok) {
-    const msg = data.developerMessage || data.message || `Refund declined (${response.status}).`
+  if (!refundRes.ok) {
+    const msg = data.developerMessage || data.message || `Refund declined (${refundRes.status}).`
     console.warn('[godaddy/collect] refund rejected', {
-      httpStatus: response.status,
+      httpStatus: refundRes.status,
       env: args.env,
       code: data.code,
       message: msg,
       hadAppIdHeader: !!appId,
       appIdPrefix: appId ? appId.slice(0, 12) : null,
       correlationKey: args.idempotencyKey,
-      poyntRequestId: requestId,
+      poyntRequestId: refundReqId,
       parentTransactionId: args.parentTransactionId,
-      requestBody: body,
+      requestBody: refundBody,
       rawBody: raw,
+      voidPriorStatus: voidRes.status,
+      voidPriorBody: voidRaw,
     })
-    return response.status >= 400 && response.status < 500
+    return refundRes.status >= 400 && refundRes.status < 500
       ? { status: 'declined', message: msg, code: data.code }
       : { status: 'error', message: msg }
   }
 
   const status = (data.status ?? '').toUpperCase()
-  // A refund can settle as REFUNDED (POS accepted) or CAPTURED
-  // (posted to processor). Anything else is a failure worth logging.
   if (status !== 'REFUNDED' && status !== 'CAPTURED' && status !== 'AUTHORIZED') {
     console.warn('[godaddy/collect] refund returned unexpected status', {
       env: args.env,

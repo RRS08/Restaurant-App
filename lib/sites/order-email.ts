@@ -416,12 +416,12 @@ function checkedMark(c: Palette): string {
   return `
         <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right" style="border-collapse:collapse;">
           <tr>
-            <td valign="middle" style="padding:0 8px 0 0;color:${c.muted};font-size:11px;letter-spacing:0.04em;font-family:${FONT_STACK};">
+            <td valign="middle" style="padding:0 6px 0 0;color:${c.muted};font-size:11px;letter-spacing:0.04em;font-family:${FONT_STACK};">
               Sent through
             </td>
-            <td valign="middle" style="padding:0 6px 0 0;">
+            <td valign="middle" style="padding:0 5px 0 0;">
               <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer" style="text-decoration:none;line-height:0;display:inline-block;">
-                <svg width="10.5" height="18" viewBox="18 8 28 48" role="img" aria-label="Checked" style="display:block;">
+                <svg width="8" height="14" viewBox="18 8 28 48" role="img" aria-label="Checked" style="display:block;">
                   <path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#18181B"></path>
                   <rect x="26" y="16" width="14" height="3" rx="1.5" fill="#FAF9F6"></rect>
                   <rect x="26" y="23" width="11" height="3" rx="1.5" fill="#FAF9F6"></rect>
@@ -432,7 +432,7 @@ function checkedMark(c: Palette): string {
             </td>
             <td valign="middle">
               <a href="https://onchecked.app" target="_blank" rel="noopener noreferrer"
-                 style="color:${c.ink};font-size:14px;font-weight:600;text-decoration:none;letter-spacing:-0.01em;font-family:${FONT_STACK};">Checked</a>
+                 style="color:${c.ink};font-size:12px;font-weight:600;text-decoration:none;letter-spacing:-0.005em;font-family:${FONT_STACK};">checked</a>
             </td>
           </tr>
         </table>`

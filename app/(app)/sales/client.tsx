@@ -569,20 +569,6 @@ export default function SalesClient({
                 {fmtMoney(salesTotal)}
               </span>
               <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>USD</span>
-              {/* Voided lane: a small pill next to the amount
-                  carries the "reversed" semantic without
-                  tinting the number itself. Matches the row
-                  chip's red so the header and rows read as
-                  one visual language. */}
-              {filter === 'voided' && (
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', borderRadius: 999,
-                  padding: '2px 9px', fontSize: 10, fontWeight: 600,
-                  background: '#FEE2E2', color: '#B91C1C', letterSpacing: '0.01em',
-                }}>
-                  {t('Voided', 'Anulado')}
-                </span>
-              )}
               <Dot />
               {/* Count noun follows the filter: "sales" for live
                   lanes, "voided" for the audit lane. Avg ticket

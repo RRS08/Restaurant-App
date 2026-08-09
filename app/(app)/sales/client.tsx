@@ -638,16 +638,16 @@ export default function SalesClient({
             // hue-coded dot so managers can scan the row by color
             // before reading the label. 'All' stays dotless.
             // Online is a container for two sub-lanes (delivery
-            // pink + pickup orange), so its dot is split half-
-            // and-half rather than picking one channel's color
-            // arbitrarily — the pip visually announces that the
-            // lane holds both.
-            const dot =
-              f === 'card' ? METHOD_TONES.card.dot
-                : f === 'cash' ? METHOD_TONES.cash.dot
-                  : f === 'web' ? `linear-gradient(90deg, ${CHANNEL_TONES.delivery.dot} 50%, ${CHANNEL_TONES.pickup.dot} 50%)`
-                    : f === 'voided' ? '#DC2626'
-                      : null
+            // pink + pickup orange), so its indicator is two
+            // small dots side by side. A single 6px gradient
+            // dot blurred the two hues into one at that scale;
+            // two adjacent pips read cleanly.
+            const dots: string[] =
+              f === 'card' ? [METHOD_TONES.card.dot]
+                : f === 'cash' ? [METHOD_TONES.cash.dot]
+                  : f === 'web' ? [CHANNEL_TONES.delivery.dot, CHANNEL_TONES.pickup.dot]
+                    : f === 'voided' ? ['#DC2626']
+                      : []
             return (
               <button
                 key={f}
@@ -663,7 +663,13 @@ export default function SalesClient({
                   fontWeight: on ? 600 : 500,
                 }}
               >
-                {dot && <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: dot }} />}
+                {dots.length > 0 && (
+                  <span aria-hidden style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    {dots.map((d, i) => (
+                      <span key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: d }} />
+                    ))}
+                  </span>
+                )}
                 {label}
                 <span style={{
                   fontFamily: MONO, fontSize: 10,

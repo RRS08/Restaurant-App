@@ -447,7 +447,7 @@ export async function voidOrder(
   // Load the order (RLS already scopes by restaurant)
   const { data: order, error: orderError } = await ctx.supabase
     .from('orders')
-    .select('id, location_id, status, source, total_amount, created_at')
+    .select('id, location_id, status, source, total_amount, created_at, payment_reference, external_id')
     .eq('id', orderId)
     .single()
 
@@ -455,6 +455,32 @@ export async function voidOrder(
   const locAuthErr = await requireLocResult(ctx.restaurantId, order.location_id)
   if (locAuthErr) return { error: locAuthErr }
   if (order.status === 'voided') return null // idempotent — nothing to do
+
+  // Cascade to sibling rows representing the same real-world
+  // transaction. When the Poynt sync imports a transaction we
+  // already inserted via web checkout (dedup miss, e.g. location_id
+  // divergence), we end up with two rows for one payment. Voiding
+  // one should void the other — otherwise a merchant clicks Void,
+  // sees the row struck-through in this filter, and the other row
+  // stays live in another filter, inflating totals for the same
+  // money. Match by payment_reference OR external_id (either is a
+  // Poynt txn id in our data), same restaurant, still live.
+  const dedupTokens = [order.payment_reference as string | null, order.external_id as string | null]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+  let siblingIds: string[] = []
+  if (dedupTokens.length > 0) {
+    const filter = dedupTokens
+      .flatMap((t) => [`payment_reference.eq.${t}`, `external_id.eq.${t}`])
+      .join(',')
+    const { data: siblings } = await ctx.supabase
+      .from('orders')
+      .select('id')
+      .eq('restaurant_id', ctx.restaurantId)
+      .neq('id', order.id)
+      .neq('status', 'voided')
+      .or(filter)
+    siblingIds = (siblings ?? []).map((s) => s.id as string)
+  }
 
   // Reverse inventory ONLY if the original order actually depleted it.
   // That's true when inventory was active at the moment the order was
@@ -546,10 +572,14 @@ export async function voidOrder(
   // Flip status last, so if the reversal fails we haven't voided yet.
   // voided_at is stamped alongside status so future weekly summaries
   // can answer "what changed this week" without a join to audit_log.
+  // Cascade to any siblings resolved above so a dupe pair (e.g. web
+  // + sync-imported for the same Poynt txn) flips together — reads
+  // as one transaction, reconciles to one Poynt refund/void.
+  const idsToVoid = [order.id, ...siblingIds]
   const { error: updateError } = await ctx.supabase
     .from('orders')
     .update({ status: 'voided', voided_at: new Date().toISOString() })
-    .eq('id', order.id)
+    .in('id', idsToVoid)
 
   if (updateError) {
     console.error('Order void failed:', updateError)
@@ -562,7 +592,18 @@ export async function voidOrder(
     intents_canceled: intentsSummary.canceled,
     intents_needs_refund: intentsSummary.needsRefund,
     intents_warnings: intentsSummary.warnings,
+    cascaded_to: siblingIds,
   })
+  // Separate audit rows for each cascaded sibling so a per-order
+  // history query surfaces the void on both. Reason field records
+  // WHY the void happened here (cascade from the sibling) instead
+  // of a direct user click — future disputes can trace the intent.
+  for (const sid of siblingIds) {
+    await logAudit(ctx, order.location_id, 'void_order', 'orders', sid, {
+      cascaded_from: order.id,
+      reason: 'same payment_reference / external_id as the voided sibling',
+    })
+  }
 
   revalidatePath('/sales')
   revalidatePath('/web/sales')

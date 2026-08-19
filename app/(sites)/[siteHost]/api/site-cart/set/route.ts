@@ -16,6 +16,7 @@ import { cookies, headers } from 'next/headers'
 import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 import { resolveSiteByHost } from '@/lib/sites/render'
 import { setCartItem, CART_COOKIE_NAME, CART_COOKIE_MAX_AGE_SECONDS } from '@/lib/sites/cart'
+import { normalizeOptions } from '@/lib/sites/cart-options'
 
 interface Ctx { params: Promise<{ siteHost: string }> }
 
@@ -37,7 +38,11 @@ export async function POST(req: Request, { params }: Ctx) {
   const cookieStore = await cookies()
   const existingSession = cookieStore.get(CART_COOKIE_NAME)?.value ?? null
 
-  const result = await setCartItem(site.id, existingSession, body.slug, body.qty)
+  // options identifies WHICH line to update when the same slug
+  // appears more than once (loose leaf + tea bags of the same tea).
+  // Optional — a set() against a no-picker product just omits it.
+  const options = normalizeOptions((body as { options?: unknown }).options)
+  const result = await setCartItem(site.id, existingSession, body.slug, body.qty, options)
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: 400 })
 
   const res = NextResponse.json({ ok: true, count: result.count })

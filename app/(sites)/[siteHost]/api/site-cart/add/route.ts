@@ -21,6 +21,7 @@ import { cookies, headers } from 'next/headers'
 import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 import { resolveSiteByHost } from '@/lib/sites/render'
 import { addToCart, CART_COOKIE_NAME, CART_COOKIE_MAX_AGE_SECONDS } from '@/lib/sites/cart'
+import { normalizeOptions } from '@/lib/sites/cart-options'
 
 interface Ctx { params: Promise<{ siteHost: string }> }
 
@@ -42,7 +43,12 @@ export async function POST(req: Request, { params }: Ctx) {
   const cookieStore = await cookies()
   const existingSession = cookieStore.get(CART_COOKIE_NAME)?.value ?? null
 
-  const result = await addToCart(site.id, existingSession, body.slug, body.qty)
+  // Options payload is optional — cart lib fills in defaults when
+  // the product has a picker but the client omitted the selection
+  // (e.g. a card-grid Add-button click). normalizeOptions strips
+  // anything not string→string so we never trust the wire shape.
+  const options = normalizeOptions((body as { options?: unknown }).options)
+  const result = await addToCart(site.id, existingSession, body.slug, body.qty, options)
   if ('error' in result) return NextResponse.json({ error: result.error }, { status: 400 })
 
   const res = NextResponse.json({ ok: true, count: result.count })

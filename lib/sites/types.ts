@@ -49,6 +49,41 @@ export interface SiteProductRow {
   featured: boolean | null
   status: string
   sort_order: number | null
+  /** Buyer-facing option groups (form/size/color/…). Null or [] =
+   *  single-variant product with no picker. Shape is intentionally
+   *  extensible: every group carries its own label + choices so a
+   *  future two-dimensional product (color + size) just adds a
+   *  second entry to the array — no schema change. */
+  options: SiteProductOptionGroup[] | null
+}
+
+/** One dimension of buyer choice on a product. For a tea, `key` is
+ *  "form" and `choices` are [loose, teabags]. For a shirt later, a
+ *  product might carry two groups: [color] and [size]. */
+export interface SiteProductOptionGroup {
+  key: string
+  label: string
+  choices: SiteProductOptionChoice[]
+}
+
+export interface SiteProductOptionChoice {
+  key: string
+  label: string
+  /** Overrides the product's base price when this choice is
+   *  selected. Undefined = use the base price. When multiple groups
+   *  each carry a price override, resolveUnitPrice() falls back
+   *  through them in group order — see lib/sites/cart-options.ts. */
+  price?: number
+}
+
+export interface SiteCartItem {
+  slug: string
+  qty: number
+  /** Map from option-group key → selected choice key. Absent /
+   *  empty = base variant. Two cart lines with same slug but
+   *  different options are treated as separate lines, so a buyer
+   *  can add loose leaf + tea bags of the same tea and see both. */
+  options?: Record<string, string>
 }
 
 export interface SiteDeliveryOption {
@@ -67,11 +102,6 @@ export interface SiteDeliveryOption {
   requires_address?: boolean
   /** When true, this option is preselected on page load. */
   default?: boolean
-}
-
-export interface SiteCartItem {
-  slug: string
-  qty: number
 }
 
 export interface SiteCartRow {

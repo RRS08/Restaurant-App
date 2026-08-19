@@ -26,6 +26,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { ShortcodeArgs, ShortcodeContext } from '../index'
 import type { SiteProductRow } from '../../types'
+import { normalizeGroups } from '../../cart-options'
 import { escapeAttr, escapeHtml } from '../utils'
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -56,10 +57,23 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
 
   const tag = p.benefit ? `<span class="pdp-tag">${escapeHtml(p.benefit)}</span>` : ''
   const en = p.secondary_name ? `<div class="pdp-en">${escapeHtml(p.secondary_name)}</div>` : ''
-  const unit = p.unit ? ` <span>· ${escapeHtml(p.unit)}</span>` : ''
-  const price = formatPrice(p.price)
+  const basePriceNum = parsePrice(p.price)
+  const groups = normalizeGroups(p.options)
+  // When the product has a picker, the unit-suffix on the price
+  // is redundant (each choice's label already carries the size —
+  // "Loose leaf · 3 oz" / "Tea bags · 30 ct") and would double-
+  // print the size. Drop it in that case; keep it for no-picker
+  // products where the price line is the only place size shows.
+  const unit = groups.length === 0 && p.unit ? ` <span>· ${escapeHtml(p.unit)}</span>` : ''
+  const price = formatPrice(basePriceNum)
   const use = p.long_description ? `<p class="pdp-use">${escapeHtml(p.long_description)}</p>` : ''
   const category = CATEGORY_LABELS[p.category ?? ''] ?? p.category ?? ''
+
+  // Options picker + the tiny script that drives it. Both are
+  // omitted entirely when the product has no options so nothing
+  // extra renders for mushroom-coffee etc.
+  const optionsMarkup = renderOptionGroups(groups, basePriceNum)
+  const optionsScript = groups.length > 0 ? PICKER_SCRIPT : ''
 
   const ritualLabel = p.ritual_label ?? 'How to steep'
   const factsRows: string[] = []
@@ -73,7 +87,7 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
     ? `<dl class="pdp-facts">\n${factsRows.join('\n')}\n  </dl>`
     : ''
 
-  return `<div class="pdp-grid">
+  return `<div class="pdp-grid" data-pdp>
   <div class="pdp-tile">
     ${tag}
     <img src="${escapeAttr(p.image_url ?? '')}" alt="${escapeAttr(p.name)}">
@@ -82,23 +96,157 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
     <div class="pdp-cat">${escapeHtml(category)}</div>
     <h1>${escapeHtml(p.name)}</h1>
     ${en}
-    <div class="pdp-price">${escapeHtml(price)}${unit}</div>
+    <div class="pdp-price" data-pdp-price>${escapeHtml(price)}${unit}</div>
     ${use}
     ${facts}
+    ${optionsMarkup}
     <div class="qty-row">
       <div class="stepper">
         <button type="button" data-step="down" aria-label="Decrease quantity">–</button>
         <output>1</output>
         <button type="button" data-step="up" aria-label="Increase quantity">+</button>
       </div>
-      <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}">Add to cart</button>
+      <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}" data-add-button>Add to cart</button>
     </div>
   </div>
-</div>`
+</div>${optionsScript}${PICKER_STYLE}`
 }
 
-function formatPrice(raw: number | string): string {
-  const n = typeof raw === 'number' ? raw : parseFloat(raw)
+function parsePrice(raw: number | string): number {
+  return typeof raw === 'number' ? raw : parseFloat(String(raw))
+}
+
+function formatPrice(raw: number | string | null): string {
+  const n = typeof raw === 'number' ? raw : parseFloat(String(raw ?? ''))
   if (!Number.isFinite(n)) return ''
   return `$${n.toFixed(2)}`
 }
+
+/** Render the pill-style picker for each option group. Skipped
+ *  when the product has no groups. Each choice pill carries the
+ *  group key + choice key + optional price override as data
+ *  attributes so the client script can update the displayed
+ *  price and pass the full options object to Add-to-cart. */
+function renderOptionGroups(
+  groups: import('../../types').SiteProductOptionGroup[],
+  basePrice: number,
+): string {
+  if (groups.length === 0) return ''
+  const groupBlocks = groups.map(g => {
+    const choices = g.choices.map((c, i) => {
+      const priceForChoice = typeof c.price === 'number' ? c.price : basePrice
+      const priceAttr = typeof c.price === 'number' ? String(c.price) : ''
+      const priceStr = formatPrice(priceForChoice)
+      const isDefault = i === 0
+      return `      <label class="pdp-choice${isDefault ? ' is-active' : ''}">
+        <input type="radio" name="pdp-opt-${escapeAttr(g.key)}" value="${escapeAttr(c.key)}"${isDefault ? ' checked' : ''} data-price="${escapeAttr(priceAttr)}">
+        <span class="pdp-choice-label">${escapeHtml(c.label)}</span>
+        <span class="pdp-choice-price">${escapeHtml(priceStr)}</span>
+      </label>`
+    }).join('\n')
+    return `  <fieldset class="pdp-optgroup" data-optgroup="${escapeAttr(g.key)}">
+    <legend class="pdp-optgroup-label">${escapeHtml(g.label)}</legend>
+    <div class="pdp-choices">
+${choices}
+    </div>
+  </fieldset>`
+  }).join('\n')
+  return `<div class="pdp-options">
+${groupBlocks}
+</div>`
+}
+
+// ----------------------------------------------------------------
+// Inline CSS + client script that drives the picker.
+//
+// CSS mirrors the aesthetic of the existing PDP surface —
+// .pdp-tag / .pdp-facts inheritance for the pill borders and the
+// mono price ticker. All measurements are relative so the picker
+// wraps cleanly on narrow (phone) viewports without any media
+// query gymnastics.
+//
+// Script: on choice change, update .pdp-choice.is-active for the
+// active pill in each group, recompute the displayed unit price,
+// and stash the full options set on the Add button as a JSON
+// data-attribute for the cart-add script to consume. The cart-add
+// script (in the site layout) already reads data-slug + qty; a
+// tiny hook there also reads data-options if present.
+// ----------------------------------------------------------------
+
+const PICKER_STYLE = `<style>
+.pdp-options { display: flex; flex-direction: column; gap: 14px; margin: 16px 0 4px; }
+.pdp-optgroup { border: 0; margin: 0; padding: 0; }
+.pdp-optgroup-label {
+  display: block; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #6b6b70; margin: 0 0 8px; padding: 0;
+}
+.pdp-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.pdp-choice {
+  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 10px 14px; border-radius: 999px; border: 1.5px solid #e7e6e2;
+  background: #fff; color: #3f3f46; font-size: 13px; line-height: 1.2;
+  transition: border-color .12s ease, background .12s ease, color .12s ease;
+  user-select: none;
+}
+.pdp-choice input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
+.pdp-choice-label { font-weight: 600; }
+.pdp-choice-price { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #6b6b70; }
+.pdp-choice.is-active { border-color: #18181b; background: #18181b; color: #faf9f6; }
+.pdp-choice.is-active .pdp-choice-price { color: #faf9f6; opacity: .8; }
+.pdp-choice:hover:not(.is-active) { border-color: #a1a1a6; }
+@media (max-width: 480px) {
+  .pdp-choice { padding: 9px 12px; font-size: 12.5px; }
+}
+</style>`
+
+const PICKER_SCRIPT = `<script>
+(function(){
+  var root = document.querySelector('[data-pdp]');
+  if (!root) return;
+  var priceEl = root.querySelector('[data-pdp-price]');
+  var addBtn  = root.querySelector('[data-add-button]');
+  if (!priceEl || !addBtn) return;
+  function selectedOptions(){
+    var out = {};
+    root.querySelectorAll('.pdp-optgroup').forEach(function(fs){
+      var g = fs.getAttribute('data-optgroup');
+      var checked = fs.querySelector('input[type=radio]:checked');
+      if (g && checked) out[g] = checked.value;
+    });
+    return out;
+  }
+  function pickPrice(){
+    // First choice (in group order) that carries an explicit
+    // price override wins — matches resolveUnitPrice server-side.
+    var groups = root.querySelectorAll('.pdp-optgroup');
+    for (var i = 0; i < groups.length; i++) {
+      var checked = groups[i].querySelector('input[type=radio]:checked');
+      var raw = checked && checked.getAttribute('data-price');
+      if (raw && raw.length > 0) {
+        var n = parseFloat(raw);
+        if (isFinite(n)) return n;
+      }
+    }
+    return null;
+  }
+  function fmt(n){ return '$' + n.toFixed(2); }
+  function sync(){
+    // Update the pill is-active state per group so keyboard nav
+    // + a click both re-paint. Then recompute the displayed price.
+    root.querySelectorAll('.pdp-optgroup').forEach(function(fs){
+      var choices = fs.querySelectorAll('.pdp-choice');
+      choices.forEach(function(lbl){
+        var inp = lbl.querySelector('input[type=radio]');
+        lbl.classList.toggle('is-active', !!(inp && inp.checked));
+      });
+    });
+    var p = pickPrice();
+    if (p !== null) priceEl.textContent = fmt(p);
+    addBtn.setAttribute('data-options', JSON.stringify(selectedOptions()));
+  }
+  root.addEventListener('change', function(e){
+    if (e.target && e.target.matches && e.target.matches('input[type=radio]')) sync();
+  });
+  sync(); // seed defaults into the button + price on first paint
+})();
+</script>`

@@ -80,14 +80,21 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   const initialTax = round2(snap.subtotal * taxRate)
   const initialTotal = round2(snap.subtotal + initialTax)
 
-  const summaryLines = snap.items.map(i => `      <div class="co-sum-line">
+  const summaryLines = snap.items.map(i => {
+    // Prefer the resolved variant label ("Tea bags · 30 ct") over
+    // the generic unit so the buyer confirms the variant they
+    // picked. No-picker products fall back to unit as before.
+    const sizeStr = i.variant_label || (i.unit ?? '')
+    const meta = sizeStr ? `Qty ${i.qty} · ${escapeHtml(sizeStr)}` : `Qty ${i.qty}`
+    return `      <div class="co-sum-line">
         <div class="co-sum-thumb"><img src="${escapeAttr(i.image_url ?? '')}" alt="${escapeAttr(i.name)}"></div>
         <div class="co-sum-info">
           <div class="co-sum-name">${escapeHtml(i.name)}</div>
-          <div class="co-sum-meta">Qty ${i.qty}${i.unit ? ` · ${escapeHtml(i.unit)}` : ''}</div>
+          <div class="co-sum-meta">${meta}</div>
         </div>
         <div class="co-sum-line-total">${escapeHtml(formatPrice(i.line_total))}</div>
-      </div>`).join('\n')
+      </div>`
+  }).join('\n')
 
   const deliveryRadios = deliveryOptions.map(opt => renderDeliveryOption(opt, false)).join('\n')
   const deliveryNoticeBlock = deliveryNotice

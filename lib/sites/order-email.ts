@@ -282,11 +282,19 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
       : `<td valign="top" width="72" style="padding:10px 0;border-bottom:1px solid ${c.line};width:72px;">
             <div style="width:56px;height:56px;border-radius:8px;background:${c.sand};"></div>
           </td>`
+    // Variant subtitle sits under the product name at ~12px muted
+    // so the buyer confirms the exact form/size they picked (tea
+    // bags vs loose leaf, later color/size etc.). Absent when the
+    // product has no picker.
+    const variantLine = i.variant_label
+      ? `<div style="color:${c.muted};font-size:12px;margin-top:2px;">${escapeHtml(i.variant_label)}</div>`
+      : ''
     return `
       <tr>
         ${thumbCell}
         <td valign="middle" style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;">
           ${escapeHtml(i.name)}${i.qty > 1 ? `<span style="color:${c.muted};"> × ${i.qty}</span>` : ''}
+          ${variantLine}
         </td>
         <td valign="middle" style="padding:10px 0;border-bottom:1px solid ${c.line};color:${c.ink};font-size:14px;text-align:right;white-space:nowrap;">
           ${money(i.line_total)}
@@ -460,6 +468,7 @@ function buildText(args: OrderConfirmationArgs, orderNumber: string, siteName: s
   ]
   for (const i of args.cart.items) {
     lines.push(`${i.name}${i.qty > 1 ? ` x ${i.qty}` : ''}  ${money(i.line_total)}`)
+    if (i.variant_label) lines.push(`  ${i.variant_label}`)
   }
   lines.push('')
   for (const [label, value] of summaryRows(args)) {

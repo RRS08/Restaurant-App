@@ -139,13 +139,22 @@ const HEADER_SCRIPT = `<script>
         if (out) { qty = parseInt(out.textContent, 10) || 1; }
       }
       var slug = addBtn.dataset.slug;
+      // Options come from the PDP picker via the button's
+      // data-options attribute (JSON-serialized). Absent for
+      // .btn-add on card grids — the server fills in defaults
+      // when the product has a picker but the payload omits it.
+      var opts = null;
+      var raw = addBtn.getAttribute('data-options');
+      if (raw) { try { opts = JSON.parse(raw); } catch (_) { opts = null; } }
+      var body = { slug: slug, qty: qty };
+      if (opts && typeof opts === 'object') body.options = opts;
       var original = addBtn.innerHTML;
       addBtn.classList.add('added');
       addBtn.textContent = 'Added \\u2713';
       fetch('/api/site-cart/add', {
         method: 'POST',
         headers: {'content-type':'application/json'},
-        body: JSON.stringify({ slug: slug, qty: qty })
+        body: JSON.stringify(body)
       }).then(function(r){ return r.json(); })
         .then(function(d){ if (d && typeof d.count === 'number') popCartCounts(d.count); })
         .catch(function(){})
@@ -168,10 +177,19 @@ const HEADER_SCRIPT = `<script>
       var newQty = Math.max(0, current + (stepBtn.dataset.cartStep === 'up' ? 1 : -1));
       var slug2 = stepBtn.dataset.slug || line.dataset.slug;
       if (!slug2) return;
+      // The line's data-options identifies WHICH cart line to
+      // update when the same slug appears with multiple variants.
+      // Missing / unparseable = no options → still identifies the
+      // no-picker line correctly.
+      var opts2 = null;
+      var rawOpts = line.getAttribute('data-options');
+      if (rawOpts) { try { opts2 = JSON.parse(rawOpts); } catch (_) { opts2 = null; } }
+      var body2 = { slug: slug2, qty: newQty };
+      if (opts2 && typeof opts2 === 'object') body2.options = opts2;
       fetch('/api/site-cart/set', {
         method: 'POST',
         headers: {'content-type':'application/json'},
-        body: JSON.stringify({ slug: slug2, qty: newQty })
+        body: JSON.stringify(body2)
       }).then(function(){ window.location.reload(); });
       return;
     }
@@ -182,10 +200,15 @@ const HEADER_SCRIPT = `<script>
       var line2 = removeBtn.closest('.cart-line');
       var slug3 = removeBtn.dataset.slug || (line2 && line2.dataset.slug);
       if (!slug3) return;
+      var opts3 = null;
+      var rawOpts2 = line2 && line2.getAttribute('data-options');
+      if (rawOpts2) { try { opts3 = JSON.parse(rawOpts2); } catch (_) { opts3 = null; } }
+      var body3 = { slug: slug3, qty: 0 };
+      if (opts3 && typeof opts3 === 'object') body3.options = opts3;
       fetch('/api/site-cart/set', {
         method: 'POST',
         headers: {'content-type':'application/json'},
-        body: JSON.stringify({ slug: slug3, qty: 0 })
+        body: JSON.stringify(body3)
       }).then(function(){ window.location.reload(); });
       return;
     }

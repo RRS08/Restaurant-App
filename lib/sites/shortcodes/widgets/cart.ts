@@ -84,15 +84,26 @@ ${lines}
 }
 
 function renderLine(item: EnrichedCartItem): string {
-  const meta = item.unit
-    ? `${formatPrice(item.price)} · ${escapeHtml(item.unit)}`
+  // When the product has a picker, the variant label ("Tea bags ·
+  // 30 ct") IS the size string — dropping .unit avoids doubling.
+  // Products with no picker keep the .unit suffix as before.
+  const sizeStr = item.variant_label || (item.unit ?? '')
+  const meta = sizeStr
+    ? `${formatPrice(item.price)} · ${escapeHtml(sizeStr)}`
     : formatPrice(item.price)
+  // data-options identifies WHICH line to update on the stepper /
+  // remove buttons — same slug can appear multiple times with
+  // different options. Serialized as JSON so client JS parses
+  // once with JSON.parse.
+  const optsAttr = item.options
+    ? ` data-options="${escapeAttr(JSON.stringify(item.options))}"`
+    : ''
 
   // Remove sits inside .cart-info under the meta line — Design's
   // shape. Was previously trailing after the line as a 5th grid
   // child, which the grid didn't allocate a track for and pushed
   // to a separate row.
-  return `    <div class="cart-line" data-slug="${escapeAttr(item.slug)}">
+  return `    <div class="cart-line" data-slug="${escapeAttr(item.slug)}"${optsAttr}>
       <div class="cart-thumb"><img src="${escapeAttr(item.image_url ?? '')}" alt="${escapeAttr(item.name)}"></div>
       <div class="cart-info">
         <div class="cart-name">${escapeHtml(item.name)}</div>

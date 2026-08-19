@@ -1226,8 +1226,12 @@ function OrderDrawer({ order, onClose, t, locale }: {
               online orders show what was bought instead of a bare
               "No line items" placeholder. */}
           {(() => {
+            // Snapshot shape widened for variant_label — orders
+            // placed after the option-picker landed carry it; older
+            // orders fall back to `unit` so the drawer still shows
+            // "3 oz pouch" for legacy rows.
             const webCart = order.source === 'web' && order.webDetail
-              ? ((order.webDetail.cart as { items?: Array<{ slug?: string; name?: string; qty?: number; line_total?: number; unit?: string | null }> } | null)?.items ?? [])
+              ? ((order.webDetail.cart as { items?: Array<{ slug?: string; name?: string; qty?: number; line_total?: number; unit?: string | null; variant_label?: string | null }> } | null)?.items ?? [])
               : []
             const displayItems: Array<{ id: string; name: string; quantity: number; totalPrice: number; variantLabel: string | null }> =
               order.lineItems.length > 0
@@ -1237,7 +1241,9 @@ function OrderDrawer({ order, onClose, t, locale }: {
                     name: c.name ?? '—',
                     quantity: typeof c.qty === 'number' ? c.qty : 1,
                     totalPrice: typeof c.line_total === 'number' ? c.line_total : 0,
-                    variantLabel: c.unit ?? null,
+                    variantLabel: (typeof c.variant_label === 'string' && c.variant_label.length > 0)
+                      ? c.variant_label
+                      : (c.unit ?? null),
                   }))
             return (
           <div style={{ marginBottom: 20 }}>

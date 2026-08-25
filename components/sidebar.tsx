@@ -37,7 +37,7 @@ import { makeT, type Lang } from '@/lib/i18n'
 import {
   LayoutDashboard, UtensilsCrossed, TrendingUp, Package, Users,
   DollarSign, Settings, LogOut, Lock, ShoppingCart, BarChart3, Wrench, X,
-  MessageCircle, ClipboardList, PencilLine, Store, Globe, ChevronsUpDown,
+  MessageCircle, ClipboardList, PencilLine, Store, Globe,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
@@ -153,33 +153,28 @@ export default function Sidebar({
     // scroll out of view when main content overflowed.
     <aside className="w-60 h-full bg-white border-r border-hairline flex flex-col">
 
-      {/* Top: active-place chip. Clicking submits the changePlace
-          server action which clears the active_place_id cookie and
-          lands the operator back on /places. Same treatment as the
-          picker design — small kind glyph tile, place name, and
-          "Change place" subtitle with a chevrons-up-down hint so
-          the affordance reads as "swap workspace". */}
+      {/* Top: active-place chip. Sits inside a soft-fill card so
+          the whole strip reads as "this is a button, click to
+          swap workspace" without needing the extra chevrons or
+          the "Change place" subtitle to spell it out. Hover
+          darkens the fill; the title attribute carries the
+          affordance for screen readers + long-press previews. */}
       <div className="px-3 py-3 border-b border-hairline flex items-center gap-2">
         <form action={changePlace} className="flex-1 min-w-0">
           <button
             type="submit"
-            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md hover:bg-zinc-50 transition-colors text-left"
-            title={`Change place — currently ${activePlace.name}`}
+            className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 transition-colors text-left"
+            title={t('Change place', 'Cambiar lugar')}
+            aria-label={t('Change place', 'Cambiar lugar')}
           >
-            <span className="inline-flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 text-zinc-900 flex-shrink-0">
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-md bg-white text-zinc-900 flex-shrink-0">
               {activePlace.kind === 'online'
                 ? <Globe className="w-4 h-4" />
                 : <Store className="w-4 h-4" />}
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-semibold text-zinc-900 truncate leading-tight">
-                {activePlace.name}
-              </span>
-              <span className="block text-[11px] text-zinc-400 mt-0.5">
-                {t('Change place', 'Cambiar lugar')}
-              </span>
+            <span className="min-w-0 flex-1 text-[13px] font-semibold text-zinc-900 truncate leading-tight">
+              {activePlace.name}
             </span>
-            <ChevronsUpDown className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
           </button>
         </form>
         {/* Tablet-only close — only renders when AppShell is

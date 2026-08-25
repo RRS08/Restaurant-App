@@ -7,28 +7,49 @@
 // syntax and page-level {{query.X}} substitution only fires inside
 // shortcode attribute values, not in class names.
 //
-// Categories are hardcoded here rather than derived from the DB.
-// Deriving would require a distinct-categories query per pageload
-// and a decision about ordering that we don't have yet; a hardcoded
-// list matches what the tea shop actually sells and can be pulled
-// into config the moment a second site needs a different set.
+// The category list is DERIVED — no hardcoded catalog. Two sources
+// are merged so the strip always mirrors what the operator sees in
+// /catalog:
+//
+//   1. site.config.catalog_categories — the ordered list of empty
+//      categories the operator added via the catalog editor.
+//   2. Distinct site_products.category slugs — categories that
+//      have at least one live product but aren't in the persisted
+//      list yet.
+//
+// Persisted order wins on the strip; anything derived-only appends
+// after (known slugs first — tea-blends, ointments, accessories —
+// then alphabetical for anything new). Empty categories still
+// render as chips so an operator adding a category from the
+// catalog editor can see it on the storefront immediately, even
+// before the first product lands there.
 // ----------------------------------------------------------------
 
+import { createAdminClient } from '@/lib/supabase/admin'
 import type { ShortcodeContext } from '../index'
 import { escapeAttr, escapeHtml } from '../utils'
 
 interface Chip { label: string; category: string }
 
-const CHIPS: Chip[] = [
-  { label: 'Everything', category: '' },
-  { label: 'Tea blends', category: 'tea-blends' },
-  { label: 'Ointments', category: 'ointments' },
-  { label: 'Accessories', category: 'accessories' },
-]
+/** Known slugs get pretty labels; anything new gets a title-cased
+ *  version of its slug so a new "wellness-teas" category still
+ *  renders as "Wellness Teas" on the chip strip. */
+const KNOWN_LABELS: Record<string, string> = {
+  'tea-blends': 'Tea blends',
+  'ointments': 'Ointments',
+  'accessories': 'Accessories',
+}
 
-export function renderShopChips(_args: unknown, ctx: ShortcodeContext): string {
+function labelFor(slug: string): string {
+  return KNOWN_LABELS[slug]
+    ?? slug.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
+}
+
+export async function renderShopChips(_args: unknown, ctx: ShortcodeContext): Promise<string> {
   const active = typeof ctx.query.category === 'string' ? ctx.query.category : ''
-  const links = CHIPS.map(c => {
+
+  const chips = await resolveChips(ctx)
+  const links = chips.map(c => {
     const isActive = c.category === active
     const href = c.category === '' ? '/shop' : `/shop?category=${encodeURIComponent(c.category)}`
     return `    <a class="chip${isActive ? ' is-active' : ''}" href="${escapeAttr(href)}" data-chip-cat="${escapeAttr(c.category)}">${escapeHtml(c.label)}</a>`
@@ -40,6 +61,54 @@ ${links}
   </div>
 </div>
 ${CHIP_SCRIPT}`
+}
+
+/** Merge persisted + derived categories into an ordered chip list.
+ *  Always starts with "Everything" so the strip has a clear
+ *  reset target. */
+async function resolveChips(ctx: ShortcodeContext): Promise<Chip[]> {
+  const chips: Chip[] = [{ label: 'Everything', category: '' }]
+  const admin = createAdminClient()
+
+  const config = (ctx.site.config ?? {}) as { catalog_categories?: unknown }
+  const persistedRaw = Array.isArray(config.catalog_categories) ? config.catalog_categories : []
+  const persisted: Chip[] = []
+  const persistedKeys = new Set<string>()
+  for (const raw of persistedRaw) {
+    if (!raw || typeof raw !== 'object') continue
+    const c = raw as { key?: unknown; label?: unknown }
+    if (typeof c.key !== 'string' || typeof c.label !== 'string') continue
+    if (persistedKeys.has(c.key)) continue
+    persisted.push({ category: c.key, label: c.label })
+    persistedKeys.add(c.key)
+  }
+
+  // Distinct categories currently in use on live products.
+  const { data: productRows } = await admin
+    .from('site_products')
+    .select('category')
+    .eq('site_id', ctx.site.id)
+    .eq('status', 'live')
+    .not('category', 'is', null)
+  const usedKeys = new Set<string>()
+  for (const row of productRows ?? []) {
+    const cat = (row as { category?: string | null }).category
+    if (typeof cat === 'string' && cat.length > 0) usedKeys.add(cat)
+  }
+
+  const derivedOnly = Array.from(usedKeys)
+    .filter(k => !persistedKeys.has(k))
+    .sort((a, b) => {
+      const ai = Object.keys(KNOWN_LABELS).indexOf(a)
+      const bi = Object.keys(KNOWN_LABELS).indexOf(b)
+      if (ai === -1 && bi === -1) return a.localeCompare(b)
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+    .map(k => ({ category: k, label: labelFor(k) }))
+
+  return [...chips, ...persisted, ...derivedOnly]
 }
 
 // Client-side chip behavior — intercepts anchor clicks so filtering

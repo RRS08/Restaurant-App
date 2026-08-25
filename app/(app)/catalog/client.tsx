@@ -19,7 +19,7 @@
 
 import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { createProduct, updateProduct, deleteProduct, type CatalogProductInput } from '@/app/actions/catalog'
+import { createProduct, updateProduct, deleteProduct, addCategory, type CatalogProductInput } from '@/app/actions/catalog'
 import { normalizeGroups } from '@/lib/sites/cart-options'
 import type { SiteProductRow } from '@/lib/sites/types'
 
@@ -47,32 +47,70 @@ function labelFor(slug: string): string {
 type Draft = Partial<CatalogProductInput> & { id?: string }
 
 export default function CatalogClient({
-  siteName, products,
+  siteName, products, persistedCategories,
 }: {
   siteName: string
   products: SiteProductRow[]
+  /** Empty categories the operator has explicitly added on
+   *  site.config.catalog_categories. Merged with the derived
+   *  categories below so the rail shows both populated and empty
+   *  ones. Order in this list is preserved on the rail. */
+  persistedCategories: Array<{ key: string; label: string }>
 }) {
   const [selected, setSelected] = useState<string>('')
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState<Draft | null>(null)
+  const [addingCategory, setAddingCategory] = useState(false)
+  const [newCategoryLabel, setNewCategoryLabel] = useState('')
+  const [categoryError, setCategoryError] = useState<string | null>(null)
+  const [savingCategory, startCategorySave] = useTransition()
+  const router = useRouter()
 
-  // Category rail data. Rebuilt on every render off the current
-  // product set so adding a product with a new category slug
-  // makes the rail line show up immediately after revalidate.
+  // Category rail data — merge two sources:
+  //   1. persistedCategories from site.config (empty ones the
+  //      operator added; kept even when no product uses them)
+  //   2. distinct site_products.category slugs (populated ones)
+  // Persisted order wins; anything derived-only appends after,
+  // known slugs first (tea-blends, ointments, accessories), then
+  // alphabetical for anything new.
   const categoryCounts = new Map<string, number>()
   for (const p of products) {
     const key = p.category ?? ''
     if (!key) continue
     categoryCounts.set(key, (categoryCounts.get(key) ?? 0) + 1)
   }
+  const labelByKey = new Map<string, string>()
+  for (const c of persistedCategories) labelByKey.set(c.key, c.label)
   const knownOrder = Object.keys(CATEGORY_LABELS)
-  const categories = Array.from(categoryCounts.keys()).sort((a, b) => {
-    const ai = knownOrder.indexOf(a); const bi = knownOrder.indexOf(b)
-    if (ai === -1 && bi === -1) return a.localeCompare(b)
-    if (ai === -1) return 1
-    if (bi === -1) return -1
-    return ai - bi
-  })
+  const derivedOnly = Array.from(categoryCounts.keys())
+    .filter(k => !labelByKey.has(k))
+    .sort((a, b) => {
+      const ai = knownOrder.indexOf(a); const bi = knownOrder.indexOf(b)
+      if (ai === -1 && bi === -1) return a.localeCompare(b)
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+  const categories: Array<{ key: string; label: string }> = [
+    ...persistedCategories.map(c => ({ key: c.key, label: c.label })),
+    ...derivedOnly.map(k => ({ key: k, label: labelFor(k) })),
+  ]
+
+  function handleAddCategory() {
+    const label = newCategoryLabel.trim()
+    if (!label) return
+    setCategoryError(null)
+    startCategorySave(async () => {
+      const result = await addCategory(label)
+      if ('error' in result) {
+        setCategoryError(result.error)
+      } else {
+        setNewCategoryLabel('')
+        setAddingCategory(false)
+        router.refresh()
+      }
+    })
+  }
 
   // Filter chain: category → search. Search matches name, slug,
   // secondary_name, benefit, purpose (all lowercased for a
@@ -197,13 +235,88 @@ export default function CatalogClient({
             <RailLink label="All" count={products.length} active={selected === ''} onClick={() => setSelected('')} />
             {categories.map(cat => (
               <RailLink
-                key={cat}
-                label={labelFor(cat)}
-                count={categoryCounts.get(cat) ?? 0}
-                active={selected === cat}
-                onClick={() => setSelected(cat)}
+                key={cat.key}
+                label={cat.label}
+                count={categoryCounts.get(cat.key) ?? 0}
+                active={selected === cat.key}
+                onClick={() => setSelected(cat.key)}
               />
             ))}
+            {/* + Add category — inline input expands from the
+                rail's bottom. Empty categories persist via
+                addCategory() so they stay in the rail (and on
+                the shop's filter chips) even without products. */}
+            {addingCategory ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '6px 4px 0' }}>
+                <input
+                  type="text"
+                  autoFocus
+                  value={newCategoryLabel}
+                  placeholder="Category name"
+                  onChange={e => setNewCategoryLabel(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') { e.preventDefault(); handleAddCategory() }
+                    else if (e.key === 'Escape') {
+                      setAddingCategory(false); setNewCategoryLabel(''); setCategoryError(null)
+                    }
+                  }}
+                  disabled={savingCategory}
+                  style={{
+                    padding: '7px 10px', font: 'inherit', fontSize: 13,
+                    border: `1px solid ${LINE}`, borderRadius: 8, background: '#fff',
+                    color: INK, outline: 'none',
+                  }}
+                />
+                {categoryError && (
+                  <div style={{ fontSize: 11, color: DANGER }}>{categoryError}</div>
+                )}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddingCategory(false); setNewCategoryLabel(''); setCategoryError(null)
+                    }}
+                    disabled={savingCategory}
+                    style={{
+                      flex: 1, border: `1px solid ${LINE}`, background: '#fff', color: '#3F3F46',
+                      borderRadius: 8, padding: '6px 10px', font: 'inherit',
+                      fontSize: 12, fontWeight: 500,
+                      cursor: savingCategory ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddCategory}
+                    disabled={savingCategory || !newCategoryLabel.trim()}
+                    style={{
+                      flex: 1, border: 0, background: INK, color: '#FAF9F6',
+                      borderRadius: 8, padding: '7px 10px', font: 'inherit',
+                      fontSize: 12, fontWeight: 600,
+                      cursor: savingCategory ? 'wait' : 'pointer',
+                      opacity: savingCategory || !newCategoryLabel.trim() ? 0.6 : 1,
+                    }}
+                  >
+                    {savingCategory ? 'Adding…' : 'Add'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAddingCategory(true)}
+                style={{
+                  marginTop: 6, padding: '8px 12px', borderRadius: 8,
+                  background: 'transparent', color: MUTED,
+                  fontSize: 13, fontWeight: 500,
+                  border: `1px dashed ${LINE}`, cursor: 'pointer',
+                  textAlign: 'left', font: 'inherit',
+                }}
+              >
+                + Add category
+              </button>
+            )}
           </nav>
         </aside>
 

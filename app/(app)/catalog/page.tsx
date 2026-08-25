@@ -28,10 +28,25 @@ export default async function CatalogPage() {
 
   const { data: site } = await supabase
     .from('sites')
-    .select('id, slug, name')
+    .select('id, slug, name, config')
     .eq('restaurant_id', role.restaurant_id)
     .maybeSingle()
   if (!site) return <EmptyShell reason="no-site" />
+
+  // Persisted categories on site.config.catalog_categories —
+  // shown in the rail even when they have no products yet, so a
+  // freshly-added category doesn't disappear on refresh. Any
+  // malformed entries are dropped rather than crashing the page.
+  const rawCategories = ((site.config ?? {}) as { catalog_categories?: unknown }).catalog_categories
+  const persistedCategories: Array<{ key: string; label: string }> = Array.isArray(rawCategories)
+    ? rawCategories
+        .filter((c): c is { key: string; label: string } =>
+          !!c && typeof c === 'object'
+          && typeof (c as { key?: unknown }).key === 'string'
+          && typeof (c as { label?: unknown }).label === 'string'
+        )
+        .map(c => ({ key: c.key, label: c.label }))
+    : []
 
   const { data: products, error } = await supabase
     .from('site_products')
@@ -49,6 +64,7 @@ export default async function CatalogPage() {
     <CatalogClient
       siteName={site.name ?? 'Online storefront'}
       products={rows}
+      persistedCategories={persistedCategories}
     />
   )
 }

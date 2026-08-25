@@ -223,6 +223,64 @@ export async function updateProduct(
   return { ok: true }
 }
 
+/** Persist a new empty category on the site's config so the rail
+ *  can display it before any product uses it. Categories live on
+ *  site.config.catalog_categories as an ordered array of
+ *  { key, label } — no separate table needed. Idempotent: adding
+ *  a slug that already exists is a no-op. */
+export async function addCategory(label: string): Promise<ActionResult<{ key: string; label: string }>> {
+  const clean = (label ?? '').trim()
+  if (!clean) return { error: 'Category name is required.' }
+  const key = slugify(clean)
+  const ctx = await resolveOperatorSite()
+  if ('error' in ctx) return ctx
+
+  const admin = createAdminClient()
+  const { data: site } = await admin
+    .from('sites')
+    .select('config')
+    .eq('id', ctx.siteId)
+    .maybeSingle()
+  if (!site) return { error: 'Site not found.' }
+
+  const config = (site.config ?? {}) as Record<string, unknown>
+  const rawList = Array.isArray(config.catalog_categories) ? config.catalog_categories : []
+  const existing: Array<{ key: string; label: string }> = []
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== 'object') continue
+    const c = raw as { key?: unknown; label?: unknown }
+    if (typeof c.key !== 'string' || typeof c.label !== 'string') continue
+    existing.push({ key: c.key, label: c.label })
+  }
+  // Duplicate check by slug against both the stored list and any
+  // slugs already in use on products — a user typing "Tea Blends"
+  // when a "tea-blends" product category already exists should
+  // land on the same rail entry, not fork two.
+  if (existing.some(c => c.key === key)) return { ok: true, data: { key, label: clean } }
+  const { data: usedByProducts } = await admin
+    .from('site_products')
+    .select('category')
+    .eq('site_id', ctx.siteId)
+    .eq('category', key)
+    .limit(1)
+  if (usedByProducts && usedByProducts.length > 0) {
+    return { ok: true, data: { key, label: clean } }
+  }
+
+  const nextList = [...existing, { key, label: clean }]
+  const nextConfig = { ...config, catalog_categories: nextList }
+  const { error } = await admin
+    .from('sites')
+    .update({ config: nextConfig })
+    .eq('id', ctx.siteId)
+  if (error) {
+    console.error('[catalog:addCategory] update failed', error)
+    return { error: 'Could not save category.' }
+  }
+  revalidatePath('/catalog')
+  return { ok: true, data: { key, label: clean } }
+}
+
 /** Delete a product. Same site-ownership guard as update. */
 export async function deleteProduct(productId: string): Promise<ActionResult> {
   if (!productId) return { error: 'Missing product id.' }

@@ -59,7 +59,7 @@ const CHANNEL_TONES = {
   delivery: { tile: '#FDF2F8', ink: '#DB2777', dot: '#EC4899' },
 } as const
 
-type FilterKey = 'all' | 'new' | 'pickup' | 'delivery' | 'voided'
+type FilterKey = 'all' | 'pickup' | 'delivery' | 'voided'
 
 export default function OrdersClient({
   lang, orders, businessDate,
@@ -75,16 +75,26 @@ export default function OrdersClient({
 
   const counts: Record<FilterKey, number> = {
     all: orders.length,
-    new: orders.filter(o => o.status !== 'voided' && o.fulfillmentState === 'new').length,
     pickup: orders.filter(o => o.status !== 'voided' && o.channel === 'pickup').length,
     delivery: orders.filter(o => o.status !== 'voided' && o.channel === 'delivery').length,
     voided: orders.filter(o => o.status === 'voided').length,
   }
 
+  // How many orders in each channel still need staff attention.
+  // Pickup has a real workflow (Mark ready) so the number is
+  // actionable; delivery's shipping workflow lands later, so its
+  // action count stays 0 until then. Rendered as a small orange
+  // dot on the filter chip only when > 0.
+  const needsAction: Record<FilterKey, number> = {
+    all: 0,
+    pickup: orders.filter(o => o.status !== 'voided' && o.channel === 'pickup' && o.fulfillmentState === 'new').length,
+    delivery: 0,
+    voided: 0,
+  }
+
   const shown = useMemo(() => {
     if (filter === 'all') return orders
     if (filter === 'voided') return orders.filter(o => o.status === 'voided')
-    if (filter === 'new') return orders.filter(o => o.status !== 'voided' && o.fulfillmentState === 'new')
     return orders.filter(o => o.status !== 'voided' && o.channel === filter)
   }, [orders, filter])
 
@@ -138,20 +148,19 @@ export default function OrdersClient({
           background: SURFACE, padding: '10px 24px',
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         }}>
-          {(['all', 'new', 'pickup', 'delivery', 'voided'] as const).map(f => {
+          {(['all', 'pickup', 'delivery', 'voided'] as const).map(f => {
             const on = filter === f
             const label =
               f === 'all' ? t('All', 'Todo')
-                : f === 'new' ? t('Needs action', 'Pendientes')
-                  : f === 'pickup' ? t('Pickup', 'Recoger')
-                    : f === 'delivery' ? t('Delivery', 'Envío')
-                      : t('Voided', 'Anuladas')
+                : f === 'pickup' ? t('Pickup', 'Recoger')
+                  : f === 'delivery' ? t('Delivery', 'Envío')
+                    : t('Voided', 'Anuladas')
             const dot =
               f === 'pickup' ? CHANNEL_TONES.pickup.dot
                 : f === 'delivery' ? CHANNEL_TONES.delivery.dot
-                  : f === 'new' ? '#F59E0B'
-                    : f === 'voided' ? '#DC2626'
-                      : null
+                  : f === 'voided' ? '#DC2626'
+                    : null
+            const needs = needsAction[f]
             return (
               <button
                 key={f}
@@ -165,6 +174,7 @@ export default function OrdersClient({
                   background: on ? INK : '#fff',
                   color: on ? PAPER : '#3F3F46',
                   fontWeight: on ? 600 : 500,
+                  position: 'relative',
                 }}
               >
                 {dot && <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: dot }} />}
@@ -175,6 +185,25 @@ export default function OrdersClient({
                 }}>
                   {counts[f]}
                 </span>
+                {/* Small orange pip when this channel has orders
+                    still waiting on staff. Sits on the top-right
+                    corner of the chip so it reads as a "there's
+                    work here" signal without cluttering the label. */}
+                {needs > 0 && (
+                  <span
+                    aria-label={`${needs} need${needs === 1 ? 's' : ''} action`}
+                    style={{
+                      position: 'absolute', top: -3, right: -3,
+                      minWidth: 14, height: 14, borderRadius: 999,
+                      background: '#EA580C', color: '#fff',
+                      fontSize: 9, fontWeight: 700, padding: '0 4px',
+                      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                      lineHeight: 1, border: '2px solid #fff',
+                    }}
+                  >
+                    {needs}
+                  </span>
+                )}
               </button>
             )
           })}

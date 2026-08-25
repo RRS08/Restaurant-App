@@ -258,6 +258,7 @@ const PICKER_SCRIPT = `<script>
   if (!root) return;
   var addBtn  = root.querySelector('[data-add-button]');
   if (!addBtn) return;
+  var qtyOut = root.querySelector('.stepper output');
   var baseLabel = addBtn.getAttribute('data-add-label') || 'Add to cart';
   function selectedOptions(){
     var out = {};
@@ -269,10 +270,11 @@ const PICKER_SCRIPT = `<script>
     return out;
   }
   function pickPrice(){
-    // Effective price for the current selection. Every choice
-    // carries its effective price on data-price (base fallback
-    // baked in server-side), so we can always keep the button
-    // label truthful. Returns null only if the DOM is malformed.
+    // Effective unit price for the current selection. Every
+    // choice carries its effective price on data-price (base
+    // fallback baked in server-side), so we can always keep the
+    // button label truthful. Returns null only if the DOM is
+    // malformed.
     var groups = root.querySelectorAll('.pdp-optgroup');
     for (var i = 0; i < groups.length; i++) {
       var checked = groups[i].querySelector('input[type=radio]:checked');
@@ -284,14 +286,20 @@ const PICKER_SCRIPT = `<script>
     }
     return null;
   }
+  function currentQty(){
+    if (!qtyOut) return 1;
+    var n = parseInt(qtyOut.textContent, 10);
+    return isFinite(n) && n > 0 ? n : 1;
+  }
   function fmt(n){ return '$' + n.toFixed(2); }
   function sync(){
     // Re-paint the pill is-active state per group so keyboard
     // nav + a click both feel snappy. Hero price stays put —
     // the base price is the product's canonical price, and any
-    // variant surcharge is shown on the pill itself + folded
-    // into the Add-to-cart label below so the buyer confirms
-    // the actual amount they're paying.
+    // variant surcharge folds into the Add-to-cart label so
+    // the buyer confirms the exact amount before they commit.
+    // Label reflects qty × unit price so bumping the stepper
+    // updates the button in lockstep.
     root.querySelectorAll('.pdp-optgroup').forEach(function(fs){
       var choices = fs.querySelectorAll('.pdp-choice');
       choices.forEach(function(lbl){
@@ -299,9 +307,10 @@ const PICKER_SCRIPT = `<script>
         lbl.classList.toggle('is-active', !!(inp && inp.checked));
       });
     });
-    var p = pickPrice();
-    if (p !== null) {
-      addBtn.textContent = baseLabel + ' · ' + fmt(p);
+    var unit = pickPrice();
+    if (unit !== null) {
+      var qty = currentQty();
+      addBtn.textContent = baseLabel + ' · ' + fmt(unit * qty);
     } else {
       addBtn.textContent = baseLabel;
     }
@@ -310,6 +319,16 @@ const PICKER_SCRIPT = `<script>
   root.addEventListener('change', function(e){
     if (e.target && e.target.matches && e.target.matches('input[type=radio]')) sync();
   });
+  // Qty changes come from the page's own stepper script (mutates
+  // the <output>'s textContent); observe it so the button stays
+  // in step regardless of who writes the qty. Character-data
+  // observation catches every path — direct assignment, innerHTML
+  // rewrites, a future replacement of the text node, etc.
+  if (qtyOut && typeof MutationObserver !== 'undefined') {
+    new MutationObserver(sync).observe(qtyOut, {
+      characterData: true, childList: true, subtree: true,
+    });
+  }
   sync(); // seed defaults into the button on first paint
 })();
 </script>`

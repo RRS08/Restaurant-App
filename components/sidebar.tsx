@@ -29,7 +29,7 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useSidebarClose } from '@/app/(app)/app-shell'
-import { BrandMark, BrandWordmark } from '@/components/brand'
+import { BrandLockup } from '@/components/brand'
 import { lockDevice } from '@/app/actions/access'
 import { changePlace } from '@/app/actions/places'
 import type { Place } from '@/lib/places'
@@ -276,16 +276,16 @@ export default function Sidebar({
           {t('Sign out', 'Cerrar sesión')}
         </Link>
 
-        {/* Product mark + wordmark — the platform's signature at
-            the bottom of every workspace. Mark sits next to the
-            wordmark so the two read as one lockup ("checked" the
-            product), not as two floating elements. Version tag
-            stays on the right. */}
+        {/* Product lockup — mark + wordmark sized in lockstep
+            from the shared BrandLockup so both render at the
+            same ink color and same optical weight. The "md"
+            size (28px mark + 20px wordmark) is big enough to
+            actually read at the bottom of the sidebar; the
+            "flat" variant keeps the mark as a one-color glyph
+            instead of a solid black tile so it matches the
+            wordmark's ink tone. */}
         <div className="mt-3 px-3 pt-3 border-t border-hairline flex items-center justify-between">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <BrandMark size={16} variant="solid" className="rounded-[4px] flex-shrink-0" />
-            <BrandWordmark size="sm" className="text-slate" />
-          </div>
+          <BrandLockup size="md" variant="flat" />
           <span className="text-[10px] text-zinc-300 font-medium tabular-nums">v1</span>
         </div>
       </div>

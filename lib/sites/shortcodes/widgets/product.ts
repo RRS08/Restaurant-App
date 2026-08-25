@@ -87,6 +87,16 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
     ? `<dl class="pdp-facts">\n${factsRows.join('\n')}\n  </dl>`
     : ''
 
+  // Optional disclaimer text — small muted paragraph rendered
+  // inside the left tile column below the image so the safety /
+  // legal copy stays paired with the product image instead of
+  // trailing after the whole layout. Pass on the shortcode as
+  // disclaimer="Sold as food...". Absent = nothing renders.
+  const disclaimerRaw = typeof args.disclaimer === 'string' ? args.disclaimer.trim() : ''
+  const disclaimer = disclaimerRaw
+    ? `<p class="pdp-disclaimer">${escapeHtml(disclaimerRaw)}</p>`
+    : ''
+
   return `<div class="pdp-grid" data-pdp>
   <div class="pdp-tile">
     ${tag}
@@ -109,7 +119,8 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
       <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}" data-add-button data-add-label="Add to cart">Add to cart</button>
     </div>
   </div>
-</div>${optionsScript}${PICKER_STYLE}`
+  ${disclaimer}
+</div>${optionsScript}${PICKER_STYLE}${DISCLAIMER_STYLE}`
 }
 
 function parsePrice(raw: number | string): number {
@@ -172,6 +183,24 @@ ${groupBlocks}
 // script (in the site layout) already reads data-slug + qty; a
 // tiny hook there also reads data-options if present.
 // ----------------------------------------------------------------
+
+// Always-injected small style block that positions the optional
+// disclaimer paragraph directly under the tile image (grid
+// column 1, row 2). Safe to inline on every render because it's
+// tiny and idempotent; browsers dedup identical rules.
+const DISCLAIMER_STYLE = `<style>
+.pdp-grid > .pdp-disclaimer {
+  grid-column: 1;
+  margin: 12px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #55723e;
+  max-width: 100%;
+}
+@media (max-width: 767px) {
+  .pdp-grid > .pdp-disclaimer { grid-column: 1 / -1; margin-top: 16px; }
+}
+</style>`
 
 const PICKER_STYLE = `<style>
 .pdp-options { display: flex; flex-direction: column; gap: 12px; margin: 20px 0 8px; }

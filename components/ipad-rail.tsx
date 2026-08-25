@@ -28,12 +28,14 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BrandMark } from '@/components/brand'
 import { lockDevice } from '@/app/actions/access'
+import { changePlace } from '@/app/actions/places'
+import type { Place } from '@/lib/places'
 import { makeT, type Lang } from '@/lib/i18n'
 import {
   LayoutDashboard, UtensilsCrossed, ShoppingCart, TrendingUp,
   Package, Users, DollarSign, BarChart3, Settings, Lock, LogOut, Wrench,
+  MessageCircle, ClipboardList, PencilLine, Store, Globe,
 } from 'lucide-react'
 
 const INK = '#18181B'
@@ -41,19 +43,33 @@ const LINE = '#E7E6E2'
 const FILL = '#F4F4F5'
 const FAINT = '#A1A1A6'
 
-const navItems: Array<{
+type NavItem = {
   labelEn: string; labelEs: string; href: string; icon: typeof LayoutDashboard; dev?: true
-}> = [
-  { labelEn: 'Dashboard',   labelEs: 'Panel',         href: '/dashboard', icon: LayoutDashboard },
-  { labelEn: 'Menu',        labelEs: 'Menú',          href: '/menu',      icon: UtensilsCrossed },
-  { labelEn: 'POS',         labelEs: 'POS',           href: '/pos',       icon: ShoppingCart },
-  { labelEn: 'Sales',       labelEs: 'Ventas',        href: '/sales',     icon: TrendingUp },
-  { labelEn: 'Inventory',   labelEs: 'Inventario',    href: '/inventory', icon: Package },
-  { labelEn: 'Staffing',    labelEs: 'Personal',      href: '/staffing',  icon: Users },
-  { labelEn: 'Finance',     labelEs: 'Finanzas',      href: '/finance',   icon: DollarSign },
-  { labelEn: 'Analytics',   labelEs: 'Analíticas',    href: '/analytics', icon: BarChart3 },
-  { labelEn: 'Settings',    labelEs: 'Ajustes',       href: '/settings',  icon: Settings },
-  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox',   href: '/dev-tools', icon: Wrench, dev: true },
+}
+
+const RETAIL_NAV: NavItem[] = [
+  { labelEn: 'Dashboard',   labelEs: 'Panel',       href: '/dashboard', icon: LayoutDashboard },
+  { labelEn: 'Menu',        labelEs: 'Menú',        href: '/menu',      icon: UtensilsCrossed },
+  { labelEn: 'POS',         labelEs: 'POS',         href: '/pos',       icon: ShoppingCart },
+  { labelEn: 'Sales',       labelEs: 'Ventas',      href: '/sales',     icon: TrendingUp },
+  { labelEn: 'Inventory',   labelEs: 'Inventario',  href: '/inventory', icon: Package },
+  { labelEn: 'Staffing',    labelEs: 'Personal',    href: '/staffing',  icon: Users },
+  { labelEn: 'Finance',     labelEs: 'Finanzas',    href: '/finance',   icon: DollarSign },
+  { labelEn: 'Analytics',   labelEs: 'Analíticas',  href: '/analytics', icon: BarChart3 },
+  { labelEn: 'Settings',    labelEs: 'Ajustes',     href: '/settings',  icon: Settings },
+  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
+]
+
+const ONLINE_NAV: NavItem[] = [
+  { labelEn: 'Dashboard',   labelEs: 'Panel',       href: '/dashboard', icon: LayoutDashboard },
+  { labelEn: 'Chat',        labelEs: 'Chat',        href: '/chat',      icon: MessageCircle },
+  { labelEn: 'Orders',      labelEs: 'Pedidos',     href: '/orders',    icon: ClipboardList },
+  { labelEn: 'Catalog',     labelEs: 'Catálogo',    href: '/catalog',   icon: UtensilsCrossed },
+  { labelEn: 'Inventory',   labelEs: 'Inventario',  href: '/inventory', icon: Package },
+  { labelEn: 'Customers',   labelEs: 'Clientes',    href: '/customers', icon: Users },
+  { labelEn: 'Edit site',   labelEs: 'Editar sitio',href: '/edit-site', icon: PencilLine },
+  { labelEn: 'Settings',    labelEs: 'Ajustes',     href: '/settings',  icon: Settings },
+  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
 ]
 
 interface IPadRailProps {
@@ -64,10 +80,11 @@ interface IPadRailProps {
   nativePosEnabled: boolean
   isDev: boolean
   lang: Lang
+  activePlace: Place
 }
 
 export default function IPadRail({
-  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang,
+  userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace,
 }: IPadRailProps) {
   const t = makeT(lang)
   const pathname = usePathname()
@@ -75,9 +92,11 @@ export default function IPadRail({
   const popoverRef = useRef<HTMLDivElement>(null)
   const avatarBtnRef = useRef<HTMLButtonElement>(null)
 
-  // Same filter as components/sidebar.tsx so the rail and the
-  // labeled desktop sidebar surface the same navigation set.
-  const visibleNavItems = navItems.filter((item) => {
+  // Pick nav list off the active place's kind. Same filter rules
+  // as the labeled sidebar so the rail and desktop sidebar always
+  // surface the same set of icons in the same order.
+  const baseNav = activePlace.kind === 'online' ? ONLINE_NAV : RETAIL_NAV
+  const visibleNavItems = baseNav.filter((item) => {
     if (item.dev && !isDev) return false
     if (isDev) return true
     if (item.href === '/pos' && operatingMode === 'external_pos' && !nativePosEnabled) return false
@@ -129,20 +148,30 @@ export default function IPadRail({
         padding: 'calc(12px + env(safe-area-inset-top)) 0 calc(12px + env(safe-area-inset-bottom))',
       }}
     >
-      {/* Brand mark — same target as the labeled sidebar. Tooltip
-          carries the tenant identity that the labeled sidebar
-          shows as text. */}
-      <Link
-        href="/dashboard"
-        title={restaurantName}
-        aria-label={restaurantName}
-        style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flex: '0 0 auto',
-        }}
+      {/* Active-place chip — icon-only on the rail. Submitting the
+          changePlace form clears the active_place_id cookie and
+          bounces to /places, matching the labeled sidebar's
+          "Change place" affordance. */}
+      <form
+        action={changePlace}
+        style={{ flex: '0 0 auto', margin: 0, padding: 0, lineHeight: 0 }}
       >
-        <BrandMark size={26} variant="solid" className="rounded-lg" />
-      </Link>
+        <button
+          type="submit"
+          title={`${activePlace.name} — ${t('Change place', 'Cambiar lugar')}`}
+          aria-label={`${activePlace.name} — ${t('Change place', 'Cambiar lugar')}`}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            width: 34, height: 34, borderRadius: 9,
+            border: 0, background: FILL, color: INK, cursor: 'pointer',
+            padding: 0, font: 'inherit',
+          }}
+        >
+          {activePlace.kind === 'online'
+            ? <Globe width={18} height={18} strokeWidth={1.8} />
+            : <Store width={18} height={18} strokeWidth={1.8} />}
+        </button>
+      </form>
 
       {/* Divider — narrow hairline under the brand, floated
           between big top and bottom margins so the brand and

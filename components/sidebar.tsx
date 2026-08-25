@@ -29,21 +29,26 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import { useSidebarClose } from '@/app/(app)/app-shell'
-import { BrandMark, BrandWordmark } from '@/components/brand'
+import { BrandWordmark } from '@/components/brand'
 import { lockDevice } from '@/app/actions/access'
+import { changePlace } from '@/app/actions/places'
+import type { Place } from '@/lib/places'
 import { makeT, type Lang } from '@/lib/i18n'
 import {
   LayoutDashboard, UtensilsCrossed, TrendingUp, Package, Users,
   DollarSign, Settings, LogOut, Lock, ShoppingCart, BarChart3, Wrench, X,
+  MessageCircle, ClipboardList, PencilLine, Store, Globe, ChevronsUpDown,
 } from 'lucide-react'
 
 // ----------------------------------------------------------------
 // Nav item definitions
 //
-// Centralising the nav items here means:
-// - Adding a new page = add one line here
-// - No duplication across sidebar and any mobile nav you add later
-// ----------------------------------------------------------------
+// Two nav lists — one per place kind. The active place's kind
+// picks which list renders. Retail keeps the historical menu
+// (POS, Sales, Menu, Staffing, Finance, Analytics); Online gets
+// the storefront workflow (Chat, Orders, Catalog, Customers,
+// Edit site). Dashboard, Inventory, Settings appear on both.
+//
 // `dev: true` items are filtered out for non-dev viewers. The
 // /dev-tools page is also server-side guarded (`isDevEmail`); this
 // flag controls sidebar visibility only — convenience, not security.
@@ -51,19 +56,33 @@ import {
 // labelEn + labelEs feed makeT() at render time so the same item
 // list serves both languages. Spanish strings stay inline next to
 // English so future translators can scan the file once.
-const navItems: Array<{
+type NavItem = {
   labelEn: string; labelEs: string; href: string; icon: typeof LayoutDashboard; dev?: true
-}> = [
-  { labelEn: 'Dashboard',   labelEs: 'Panel',         href: '/dashboard', icon: LayoutDashboard },
-  { labelEn: 'Menu',        labelEs: 'Menú',          href: '/menu',      icon: UtensilsCrossed },
-  { labelEn: 'POS',         labelEs: 'POS',           href: '/pos',       icon: ShoppingCart },
-  { labelEn: 'Sales',       labelEs: 'Ventas',        href: '/sales',     icon: TrendingUp },
-  { labelEn: 'Inventory',   labelEs: 'Inventario',    href: '/inventory', icon: Package },
-  { labelEn: 'Staffing',    labelEs: 'Personal',      href: '/staffing',  icon: Users },
-  { labelEn: 'Finance',     labelEs: 'Finanzas',      href: '/finance',   icon: DollarSign },
-  { labelEn: 'Analytics',   labelEs: 'Analíticas',    href: '/analytics', icon: BarChart3 },
-  { labelEn: 'Settings',    labelEs: 'Ajustes',       href: '/settings',  icon: Settings },
-  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox',   href: '/dev-tools', icon: Wrench, dev: true },
+}
+
+const RETAIL_NAV: NavItem[] = [
+  { labelEn: 'Dashboard',   labelEs: 'Panel',       href: '/dashboard', icon: LayoutDashboard },
+  { labelEn: 'Menu',        labelEs: 'Menú',        href: '/menu',      icon: UtensilsCrossed },
+  { labelEn: 'POS',         labelEs: 'POS',         href: '/pos',       icon: ShoppingCart },
+  { labelEn: 'Sales',       labelEs: 'Ventas',      href: '/sales',     icon: TrendingUp },
+  { labelEn: 'Inventory',   labelEs: 'Inventario',  href: '/inventory', icon: Package },
+  { labelEn: 'Staffing',    labelEs: 'Personal',    href: '/staffing',  icon: Users },
+  { labelEn: 'Finance',     labelEs: 'Finanzas',    href: '/finance',   icon: DollarSign },
+  { labelEn: 'Analytics',   labelEs: 'Analíticas',  href: '/analytics', icon: BarChart3 },
+  { labelEn: 'Settings',    labelEs: 'Ajustes',     href: '/settings',  icon: Settings },
+  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
+]
+
+const ONLINE_NAV: NavItem[] = [
+  { labelEn: 'Dashboard',   labelEs: 'Panel',       href: '/dashboard', icon: LayoutDashboard },
+  { labelEn: 'Chat',        labelEs: 'Chat',        href: '/chat',      icon: MessageCircle },
+  { labelEn: 'Orders',      labelEs: 'Pedidos',     href: '/orders',    icon: ClipboardList },
+  { labelEn: 'Catalog',     labelEs: 'Catálogo',    href: '/catalog',   icon: UtensilsCrossed },
+  { labelEn: 'Inventory',   labelEs: 'Inventario',  href: '/inventory', icon: Package },
+  { labelEn: 'Customers',   labelEs: 'Clientes',    href: '/customers', icon: Users },
+  { labelEn: 'Edit site',   labelEs: 'Editar sitio',href: '/edit-site', icon: PencilLine },
+  { labelEn: 'Settings',    labelEs: 'Ajustes',     href: '/settings',  icon: Settings },
+  { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },
 ]
 
 interface SidebarProps {
@@ -84,10 +103,14 @@ interface SidebarProps {
   isDev: boolean
   /** Active language for this device. Set via Settings → Language. */
   lang: Lang
+  /** The place this workspace is currently scoped to. Nav list
+   *  swaps based on kind — retail sees POS/Sales/etc., online
+   *  sees Chat/Orders/Catalog. */
+  activePlace: Place
 }
 
 export default function Sidebar({
-  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang,
+  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace,
 }: SidebarProps) {
   const t = makeT(lang)
   // Tablet overlay close handler — pulled from AppShell's React
@@ -98,6 +121,11 @@ export default function Sidebar({
   // across the server/client boundary and crash the Vercel runtime.
   const closeSidebar = useSidebarClose()
 
+  // Pick the base nav list off the active place's kind. Online
+  // storefront workspaces surface Chat/Orders/Catalog etc.;
+  // retail storefronts stay on POS/Sales/Menu/Staffing/etc.
+  const baseNav = activePlace.kind === 'online' ? ONLINE_NAV : RETAIL_NAV
+
   // Visibility filter:
   //   • `dev: true` items render for dev accounts only. The page
   //     itself is server-side guarded; this is a convenience.
@@ -106,7 +134,7 @@ export default function Sidebar({
   //     local POS (nativePosEnabled=true) to trial the in-app
   //     POS alongside their external terminal. Dev accounts
   //     always see it so the testing workflow can hit both.
-  const visibleNavItems = navItems.filter((item) => {
+  const visibleNavItems = baseNav.filter((item) => {
     if (item.dev && !isDev) return false
     if (isDev) return true
     if (item.href === '/pos' && operatingMode === 'external_pos' && !nativePosEnabled) return false
@@ -125,14 +153,35 @@ export default function Sidebar({
     // scroll out of view when main content overflowed.
     <aside className="w-60 h-full bg-white border-r border-hairline flex flex-col">
 
-      {/* Top: product mark + tenant identity */}
-      <div className="px-4 py-4 border-b border-hairline flex items-center justify-between gap-2">
-        <Link href="/dashboard" className="flex items-center gap-2.5 min-w-0 group">
-          <BrandMark size={32} variant="solid" className="flex-shrink-0 rounded-lg" />
-          <span className="font-semibold text-zinc-900 text-sm leading-tight truncate group-hover:text-slate transition-colors">
-            {restaurantName}
-          </span>
-        </Link>
+      {/* Top: active-place chip. Clicking submits the changePlace
+          server action which clears the active_place_id cookie and
+          lands the operator back on /places. Same treatment as the
+          picker design — small kind glyph tile, place name, and
+          "Change place" subtitle with a chevrons-up-down hint so
+          the affordance reads as "swap workspace". */}
+      <div className="px-3 py-3 border-b border-hairline flex items-center gap-2">
+        <form action={changePlace} className="flex-1 min-w-0">
+          <button
+            type="submit"
+            className="w-full flex items-center gap-2.5 px-2 py-2 rounded-md hover:bg-zinc-50 transition-colors text-left"
+            title={`Change place — currently ${activePlace.name}`}
+          >
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 text-zinc-900 flex-shrink-0">
+              {activePlace.kind === 'online'
+                ? <Globe className="w-4 h-4" />
+                : <Store className="w-4 h-4" />}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold text-zinc-900 truncate leading-tight">
+                {activePlace.name}
+              </span>
+              <span className="block text-[11px] text-zinc-400 mt-0.5">
+                {t('Change place', 'Cambiar lugar')}
+              </span>
+            </span>
+            <ChevronsUpDown className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+          </button>
+        </form>
         {/* Tablet-only close — only renders when AppShell is
             providing a close handler via Context (i.e. when the
             sidebar is mounted inside the tablet overlay). The

@@ -31,6 +31,7 @@ import { Lock } from 'lucide-react'
 import { getLang, getT } from '@/lib/i18n-server'
 import OfflineBanner from '@/components/offline-banner'
 import SyncRunner from '@/components/sync-runner'
+import { resolveActivePlace } from '@/lib/places'
 
 export default async function AppLayout({
   children,
@@ -130,6 +131,22 @@ export default async function AppLayout({
     )
   }
 
+  // ---- Active place gate ----
+  //
+  // The 2026-08-25 places pivot scopes every workspace page to one
+  // location at a time (physical shop or the virtual online
+  // storefront). The picker at /places (outside this route group)
+  // sets the `active_place_id` cookie; here we resolve it against
+  // the user's restaurant and bounce to the picker if the cookie
+  // is missing, stale, or points at something outside this tenant.
+  //
+  // /places itself lives in a different route group so it never
+  // hits this layout — otherwise the redirect would loop.
+  const activePlace = await resolveActivePlace(supabase, userRole.restaurant_id)
+  if (!activePlace) {
+    redirect('/places')
+  }
+
   // ---- Fetch display data for the sidebar ----
   // We run these three queries at the same time using Promise.all.
   // This is faster than running them one after another.
@@ -190,6 +207,7 @@ export default async function AppLayout({
             nativePosEnabled={nativePosEnabled}
             isDev={isDev}
             lang={lang}
+            activePlace={activePlace}
           />
         }
         rail={
@@ -201,6 +219,7 @@ export default async function AppLayout({
             nativePosEnabled={nativePosEnabled}
             isDev={isDev}
             lang={lang}
+            activePlace={activePlace}
           />
         }
       >

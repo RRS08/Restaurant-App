@@ -346,7 +346,10 @@ function DeliveryIcon() {
 // SalesClient — top-level page component.
 // ================================================================
 
-type FilterKey = 'all' | 'card' | 'cash' | 'web' | 'voided'
+// 'web' isn't in this union anymore — online orders live under
+// Online > Orders (their own workspace) since the 2026-08-25
+// places pivot. Retail Sales is the in-person ledger only.
+type FilterKey = 'all' | 'card' | 'cash' | 'voided'
 
 export default function SalesClient({
   lang, orders, operatingMode, date, today,
@@ -399,7 +402,6 @@ export default function SalesClient({
   const scoped = useMemo(() => {
     if (filter === 'all') return orders.filter((o) => o.status === 'completed')
     if (filter === 'voided') return orders.filter((o) => o.status === 'voided')
-    if (filter === 'web') return orders.filter((o) => o.source === 'web' && o.status !== 'voided')
     return orders.filter((o) => o.paymentType === filter && o.source !== 'web' && o.status !== 'voided')
   }, [orders, filter])
   const salesTotal = useMemo(() => scoped.reduce((s, o) => s + o.total, 0), [scoped])
@@ -420,7 +422,6 @@ export default function SalesClient({
     all: orders.length,
     card: orders.filter((o) => o.paymentType === 'card' && o.source !== 'web' && o.status !== 'voided').length,
     cash: orders.filter((o) => o.paymentType === 'cash' && o.source !== 'web' && o.status !== 'voided').length,
-    web: orders.filter((o) => o.source === 'web' && o.status !== 'voided').length,
     voided: orders.filter((o) => o.status === 'voided').length,
   }
 
@@ -428,8 +429,7 @@ export default function SalesClient({
     const byFilter =
       filter === 'all' ? orders
         : filter === 'voided' ? orders.filter((o) => o.status === 'voided')
-          : filter === 'web' ? orders.filter((o) => o.source === 'web' && o.status !== 'voided')
-            : orders.filter((o) => o.paymentType === filter && o.source !== 'web' && o.status !== 'voided')
+          : orders.filter((o) => o.paymentType === filter && o.source !== 'web' && o.status !== 'voided')
     const q = salesQuery.trim().toLowerCase()
     if (!q) return byFilter
     // Match customer / note / card last4 / short-id / any line item name.
@@ -648,29 +648,21 @@ export default function SalesClient({
           padding: isBands ? '10px 24px' : '10px 16px',
           flexWrap: 'wrap',
         }}>
-          {(['all', 'card', 'cash', 'web', 'voided'] as const).map((f) => {
+          {(['all', 'card', 'cash', 'voided'] as const).map((f) => {
             const on = filter === f
             const label =
               f === 'all' ? t('All', 'Todo')
                 : f === 'card' ? t('Card', 'Tarjeta')
                   : f === 'cash' ? t('Cash', 'Efectivo')
-                    : f === 'web' ? t('Online', 'En línea')
-                      : t('Voided', 'Anuladas')
+                    : t('Voided', 'Anuladas')
             // Same treatment as inventory's filter row — a small
             // hue-coded dot so managers can scan the row by color
             // before reading the label. 'All' stays dotless.
-            // Online is a container for two sub-lanes (delivery
-            // pink + pickup orange), so its dot is one circle
-            // diagonally split between the two channel colors —
-            // one indicator slot like the other filters, but
-            // announcing both lanes. Hard-edge linear gradient
-            // renders sharper than conic at the shared 6px size.
             const dot =
               f === 'card' ? METHOD_TONES.card.dot
                 : f === 'cash' ? METHOD_TONES.cash.dot
-                  : f === 'web' ? `linear-gradient(135deg, ${CHANNEL_TONES.delivery.dot} 50%, ${CHANNEL_TONES.pickup.dot} 50%)`
-                    : f === 'voided' ? '#DC2626'
-                      : null
+                  : f === 'voided' ? '#DC2626'
+                    : null
             return (
               <button
                 key={f}

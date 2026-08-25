@@ -276,16 +276,13 @@ export default function Sidebar({
           {t('Sign out', 'Cerrar sesión')}
         </Link>
 
-        {/* Product lockup — mark + wordmark sized in lockstep
-            from the shared BrandLockup so both render at the
-            same ink color and same optical weight. The "md"
-            size (28px mark + 20px wordmark) is big enough to
-            actually read at the bottom of the sidebar; the
-            "flat" variant keeps the mark as a one-color glyph
-            instead of a solid black tile so it matches the
-            wordmark's ink tone. */}
+        {/* Product lockup — small "sm" size (20px mark + 14px
+            wordmark) so the signature sits calmly at the bottom
+            without competing with the tenant chip at the top.
+            Both mark and wordmark render at the same ink color
+            via variant="flat". */}
         <div className="mt-3 px-3 pt-3 border-t border-hairline flex items-center justify-between">
-          <BrandLockup size="md" variant="flat" />
+          <BrandLockup size="sm" variant="flat" />
           <span className="text-[10px] text-zinc-300 font-medium tabular-nums">v1</span>
         </div>
       </div>

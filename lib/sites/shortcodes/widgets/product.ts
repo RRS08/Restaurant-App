@@ -148,11 +148,19 @@ function renderOptionGroups(
   const groupBlocks = groups.map(g => {
     const choices = g.choices.map((c, i) => {
       const priceForChoice = typeof c.price === 'number' ? c.price : basePrice
-      const priceAttr = typeof c.price === 'number' ? String(c.price) : ''
+      // Always stamp the effective price on the radio — the
+      // client script uses it to keep the Add-to-cart button
+      // label truthful ("Add to cart · $18.00") regardless of
+      // whether the choice carries its own override or falls
+      // back to the base. Also carries an isBase flag so the
+      // server-side pickPrice logic (which needs to know
+      // whether an override was set) can distinguish.
+      const hasOverride = typeof c.price === 'number'
+      const priceAttr = String(priceForChoice)
       const priceStr = formatPrice(priceForChoice)
       const isDefault = i === 0
       return `      <label class="pdp-choice${isDefault ? ' is-active' : ''}">
-        <input type="radio" name="pdp-opt-${escapeAttr(g.key)}" value="${escapeAttr(c.key)}"${isDefault ? ' checked' : ''} data-price="${escapeAttr(priceAttr)}">
+        <input type="radio" name="pdp-opt-${escapeAttr(g.key)}" value="${escapeAttr(c.key)}"${isDefault ? ' checked' : ''} data-price="${escapeAttr(priceAttr)}"${hasOverride ? ' data-override="1"' : ''}>
         <span class="pdp-choice-label">${escapeHtml(c.label)}</span>
         <span class="pdp-choice-price">${escapeHtml(priceStr)}</span>
       </label>`
@@ -257,10 +265,10 @@ const PICKER_SCRIPT = `<script>
     return out;
   }
   function pickPrice(){
-    // Actual line price for the currently selected variant —
-    // first choice in group order with an explicit price override
-    // wins, matching resolveUnitPrice() server-side. Null means
-    // no override (use the base price).
+    // Effective price for the current selection. Every choice
+    // carries its effective price on data-price (base fallback
+    // baked in server-side), so we can always keep the button
+    // label truthful. Returns null only if the DOM is malformed.
     var groups = root.querySelectorAll('.pdp-optgroup');
     for (var i = 0; i < groups.length; i++) {
       var checked = groups[i].querySelector('input[type=radio]:checked');

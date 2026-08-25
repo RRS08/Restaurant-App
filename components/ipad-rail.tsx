@@ -35,7 +35,7 @@ import { makeT, type Lang } from '@/lib/i18n'
 import {
   LayoutDashboard, UtensilsCrossed, ShoppingCart, TrendingUp,
   Package, Users, DollarSign, BarChart3, Settings, Lock, LogOut, Wrench,
-  MessageCircle, ClipboardList, PencilLine, Store, Globe,
+  MessageCircle, ClipboardList, PencilLine, Store, Globe, UserRound, Tag,
 } from 'lucide-react'
 
 const INK = '#18181B'
@@ -64,9 +64,9 @@ const ONLINE_NAV: NavItem[] = [
   { labelEn: 'Dashboard',   labelEs: 'Panel',       href: '/dashboard', icon: LayoutDashboard },
   { labelEn: 'Chat',        labelEs: 'Chat',        href: '/chat',      icon: MessageCircle },
   { labelEn: 'Orders',      labelEs: 'Pedidos',     href: '/orders',    icon: ClipboardList },
-  { labelEn: 'Catalog',     labelEs: 'Catálogo',    href: '/catalog',   icon: UtensilsCrossed },
+  { labelEn: 'Catalog',     labelEs: 'Catálogo',    href: '/catalog',   icon: Tag },
   { labelEn: 'Inventory',   labelEs: 'Inventario',  href: '/inventory', icon: Package },
-  { labelEn: 'Customers',   labelEs: 'Clientes',    href: '/customers', icon: Users },
+  { labelEn: 'Customers',   labelEs: 'Clientes',    href: '/customers', icon: UserRound },
   { labelEn: 'Edit site',   labelEs: 'Editar sitio',href: '/edit-site', icon: PencilLine },
   { labelEn: 'Settings',    labelEs: 'Ajustes',     href: '/settings',  icon: Settings },
   { labelEn: 'Dev Toolbox', labelEs: 'Dev Toolbox', href: '/dev-tools', icon: Wrench, dev: true },

@@ -178,13 +178,13 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
           </nav>
         </aside>
 
-        <section className="catalog-list">
+        <section className="catalog-cards">
           {visible.length === 0 ? (
-            <div style={{ padding: '32px 24px', color: FAINT, fontSize: 13 }}>
+            <div style={{ padding: '32px 24px', color: FAINT, fontSize: 13, gridColumn: '1 / -1' }}>
               No products in this category yet.
             </div>
           ) : visible.map(p => (
-            <ProductRow key={p.id} p={p} />
+            <ProductCard key={p.id} p={p} />
           ))}
         </section>
       </div>
@@ -204,9 +204,17 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
           position: sticky;
           top: 74px;
         }
-        .catalog-list { min-width: 0; }
+        .catalog-cards {
+          min-width: 0;
+          padding: 20px 24px 32px;
+          display: grid;
+          gap: 16px;
+          grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+          align-content: start;
+        }
         @media (max-width: 767px) {
           .catalog-grid { grid-template-columns: 1fr; }
+          .catalog-cards { padding: 16px; grid-template-columns: repeat(2, 1fr); gap: 12px; }
           .catalog-rail {
             border-right: 0;
             border-bottom: 1px solid ${LINE};
@@ -220,6 +228,9 @@ export default async function CatalogPage({ searchParams }: CatalogPageProps) {
             flex-wrap: nowrap;
           }
           .catalog-rail nav a { white-space: nowrap; }
+        }
+        @media (max-width: 420px) {
+          .catalog-cards { grid-template-columns: 1fr; }
         }
       `}</style>
     </div>
@@ -260,26 +271,31 @@ function RailLink({
   )
 }
 
-function ProductRow({ p }: { p: SiteProductRow }) {
+function ProductCard({ p }: { p: SiteProductRow }) {
   const priceNum = typeof p.price === 'number' ? p.price : parseFloat(String(p.price))
   const priceStr = Number.isFinite(priceNum) ? `$${priceNum.toFixed(2)}` : '—'
   const groups = normalizeGroups(p.options)
-  const categoryLabel = labelFor(p.category ?? '')
   const isLive = p.status === 'live'
+  // Compact variant hint that fits in a card slot ("2 forms",
+  // "3 colors · 5 sizes"). Skipped when the product has no
+  // picker so simple items don't carry extra chrome.
   const variantHint = groups.map(g => `${g.choices.length} ${g.label.toLowerCase()}`).join(' · ')
 
   return (
     <div
       style={{
-        display: 'flex', alignItems: 'center', gap: 14,
-        padding: '14px 24px',
-        borderBottom: `1px solid ${LINE_SOFT}`,
+        border: `1px solid ${LINE}`, borderRadius: 12,
+        background: '#fff', overflow: 'hidden',
+        display: 'flex', flexDirection: 'column',
         opacity: isLive ? 1 : 0.6,
       }}
     >
+      {/* Square-ish product tile at the top. Aspect ratio kept
+          1:1 so cards line up cleanly in the grid regardless of
+          the underlying image dimensions. */}
       <div style={{
-        width: 44, height: 44, borderRadius: 8, flex: '0 0 auto',
-        background: SURFACE, border: `1px solid ${LINE_SOFT}`,
+        aspectRatio: '1 / 1', background: SURFACE,
+        borderBottom: `1px solid ${LINE_SOFT}`,
         overflow: 'hidden',
       }}>
         {p.image_url && (
@@ -287,70 +303,70 @@ function ProductRow({ p }: { p: SiteProductRow }) {
           <img
             src={p.image_url}
             alt={p.name}
-            width={44}
-            height={44}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           />
         )}
       </div>
 
-      <div style={{ minWidth: 0, flex: 1 }}>
+      {/* Body — name, primary pill + focus, unit + price row. */}
+      <div style={{
+        padding: '12px 14px 14px',
+        display: 'flex', flexDirection: 'column', gap: 8,
+        flex: 1,
+      }}>
         <div style={{
-          fontSize: 14, fontWeight: 600, letterSpacing: '-0.015em',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          fontSize: 14, fontWeight: 600, letterSpacing: '-0.015em', color: INK,
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const,
+          lineHeight: 1.25,
         }}>
           {p.name}
         </div>
         <div style={{
-          marginTop: 3, display: 'flex', alignItems: 'center',
-          gap: 8, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+          minHeight: 20,
         }}>
-          {categoryLabel && (
-            <span style={{ fontSize: 11, color: MUTED }}>{categoryLabel}</span>
-          )}
           {p.benefit && (
-            <>
-              <Dot />
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', borderRadius: 999,
-                padding: '1px 8px', fontSize: 10, fontWeight: 600,
-                background: '#EEF2FF', color: '#27306F',
-              }}>
-                {p.benefit}
-              </span>
-            </>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', borderRadius: 999,
+              padding: '1px 8px', fontSize: 10, fontWeight: 600,
+              background: '#EEF2FF', color: '#27306F',
+            }}>
+              {p.benefit}
+            </span>
           )}
           {p.purpose && (
-            <>
-              <Dot />
-              <span style={{ fontSize: 11, color: MUTED }}>{p.purpose}</span>
-            </>
+            <span style={{ fontSize: 11, color: MUTED }}>{p.purpose}</span>
           )}
           {variantHint && (
             <>
-              <Dot />
+              {(p.benefit || p.purpose) && <span aria-hidden style={{ width: 3, height: 3, borderRadius: '50%', background: LINE }} />}
               <span style={{ fontSize: 11, color: MUTED }}>{variantHint}</span>
             </>
           )}
         </div>
-      </div>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flex: '0 0 auto' }}>
-        {p.unit && (
-          <span style={{ fontSize: 11, color: FAINT, whiteSpace: 'nowrap' }}>
-            {p.unit}
-          </span>
-        )}
-        <span style={{
-          fontFamily: MONO, fontSize: 15, fontWeight: 600,
-          letterSpacing: '-0.02em', color: INK, whiteSpace: 'nowrap',
+        <div style={{
+          marginTop: 'auto', paddingTop: 6,
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+          gap: 8, borderTop: `1px solid ${LINE_SOFT}`,
         }}>
-          {priceStr}
-        </span>
+          {p.unit && (
+            <span style={{ fontSize: 11, color: FAINT, whiteSpace: 'nowrap' }}>
+              {p.unit}
+            </span>
+          )}
+          <span style={{
+            fontFamily: MONO, fontSize: 15, fontWeight: 600,
+            letterSpacing: '-0.02em', color: INK, whiteSpace: 'nowrap',
+            marginLeft: 'auto',
+          }}>
+            {priceStr}
+          </span>
+        </div>
         {!isLive && (
           <span style={{
-            display: 'inline-flex', alignItems: 'center', borderRadius: 999,
-            padding: '2px 8px', fontSize: 10, fontWeight: 600,
+            alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center',
+            borderRadius: 999, padding: '2px 8px', fontSize: 10, fontWeight: 600,
             background: '#F4F4F5', color: MUTED,
           }}>
             {p.status}
@@ -358,15 +374,6 @@ function ProductRow({ p }: { p: SiteProductRow }) {
         )}
       </div>
     </div>
-  )
-}
-
-function Dot() {
-  return (
-    <span aria-hidden style={{
-      width: 3, height: 3, borderRadius: '50%', background: LINE,
-      flex: '0 0 auto',
-    }} />
   )
 }
 

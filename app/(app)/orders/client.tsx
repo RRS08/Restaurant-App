@@ -277,6 +277,14 @@ function OrderRowCard({
           ) : (
             stateChip
           )}
+          {/* Short order id — same scannable chip Sales rows carry.
+              Sits after the state so the workflow signal reads
+              first and the id is a secondary reference. */}
+          <span style={{
+            fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.02em',
+          }}>
+            #{order.orderNumber}
+          </span>
         </span>
       </span>
       <span style={{

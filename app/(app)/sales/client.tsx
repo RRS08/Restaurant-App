@@ -910,6 +910,14 @@ function SaleRow({
               {chipLabel}
             </span>
           )}
+          {/* Short order id. Scannable for support ("the buyer
+              said #ABC123"), unobtrusive next to the primary
+              meta so it doesn't compete with the human title. */}
+          <span style={{
+            fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.02em',
+          }}>
+            #{shortId(order.id)}
+          </span>
         </span>
       </span>
       <span style={{

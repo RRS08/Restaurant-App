@@ -235,8 +235,12 @@ const PICKER_STYLE = `<style>
 }
 .pdp-optgroup { border: 0; margin: 0; padding: 0; }
 .pdp-optgroup-label {
-  display: block; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-  color: #6b6b70; margin: 0 0 8px; padding: 0; font-weight: 500;
+  /* Match .pdp-facts dt exactly so FORM reads as a sibling
+     eyebrow to HOW TO STEEP / WHAT'S IN IT — same sage tone,
+     size, tracking, weight. */
+  display: block; font-size: 9.5px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: #55723e; font-weight: 600;
+  margin: 0 0 5px; padding: 0;
 }
 /* Tab-style choice row — plain text with a 2px underline
    marking the selected option. No pills or rectangles, so

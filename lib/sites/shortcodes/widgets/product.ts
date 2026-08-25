@@ -226,7 +226,11 @@ const PICKER_STYLE = `<style>
 .pdp-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .pdp-choice {
   display: inline-flex; align-items: center; gap: 12px; cursor: pointer;
-  padding: 11px 18px; border-radius: 999px; border: 1px solid #d6d5d1;
+  /* Rounded rectangles, not pills — differentiates the FORM
+     picker from the pill-shaped qty stepper + Add-to-cart
+     button below so the visual hierarchy reads as three
+     distinct controls, not a stack of the same shape. */
+  padding: 12px 16px; border-radius: 10px; border: 1px solid #d6d5d1;
   background: #fff; color: #253b0e; font-size: 13.5px; line-height: 1.2;
   transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease;
   user-select: none; position: relative;
@@ -244,7 +248,7 @@ const PICKER_STYLE = `<style>
 .pdp-choice.is-active .pdp-choice-price { color: #faf9f6; opacity: .78; }
 .pdp-choice:hover:not(.is-active) { border-color: #55723e; background: #f7f6f0; }
 @media (max-width: 480px) {
-  .pdp-choice { padding: 10px 14px; font-size: 12.5px; gap: 10px; }
+  .pdp-choice { padding: 11px 14px; font-size: 12.5px; gap: 10px; }
 }
 </style>`
 

@@ -18,6 +18,10 @@ import {
   type AvailabilityOverride,
 } from '@/lib/menu/availability'
 import PosClient from './client'
+import POSPickupBubble from '@/components/pos-pickup-bubble'
+import { listPendingPickups } from '@/lib/orders/pickup'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 export default async function PosPage() {
   const supabase = await createClient()
@@ -229,8 +233,43 @@ export default async function PosPage() {
   const kioskMode = posMode === 'staff'
   const lang = await getLang()
 
+  // Pending pickup queue for this station's restaurant. Resolved
+  // against the first retail location's timezone so "today" matches
+  // the business_date bucket web checkouts stamp. Silent-empty for
+  // restaurants without a site or without a retail location — the
+  // bubble hides itself when there's nothing pending, so no chrome
+  // is added for merchants who don't sell online.
+  let pendingPickups: Awaited<ReturnType<typeof listPendingPickups>> = []
+  if (user) {
+    const { data: role } = await supabase
+      .from('user_roles')
+      .select('restaurant_id')
+      .eq('user_id', user.id)
+      .single()
+    if (role?.restaurant_id) {
+      const admin = createAdminClient()
+      const { data: retail } = await admin
+        .from('locations')
+        .select('timezone')
+        .eq('restaurant_id', role.restaurant_id)
+        .eq('kind', 'retail')
+        .order('created_at')
+        .limit(1)
+        .maybeSingle()
+      const businessDate = businessDateInTimezone(
+        new Date(),
+        (retail?.timezone as string | null | undefined) ?? null,
+      )
+      pendingPickups = await listPendingPickups(admin, role.restaurant_id, businessDate)
+    }
+  }
+
   return (
-    <PosClient
+    <>
+      <div style={{ padding: '16px 24px 0' }}>
+        <POSPickupBubble initial={pendingPickups} />
+      </div>
+      <PosClient
       lang={lang}
       kioskMode={kioskMode}
       categories={(categories ?? []).map((c) => ({
@@ -261,5 +300,6 @@ export default async function PosPage() {
       })}
       operatingMode={operatingMode}
     />
+    </>
   )
 }

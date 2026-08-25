@@ -81,10 +81,11 @@ interface IPadRailProps {
   isDev: boolean
   lang: Lang
   activePlace: Place
+  pendingPickupCount: number
 }
 
 export default function IPadRail({
-  userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace,
+  userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace, pendingPickupCount,
 }: IPadRailProps) {
   const t = makeT(lang)
   const pathname = usePathname()
@@ -213,6 +214,21 @@ export default function IPadRail({
               }}
             >
               <Icon width={20} height={20} strokeWidth={2} />
+              {(item.href === '/pos' || item.href === '/orders') && pendingPickupCount > 0 && (
+                <span
+                  aria-hidden
+                  style={{
+                    position: 'absolute', top: 4, right: 4,
+                    minWidth: 16, height: 16, borderRadius: 999,
+                    background: '#EA580C', color: '#fff',
+                    fontSize: 9, fontWeight: 700, padding: '0 4px',
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    lineHeight: 1,
+                  }}
+                >
+                  {pendingPickupCount > 9 ? '9+' : pendingPickupCount}
+                </span>
+              )}
             </Link>
           )
         })}

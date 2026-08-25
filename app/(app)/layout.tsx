@@ -32,6 +32,9 @@ import { getLang, getT } from '@/lib/i18n-server'
 import OfflineBanner from '@/components/offline-banner'
 import SyncRunner from '@/components/sync-runner'
 import { resolveActivePlace } from '@/lib/places'
+import { countPendingPickups } from '@/lib/orders/pickup'
+import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { createAdminClient } from '@/lib/supabase/admin'
 
 export default async function AppLayout({
   children,
@@ -176,6 +179,32 @@ export default async function AppLayout({
   ])
   const nativePosEnabled = Boolean(setupState?.native_pos_enabled)
 
+  // Pending pickup count powers the little red badge on the POS
+  // nav item — same data source as the POS bubble on /pos so the
+  // count stays consistent whether the operator is on POS or not.
+  // Timezone from the first retail location; falls back to 0 for
+  // restaurants without a site (nothing to fulfill) or a retail
+  // location (badge would have no meaningful home).
+  let pendingPickupCount = 0
+  {
+    const admin = createAdminClient()
+    const { data: retail } = await admin
+      .from('locations')
+      .select('timezone')
+      .eq('restaurant_id', userRole.restaurant_id)
+      .eq('kind', 'retail')
+      .order('created_at')
+      .limit(1)
+      .maybeSingle()
+    if (retail) {
+      const businessDate = businessDateInTimezone(
+        new Date(),
+        (retail.timezone as string | null | undefined) ?? null,
+      )
+      pendingPickupCount = await countPendingPickups(admin, userRole.restaurant_id, businessDate)
+    }
+  }
+
   // Dev accounts override mode-based gating so the testing workflow
   // can see both Native POS and External POS surfaces regardless of
   // the restaurant's actual operating mode.
@@ -208,6 +237,7 @@ export default async function AppLayout({
             isDev={isDev}
             lang={lang}
             activePlace={activePlace}
+            pendingPickupCount={pendingPickupCount}
           />
         }
         rail={
@@ -220,6 +250,7 @@ export default async function AppLayout({
             isDev={isDev}
             lang={lang}
             activePlace={activePlace}
+            pendingPickupCount={pendingPickupCount}
           />
         }
       >

@@ -107,10 +107,15 @@ interface SidebarProps {
    *  swaps based on kind — retail sees POS/Sales/etc., online
    *  sees Chat/Orders/Catalog. */
   activePlace: Place
+  /** Pending pickup orders for today across the restaurant. Rendered
+   *  as a small red badge on the POS nav item (retail) and the
+   *  Orders nav item (online) so the counter person + shop owner
+   *  both see the ping regardless of which page they're on. */
+  pendingPickupCount: number
 }
 
 export default function Sidebar({
-  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace,
+  restaurantName, userFullName, userEmail, operatingMode, nativePosEnabled, isDev, lang, activePlace, pendingPickupCount,
 }: SidebarProps) {
   const t = makeT(lang)
   // Tablet overlay close handler — pulled from AppShell's React
@@ -222,6 +227,17 @@ export default function Sidebar({
                 )}
               />
               <span className="flex-1">{t(item.labelEn, item.labelEs)}</span>
+              {/* Pending-pickup ping — same count on the retail
+                  POS item and the online Orders item so whichever
+                  workspace the operator is in, they see the badge. */}
+              {(item.href === '/pos' || item.href === '/orders') && pendingPickupCount > 0 && (
+                <span
+                  className="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full bg-orange-500 text-white text-[10px] font-bold px-1"
+                  aria-label={`${pendingPickupCount} pickup ${pendingPickupCount === 1 ? 'order' : 'orders'} pending`}
+                >
+                  {pendingPickupCount}
+                </span>
+              )}
               {item.dev && (
                 <span
                   className="text-[10px] font-semibold uppercase tracking-[0.12em] text-amber-700 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded"

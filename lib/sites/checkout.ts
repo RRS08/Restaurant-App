@@ -23,6 +23,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { loadCartWithItems, type CartSnapshot } from './cart'
 import { resolvePaymentAdapter } from './payment'
 import { queueOrderConfirmation } from './order-email'
+import { queueMerchantNewOrderEmail } from './merchant-new-order-email'
 import type { SiteRow, SiteDeliveryOption } from './types'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
 
@@ -275,6 +276,32 @@ export async function performCheckout(
       taxAmount,
       total,
       linkSaved,
+    })
+
+    // Merchant ping — lands in the shop's own inbox (Outlook /
+    // Gmail mobile push serves as the "text notification" the
+    // owner asked for). Same after() envelope as the buyer email
+    // so checkout latency is unaffected, and skipped silently
+    // when the site hasn't set config.contact.email.
+    const shippingStr = deliveryOption.requires_address && input.shipping
+      ? [
+          input.shipping.line1,
+          input.shipping.line2,
+          [input.shipping.city, input.shipping.state].filter(Boolean).join(', '),
+          input.shipping.postal,
+        ].filter(Boolean).join(', ')
+      : null
+    queueMerchantNewOrderEmail({
+      site,
+      orderId,
+      buyerName: fullName,
+      buyerEmail: input.contact.email,
+      buyerPhone: input.contact.phone ?? null,
+      cart,
+      total,
+      channelLabel: deliveryOption.requires_address ? 'Delivery' : 'Pickup',
+      shippingLine: shippingStr,
+      pickupLabel: deliveryOption.requires_address ? null : deliveryOption.label,
     })
   }
 

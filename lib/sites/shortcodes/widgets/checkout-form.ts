@@ -77,7 +77,15 @@ export async function renderCheckoutForm(args: ShortcodeArgs, ctx: ShortcodeCont
   // pickup was letting people submit the wrong fulfillment mode
   // when they meant to ship.
   const taxRate = readTaxRate(config)
-  const initialTax = round2(snap.subtotal * taxRate)
+  // Tax base = only the taxable items' line totals, not the whole
+  // subtotal. Matches the server calc in lib/sites/checkout.ts so
+  // the amount the buyer sees on Place order is exactly what we
+  // charge. Older cart lines without a taxable flag default to
+  // true (treated as taxable) so nothing accidentally goes exempt.
+  const taxableSubtotal = snap.items
+    .filter((i) => i.taxable !== false)
+    .reduce((s, i) => s + i.line_total, 0)
+  const initialTax = round2(taxableSubtotal * taxRate)
   const initialTotal = round2(snap.subtotal + initialTax)
 
   const summaryLines = snap.items.map(i => {
@@ -244,7 +252,7 @@ ${deliveryRadios}
     <div class="co-sum-lines">
 ${summaryLines}
     </div>
-    <div class="co-sum-totals" data-tax-rate="${taxRate}" data-subtotal="${snap.subtotal}">
+    <div class="co-sum-totals" data-tax-rate="${taxRate}" data-subtotal="${snap.subtotal}" data-taxable-subtotal="${taxableSubtotal}">
       <div class="row"><span>Subtotal</span><span data-summary-subtotal>${escapeHtml(subtotalStr)}</span></div>
       <div class="row" data-summary-delivery-row hidden><span data-summary-delivery-label></span><span data-summary-shipping></span></div>
       <div class="row row-shipto" data-summary-shipto-row hidden><span>Ship to</span><span data-summary-shipto></span></div>
@@ -722,6 +730,13 @@ const CHECKOUT_SCRIPT = `
   // DOM textContent was returning something weird under some race.
   var taxRate = totalsEl ? (parseFloat(totalsEl.dataset.taxRate || '0') || 0) : 0;
   var subtotalRaw = totalsEl ? (parseFloat(totalsEl.dataset.subtotal || '0') || 0) : 0;
+  // Taxable subtotal — the subset of subtotal that carries tax.
+  // Falls back to the full subtotal when the data attribute is
+  // missing (older render / no product exempt), matching prior
+  // behavior for legacy carts.
+  var taxableSubtotal = totalsEl && totalsEl.dataset.taxableSubtotal !== undefined
+    ? (parseFloat(totalsEl.dataset.taxableSubtotal) || 0)
+    : subtotalRaw;
   var addressBlock = root.querySelector('[data-address]');
   var addressInputs = addressBlock ? addressBlock.querySelectorAll('input[name="address_line1"], input[name="city"], input[name="state"], input[name="postal"]') : [];
   var billingToggle = root.querySelector('[data-billing-toggle]');
@@ -795,7 +810,8 @@ const CHECKOUT_SCRIPT = `
     if (deliveryRowEl) deliveryRowEl.setAttribute('hidden', '');
     if (shiptoRow) { shiptoRow.setAttribute('hidden', ''); if (shiptoEl) shiptoEl.textContent = ''; }
     var sub = currentSubtotal();
-    var tax = round2(sub * taxRate);
+    // Tax base is the taxable subset — matches server-side calc.
+    var tax = round2(taxableSubtotal * taxRate);
     var total = round2(sub + tax);
     if (taxEl) taxEl.textContent = money(tax);
     if (totalEl) totalEl.textContent = money(total);
@@ -806,7 +822,7 @@ const CHECKOUT_SCRIPT = `
     var radio = selectedRadio;
     var price = parseFloat(radio.dataset.price || '0') || 0;
     var sub = currentSubtotal();
-    var tax = round2((sub + price) * taxRate);
+    var tax = round2((taxableSubtotal + price) * taxRate);
     var total = round2(sub + price + tax);
     // For pickup, the sublabel in site config is typically written
     // as "Store Name · 123 Address St" — drop the store-name prefix

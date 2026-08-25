@@ -124,12 +124,16 @@ export async function performCheckout(
     return { error: `No payment adapter registered for provider '${providerName ?? 'none'}'.` }
   }
 
-  // Tax applied to (subtotal + delivery). Site config carries the
-  // rate as a decimal (0.0825 = 8.25%). Missing config = 0 = no tax.
-  // Client-side widget uses the same formula, so the amount buyer
-  // sees on the Place order button is exactly what we charge.
+  // Tax applied to (taxable subset of subtotal + delivery). Site
+  // config carries the rate as a decimal (0.0825 = 8.25%). Missing
+  // config = 0 = no tax. Per-product `taxable` flag lets a merchant
+  // flip individual items to exempt in the catalog drawer; only
+  // the taxable subtotal contributes to the tax base here.
   const taxRate = readSiteTaxRate(site)
-  const taxAmount = round2((cart.subtotal + deliveryOption.price) * taxRate)
+  const taxableSubtotal = cart.items
+    .filter((i) => i.taxable !== false)
+    .reduce((s, i) => s + i.line_total, 0)
+  const taxAmount = round2((taxableSubtotal + deliveryOption.price) * taxRate)
   const total = round2(cart.subtotal + deliveryOption.price + taxAmount)
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
   // OUR correlation id for this checkout attempt — logged by the

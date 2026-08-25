@@ -49,6 +49,11 @@ export interface EnrichedCartItem {
   /** Pre-rendered display label for the chosen variant
    *  ("Tea bags · 30 ct"). Empty string when there's no picker. */
   variant_label: string
+  /** Whether this line contributes to the checkout tax subtotal.
+   *  Mirrors site_products.taxable — merchants can flip individual
+   *  products to exempt in the catalog drawer. Delivery always
+   *  taxes (a per-delivery-option toggle is a future concern). */
+  taxable: boolean
 }
 
 export interface CartSnapshot {
@@ -96,7 +101,7 @@ export async function loadCartWithItems(siteId: string, sessionId: string | null
   const slugs = valid.map(i => i.slug)
   const { data: products } = await admin
     .from('site_products')
-    .select('slug, name, price, image_url, unit, options')
+    .select('slug, name, price, image_url, unit, options, taxable')
     .eq('site_id', siteId)
     .eq('status', 'live')
     .in('slug', slugs)
@@ -108,6 +113,7 @@ export async function loadCartWithItems(siteId: string, sessionId: string | null
     image_url: string | null
     unit: string | null
     options: unknown
+    taxable: boolean | null
   }
   const productMap = new Map<string, ProductRow>((products ?? []).map(p => [(p as ProductRow).slug, p as ProductRow]))
 
@@ -137,6 +143,9 @@ export async function loadCartWithItems(siteId: string, sessionId: string | null
       line_total: round2(unitPrice * i.qty),
       options,
       variant_label: variantLabel,
+      // Null in the DB (older rows before the migration) defaults
+      // to true so nothing accidentally becomes tax-exempt.
+      taxable: p.taxable !== false,
     })
   }
 

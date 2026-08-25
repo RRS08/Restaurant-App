@@ -548,6 +548,9 @@ function productToDraft(p: SiteProductRow): Draft {
     status: (p.status === 'draft' ? 'draft' : 'live'),
     sort_order: p.sort_order,
     options: p.options,
+    // Null/undefined defaults to taxable — a fresh product goes
+    // live as taxable unless the merchant flips the switch.
+    taxable: p.taxable !== false,
   }
 }
 
@@ -583,6 +586,7 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
         ingredients: form.ingredients ?? null,
         image_url: form.image_url ?? null,
         featured: !!form.featured,
+        taxable: form.taxable !== false,
         status: form.status === 'draft' ? 'draft' : 'live',
         sort_order: form.sort_order ?? null,
         options: form.options,
@@ -742,6 +746,18 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
               style={{ margin: 0 }}
             />
             Featured (appears in the shop's "Featured" strip)
+          </label>
+          <label style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginTop: 8,
+            fontSize: 13, color: INK, cursor: 'pointer',
+          }}>
+            <input
+              type="checkbox"
+              checked={form.taxable !== false}
+              onChange={e => set('taxable', e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            Charge tax on this product (uncheck for tax-exempt items)
           </label>
 
           {isEdit && (

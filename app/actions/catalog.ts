@@ -46,6 +46,9 @@ export interface CatalogProductInput {
   /** Options JSON — passed through to storage as-is after
    *  normalizeGroups() strips any malformed entries. */
   options?: unknown
+  /** When false, this product's line total is excluded from the
+   *  checkout tax base. Defaults true if omitted. */
+  taxable?: boolean
 }
 
 /** Resolve the operator's restaurant + their site in one call.
@@ -109,6 +112,7 @@ function toPatch(input: Partial<CatalogProductInput>): Record<string, unknown> {
     patch.price = n
   }
   if (input.featured !== undefined) patch.featured = !!input.featured
+  if (input.taxable !== undefined) patch.taxable = !!input.taxable
   if (input.status !== undefined) patch.status = input.status === 'draft' ? 'draft' : 'live'
   if (input.sort_order !== undefined) {
     patch.sort_order = typeof input.sort_order === 'number' && Number.isFinite(input.sort_order)

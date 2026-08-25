@@ -55,6 +55,12 @@ export interface SiteProductRow {
    *  future two-dimensional product (color + size) just adds a
    *  second entry to the array — no schema change. */
   options: SiteProductOptionGroup[] | null
+  /** Whether this product's line total contributes to the taxable
+   *  subtotal at checkout. Default true — merchant flips it to
+   *  false for tax-exempt items (some jurisdictions exempt raw
+   *  foods, medical, etc.). Delivery + all other line totals are
+   *  taxed normally. */
+  taxable: boolean
 }
 
 /** One dimension of buyer choice on a product. For a tea, `key` is

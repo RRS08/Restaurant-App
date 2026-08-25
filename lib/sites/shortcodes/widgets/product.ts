@@ -217,13 +217,20 @@ const DISCLAIMER_STYLE = `<style>
 </style>`
 
 const PICKER_STYLE = `<style>
+/* Fold the FORM picker INSIDE the same sage-lined container as
+   HOW-TO-STEEP + WHAT'S IN IT. .pdp-facts contributes the top
+   border and its own internal rhythm; we drop its bottom border
+   + padding so the picker below sits inside the same block and
+   the .pdp-options bottom border closes the whole section as
+   one visual unit. Everything below (qty stepper + Add-to-cart)
+   starts fresh beneath that closing line. */
+.pdp-facts { border-bottom: 0 !important; padding-bottom: 0 !important; margin-bottom: 0 !important; }
 .pdp-options {
   display: flex; flex-direction: column; gap: 10px;
-  margin: 18px 0 4px;
-  /* Sage hairline separates the FORM row from the qty stepper +
-     Add-to-cart button below. Matches the .pdp-facts divider
-     tone (#e2efd9) so the whole PDP reads as one system. */
-  padding-bottom: 16px;
+  margin: 15px 0 0;
+  padding-top: 0;
+  padding-bottom: 18px;
+  border-top: 0;
   border-bottom: 1px solid #e2efd9;
 }
 .pdp-optgroup { border: 0; margin: 0; padding: 0; }

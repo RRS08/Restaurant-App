@@ -106,7 +106,7 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
         <output>1</output>
         <button type="button" data-step="up" aria-label="Increase quantity">+</button>
       </div>
-      <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}" data-add-button>Add to cart</button>
+      <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}" data-add-button data-add-label="Add to cart">Add to cart</button>
     </div>
   </div>
 </div>${optionsScript}${PICKER_STYLE}`
@@ -174,28 +174,34 @@ ${groupBlocks}
 // ----------------------------------------------------------------
 
 const PICKER_STYLE = `<style>
-.pdp-options { display: flex; flex-direction: column; gap: 14px; margin: 16px 0 4px; }
+.pdp-options { display: flex; flex-direction: column; gap: 12px; margin: 20px 0 8px; }
 .pdp-optgroup { border: 0; margin: 0; padding: 0; }
 .pdp-optgroup-label {
-  display: block; font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
-  color: #6b6b70; margin: 0 0 8px; padding: 0;
+  display: block; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+  color: #6b6b70; margin: 0 0 10px; padding: 0; font-weight: 500;
 }
 .pdp-choices { display: flex; flex-wrap: wrap; gap: 8px; }
 .pdp-choice {
-  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
-  padding: 10px 14px; border-radius: 999px; border: 1.5px solid #e7e6e2;
-  background: #fff; color: #3f3f46; font-size: 13px; line-height: 1.2;
-  transition: border-color .12s ease, background .12s ease, color .12s ease;
-  user-select: none;
+  display: inline-flex; align-items: center; gap: 12px; cursor: pointer;
+  padding: 11px 18px; border-radius: 999px; border: 1px solid #d6d5d1;
+  background: #fff; color: #253b0e; font-size: 13.5px; line-height: 1.2;
+  transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease;
+  user-select: none; position: relative;
 }
 .pdp-choice input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
-.pdp-choice-label { font-weight: 600; }
-.pdp-choice-price { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; color: #6b6b70; }
-.pdp-choice.is-active { border-color: #18181b; background: #18181b; color: #faf9f6; }
-.pdp-choice.is-active .pdp-choice-price { color: #faf9f6; opacity: .8; }
-.pdp-choice:hover:not(.is-active) { border-color: #a1a1a6; }
+.pdp-choice-label { font-weight: 600; letter-spacing: -0.005em; }
+.pdp-choice-price {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 12px; color: #6b6b70; font-weight: 500;
+}
+.pdp-choice.is-active {
+  border-color: #253b0e; background: #253b0e; color: #faf9f6;
+  box-shadow: 0 1px 3px rgba(37,59,14,0.15);
+}
+.pdp-choice.is-active .pdp-choice-price { color: #faf9f6; opacity: .78; }
+.pdp-choice:hover:not(.is-active) { border-color: #55723e; background: #f7f6f0; }
 @media (max-width: 480px) {
-  .pdp-choice { padding: 9px 12px; font-size: 12.5px; }
+  .pdp-choice { padding: 10px 14px; font-size: 12.5px; gap: 10px; }
 }
 </style>`
 
@@ -203,9 +209,9 @@ const PICKER_SCRIPT = `<script>
 (function(){
   var root = document.querySelector('[data-pdp]');
   if (!root) return;
-  var priceEl = root.querySelector('[data-pdp-price]');
   var addBtn  = root.querySelector('[data-add-button]');
-  if (!priceEl || !addBtn) return;
+  if (!addBtn) return;
+  var baseLabel = addBtn.getAttribute('data-add-label') || 'Add to cart';
   function selectedOptions(){
     var out = {};
     root.querySelectorAll('.pdp-optgroup').forEach(function(fs){
@@ -216,8 +222,10 @@ const PICKER_SCRIPT = `<script>
     return out;
   }
   function pickPrice(){
-    // First choice (in group order) that carries an explicit
-    // price override wins — matches resolveUnitPrice server-side.
+    // Actual line price for the currently selected variant —
+    // first choice in group order with an explicit price override
+    // wins, matching resolveUnitPrice() server-side. Null means
+    // no override (use the base price).
     var groups = root.querySelectorAll('.pdp-optgroup');
     for (var i = 0; i < groups.length; i++) {
       var checked = groups[i].querySelector('input[type=radio]:checked');
@@ -231,8 +239,12 @@ const PICKER_SCRIPT = `<script>
   }
   function fmt(n){ return '$' + n.toFixed(2); }
   function sync(){
-    // Update the pill is-active state per group so keyboard nav
-    // + a click both re-paint. Then recompute the displayed price.
+    // Re-paint the pill is-active state per group so keyboard
+    // nav + a click both feel snappy. Hero price stays put —
+    // the base price is the product's canonical price, and any
+    // variant surcharge is shown on the pill itself + folded
+    // into the Add-to-cart label below so the buyer confirms
+    // the actual amount they're paying.
     root.querySelectorAll('.pdp-optgroup').forEach(function(fs){
       var choices = fs.querySelectorAll('.pdp-choice');
       choices.forEach(function(lbl){
@@ -241,12 +253,16 @@ const PICKER_SCRIPT = `<script>
       });
     });
     var p = pickPrice();
-    if (p !== null) priceEl.textContent = fmt(p);
+    if (p !== null) {
+      addBtn.textContent = baseLabel + ' · ' + fmt(p);
+    } else {
+      addBtn.textContent = baseLabel;
+    }
     addBtn.setAttribute('data-options', JSON.stringify(selectedOptions()));
   }
   root.addEventListener('change', function(e){
     if (e.target && e.target.matches && e.target.matches('input[type=radio]')) sync();
   });
-  sync(); // seed defaults into the button + price on first paint
+  sync(); // seed defaults into the button on first paint
 })();
 </script>`

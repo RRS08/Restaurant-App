@@ -98,9 +98,12 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
     : ''
 
   return `<div class="pdp-grid" data-pdp>
-  <div class="pdp-tile">
-    ${tag}
-    <img src="${escapeAttr(p.image_url ?? '')}" alt="${escapeAttr(p.name)}">
+  <div class="pdp-tile-col">
+    <div class="pdp-tile">
+      ${tag}
+      <img src="${escapeAttr(p.image_url ?? '')}" alt="${escapeAttr(p.name)}">
+    </div>
+    ${disclaimer}
   </div>
   <div class="pdp-body">
     <div class="pdp-cat">${escapeHtml(category)}</div>
@@ -119,7 +122,6 @@ export async function renderProduct(args: ShortcodeArgs, ctx: ShortcodeContext):
       <button class="btn-add-lg" type="button" data-slug="${escapeAttr(p.slug)}" data-add-button data-add-label="Add to cart">Add to cart</button>
     </div>
   </div>
-  ${disclaimer}
 </div>${optionsScript}${PICKER_STYLE}${DISCLAIMER_STYLE}`
 }
 
@@ -184,21 +186,25 @@ ${groupBlocks}
 // tiny hook there also reads data-options if present.
 // ----------------------------------------------------------------
 
-// Always-injected small style block that positions the optional
-// disclaimer paragraph directly under the tile image (grid
-// column 1, row 2). Safe to inline on every render because it's
-// tiny and idempotent; browsers dedup identical rules.
+// Always-injected small style block. Wraps the tile + optional
+// disclaimer in .pdp-tile-col so both stack in the left column
+// on desktop and the disclaimer sits directly under the sage
+// tile instead of at the bottom of the row (which would happen
+// if disclaimer were a sibling grid child — row height stretches
+// to match the taller info column, pushing the disclaimer far
+// below the tile). Existing .pdp-tile CSS doesn't require it to
+// be a direct .pdp-grid child, so the wrapper is safe.
 const DISCLAIMER_STYLE = `<style>
-.pdp-grid > .pdp-disclaimer {
-  grid-column: 1;
-  margin: 12px 0 0;
+.pdp-tile-col { display: flex; flex-direction: column; min-width: 0; }
+.pdp-disclaimer {
+  margin: 14px 2px 0;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: #55723e;
   max-width: 100%;
 }
-@media (max-width: 767px) {
-  .pdp-grid > .pdp-disclaimer { grid-column: 1 / -1; margin-top: 16px; }
+@media (min-width: 1024px) {
+  .pdp-disclaimer { font-size: 12.5px; margin-top: 18px; max-width: 440px; }
 }
 </style>`
 

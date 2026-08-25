@@ -557,6 +557,7 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
   const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState<Draft>(draft)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
   const isEdit = !!form.id
 
   function set<K extends keyof Draft>(k: K, v: Draft[K]) {
@@ -665,6 +666,10 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px 24px' }}>
+          {/* Essentials — the sellable data. Everything a shop
+              needs to actually ring up + list the product.
+              Copy / narrative moves into the collapsible below
+              (and will graduate to Edit Site in a follow-up). */}
           <FormRow label="Name" required>
             <TextInput value={form.name ?? ''} onChange={v => set('name', v)} />
           </FormRow>
@@ -680,10 +685,6 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
               />
             </FormRow>
           </Field2Col>
-
-          <FormRow label="Secondary name" hint="Small kicker under the title on the PDP.">
-            <TextInput value={form.secondary_name ?? ''} onChange={v => set('secondary_name', v)} />
-          </FormRow>
 
           <Field2Col>
             <FormRow label="Category">
@@ -726,23 +727,6 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
             </FormRow>
           </Field2Col>
 
-          <FormRow label="Description" hint="Body paragraph on the PDP.">
-            <TextArea value={form.long_description ?? ''} onChange={v => set('long_description', v)} rows={4} />
-          </FormRow>
-
-          <FormRow label="Ingredients">
-            <TextArea value={form.ingredients ?? ''} onChange={v => set('ingredients', v)} rows={2} />
-          </FormRow>
-
-          <Field2Col>
-            <FormRow label="Ritual / steep" hint='e.g. "190°F · 5–10 minutes"'>
-              <TextInput value={form.ritual ?? ''} onChange={v => set('ritual', v)} />
-            </FormRow>
-            <FormRow label="Ritual label" hint='Defaults to "How to steep" if blank.'>
-              <TextInput value={form.ritual_label ?? ''} onChange={v => set('ritual_label', v)} />
-            </FormRow>
-          </Field2Col>
-
           <FormRow label="Image URL">
             <TextInput value={form.image_url ?? ''} onChange={v => set('image_url', v)} placeholder="/assets/example.png" />
           </FormRow>
@@ -766,8 +750,7 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
               borderRadius: 10, background: SURFACE,
             }}>
               <div style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
-                Options / variants are edited via the JSON below for now.
-                A visual editor lands with subsections in a follow-up.
+                Options / variants — JSON for now. Visual editor lands with subsections.
               </div>
               <TextArea
                 value={JSON.stringify(form.options ?? null, null, 2)}
@@ -781,6 +764,63 @@ function ProductDrawer({ draft, onClose }: { draft: Draft; onClose: () => void }
               />
             </div>
           )}
+
+          {/* Storefront copy — the narrative content that belongs
+              to the storefront presentation (secondary name,
+              description, ingredients, ritual). Collapsed by
+              default so the drawer stays lean; graduates to
+              Edit Site in a follow-up and gets removed from this
+              drawer entirely once that page exists. */}
+          <div style={{
+            marginTop: 24, borderTop: `1px solid ${LINE}`, paddingTop: 18,
+          }}>
+            <button
+              type="button"
+              onClick={() => setCopyOpen(v => !v)}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                width: '100%', padding: '4px 0',
+                background: 'transparent', border: 0, cursor: 'pointer',
+                font: 'inherit', color: INK, textAlign: 'left',
+              }}
+              aria-expanded={copyOpen}
+            >
+              <span>
+                <span style={{ display: 'block', fontSize: 13, fontWeight: 600 }}>
+                  Storefront copy
+                </span>
+                <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 2 }}>
+                  Moves to Edit site in a follow-up · description, ingredients, steep
+                </span>
+              </span>
+              <span aria-hidden style={{
+                fontSize: 12, color: FAINT, transform: copyOpen ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 120ms ease',
+              }}>▾</span>
+            </button>
+
+            {copyOpen && (
+              <div style={{ marginTop: 14 }}>
+                <FormRow label="Secondary name" hint="Small kicker under the title on the PDP.">
+                  <TextInput value={form.secondary_name ?? ''} onChange={v => set('secondary_name', v)} />
+                </FormRow>
+                <FormRow label="Description" hint="Body paragraph on the PDP.">
+                  <TextArea value={form.long_description ?? ''} onChange={v => set('long_description', v)} rows={4} />
+                </FormRow>
+                <FormRow label="Ingredients">
+                  <TextArea value={form.ingredients ?? ''} onChange={v => set('ingredients', v)} rows={2} />
+                </FormRow>
+                <Field2Col>
+                  <FormRow label="Ritual / steep" hint='e.g. "190°F · 5–10 minutes"'>
+                    <TextInput value={form.ritual ?? ''} onChange={v => set('ritual', v)} />
+                  </FormRow>
+                  <FormRow label="Ritual label" hint='Defaults to "How to steep" if blank.'>
+                    <TextInput value={form.ritual_label ?? ''} onChange={v => set('ritual_label', v)} />
+                  </FormRow>
+                </Field2Col>
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{

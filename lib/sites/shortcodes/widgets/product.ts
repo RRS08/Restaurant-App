@@ -217,38 +217,49 @@ const DISCLAIMER_STYLE = `<style>
 </style>`
 
 const PICKER_STYLE = `<style>
-.pdp-options { display: flex; flex-direction: column; gap: 12px; margin: 20px 0 8px; }
+.pdp-options {
+  display: flex; flex-direction: column; gap: 10px;
+  margin: 18px 0 4px;
+  /* Sage hairline separates the FORM row from the qty stepper +
+     Add-to-cart button below. Matches the .pdp-facts divider
+     tone (#e2efd9) so the whole PDP reads as one system. */
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e2efd9;
+}
 .pdp-optgroup { border: 0; margin: 0; padding: 0; }
 .pdp-optgroup-label {
   display: block; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
-  color: #6b6b70; margin: 0 0 10px; padding: 0; font-weight: 500;
+  color: #6b6b70; margin: 0 0 8px; padding: 0; font-weight: 500;
 }
-.pdp-choices { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Tab-style choice row — plain text with a 2px underline
+   marking the selected option. No pills or rectangles, so
+   the picker reads as inline copy rather than another button
+   stacked on top of the qty stepper + Add-to-cart button. */
+.pdp-choices { display: flex; flex-wrap: wrap; gap: 24px; align-items: baseline; }
 .pdp-choice {
-  display: inline-flex; align-items: center; gap: 12px; cursor: pointer;
-  /* Rounded rectangles, not pills — differentiates the FORM
-     picker from the pill-shaped qty stepper + Add-to-cart
-     button below so the visual hierarchy reads as three
-     distinct controls, not a stack of the same shape. */
-  padding: 12px 16px; border-radius: 10px; border: 1px solid #d6d5d1;
-  background: #fff; color: #253b0e; font-size: 13.5px; line-height: 1.2;
-  transition: border-color .15s ease, background .15s ease, color .15s ease, box-shadow .15s ease;
+  display: inline-flex; align-items: baseline; gap: 8px; cursor: pointer;
+  padding: 6px 0 8px; margin: 0;
+  border: 0; background: none;
+  color: #55723e; font-size: 14px; line-height: 1.2;
+  border-bottom: 2px solid transparent;
+  transition: color .15s ease, border-color .15s ease;
   user-select: none; position: relative;
 }
 .pdp-choice input { position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; }
-.pdp-choice-label { font-weight: 600; letter-spacing: -0.005em; }
+.pdp-choice-label { font-weight: 500; letter-spacing: -0.005em; }
 .pdp-choice-price {
   font-family: 'Geist Mono', ui-monospace, monospace;
-  font-size: 12px; color: #6b6b70; font-weight: 500;
+  font-size: 12.5px; color: #55723e; font-weight: 500; opacity: .75;
 }
 .pdp-choice.is-active {
-  border-color: #253b0e; background: #253b0e; color: #faf9f6;
-  box-shadow: 0 1px 3px rgba(37,59,14,0.15);
+  color: #253b0e; border-bottom-color: #253b0e;
 }
-.pdp-choice.is-active .pdp-choice-price { color: #faf9f6; opacity: .78; }
-.pdp-choice:hover:not(.is-active) { border-color: #55723e; background: #f7f6f0; }
+.pdp-choice.is-active .pdp-choice-label { font-weight: 600; }
+.pdp-choice.is-active .pdp-choice-price { color: #253b0e; opacity: 1; }
+.pdp-choice:hover:not(.is-active) { color: #253b0e; }
 @media (max-width: 480px) {
-  .pdp-choice { padding: 11px 14px; font-size: 12.5px; gap: 10px; }
+  .pdp-choices { gap: 18px; }
+  .pdp-choice { font-size: 13.5px; }
 }
 </style>`
 

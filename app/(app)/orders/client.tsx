@@ -19,6 +19,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { markReady } from '@/app/actions/pickup'
+import { voidOrder } from '@/app/actions/sales'
 import { makeT, type Lang } from '@/lib/i18n'
 
 export interface OrderRowItem {
@@ -28,11 +29,30 @@ export interface OrderRowItem {
   lineTotal: number
 }
 
+export interface OrderShipping {
+  line1: string | null
+  line2: string | null
+  city: string | null
+  state: string | null
+  postal: string | null
+  country: string | null
+}
+
+export interface OrderDelivery {
+  key: string | null
+  label: string | null
+  price: number | null
+  sublabel: string | null
+}
+
 export interface OrderRow {
   id: string
   orderNumber: string
   createdAt: string
   total: number
+  subtotal: number | null
+  discountTotal: number | null
+  taxTotal: number | null
   status: 'completed' | 'voided'
   fulfillmentState: 'new' | 'ready' | 'completed'
   readyAt: string | null
@@ -42,7 +62,14 @@ export interface OrderRow {
   items: OrderRowItem[]
   buyerEmail: string | null
   buyerPhone: string | null
-  shippingLine1: string | null
+  cardholderName: string | null
+  cardBrand: string | null
+  cardLast4: string | null
+  shipping: OrderShipping
+  delivery: OrderDelivery
+  note: string | null
+  paymentProvider: string | null
+  paymentReference: string | null
 }
 
 const INK = '#18181B'
@@ -383,10 +410,12 @@ function OrderDrawer({
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+  const [confirmingVoid, setConfirmingVoid] = useState(false)
   const isVoided = order.status === 'voided'
   const canMarkReady = !isVoided
     && order.channel === 'pickup'
     && order.fulfillmentState === 'new'
+  const canVoid = !isVoided
 
   function handleMarkReady() {
     setError(null)
@@ -402,6 +431,43 @@ function OrderDrawer({
       }
     })
   }
+
+  function handleVoid() {
+    setError(null)
+    const fd = new FormData()
+    fd.set('order_id', order.id)
+    startTransition(async () => {
+      const result = await voidOrder(null, fd)
+      if (result && 'error' in result) {
+        setError(result.error)
+        setConfirmingVoid(false)
+      } else {
+        router.refresh()
+        onClose()
+      }
+    })
+  }
+
+  // Precomputed views for the drawer body so the JSX below stays
+  // readable. Everything is optional-guarded so an incomplete
+  // site_orders_link (a legacy row, or a schema in flux) still
+  // renders instead of throwing.
+  const s = order.shipping
+  const addressStreet = [s.line1, s.line2].filter(Boolean).join(', ')
+  const addressCity = [s.city, s.state, s.postal].filter(Boolean).join(', ')
+  const hasAddress = Boolean(addressStreet || addressCity)
+  const summaryRows: Array<[string, string, boolean]> = []
+  if (order.subtotal != null) summaryRows.push([t('Subtotal', 'Subtotal'), fmtMoney(order.subtotal), false])
+  if (order.discountTotal != null && order.discountTotal > 0) {
+    summaryRows.push([t('Discount', 'Descuento'), `−${fmtMoney(order.discountTotal)}`, false])
+  }
+  if (order.delivery.price != null && order.delivery.price > 0) {
+    summaryRows.push([order.delivery.label ?? t('Delivery', 'Envío'), fmtMoney(order.delivery.price), false])
+  }
+  if (order.taxTotal != null && order.taxTotal > 0) {
+    summaryRows.push([t('Tax', 'Impuesto'), fmtMoney(order.taxTotal), false])
+  }
+  summaryRows.push([t('Total', 'Total'), fmtMoney(order.total), true])
 
   return (
     <div style={{
@@ -466,93 +532,120 @@ function OrderDrawer({
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 24px 24px' }}>
-          {/* Fulfillment */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT, marginBottom: 8 }}>
-              {t('FULFILLMENT', 'ENTREGA')}
-            </div>
-            <div style={{
-              border: `1px solid ${LINE}`, borderRadius: 10, padding: '10px 12px',
-              background: SURFACE, fontSize: 13, color: INK,
+          {/* Fulfillment — channel chip + shipping address (all
+              lines) + marked-ready timestamp when applicable. */}
+          <SectionEyebrow label={t('FULFILLMENT', 'ENTREGA')} />
+          <div style={{
+            border: `1px solid ${LINE}`, borderRadius: 10, padding: '10px 12px',
+            background: SURFACE, fontSize: 13, color: INK, marginBottom: 20,
+          }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+              borderRadius: 999, padding: '2px 9px', fontSize: 11, fontWeight: 600,
+              background: CHANNEL_TONES[order.channel].tile,
+              color: CHANNEL_TONES[order.channel].ink,
             }}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                borderRadius: 999, padding: '2px 9px', fontSize: 11, fontWeight: 600,
-                background: CHANNEL_TONES[order.channel].tile,
-                color: CHANNEL_TONES[order.channel].ink,
-              }}>
-                <span style={{ width: 5, height: 5, borderRadius: '50%', background: CHANNEL_TONES[order.channel].dot }} />
-                {order.channel === 'pickup' ? t('Pickup', 'Recoger') : t('Delivery', 'Envío')}
-              </span>
-              {order.channel === 'delivery' && order.shippingLine1 && (
-                <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
-                  {t('Ship to', 'Enviar a')}: {order.shippingLine1}
-                </div>
+              <span style={{ width: 5, height: 5, borderRadius: '50%', background: CHANNEL_TONES[order.channel].dot }} />
+              {order.channel === 'pickup' ? t('Pickup', 'Recoger') : t('Delivery', 'Envío')}
+              {order.delivery.label && (
+                <span style={{ opacity: 0.8 }}>· {order.delivery.label}</span>
               )}
-              {order.readyAt && (
-                <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
-                  {t('Marked ready', 'Marcada lista')}: {fmtFullDateTime(order.readyAt, locale)}
+            </span>
+            {order.delivery.sublabel && (
+              <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
+                {order.delivery.sublabel}
+              </div>
+            )}
+            {hasAddress && (
+              <div style={{ marginTop: 8, fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+                <div style={{ color: FAINT, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>
+                  {t('Ship to', 'Enviar a')}
                 </div>
-              )}
-            </div>
+                {addressStreet && <div style={{ color: INK }}>{addressStreet}</div>}
+                {addressCity && <div style={{ color: INK }}>{addressCity}</div>}
+                {s.country && s.country.toUpperCase() !== 'US' && <div style={{ color: INK }}>{s.country}</div>}
+              </div>
+            )}
+            {order.readyAt && (
+              <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
+                {t('Marked ready', 'Marcada lista')}: {fmtFullDateTime(order.readyAt, locale)}
+              </div>
+            )}
           </div>
 
-          {/* Items */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT, marginBottom: 8 }}>
-              {t('ITEMS', 'ARTÍCULOS')}
-            </div>
-            <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden' }}>
-              {order.items.length === 0 ? (
-                <div style={{ padding: '10px 12px', fontSize: 12, color: FAINT }}>
-                  {t('No line items on this order.', 'Sin artículos en esta orden.')}
-                </div>
-              ) : order.items.map((li, i) => (
-                <div
-                  key={i}
-                  style={{
-                    display: 'flex', alignItems: 'flex-start', gap: 11,
-                    padding: '9px 12px',
-                    borderBottom: i === order.items.length - 1 ? undefined : `1px solid ${LINE_SOFT}`,
-                  }}
-                >
-                  <span style={{
-                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-                    minWidth: 22, height: 20, borderRadius: 6,
-                    background: '#F4F4F2', fontFamily: MONO, fontSize: 10, fontWeight: 600,
-                    color: '#52525B', padding: '0 4px',
-                  }}>
-                    {li.qty}×
-                  </span>
-                  <span style={{ flex: 1, minWidth: 0 }}>
-                    <span style={{ display: 'block', fontSize: 13, letterSpacing: '-0.01em' }}>{li.name}</span>
-                    {li.variantLabel && (
-                      <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>
-                        {li.variantLabel}
-                      </span>
-                    )}
-                  </span>
-                  <span style={{ fontFamily: MONO, fontSize: 13, color: '#3F3F46' }}>
-                    {fmtMoney(li.lineTotal)}
-                  </span>
-                </div>
-              ))}
-            </div>
+          {/* Items + summary rows in one bordered block — matches
+              sales drawer's shape so both surfaces read the same. */}
+          <SectionEyebrow label={t('ITEMS', 'ARTÍCULOS')} />
+          <div style={{ border: `1px solid ${LINE}`, borderRadius: 10, overflow: 'hidden', marginBottom: 20 }}>
+            {order.items.length === 0 ? (
+              <div style={{ padding: '10px 12px', fontSize: 12, color: FAINT }}>
+                {t('No line items on this order.', 'Sin artículos en esta orden.')}
+              </div>
+            ) : order.items.map((li, i) => (
+              <div
+                key={i}
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 11,
+                  padding: '9px 12px',
+                  borderBottom: `1px solid ${LINE_SOFT}`,
+                }}
+              >
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  minWidth: 22, height: 20, borderRadius: 6,
+                  background: '#F4F4F2', fontFamily: MONO, fontSize: 10, fontWeight: 600,
+                  color: '#52525B', padding: '0 4px',
+                }}>
+                  {li.qty}×
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 13, letterSpacing: '-0.01em' }}>{li.name}</span>
+                  {li.variantLabel && (
+                    <span style={{ display: 'block', fontSize: 11, color: FAINT, marginTop: 1 }}>
+                      {li.variantLabel}
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 13, color: '#3F3F46' }}>
+                  {fmtMoney(li.lineTotal)}
+                </span>
+              </div>
+            ))}
+            {summaryRows.map((r, i) => (
+              <div
+                key={r[0] + i}
+                style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  padding: r[2] ? '10px 12px' : '8px 12px',
+                  borderTop: `1px solid ${r[2] ? LINE : LINE_SOFT}`,
+                  background: SURFACE,
+                }}
+              >
+                <span style={r[2]
+                  ? { fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }
+                  : { fontSize: 12, color: MUTED }}>
+                  {r[0]}
+                </span>
+                <span style={r[2]
+                  ? { fontFamily: MONO, fontSize: 14, fontWeight: 700, letterSpacing: '-0.02em' }
+                  : { fontFamily: MONO, fontSize: 12 }}>
+                  {r[1]}
+                </span>
+              </div>
+            ))}
           </div>
 
           {/* Buyer contact */}
-          {(order.buyerEmail || order.buyerPhone) && (
-            <div style={{ marginBottom: 20 }}>
-              <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT, marginBottom: 8 }}>
-                {t('BUYER', 'COMPRADOR')}
-              </div>
+          {(order.buyerEmail || order.buyerPhone || order.customerName) && (
+            <>
+              <SectionEyebrow label={t('BUYER', 'COMPRADOR')} />
               <div style={{
                 border: `1px solid ${LINE}`, borderRadius: 10, padding: '10px 12px',
-                fontSize: 13, color: INK,
+                fontSize: 13, color: INK, marginBottom: 20,
               }}>
                 {order.customerName && <div style={{ fontWeight: 600 }}>{order.customerName}</div>}
                 {order.buyerEmail && (
-                  <a href={`mailto:${order.buyerEmail}`} style={{ color: '#2563EB', fontSize: 12, display: 'block', marginTop: 4 }}>
+                  <a href={`mailto:${order.buyerEmail}`} style={{ color: '#2563EB', fontSize: 12, display: 'block', marginTop: 4, wordBreak: 'break-all' }}>
                     {order.buyerEmail}
                   </a>
                 )}
@@ -562,41 +655,141 @@ function OrderDrawer({
                   </a>
                 )}
               </div>
-            </div>
+            </>
+          )}
+
+          {/* Payment — card brand + last4 + Poynt reference. Only
+              rendered when we have any of it; a truly card-less
+              order (all-cash or manual) just skips this block. */}
+          {(order.cardBrand || order.cardLast4 || order.paymentReference || order.cardholderName) && (
+            <>
+              <SectionEyebrow label={t('PAYMENT', 'PAGO')} />
+              <div style={{
+                border: `1px solid ${LINE}`, borderRadius: 10, padding: '10px 12px',
+                fontSize: 13, color: INK, marginBottom: 20,
+              }}>
+                {(order.cardBrand || order.cardLast4) && (
+                  <MetaLine
+                    label={t('Card', 'Tarjeta')}
+                    value={`${order.cardBrand ?? '—'}${order.cardLast4 ? ` ··${order.cardLast4}` : ''}`}
+                    mono
+                  />
+                )}
+                {order.cardholderName && (
+                  <MetaLine label={t('Name on card', 'Nombre en tarjeta')} value={order.cardholderName} />
+                )}
+                {order.paymentReference && (
+                  <MetaLine
+                    label={t('Poynt ref', 'Ref. Poynt')}
+                    value={order.paymentReference}
+                    mono
+                    small
+                  />
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Order note — free-text the buyer left at checkout. */}
+          {order.note && (
+            <>
+              <SectionEyebrow label={t('NOTE TO SHOP', 'NOTA A LA TIENDA')} />
+              <div style={{
+                border: `1px solid ${LINE}`, borderRadius: 10, background: SURFACE,
+                padding: '10px 12px', fontSize: 12, color: '#3F3F46', lineHeight: 1.5,
+                marginBottom: 20,
+              }}>
+                {order.note}
+              </div>
+            </>
           )}
         </div>
 
-        {/* Footer — primary action */}
+        {/* Footer — Void on the left, primary action on the right.
+            Two-step confirm mirrors the sales drawer so a stray
+            tap can't reverse a live sale. */}
         <div style={{
           borderTop: `1px solid ${LINE}`, padding: '14px 24px',
           display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+          flexWrap: 'wrap',
         }}>
-          {canMarkReady ? (
-            <button
-              type="button"
-              onClick={handleMarkReady}
-              disabled={pending}
-              style={{
-                border: 0, background: CHANNEL_TONES.pickup.ink, color: '#fff',
-                borderRadius: 9, padding: '10px 16px',
-                font: 'inherit', fontSize: 13, fontWeight: 600,
-                cursor: pending ? 'wait' : 'pointer',
-                opacity: pending ? 0.75 : 1,
-              }}
-            >
-              {pending ? t('Marking…', 'Marcando…') : t('Mark ready for pickup', 'Marcar lista para recoger')}
-            </button>
+          {confirmingVoid ? (
+            <>
+              <span style={{ fontSize: 12, color: '#B91C1C', marginRight: 'auto', lineHeight: 1.4, maxWidth: 220 }}>
+                {t('Void this order? The record stays.', '¿Anular esta orden? El registro se mantiene.')}
+              </span>
+              <button
+                type="button"
+                onClick={() => setConfirmingVoid(false)}
+                disabled={pending}
+                style={{
+                  border: `1px solid ${LINE}`, background: '#fff', color: '#3F3F46',
+                  borderRadius: 9, padding: '9px 14px', font: 'inherit',
+                  fontSize: 13, fontWeight: 500, cursor: pending ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {t('Keep it', 'Conservar')}
+              </button>
+              <button
+                type="button"
+                onClick={handleVoid}
+                disabled={pending}
+                style={{
+                  border: 0, background: '#B91C1C', color: '#fff',
+                  borderRadius: 9, padding: '10px 16px', font: 'inherit',
+                  fontSize: 13, fontWeight: 600, cursor: pending ? 'wait' : 'pointer',
+                  opacity: pending ? 0.7 : 1,
+                }}
+              >
+                {pending ? t('Voiding…', 'Anulando…') : t('Void order', 'Anular orden')}
+              </button>
+            </>
           ) : (
-            <span style={{ fontSize: 12, color: MUTED }}>
-              {isVoided
-                ? t('This order was voided.', 'Esta orden fue anulada.')
-                : order.channel === 'delivery'
-                  ? t('Shipping workflow coming soon.', 'Flujo de envío próximamente.')
-                  : t('Order handled.', 'Orden manejada.')}
-            </span>
-          )}
-          {error && (
-            <span style={{ fontSize: 12, color: '#B91C1C', marginLeft: 'auto' }}>{error}</span>
+            <>
+              {canVoid && (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingVoid(true)}
+                  disabled={pending}
+                  style={{
+                    border: `1px solid ${LINE}`, background: '#fff', color: '#B91C1C',
+                    borderRadius: 9, padding: '9px 14px', font: 'inherit',
+                    fontSize: 13, fontWeight: 500,
+                    cursor: pending ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {t('Void', 'Anular')}
+                </button>
+              )}
+              <div style={{ marginLeft: 'auto' }} />
+              {canMarkReady ? (
+                <button
+                  type="button"
+                  onClick={handleMarkReady}
+                  disabled={pending}
+                  style={{
+                    border: 0, background: CHANNEL_TONES.pickup.ink, color: '#fff',
+                    borderRadius: 9, padding: '10px 16px',
+                    font: 'inherit', fontSize: 13, fontWeight: 600,
+                    cursor: pending ? 'wait' : 'pointer',
+                    opacity: pending ? 0.75 : 1,
+                  }}
+                >
+                  {pending ? t('Marking…', 'Marcando…') : t('Mark ready for pickup', 'Marcar lista para recoger')}
+                </button>
+              ) : (
+                <span style={{ fontSize: 12, color: MUTED }}>
+                  {isVoided
+                    ? t('This order was voided.', 'Esta orden fue anulada.')
+                    : order.channel === 'delivery'
+                      ? t('Shipping workflow coming soon.', 'Flujo de envío próximamente.')
+                      : t('Order handled.', 'Orden manejada.')}
+                </span>
+              )}
+              {error && (
+                <span style={{ fontSize: 12, color: '#B91C1C', width: '100%', textAlign: 'right' }}>{error}</span>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -607,6 +800,43 @@ function OrderDrawer({
 // ================================================================
 // Bits
 // ================================================================
+
+function SectionEyebrow({ label }: { label: string }) {
+  return (
+    <div style={{
+      fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em',
+      color: FAINT, marginBottom: 8,
+    }}>
+      {label}
+    </div>
+  )
+}
+
+function MetaLine({
+  label, value, mono, small,
+}: {
+  label: string
+  value: string
+  mono?: boolean
+  small?: boolean
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      gap: 12, padding: '4px 0',
+    }}>
+      <span style={{ fontSize: 12, color: MUTED, flex: '0 0 auto' }}>{label}</span>
+      <span style={{
+        fontFamily: mono ? MONO : undefined,
+        fontSize: small ? 11 : 12,
+        color: mono ? '#3F3F46' : INK,
+        textAlign: 'right', wordBreak: 'break-all', minWidth: 0,
+      }}>
+        {value}
+      </span>
+    </div>
+  )
+}
 
 function EmptyLedger({ t }: { t: (en: string, es?: string) => string }) {
   return (

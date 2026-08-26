@@ -49,9 +49,10 @@ export default async function OrdersPage() {
   const { data: rows } = await admin
     .from('orders')
     .select(`
-      id, total_amount, created_at, status, fulfillment_state, ready_at,
-      customer_name, business_date,
-      site_orders_link!inner(cart, contact, shipping)
+      id, total_amount, subtotal, tax_total, discount_total,
+      created_at, status, fulfillment_state, ready_at,
+      customer_name, card_brand, card_last4, note, business_date,
+      site_orders_link!inner(cart, contact, shipping, payment_provider, payment_reference)
     `)
     .eq('restaurant_id', role.restaurant_id)
     .eq('source', 'web')
@@ -63,14 +64,40 @@ export default async function OrdersPage() {
   type SupabaseRow = {
     id: string
     total_amount: number | string
+    subtotal: number | string | null
+    tax_total: number | string | null
+    discount_total: number | string | null
     created_at: string
     status: string
     fulfillment_state: string
     ready_at: string | null
     customer_name: string | null
+    card_brand: string | null
+    card_last4: string | null
+    note: string | null
     business_date: string
-    site_orders_link: { cart: unknown; contact: unknown; shipping: unknown }
-      | Array<{ cart: unknown; contact: unknown; shipping: unknown }>
+    site_orders_link: {
+      cart: unknown
+      contact: unknown
+      shipping: unknown
+      payment_provider: string | null
+      payment_reference: string | null
+    } | Array<{
+      cart: unknown
+      contact: unknown
+      shipping: unknown
+      payment_provider: string | null
+      payment_reference: string | null
+    }>
+  }
+
+  function toNum(v: number | string | null | undefined): number | null {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string') {
+      const n = parseFloat(v)
+      return Number.isFinite(n) ? n : null
+    }
+    return null
   }
 
   const orders: OrderRow[] = ((rows ?? []) as SupabaseRow[]).map(r => {
@@ -78,21 +105,34 @@ export default async function OrdersPage() {
     // one-element array depending on the FK cardinality; normalize
     // here so downstream code doesn't need to care.
     const link = Array.isArray(r.site_orders_link) ? r.site_orders_link[0] : r.site_orders_link
-    const shipping = link?.shipping as { line1?: string } | null
-    const channel: 'pickup' | 'delivery' = shipping && shipping.line1 ? 'delivery' : 'pickup'
-    const cart = link?.cart as { items?: Array<{ name?: string; qty?: number; variant_label?: string; line_total?: number }> } | null
-    const contact = link?.contact as { email?: string; phone?: string } | null
+    const shipping = (link?.shipping ?? null) as { line1?: string; line2?: string; city?: string; state?: string; postal?: string; country?: string } | null
+    const hasShipping = !!(shipping && shipping.line1)
+    const channel: 'pickup' | 'delivery' = hasShipping ? 'delivery' : 'pickup'
+    const cart = link?.cart as {
+      items?: Array<{ name?: string; qty?: number; variant_label?: string; line_total?: number }>
+      delivery?: { key?: string; label?: string; price?: number; sublabel?: string }
+      notes?: string
+    } | null
+    const contact = link?.contact as {
+      email?: string
+      phone?: string
+      cardholder_name?: string
+    } | null
     const items = (cart?.items ?? []).map(it => ({
       name: typeof it.name === 'string' ? it.name : '—',
       qty: typeof it.qty === 'number' ? it.qty : 1,
       variantLabel: typeof it.variant_label === 'string' ? it.variant_label : null,
       lineTotal: typeof it.line_total === 'number' ? it.line_total : 0,
     }))
+    const deliveryFromCart = cart?.delivery ?? {}
     return {
       id: r.id,
       orderNumber: r.id.slice(0, 8).toUpperCase(),
       createdAt: r.created_at,
-      total: typeof r.total_amount === 'number' ? r.total_amount : parseFloat(String(r.total_amount)),
+      total: toNum(r.total_amount) ?? 0,
+      subtotal: toNum(r.subtotal),
+      discountTotal: toNum(r.discount_total),
+      taxTotal: toNum(r.tax_total),
       status: r.status === 'voided' ? 'voided' : 'completed',
       fulfillmentState: (r.fulfillment_state === 'ready' || r.fulfillment_state === 'completed')
         ? r.fulfillment_state
@@ -104,7 +144,26 @@ export default async function OrdersPage() {
       items,
       buyerEmail: contact?.email ?? null,
       buyerPhone: contact?.phone ?? null,
-      shippingLine1: shipping?.line1 ?? null,
+      cardholderName: contact?.cardholder_name ?? null,
+      cardBrand: r.card_brand,
+      cardLast4: r.card_last4,
+      shipping: {
+        line1: shipping?.line1 ?? null,
+        line2: shipping?.line2 ?? null,
+        city: shipping?.city ?? null,
+        state: shipping?.state ?? null,
+        postal: shipping?.postal ?? null,
+        country: shipping?.country ?? null,
+      },
+      delivery: {
+        key: typeof deliveryFromCart.key === 'string' ? deliveryFromCart.key : null,
+        label: typeof deliveryFromCart.label === 'string' ? deliveryFromCart.label : null,
+        price: typeof deliveryFromCart.price === 'number' ? deliveryFromCart.price : null,
+        sublabel: typeof deliveryFromCart.sublabel === 'string' ? deliveryFromCart.sublabel : null,
+      },
+      note: typeof cart?.notes === 'string' ? cart.notes : (r.note ?? null),
+      paymentProvider: link?.payment_provider ?? null,
+      paymentReference: link?.payment_reference ?? null,
     }
   })
 

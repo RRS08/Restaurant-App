@@ -16,7 +16,7 @@
 // New lane the instant it's clicked.
 // ----------------------------------------------------------------
 
-import { useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { markReady } from '@/app/actions/pickup'
 import { voidOrder } from '@/app/actions/sales'
@@ -100,6 +100,20 @@ export default function OrdersClient({
   const [openId, setOpenId] = useState<string | null>(null)
   const [filter, setFilter] = useState<FilterKey>('all')
 
+  // Bands treatment at md+ (tablet + desktop) — same pattern as
+  // the Sales page: header + filter sticky as one band, rows run
+  // edge-to-edge with hairline dividers, no card treatment. Below
+  // md (phone), rows collapse to card-treatment with side padding.
+  // Match Sales exactly so both ledgers read as one design system.
+  const [isBands, setIsBands] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)')
+    const update = () => setIsBands(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [])
+
   const counts: Record<FilterKey, number> = {
     all: orders.length,
     pickup: orders.filter(o => o.status !== 'voided' && o.channel === 'pickup').length,
@@ -137,11 +151,19 @@ export default function OrdersClient({
     <div style={{
       minHeight: '100vh', background: '#fff', color: INK,
       fontFamily: "'Geist', system-ui, sans-serif",
+      // Phone gets a small card gutter around the ledger; md+
+      // runs edge-to-edge so bands align with the app shell.
+      padding: isBands ? 0 : '20px 24px 28px',
     }}>
       {/* Sticky header — mirrors the sales layout: date heading,
-          big mono total, count. Filter strip band underneath. */}
-      <div style={{ position: 'sticky', top: 0, zIndex: 5, background: '#fff' }}>
-        <div style={{ padding: '16px 24px 14px' }}>
+          big mono total, count. Filter strip band underneath.
+          Sticky only in bands mode so the header pins as the
+          ledger scrolls; on phone it flows with the page. */}
+      <div style={{
+        position: isBands ? 'sticky' : 'static',
+        top: 0, zIndex: 5, background: '#fff',
+      }}>
+        <div style={{ padding: isBands ? '16px 24px 14px' : '16px 16px 14px' }}>
           <div style={{
             fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em',
             color: FAINT, marginBottom: 6,
@@ -169,10 +191,11 @@ export default function OrdersClient({
           </div>
         </div>
 
-        {/* Filter strip */}
+        {/* Filter strip — same responsive inset as the header. */}
         <div style={{
           borderTop: `1px solid ${LINE}`, borderBottom: `1px solid ${LINE}`,
-          background: SURFACE, padding: '10px 24px',
+          background: SURFACE,
+          padding: isBands ? '10px 24px' : '10px 16px',
           display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
         }}>
           {(['all', 'pickup', 'delivery', 'voided'] as const).map(f => {
@@ -237,8 +260,10 @@ export default function OrdersClient({
         </div>
       </div>
 
-      {/* Rows */}
-      <div>
+      {/* Rows — phone gets an 8px gutter around the card list;
+          md+ hands the list to the row so it can run edge-to-edge
+          with the header/filter band. */}
+      <div style={{ padding: isBands ? 0 : 8 }}>
         {orders.length === 0 ? (
           <EmptyLedger t={t} />
         ) : shown.length === 0 ? (
@@ -253,6 +278,7 @@ export default function OrdersClient({
             onOpen={() => setOpenId(o.id)}
             t={t}
             locale={locale}
+            isBands={isBands}
           />
         ))}
       </div>
@@ -274,13 +300,14 @@ export default function OrdersClient({
 // ================================================================
 
 function OrderRowCard({
-  order, selected, onOpen, t, locale,
+  order, selected, onOpen, t, locale, isBands,
 }: {
   order: OrderRow
   selected: boolean
   onOpen: () => void
   t: (en: string, es?: string) => string
   locale: string
+  isBands: boolean
 }) {
   const tone = CHANNEL_TONES[order.channel]
   const isVoided = order.status === 'voided'
@@ -294,8 +321,13 @@ function OrderRowCard({
       aria-selected={selected}
       style={{
         display: 'flex', alignItems: 'center', gap: 13,
-        padding: '11px 24px', cursor: 'pointer',
-        borderBottom: `1px solid ${LINE_SOFT}`,
+        // md+ runs edge-to-edge with 24px inset; phone tightens
+        // to 12px inside its 8px card gutter for touch comfort.
+        padding: isBands ? '11px 24px' : '11px 12px',
+        borderRadius: isBands ? 0 : 10,
+        cursor: 'pointer',
+        border: isBands ? 0 : `1px solid ${selected ? LINE : 'transparent'}`,
+        borderBottom: isBands ? `1px solid ${LINE_SOFT}` : undefined,
         background: selected ? SURFACE : 'transparent',
         opacity: isVoided ? 0.75 : 1,
       }}

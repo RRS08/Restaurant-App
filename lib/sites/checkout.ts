@@ -124,16 +124,26 @@ export async function performCheckout(
     return { error: `No payment adapter registered for provider '${providerName ?? 'none'}'.` }
   }
 
-  // Tax applied to (taxable subset of subtotal + delivery). Site
-  // config carries the rate as a decimal (0.0825 = 8.25%). Missing
-  // config = 0 = no tax. Per-product `taxable` flag lets a merchant
-  // flip individual items to exempt in the catalog drawer; only
-  // the taxable subtotal contributes to the tax base here.
+  // Tax applied to (taxable subset of subtotal + shipping, when
+  // taxable). Site config carries the rate as a decimal (0.0825 =
+  // 8.25%). Missing config = 0 = no tax. Per-product `taxable`
+  // flag lets a merchant flip individual items to exempt in the
+  // catalog drawer; only the taxable subtotal contributes to the
+  // tax base here.
+  //
+  // Shipping tax follows the tax status of what's being shipped:
+  // when every item in the cart is exempt, the shipping charge is
+  // exempt too. Matches Texas + most US state rules — shipping is
+  // ancillary to the taxable good it delivers, not a stand-alone
+  // taxable service. An all-exempt cart with a shipped delivery
+  // now settles at $0 tax instead of accruing tax on the shipping
+  // line alone.
   const taxRate = readSiteTaxRate(site)
   const taxableSubtotal = cart.items
     .filter((i) => i.taxable !== false)
     .reduce((s, i) => s + i.line_total, 0)
-  const taxAmount = round2((taxableSubtotal + deliveryOption.price) * taxRate)
+  const taxableDelivery = taxableSubtotal > 0 ? deliveryOption.price : 0
+  const taxAmount = round2((taxableSubtotal + taxableDelivery) * taxRate)
   const total = round2(cart.subtotal + deliveryOption.price + taxAmount)
   const buyer = { name: fullName, email: input.contact.email, phone: input.contact.phone }
   // OUR correlation id for this checkout attempt — logged by the

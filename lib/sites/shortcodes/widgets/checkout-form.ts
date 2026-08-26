@@ -822,7 +822,11 @@ const CHECKOUT_SCRIPT = `
     var radio = selectedRadio;
     var price = parseFloat(radio.dataset.price || '0') || 0;
     var sub = currentSubtotal();
-    var tax = round2((taxableSubtotal + price) * taxRate);
+    // Shipping tax follows the cart's tax status — an all-exempt
+    // cart doesn't accrue tax on the shipping line either.
+    // Mirrors the server calc in lib/sites/checkout.ts.
+    var taxableDelivery = taxableSubtotal > 0 ? price : 0;
+    var tax = round2((taxableSubtotal + taxableDelivery) * taxRate);
     var total = round2(sub + price + tax);
     // For pickup, the sublabel in site config is typically written
     // as "Store Name · 123 Address St" — drop the store-name prefix

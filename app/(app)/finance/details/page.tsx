@@ -16,6 +16,7 @@ import { isDevEmail } from '@/lib/dev'
 import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
 import { getLang } from '@/lib/i18n-server'
 import { makeT, type Lang } from '@/lib/i18n'
+import { resolveActivePlace } from '@/lib/places'
 import FinanceClient from './client'
 
 // Plaid Personal Finance Category primaries → short human labels.
@@ -71,6 +72,26 @@ export default async function FinancePage() {
 
   const defaultLocationId = locations?.[0]?.id ?? null
 
+  // Scope the revenue-from-orders query to the active place — a
+  // manager on Mercado should see only that shop's revenue in the
+  // Finance details bridges, not web orders sitting at the online
+  // location. Without this, the 2026-08-25 places pivot leaks web
+  // revenue into every retail Finance card.
+  const { data: userRole } = user
+    ? await supabase
+        .from('user_roles')
+        .select('restaurant_id')
+        .eq('user_id', user.id)
+        .single()
+    : { data: null as { restaurant_id: string | null } | null }
+  const activePlace = userRole?.restaurant_id
+    ? await resolveActivePlace(supabase, userRole.restaurant_id)
+    : null
+  // Fallback to an unmatchable UUID so no orders leak when the
+  // cookie is missing on first render — the layout redirects to
+  // /places before this normally renders.
+  const orderScopeId = activePlace?.id ?? '00000000-0000-0000-0000-000000000000'
+
   // ---- Date boundaries ----
   const now = new Date()
 
@@ -118,6 +139,7 @@ export default async function FinancePage() {
       .from('orders')
       .select('id, total_amount')
       .eq('status', 'completed')
+      .eq('location_id', orderScopeId)
       .gte('created_at', sevenDaysAgo.toISOString()),
 
     // 4. Shifts this week with employee + section context. The labor

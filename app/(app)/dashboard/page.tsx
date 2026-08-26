@@ -30,6 +30,7 @@ import {
 } from '@/lib/readiness'
 import { groupBankTransactions } from '@/lib/finance/matching'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { resolveActivePlace } from '@/lib/places'
 
 export default async function DashboardPage({
   searchParams,
@@ -62,21 +63,42 @@ export default async function DashboardPage({
   // because setHours(0,0,0,0) computes midnight in the server's
   // timezone rather than in the restaurant's timezone.
   let timezone: string | null = null
+  // Scope every orders query on this page to the active place — a
+  // manager on Mercado sees only orders that landed at Mercado's
+  // location; web orders sit at the online location and surface in
+  // Online > Orders instead. Without this, the 2026-08-25 places
+  // pivot leaks web orders back into retail dashboards.
+  let activePlaceId: string | null = null
+  let activePlaceTimezone: string | null = null
   if (userRole?.restaurant_id) {
-    const { data: loc } = await supabase
-      .from('locations')
-      .select('timezone')
-      .eq('restaurant_id', userRole.restaurant_id)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle()
+    const [{ data: loc }, place] = await Promise.all([
+      supabase
+        .from('locations')
+        .select('timezone')
+        .eq('restaurant_id', userRole.restaurant_id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle(),
+      resolveActivePlace(supabase, userRole.restaurant_id),
+    ])
     timezone = (loc?.timezone as string | null) ?? null
+    if (place) {
+      activePlaceId = place.id
+      activePlaceTimezone = place.timezone
+    }
   }
+  // Filter value used on every orders query below. When no place is
+  // selected we fall back to an unmatchable UUID so no orders leak
+  // — the layout redirects to /places before this renders in
+  // practice, but the guard keeps a stale render honest.
+  const orderScopeId = activePlaceId ?? '00000000-0000-0000-0000-000000000000'
   // YYYY-MM-DD in the restaurant's local calendar — matches what
   // Sales writes into orders.business_date at insert time. Using it
   // as the filter for "today" makes Dashboard, Sales, and Analytics
   // agree on which orders belong to today regardless of runtime TZ.
-  const todayBusinessDate = businessDateInTimezone(new Date(), timezone)
+  // Prefer the active place's tz so the day matches the operator's
+  // physical clock rather than the first-location default.
+  const todayBusinessDate = businessDateInTimezone(new Date(), activePlaceTimezone ?? timezone)
   // The date the page is actually showing — either ?date or today.
   const viewingBusinessDate = isDateShape ? (rawDate as string) : todayBusinessDate
 
@@ -140,12 +162,14 @@ export default async function DashboardPage({
       .select('id, total_amount, created_at, payment_type, locations ( name ), order_items(count)')
       .eq('status', 'completed')
       .eq('business_date', viewingBusinessDate)
+      .eq('location_id', orderScopeId)
       .order('created_at', { ascending: false }),
 
     supabase
       .from('orders')
       .select('id, total_amount, created_at')
       .eq('status', 'completed')
+      .eq('location_id', orderScopeId)
       .gte('created_at', sevenDaysAgo.toISOString()),
 
     supabase
@@ -209,7 +233,8 @@ export default async function DashboardPage({
       .from('orders')
       .select('id, total_amount, payment_type')
       .eq('status', 'completed')
-      .eq('business_date', viewingBusinessDate),
+      .eq('business_date', viewingBusinessDate)
+      .eq('location_id', orderScopeId),
 
     // 12. Latest single expense — for the Recent Movement card.
     //     Compact pulse, not an expense feed.
@@ -288,11 +313,15 @@ export default async function DashboardPage({
     //     drop line items whose parent order isn't a today's
     //     completed order.
     //     Same business_date fix as the todayOrders query above.
+    //     Also scoped to the active place via the inner-joined
+    //     orders.location_id — a best seller at Mercado shouldn't
+    //     be tallied against web orders at the online location.
     supabase
       .from('order_items')
       .select('quantity, menu_items ( name ), orders!inner ( status, business_date )')
       .eq('orders.status', 'completed')
-      .eq('orders.business_date', viewingBusinessDate),
+      .eq('orders.business_date', viewingBusinessDate)
+      .eq('orders.location_id', orderScopeId),
   ])
 
   // ---- Metrics ----

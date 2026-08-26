@@ -23,6 +23,7 @@ import AnalyticsClient from './client'
 import AnalyticsLocked from './locked'
 import { computeReadiness } from '@/lib/readiness'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { resolveActivePlace } from '@/lib/places'
 
 // 95 days ≈ 3 full calendar months + buffer, so the Month view
 // can always render a full "this month" + "prior month" pair for
@@ -92,6 +93,12 @@ export default async function AnalyticsPage() {
   // below can key off business_date in local time (matching the
   // Sales page) instead of UTC-drifted created_at.
   let timezone: string | null = null
+  // Scope the analytics window to the active place — a manager on
+  // Mercado sees only that shop's history, not web orders sitting
+  // at the online location. Without this, the 2026-08-25 places
+  // pivot leaks web orders into every retail analytics chart.
+  let activePlaceId: string | null = null
+  let activePlaceTimezone: string | null = null
   const { data: { user } } = await supabase.auth.getUser()
   if (user) {
     const { data: role } = await supabase
@@ -104,24 +111,38 @@ export default async function AnalyticsPage() {
       if (readiness.pillars.analytics !== 'active') {
         return <AnalyticsLocked readiness={readiness} lang={lang} />
       }
-      const { data: loc } = await supabase
-        .from('locations')
-        .select('timezone')
-        .eq('restaurant_id', role.restaurant_id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle()
+      const [{ data: loc }, place] = await Promise.all([
+        supabase
+          .from('locations')
+          .select('timezone')
+          .eq('restaurant_id', role.restaurant_id)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle(),
+        resolveActivePlace(supabase, role.restaurant_id),
+      ])
       timezone = (loc?.timezone as string | null) ?? null
+      if (place) {
+        activePlaceId = place.id
+        activePlaceTimezone = place.timezone
+      }
     }
   }
+  // Filter value used on the orders fetch below. When no place is
+  // selected we fall back to an unmatchable UUID so no orders
+  // leak — the layout normally redirects to /places before render.
+  const orderScopeId = activePlaceId ?? '00000000-0000-0000-0000-000000000000'
 
   // Build the 60-day window in the restaurant's local calendar.
   // These keys match the plain YYYY-MM-DD values Sales writes into
   // orders.business_date at insert time via businessDateInTimezone.
   // Using them for both the query filter and the daily bucketing
   // means Analytics and Sales agree on which orders belong to
-  // which day, no matter what timezone the server runs in.
-  const todayKey = businessDateInTimezone(new Date(), timezone)
+  // which day, no matter what timezone the server runs in. Prefer
+  // the active place's tz so the day matches the operator's
+  // physical clock.
+  const tzForBuckets = activePlaceTimezone ?? timezone
+  const todayKey = businessDateInTimezone(new Date(), tzForBuckets)
   const dateKeys: string[] = []
   {
     const [y, m, d] = todayKey.split('-').map(Number)
@@ -149,6 +170,7 @@ export default async function AnalyticsPage() {
     // orders in the restaurant's timezone don't roll into the next
     // UTC day and disappear from their real business day.
     .gte('business_date', windowStartKey)
+    .eq('location_id', orderScopeId)
     .order('created_at', { ascending: true })
 
   // ---- Seed per-day maps for the full window ----
@@ -188,7 +210,7 @@ export default async function AnalyticsPage() {
 
     // Hour-of-day in the restaurant's local timezone. Powers the
     // peak-hour readout in the chart tooltip.
-    const hour = hourInTimezone(new Date(o.created_at), timezone)
+    const hour = hourInTimezone(new Date(o.created_at), tzForBuckets)
     const dayHours = dailyHourMap.get(key)!
     dayHours.set(hour, (dayHours.get(hour) ?? 0) + 1)
 

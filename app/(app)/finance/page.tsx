@@ -27,6 +27,7 @@ import { isPlaidConfigured } from '@/lib/plaid/client'
 import { maybeAutoSyncBankTransactions } from '@/app/actions/bank'
 import { getLang } from '@/lib/i18n-server'
 import { groupBankTransactions, type GroupableTxn, type BankReviewGroup } from '@/lib/finance/matching'
+import { resolveActivePlace } from '@/lib/places'
 import FinanceDashboardClient from './client'
 
 // ----------------------------------------------------------------
@@ -64,6 +65,19 @@ export default async function FinancePage() {
       ).data?.restaurant_id ?? null
     : null
 
+  // Scope every orders query on this page to the active place —
+  // Finance's money-in aggregates should describe the shop the
+  // manager is working from, not include web orders sitting at the
+  // online location. Without this, the 2026-08-25 places pivot
+  // leaks web revenue into every retail Finance total.
+  const activePlace = restaurantId
+    ? await resolveActivePlace(supabase, restaurantId)
+    : null
+  // Fallback to an unmatchable UUID so no orders leak when the
+  // cookie is missing on first render — the layout redirects to
+  // /places before this normally renders.
+  const orderScopeId = activePlace?.id ?? '00000000-0000-0000-0000-000000000000'
+
   // ---- Date boundaries ----
   const now = new Date()
   const thisMon = mondayOf(now)
@@ -94,6 +108,7 @@ export default async function FinancePage() {
       .from('orders')
       .select('id, total_amount, created_at, payment_type, source, external_provider')
       .eq('status', 'completed')
+      .eq('location_id', orderScopeId)
       .gte('created_at', thisMon.toISOString())
       .lt('created_at', nextMon.toISOString()),
     // Prior 8 weeks of orders — feeds the sparkline (last 7 daily
@@ -102,6 +117,7 @@ export default async function FinancePage() {
       .from('orders')
       .select('id, total_amount, created_at')
       .eq('status', 'completed')
+      .eq('location_id', orderScopeId)
       .gte('created_at', eightWeeksAgo.toISOString())
       .lt('created_at', thisMon.toISOString()),
     // Current-week expenses.
@@ -152,6 +168,7 @@ export default async function FinancePage() {
       .from('orders')
       .select('id, total_amount, created_at, payment_type, source, external_provider')
       .eq('status', 'completed')
+      .eq('location_id', orderScopeId)
       .order('created_at', { ascending: false })
       .limit(10),
     supabase

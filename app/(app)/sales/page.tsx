@@ -22,6 +22,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getLang } from '@/lib/i18n-server'
 import { getOperatingMode } from '@/lib/readiness'
 import { businessDateInTimezone } from '@/lib/sales/business-date'
+import { resolveActivePlace } from '@/lib/places'
 import SalesClient from './client'
 
 interface SalesPageProps {
@@ -41,6 +42,12 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   let operatingMode: 'native_pos' | 'external_pos' | null = null
   let restaurantId: string | null = null
   let timezone: string | null = null
+  // The Sales ledger is scoped to the active place — a manager on
+  // Mercado sees only orders that landed at Mercado's location,
+  // not web orders sitting at the online location. Without this
+  // scope, the places pivot leaks web orders back into retail.
+  let activePlaceId: string | null = null
+  let activePlaceTimezone: string | null = null
   if (user) {
     const { data: role } = await supabase
       .from('user_roles')
@@ -49,7 +56,7 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
       .single()
     if (role?.restaurant_id) {
       restaurantId = role.restaurant_id as string
-      const [{ data: loc }, mode] = await Promise.all([
+      const [{ data: loc }, mode, place] = await Promise.all([
         supabase
           .from('locations')
           .select('timezone')
@@ -58,16 +65,25 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
           .limit(1)
           .maybeSingle(),
         getOperatingMode(supabase, restaurantId),
+        resolveActivePlace(supabase, restaurantId),
       ])
       timezone = (loc?.timezone as string | null) ?? null
       operatingMode = mode
+      if (place) {
+        activePlaceId = place.id
+        activePlaceTimezone = place.timezone
+      }
     }
   }
+  // Prefer the active place's timezone for the "today" default —
+  // the ledger day should match whatever clock the operator's
+  // physical location is on. Falls back to the first-location tz.
+  const tzForToday = activePlaceTimezone ?? timezone
 
-  // Today (in the restaurant's timezone) is the default day, and
+  // Today (in the active place's timezone) is the default day, and
   // also the "today" reference the client uses to decide whether
   // to render the "Jump to today" affordance.
-  const today = businessDateInTimezone(new Date(), timezone)
+  const today = businessDateInTimezone(new Date(), tzForToday)
 
   // Requested day: ?date=YYYY-MM-DD, sanitized. Anything malformed
   // falls back to today so a stray URL can't crash the page.
@@ -88,7 +104,7 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
   // site_orders_link silently returned zero orders on /sales while
   // the dashboard (no such embed) kept working — user-visible bug
   // where the sales page was empty for a merchant with 21 real sales.
-  const { data: orders } = await supabase
+  let ordersQuery = supabase
     .from('orders')
     .select(`
       id, total_amount, created_at,
@@ -102,6 +118,21 @@ export default async function SalesPage({ searchParams }: SalesPageProps) {
     .eq('business_date', requestedDate)
     .order('created_at', { ascending: false })
     .limit(500)
+  // Scope to the active place. Retail Sales shows only orders that
+  // landed at the physical shop; web orders (now routed to the
+  // online location) surface in Online > Orders instead. Without
+  // a place selected (edge case — cookie missing on first render),
+  // we deliberately return nothing rather than leak a cross-place
+  // view.
+  if (activePlaceId) {
+    ordersQuery = ordersQuery.eq('location_id', activePlaceId)
+  } else {
+    // No place picked = no results. Layout will redirect to /places
+    // before this even renders in practice, but guard anyway so a
+    // stale render can't leak.
+    ordersQuery = ordersQuery.eq('id', '00000000-0000-0000-0000-000000000000')
+  }
+  const { data: orders } = await ordersQuery
 
   const numOrNull = (v: unknown): number | null => {
     if (v === null || v === undefined) return null

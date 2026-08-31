@@ -813,11 +813,11 @@ function AddAccountDrawer({
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+  const [plaidNotice, setPlaidNotice] = useState<string | null>(null)
 
   const [name, setName] = useState('')
   const [kind, setKind] = useState<FinanceAccountKind>('digital_wallet')
   const [balanceStr, setBalanceStr] = useState('')
-  const [scope, setScope] = useState<'location' | 'shop'>('location')
 
   function save() {
     setError(null)
@@ -834,7 +834,11 @@ function AddAccountDrawer({
       const result = await createAccount({
         name: name.trim(),
         kind,
-        location_id: scope === 'location' ? activePlaceId : null,
+        // Every account is location-scoped for now — the pilot
+        // target is single-place vendors, and scoping matches
+        // their mental model. Shop-wide accounts across multiple
+        // locations get a picker back when we have that user.
+        location_id: activePlaceId,
         color: ACCOUNT_KIND_DEFAULTS[kind].color,
         balance,
       })
@@ -845,6 +849,18 @@ function AddAccountDrawer({
         onClose()
       }
     })
+  }
+
+  function openPlaid() {
+    // Plaid Link fires from here once the tenant has Plaid Dev
+    // credentials configured on the server (PLAID_CLIENT_ID +
+    // PLAID_SECRET + PLAID_ENV env vars). Until then, this
+    // surface exists so the operator can see where the flow
+    // will live — a stub notice tells them what's missing.
+    setPlaidNotice(t(
+      'Plaid credentials not configured yet. Set up a Plaid Development account (free, ~1 day) — Chat says: I have Plaid keys — and this button connects to your Venmo, Cash App, Zelle, and every US bank in one flow.',
+      'Plaid aún no está configurado. Regístrate en Plaid Development (gratis, ~1 día) y este botón conectará Venmo, Cash App, Zelle y cualquier banco de EE.UU.',
+    ))
   }
 
   const kindOptions: Array<{ value: FinanceAccountKind; label: string }> = [
@@ -872,6 +888,69 @@ function AddAccountDrawer({
         />
       }
     >
+      {/* Plaid connect — one integration unlocks Venmo, Cash App,
+          Zelle, and every US bank in a single Link flow. Sits at
+          the top so an operator with a payment app to add reaches
+          for it first; the manual form below is the fallback for
+          accounts Plaid can't touch (own cash drawer, unlisted
+          neo-bank, etc.). */}
+      <div style={{
+        border: `1px solid ${LINE}`, borderRadius: 12, background: SURFACE,
+        padding: '14px 14px 14px', marginBottom: 16,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 32, height: 32, borderRadius: 8, background: '#EEF2FF', color: '#4F46E5',
+          }}>
+            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+              <path d="M6 4h3l1 1h4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4V6a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+              <path d="M4 10h14" stroke="currentColor" strokeWidth="1.6" />
+            </svg>
+          </span>
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: INK }}>
+              {t('Connect via Plaid', 'Conectar con Plaid')}
+            </span>
+            <span style={{ display: 'block', fontSize: 11, color: MUTED, marginTop: 2 }}>
+              {t('Venmo · Cash App · Zelle · every US bank', 'Venmo · Cash App · Zelle · cualquier banco de EE.UU.')}
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={openPlaid}
+            style={{
+              border: 0, background: '#4F46E5', color: '#fff',
+              borderRadius: 8, padding: '7px 12px', font: 'inherit',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', flex: '0 0 auto',
+            }}
+          >
+            {t('Connect', 'Conectar')}
+          </button>
+        </div>
+        {plaidNotice && (
+          <div style={{
+            marginTop: 10, padding: '9px 11px', border: `1px solid #FCD34D`,
+            borderRadius: 8, background: '#FFFBEB',
+            fontSize: 12, color: '#78350F', lineHeight: 1.5,
+          }}>
+            {plaidNotice}
+          </div>
+        )}
+      </div>
+
+      {/* Divider — "or add manually" so the two paths are clear. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        margin: '4px 0 14px',
+        fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+        color: FAINT, textTransform: 'uppercase',
+      }}>
+        <span style={{ flex: 1, height: 1, background: LINE }} />
+        {t('or add manually', 'o añadir manualmente')}
+        <span style={{ flex: 1, height: 1, background: LINE }} />
+      </div>
+
       <Field label={t('Kind', 'Tipo')} required>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
           {kindOptions.map(o => {
@@ -920,22 +999,6 @@ function AddAccountDrawer({
         </span>
       </Field>
 
-      {activePlaceId && (
-        <Field label={t('Scope', 'Alcance')} hint={t('Location-scoped accounts (like a cash drawer) only show in that place. Shop-wide accounts show everywhere.', 'Las cuentas de un lugar (como una caja) solo aparecen ahí. Las de toda la tienda aparecen en todas partes.')}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-            <PickerPill
-              label={t('This location only', 'Solo este lugar')}
-              active={scope === 'location'}
-              onClick={() => setScope('location')}
-            />
-            <PickerPill
-              label={t('Shop-wide', 'Toda la tienda')}
-              active={scope === 'shop'}
-              onClick={() => setScope('shop')}
-            />
-          </div>
-        </Field>
-      )}
     </DrawerShell>
   )
 }

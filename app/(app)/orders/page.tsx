@@ -21,7 +21,12 @@ import ComingSoon from '@/components/coming-soon'
 
 export const metadata = { title: 'Orders · Checked' }
 
-export default async function OrdersPage() {
+interface OrdersPageProps {
+  // Next.js 16 hands searchParams as a Promise; must await.
+  searchParams?: Promise<{ date?: string }>
+}
+
+export default async function OrdersPage({ searchParams }: OrdersPageProps) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return <ComingSoon eyebrow="ORDERS" title="Sign in required" body="You need to be signed in to view orders." />
@@ -46,6 +51,14 @@ export default async function OrdersPage() {
     .maybeSingle()
   const today = businessDateInTimezone(new Date(), (tzRow?.timezone as string | null | undefined) ?? null)
 
+  // Requested day: ?date=YYYY-MM-DD, sanitized. Malformed / future
+  // dates fall back to today so a stray URL can't crash the page.
+  const rawDate = (await searchParams)?.date
+  const requestedDate =
+    typeof rawDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+      ? rawDate
+      : today
+
   const { data: rows } = await admin
     .from('orders')
     .select(`
@@ -56,7 +69,7 @@ export default async function OrdersPage() {
     `)
     .eq('restaurant_id', role.restaurant_id)
     .eq('source', 'web')
-    .eq('business_date', today)
+    .eq('business_date', requestedDate)
     .order('created_at', { ascending: false })
 
   const lang = await getLang()
@@ -167,5 +180,5 @@ export default async function OrdersPage() {
     }
   })
 
-  return <OrdersClient lang={lang} orders={orders} businessDate={today} />
+  return <OrdersClient lang={lang} orders={orders} date={requestedDate} today={today} />
 }

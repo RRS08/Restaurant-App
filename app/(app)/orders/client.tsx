@@ -16,7 +16,8 @@
 // New lane the instant it's clicked.
 // ----------------------------------------------------------------
 
-import { useEffect, useMemo, useState, useTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { markReady } from '@/app/actions/pickup'
 import { voidOrder } from '@/app/actions/sales'
@@ -79,6 +80,7 @@ const LINE_SOFT = '#F0EFEB'
 const MUTED = '#6B6B70'
 const FAINT = '#A1A1A6'
 const SURFACE = '#FAFAF9'
+const BAND = '#F0EFEB'
 const MONO = "'Geist Mono', ui-monospace, monospace"
 
 const CHANNEL_TONES = {
@@ -89,16 +91,54 @@ const CHANNEL_TONES = {
 type FilterKey = 'all' | 'pickup' | 'delivery' | 'voided'
 
 export default function OrdersClient({
-  lang, orders, businessDate,
+  lang, orders, date, today,
 }: {
   lang: Lang
   orders: OrderRow[]
-  businessDate: string
+  /** The business_date the ledger is currently showing (YYYY-MM-DD). */
+  date: string
+  /** Today in the restaurant's tz — enables the "Today" chip +
+   *  disables future-date clicks in the month picker. */
+  today: string
 }) {
   const t = makeT(lang)
+  const router = useRouter()
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
   const [openId, setOpenId] = useState<string | null>(null)
   const [filter, setFilter] = useState<FilterKey>('all')
+  const [calOpen, setCalOpen] = useState(false)
+  const [calMonth, setCalMonth] = useState(() => monthOfIso(date))
+  const titleBtnRef = useRef<HTMLButtonElement | null>(null)
+  const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null)
+
+  // Recompute the picker's anchor position on scroll/resize so
+  // the overlay stays glued to the title button as the ledger
+  // moves under it.
+  useEffect(() => {
+    if (!calOpen) return
+    const compute = () => {
+      const r = titleBtnRef.current?.getBoundingClientRect()
+      if (r) setPickerAnchor({ top: r.bottom + 8, left: r.left })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    window.addEventListener('scroll', compute, true)
+    return () => {
+      window.removeEventListener('resize', compute)
+      window.removeEventListener('scroll', compute, true)
+    }
+  }, [calOpen])
+
+  const isToday = date === today
+
+  // Relative day chip: Today / Yesterday / N days ago / Sat …
+  const relativeChip = ((): { label: string; kind: 'today' | 'past' } => {
+    if (isToday) return { label: t('Today', 'Hoy'), kind: 'today' }
+    const days = daysBetween(date, today)
+    if (days === 1) return { label: t('Yesterday', 'Ayer'), kind: 'past' }
+    if (days > 0 && days < 7) return { label: `${days} ${t('days ago', 'días atrás')}`, kind: 'past' }
+    return { label: fmtBusinessDateShort(date, locale), kind: 'past' }
+  })()
 
   // Bands treatment at md+ (tablet + desktop) — same pattern as
   // the Sales page: header + filter sticky as one band, rows run
@@ -171,12 +211,33 @@ export default function OrdersClient({
             ORDERS
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <h1 style={{
-              margin: 0, fontSize: 21, fontWeight: 700,
-              letterSpacing: '-0.035em', whiteSpace: 'nowrap',
+            <button
+              ref={titleBtnRef}
+              type="button"
+              onClick={() => {
+                setCalMonth(monthOfIso(date))
+                setCalOpen(v => !v)
+              }}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                border: '1px solid transparent', background: 'transparent',
+                borderRadius: 9, padding: '2px 8px', marginLeft: -8,
+                font: 'inherit', color: INK, cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
+                {fmtBusinessDateLong(date, locale)}
+              </span>
+              <span style={{ fontSize: 10, color: FAINT }}>▾</span>
+            </button>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+              padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+              background: relativeChip.kind === 'today' ? '#F4F4F2' : '#EFF6FF',
+              color: relativeChip.kind === 'today' ? MUTED : '#2563EB',
             }}>
-              {fmtBusinessDateLong(businessDate, locale)}
-            </h1>
+              {relativeChip.label}
+            </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
             <span style={{
@@ -265,7 +326,7 @@ export default function OrdersClient({
           with the header/filter band. */}
       <div style={{ padding: isBands ? 0 : 8 }}>
         {orders.length === 0 ? (
-          <EmptyLedger t={t} />
+          <EmptyLedger t={t} isToday={isToday} />
         ) : shown.length === 0 ? (
           <div style={{ padding: '32px 16px', textAlign: 'center', color: FAINT, fontSize: 12 }}>
             {t('No orders match this filter.', 'Ninguna orden coincide con este filtro.')}
@@ -282,6 +343,27 @@ export default function OrdersClient({
           />
         ))}
       </div>
+
+      {/* Month picker — portaled to <body> so a scrolled ledger
+          can't clip it. Same shape as the sales page picker. */}
+      {calOpen && typeof document !== 'undefined' && pickerAnchor && createPortal(
+        <MonthPickerOverlay
+          date={date}
+          today={today}
+          month={calMonth}
+          setMonth={setCalMonth}
+          onPick={(iso) => {
+            router.push(`/orders?date=${iso}`)
+            setCalOpen(false)
+            setOpenId(null)
+          }}
+          onClose={() => setCalOpen(false)}
+          anchor={pickerAnchor}
+          t={t}
+          locale={locale}
+        />,
+        document.body,
+      )}
 
       {selected && (
         <OrderDrawer
@@ -870,14 +952,21 @@ function MetaLine({
   )
 }
 
-function EmptyLedger({ t }: { t: (en: string, es?: string) => string }) {
+function EmptyLedger({ t, isToday }: {
+  t: (en: string, es?: string) => string
+  isToday: boolean
+}) {
   return (
     <div style={{ padding: '44px 16px', textAlign: 'center' }}>
       <div style={{ fontSize: 13, fontWeight: 600, color: '#52525B' }}>
-        {t('No online orders today', 'Sin órdenes en línea hoy')}
+        {isToday
+          ? t('No online orders today', 'Sin órdenes en línea hoy')
+          : t('No online orders on this day', 'Sin órdenes en línea este día')}
       </div>
       <div style={{ fontSize: 12, color: FAINT, marginTop: 3 }}>
-        {t('When buyers check out on the storefront, orders will land here.', 'Cuando los compradores realicen un pedido, aparecerán aquí.')}
+        {isToday
+          ? t('When buyers check out on the storefront, orders will land here.', 'Cuando los compradores realicen un pedido, aparecerán aquí.')
+          : t('Nothing came through the storefront that day.', 'No hubo pedidos por la tienda ese día.')}
       </div>
     </div>
   )
@@ -939,4 +1028,163 @@ function fmtBusinessDateLong(iso: string, locale: string): string {
   return asUTC.toLocaleDateString(locale, {
     weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC',
   })
+}
+
+function fmtBusinessDateShort(iso: string, locale: string): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  const asUTC = new Date(Date.UTC(y, m - 1, d, 12, 0, 0))
+  return asUTC.toLocaleDateString(locale, {
+    weekday: 'short', timeZone: 'UTC',
+  })
+}
+
+function monthOfIso(iso: string): { y: number; m: number } {
+  const [y, m] = iso.split('-').map(Number)
+  return { y, m: m - 1 }
+}
+
+function daysBetween(a: string, b: string): number {
+  const [ya, ma, da] = a.split('-').map(Number)
+  const [yb, mb, db] = b.split('-').map(Number)
+  const at = Date.UTC(ya, ma - 1, da, 12)
+  const bt = Date.UTC(yb, mb - 1, db, 12)
+  return Math.round((bt - at) / 86_400_000)
+}
+
+// ================================================================
+// MonthPickerOverlay — portal-rendered floating calendar. Same
+// shape as the sales page picker so both ledgers navigate dates
+// with identical mechanics.
+// ================================================================
+
+function MonthPickerOverlay({
+  date, today, month, setMonth, onPick, onClose, anchor, t, locale,
+}: {
+  date: string
+  today: string
+  month: { y: number; m: number }
+  setMonth: (m: { y: number; m: number }) => void
+  onPick: (iso: string) => void
+  onClose: () => void
+  anchor: { top: number; left: number }
+  t: (en: string, es?: string) => string
+  locale: string
+}) {
+  const first = new Date(Date.UTC(month.y, month.m, 1, 12))
+  // Monday-first grid start.
+  const wd = (first.getUTCDay() + 6) % 7
+  const gridStartUTC = Date.UTC(month.y, month.m, 1 - wd, 12)
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(gridStartUTC + i * 86_400_000)
+    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`
+    return {
+      iso,
+      day: d.getUTCDate(),
+      inMonth: d.getUTCMonth() === month.m,
+      selected: iso === date,
+      isToday: iso === today,
+    }
+  })
+  const monthLabel = new Date(Date.UTC(month.y, month.m, 1, 12)).toLocaleDateString(locale, {
+    month: 'long', year: 'numeric', timeZone: 'UTC',
+  })
+  const weekdayLetters = Array.from({ length: 7 }, (_, i) => {
+    // Jan 1 2024 was a Monday — sample by day-of-week for locale-aware initials.
+    const sample = new Date(Date.UTC(2024, 0, 1 + i, 12))
+    return sample.toLocaleDateString(locale, { weekday: 'narrow', timeZone: 'UTC' })
+  })
+
+  const shift = (delta: number) => {
+    const next = new Date(Date.UTC(month.y, month.m + delta, 1, 12))
+    setMonth({ y: next.getUTCFullYear(), m: next.getUTCMonth() })
+  }
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div style={{
+        position: 'fixed',
+        top: anchor.top,
+        left: anchor.left,
+        zIndex: 41, width: 300,
+        border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+        boxShadow: '0 12px 32px rgba(24,24,27,0.14)', padding: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+          <MonthNavBtn dir="‹" onClick={() => shift(-1)} />
+          <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em' }}>{monthLabel}</span>
+          <MonthNavBtn dir="›" onClick={() => shift(1)} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 0, marginBottom: 6 }}>
+          {weekdayLetters.map((l, i) => (
+            <span key={i} style={{ textAlign: 'center', fontFamily: MONO, fontSize: 9, letterSpacing: '0.1em', color: FAINT }}>
+              {l}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: '3px 0' }}>
+          {cells.map((c, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => onPick(c.iso)}
+              disabled={c.iso > today}
+              style={{
+                position: 'relative', border: 0, borderRadius: 8, height: 30, font: 'inherit',
+                fontFamily: MONO, fontSize: 12,
+                cursor: c.iso > today ? 'not-allowed' : 'pointer',
+                background: c.selected ? BAND : 'transparent',
+                color: c.iso > today ? '#E5E5E5'
+                  : c.selected ? INK
+                    : c.inMonth ? '#3F3F46' : '#D6D5D1',
+                fontWeight: c.selected ? 600 : 400,
+              }}
+            >
+              {c.day}
+              {c.isToday && (
+                <span style={{
+                  position: 'absolute', left: '50%', bottom: 4, transform: 'translateX(-50%)',
+                  width: 3, height: 3, borderRadius: '50%', background: c.selected ? INK : FAINT,
+                }} />
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${LINE}` }}>
+          <span style={{ fontSize: 11, color: FAINT }}>
+            {t('Pick a date to see its orders', 'Elige una fecha para ver sus pedidos')}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPick(today)}
+            style={{
+              border: 0, background: 'transparent', padding: 0,
+              font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer',
+            }}
+          >
+            {t('Today', 'Hoy')}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function MonthNavBtn({ dir, onClick }: { dir: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+        width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        font: 'inherit', fontSize: 12, color: '#52525B', cursor: 'pointer',
+      }}
+    >
+      {dir}
+    </button>
+  )
 }

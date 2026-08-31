@@ -1,1017 +1,604 @@
 'use client'
 
 // ----------------------------------------------------------------
-// FinanceDashboardClient — the warm, alive, at-a-glance surface.
+// Finance client — cash-flow dashboard.
 //
-// Sections top-down:
-//   1. Balance anchor (big number, delta, count-up on mount)
-//   2. Weekly progress rings (revenue / expenses / net vs typical
-//      week — or "learning your typical week" state under 4 weeks
-//      of history)
-//   3. Money In / Money Out cards (sparkline + attribution chip)
-//   4. Net line (this week) with streak / context if it's earned
-//   5. Sunday recap (Sun / Mon of the following week only)
-//   6. Smart nudge (max one line, colleague tone, never alarm)
-//   7. Recent activity ledger (expense rows categorize on tap)
-//   8. Small footer link → /finance/details for the classic workspace
+// v1 layout mirrors the design mockup exactly:
+//   Header:  cash on hand ($8,430.67) · +$X in this week ·
+//            -$Y out · [date-range picker] · [Add expense]
+//   Tiles:   adaptive grid, one per account, auto-fills columns
+//            so 3 tiles look right, so do 5, so do 8.
+//   Every movement: filter chips (All / one per account /
+//            Expenses) + row list with icon + title + meta line +
+//            amount (green + / red - / muted transfers).
 //
-// Warm palette:
-//   • Never a red arrow. Warm neutral for down / negative.
-//   • Money in = forward green. Money out = warm slate, not red.
-//   • Emoji sparingly, only in earned moments.
+// The Add-expense / Add-account drawers land in the next commit;
+// v1 header CTA is present but disabled with a hint so we can
+// eyeball the surface first.
 // ----------------------------------------------------------------
 
-import { useEffect, useMemo, useRef, useState, useTransition, type CSSProperties } from 'react'
-import Link from 'next/link'
-import { updateExpenseCategory } from '@/app/actions/finance'
-import { EXPENSE_CATEGORIES } from '@/lib/finance/constants'
+import { useMemo, useState } from 'react'
 import { makeT, type Lang } from '@/lib/i18n'
-import { PhonePage, PHONE_PAIR, type PhoneRow } from '@/components/phone-page'
+import type {
+  FinanceAccount,
+  FinanceCategory,
+  FinanceMovement,
+  FinanceAccountKind,
+  FinanceMovementDirection,
+} from '@/lib/finance/types'
+import { ACCOUNT_KIND_DEFAULTS } from '@/lib/finance/types'
 
-// Duplicate small style helpers here so the component stays a
-// self-contained "read the file to understand it" surface.
-const MONO = 'var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace'
-const mono = (extra: CSSProperties = {}): CSSProperties => ({ fontFamily: MONO, ...extra })
-
-// ----------------------------------------------------------------
-// Prop shapes match the server-side computation. If those change,
-// TypeScript will surface the mismatch here.
-// ----------------------------------------------------------------
-type Kind = 'order' | 'expense' | 'bank_credit' | 'bank_debit'
-
-interface LedgerRow {
-  id: string
-  kind: Kind
-  amount: number
-  label: string
-  sub: string | null
-  category: string | null
-  categoryEditable: boolean
-  timestamp: string
-}
-
-interface Props {
-  lang: Lang
-  bank: {
-    connected: boolean
-    balance: number
-    latestSyncAt: string | null
-    accountCount: number
-  }
-  week: {
-    startISO: string
-    moneyIn: number
-    moneyOut: number
-    net: number
-    inChip: string
-    outChip: string
-    inSpark: number[]
-    outSpark: number[]
-    lastWeekNet: number
-    streakWeeks: number
-  }
-  baselines: {
-    moneyIn: number | null
-    moneyOut: number | null
-    net: number | null
-    enoughHistory: boolean
-  }
-  ledger: LedgerRow[]
-  nudge: string | null
-  recap: string | null
-  /** Phone-only Money tab payload. Present in every render but
-   *  only consumed at <md. Kept optional so any code path that
-   *  constructs FinanceDashboardClient without it still compiles. */
-  phoneMoney?: {
-    moneyIn: number
-    moneyOut: number
-    net: number
-    paymentSources: Array<{ key: 'card' | 'cash' | 'other'; label: string; count: number; total: number }>
-    reviewGroups: Array<{
-      key: string
-      label: string
-      direction: 'inflow' | 'outflow'
-      totalAmount: number
-      txnCount: number
-      reason: string
-      firstTxnPostedAt: string | null
-      firstTxnDescription: string | null
-    }>
-  }
-}
-
-// ----------------------------------------------------------------
-// Warm palette tokens. Ink for primary text; olive-forward "up"
-// green; warm slate for outflow (not red — spending is neutral,
-// not bad); soft cream and sand for surfaces.
-// ----------------------------------------------------------------
+// ---------------------------------------------------------------- Palette
 const INK = '#18181B'
-const SLATE = '#52525B'
-const MUTED = '#9CA3AF'
-const HAIR = '#E7E6E2'
-const CREAM = '#FAF9F6'
-const SAND = '#F4F1EA'
-const UP = '#16A34A'         // forward green — earned money, positive delta
-const DOWN_WARM = '#B45309'  // warm terra — negative / decline, not alarm
-const SPEND = '#78716C'      // warm slate — money out, neutral
-const RING_IN = '#16A34A'    // ring 1 fill
-const RING_OUT = '#D4A056'   // ring 2 fill
-const RING_NET = '#3F6B4C'   // ring 3 fill, deeper green
+const PAPER = '#FAF9F6'
+const LINE = '#E7E6E2'
+const LINE_SOFT = '#F0EFEB'
+const MUTED = '#6B6B70'
+const FAINT = '#A1A1A6'
+const SURFACE = '#FAFAF9'
+const MONO = "'Geist Mono', ui-monospace, monospace"
+const INCOME = '#059669'
+const EXPENSE = '#DC2626'
 
-// USD formatter used across the page. Compact (no decimals) for big
-// anchor numbers; full for ledger amounts.
-const fmt = (n: number, opts?: { compact?: boolean }): string => {
-  const abs = Math.abs(n)
-  if (opts?.compact) {
-    return `${n < 0 ? '-' : ''}$${Math.round(abs).toLocaleString('en-US')}`
-  }
-  return `${n < 0 ? '-' : ''}$${abs.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
-}
+export default function FinanceClient({
+  lang, accounts, categories: _categories, movements,
+  cashOnHand, weekIn, weekOut, activePlaceId: _activePlaceId,
+}: {
+  lang: Lang
+  accounts: FinanceAccount[]
+  categories: FinanceCategory[]
+  movements: FinanceMovement[]
+  cashOnHand: number
+  weekIn: number
+  weekOut: number
+  activePlaceId: string | null
+}) {
+  const t = makeT(lang)
+  const locale = lang === 'es' ? 'es-ES' : 'en-US'
 
-// Format a delta with a leading "+" for positive amounts; used
-// in "vs last week" lines and streak lines.
-const fmtDelta = (n: number, opts?: { compact?: boolean }): string => {
-  if (n === 0) return fmt(0, opts)
-  return `${n > 0 ? '+' : '-'}$${Math.abs(n).toFixed(opts?.compact ? 0 : 2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`
-}
+  const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
 
-// ----------------------------------------------------------------
-// useCountUp — animate a numeric value from 0 to `target` on mount
-// or when `target` changes. Uses requestAnimationFrame; ~800ms
-// duration. Respects prefers-reduced-motion by jumping instantly.
-// ----------------------------------------------------------------
-function useCountUp(target: number, durationMs = 800): number {
-  const [value, setValue] = useState(0)
-  const startedRef = useRef(false)
+  // Ledger view — filter by account (source OR dest touches it)
+  // or by direction (expenses only). "All" shows everything.
+  const shown = useMemo(() => {
+    if (accountFilter === 'all') return movements
+    if (accountFilter === 'expenses') return movements.filter(m => m.direction === 'expense')
+    return movements.filter(m =>
+      m.source?.id === accountFilter || m.dest?.id === accountFilter,
+    )
+  }, [movements, accountFilter])
 
-  useEffect(() => {
-    // Respect reduced motion — jump to target.
-    if (typeof window !== 'undefined') {
-      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-      if (reduced) {
-        setValue(target)
-        return
-      }
+  // Per-account count for the chip badges + per-direction count.
+  const counts = useMemo(() => {
+    const byId = new Map<string, number>()
+    let expenseCount = 0
+    for (const m of movements) {
+      if (m.direction === 'expense') expenseCount++
+      if (m.source?.id) byId.set(m.source.id, (byId.get(m.source.id) ?? 0) + 1)
+      if (m.dest?.id) byId.set(m.dest.id, (byId.get(m.dest.id) ?? 0) + 1)
     }
-    let raf: number
-    const startAt = performance.now()
-    const from = startedRef.current ? value : 0
-    startedRef.current = true
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - startAt) / durationMs)
-      // ease-out cubic
-      const eased = 1 - Math.pow(1 - t, 3)
-      setValue(from + (target - from) * eased)
-      if (t < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, durationMs])
+    return { byAccount: byId, expenses: expenseCount, all: movements.length }
+  }, [movements])
 
-  return value
-}
+  const weekLabel = weekRangeLabel(new Date(), locale)
 
-// ----------------------------------------------------------------
-// PageShell — reproduces the classic app-shell page frame so this
-// page reads as part of the tablet product family. Title + optional
-// subtitle up top, generous horizontal padding, cream page.
-// ----------------------------------------------------------------
-function PageShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="max-w-[1200px] mx-auto px-4 sm:px-6 lg:px-8 py-4" style={{ color: INK }}>
-      {children}
+    <div style={{
+      minHeight: '100vh', background: '#fff', color: INK,
+      fontFamily: "'Geist', system-ui, sans-serif",
+      padding: 0,
+    }}>
+      {/* Header — cash on hand, weekly delta, date range, add
+          expense CTA. */}
+      <div style={{
+        padding: '20px 24px 18px', borderBottom: `1px solid ${LINE}`,
+        display: 'flex', flexDirection: 'column', gap: 14,
+      }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 16, flexWrap: 'wrap',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
+              {t('Finance', 'Finanzas')}
+            </span>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+              padding: '3px 10px', fontSize: 11, fontWeight: 500,
+              background: SURFACE, color: MUTED, border: `1px solid ${LINE}`,
+            }}>
+              {weekLabel}
+              <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
+            </span>
+          </div>
+          <button
+            type="button"
+            disabled
+            title={t('Coming in the next commit', 'Próximamente')}
+            style={{
+              border: 0, background: INK, color: PAPER,
+              borderRadius: 10, padding: '9px 16px',
+              font: 'inherit', fontSize: 13, fontWeight: 600,
+              cursor: 'not-allowed', opacity: 0.55,
+            }}
+          >
+            {t('Add expense', 'Añadir gasto')}
+          </button>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{
+            fontFamily: MONO, fontSize: 34, fontWeight: 600,
+            letterSpacing: '-0.045em', lineHeight: 1, color: INK,
+          }}>
+            {fmtMoney(cashOnHand)}
+          </span>
+          <span style={{
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+            textTransform: 'uppercase', color: FAINT,
+          }}>
+            {t('CASH ON HAND', 'EFECTIVO A LA MANO')}
+          </span>
+          <Dot />
+          <span style={{ fontSize: 13, color: INCOME, fontFamily: MONO, fontWeight: 600 }}>
+            +{fmtMoney(weekIn)}
+          </span>
+          <span style={{ fontSize: 12, color: MUTED }}>{t('in this week', 'esta semana')}</span>
+          <Dot />
+          <span style={{ fontSize: 13, color: EXPENSE, fontFamily: MONO, fontWeight: 600 }}>
+            −{fmtMoney(weekOut)}
+          </span>
+          <span style={{ fontSize: 12, color: MUTED }}>{t('out', 'salida')}</span>
+        </div>
+      </div>
+
+      {/* Account tile row — adaptive grid, auto-fill so N tiles
+          pack cleanly at any viewport / any count. Empty state
+          when no accounts. "+ Add account" tile at the end. */}
+      <div style={{ padding: '20px 24px 8px' }}>
+        {accounts.length === 0 ? (
+          <EmptyAccounts t={t} />
+        ) : (
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+            gap: 12,
+          }}>
+            {accounts.map(a => (
+              <AccountTile key={a.id} a={a} locale={locale} />
+            ))}
+            <AddAccountTile t={t} />
+          </div>
+        )}
+      </div>
+
+      {/* Every movement — filter chips + row list. */}
+      <div style={{
+        margin: '20px 24px 32px', borderRadius: 14,
+        border: `1px solid ${LINE}`, background: '#fff', overflow: 'hidden',
+      }}>
+        <div style={{
+          padding: '14px 18px 12px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 12, flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em' }}>
+            {t('Every movement', 'Todo movimiento')}
+          </span>
+          <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.14em' }}>
+            {weekLabel.toUpperCase()}
+          </span>
+        </div>
+        <div style={{
+          padding: '10px 18px', borderTop: `1px solid ${LINE_SOFT}`,
+          background: SURFACE,
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+        }}>
+          <FilterChip
+            label={t('All', 'Todo')}
+            count={counts.all}
+            active={accountFilter === 'all'}
+            onClick={() => setAccountFilter('all')}
+          />
+          {accounts.map(a => (
+            <FilterChip
+              key={a.id}
+              label={a.name}
+              count={counts.byAccount.get(a.id) ?? 0}
+              tone={tintForAccount(a)}
+              active={accountFilter === a.id}
+              onClick={() => setAccountFilter(a.id)}
+            />
+          ))}
+          <FilterChip
+            label={t('Expenses', 'Gastos')}
+            count={counts.expenses}
+            tone={{ dot: EXPENSE }}
+            active={accountFilter === 'expenses'}
+            onClick={() => setAccountFilter('expenses')}
+          />
+        </div>
+
+        {shown.length === 0 ? (
+          <div style={{ padding: '32px 18px', textAlign: 'center', color: FAINT, fontSize: 13 }}>
+            {movements.length === 0
+              ? t('Nothing has moved yet this week.', 'Nada se ha movido esta semana.')
+              : t('No movements match this filter.', 'Ningún movimiento coincide.')}
+          </div>
+        ) : shown.map(m => (
+          <MovementRow key={m.id} m={m} locale={locale} t={t} />
+        ))}
+      </div>
     </div>
   )
 }
 
-// ----------------------------------------------------------------
-// Main component
-// ----------------------------------------------------------------
-export default function FinanceDashboardClient({
-  lang, bank, week, baselines, ledger, nudge, recap, phoneMoney,
-}: Props) {
-  const t = makeT(lang)
+// ================================================================
+// Tiles
+// ================================================================
 
-  // Phone (<md) — Money tab. Reuses the server props above plus
-  // the phoneMoney bundle. isPhone hooks live at the top so the
-  // hook order matches on every render (main function has no
-  // hooks after this block, so an early return is safe).
-  const [isPhone, setIsPhone] = useState(false)
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const mq = window.matchMedia('(max-width: 767px)')
-    const update = () => setIsPhone(mq.matches)
-    update()
-    mq.addEventListener('change', update)
-    return () => mq.removeEventListener('change', update)
-  }, [])
-  if (isPhone) return <PhoneMoney t={t} money={phoneMoney ?? null} />
-
+function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string }) {
+  const tone = tintForAccount(a)
   return (
-    <PageShell>
-      {/* Page title — small, calm; the balance below is the star. */}
-      <div className="mb-3 flex items-baseline justify-between gap-4">
-        <div>
-          <h1 className="text-[22px] leading-tight font-semibold tracking-tight" style={{ color: INK }}>
-            {t('Finance', 'Finanzas')}
-          </h1>
-          <p className="mt-0.5 text-[12px]" style={{ color: MUTED }}>
-            {t('The week at a glance.', 'La semana de un vistazo.')}
-          </p>
-        </div>
-        <Link
-          href="/finance/details"
-          className="text-[11px] font-mono uppercase tracking-[0.14em] transition-colors"
-          style={{ color: MUTED }}
-        >
-          {t('Detailed workspace →', 'Espacio detallado →')}
-        </Link>
-      </div>
-
-      {/* Row 1 — Balance (2/3) + Rings (1/3) side by side on desktop,
-                 stacked on narrow. Keeps the anchor + progress in
-                 one glance instead of two vertical rows. */}
-      <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] gap-3">
-        <BalanceCard bank={bank} lastWeekNet={week.lastWeekNet} lang={lang} />
-        <ProgressRings week={week} baselines={baselines} lang={lang} />
-      </div>
-
-      {/* Row 2 — Money In / Money Out */}
-      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-        <FlowCard
-          direction="in"
-          label={t('Money in this week', 'Ingresos esta semana')}
-          amount={week.moneyIn}
-          spark={week.inSpark}
-          chip={week.inChip}
-        />
-        <FlowCard
-          direction="out"
-          label={t('Money out this week', 'Egresos esta semana')}
-          amount={week.moneyOut}
-          spark={week.outSpark}
-          chip={week.outChip}
-        />
-      </div>
-
-      {/* Row 3 — Net line (+ streak) and optional nudge share one
-                 compact horizontal strip so we don't stack a
-                 whole extra card. */}
-      <div className="mt-3">
-        <NetAndNudge net={week.net} streak={week.streakWeeks} nudge={nudge} lang={lang} />
-      </div>
-
-      {/* Row 4 — Sunday recap (only when the server said so) */}
-      {recap && (
-        <div className="mt-3">
-          <RecapCard text={recap} lang={lang} />
-        </div>
-      )}
-
-      {/* Row 5 — Recent activity ledger */}
-      <div className="mt-3">
-        <LedgerSection rows={ledger} lang={lang} />
-      </div>
-    </PageShell>
-  )
-}
-
-// ----------------------------------------------------------------
-// BalanceCard — the anchor. Big number counts up on mount. Delta
-// vs last week's net sits underneath. When bank isn't connected,
-// we show a warm nudge in the same slot.
-// ----------------------------------------------------------------
-function BalanceCard({
-  bank, lastWeekNet, lang,
-}: { bank: Props['bank']; lastWeekNet: number; lang: Lang }) {
-  const t = makeT(lang)
-  const shown = useCountUp(bank.connected ? bank.balance : 0)
-
-  if (!bank.connected) {
-    return (
-      <section
-        className="rounded-xl px-5 py-4"
-        style={{ background: SAND, border: `1px solid ${HAIR}` }}
-      >
-        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-          {t('In the bank', 'En el banco')}
-        </p>
-        <p className="mt-2 text-[13px] leading-snug" style={{ color: SLATE, maxWidth: 520 }}>
-          {t(
-            'Connect your bank to see your real balance. Everything below still works without it.',
-            'Conecta tu banco para ver tu saldo real. Todo lo de abajo funciona sin él.'
-          )}
-        </p>
-        <div className="mt-3">
-          <Link
-            href="/settings"
-            className="inline-flex items-center gap-2 h-8 px-3 rounded-md text-[12px] font-semibold transition-colors"
-            style={{ background: INK, color: CREAM }}
-          >
-            {t('Connect bank', 'Conectar banco')} →
-          </Link>
-        </div>
-      </section>
-    )
-  }
-
-  return (
-    <section
-      className="rounded-xl px-5 py-4"
-      style={{ background: SAND, border: `1px solid ${HAIR}` }}
+    <div
+      style={{
+        border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+        padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: 8,
+      }}
     >
-      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-        {t('In the bank', 'En el banco')}
-      </p>
-      <p
-        className="mt-1 leading-none tabular-nums"
-        style={{ fontSize: 'clamp(32px, 4.5vw, 42px)', fontWeight: 700, letterSpacing: '-1.2px', color: INK }}
-      >
-        {fmt(shown, { compact: true })}
-      </p>
-      <div className="mt-2 flex items-baseline gap-2 flex-wrap">
-        <span className="text-[12px]" style={{ color: SLATE }}>
-          {t('Last week net', 'Neto semana pasada')}:
-        </span>
-        <span
-          className="text-[12px] font-semibold tabular-nums"
-          style={{ color: lastWeekNet >= 0 ? UP : DOWN_WARM }}
-        >
-          {fmtDelta(lastWeekNet)}
-        </span>
-        <span className="text-[10.5px]" style={{ color: MUTED }}>
-          · {bank.accountCount === 1
-              ? t('1 account', '1 cuenta')
-              : `${bank.accountCount} ${t('accounts', 'cuentas')}`}
-        </span>
-      </div>
-    </section>
-  )
-}
-
-// ----------------------------------------------------------------
-// ProgressRings — three concentric arcs showing progress vs a
-// median "typical week." Under 4 weeks of history, shows a
-// warm "learning your typical week" state instead of a broken ring.
-// ----------------------------------------------------------------
-function ProgressRings({
-  week, baselines, lang,
-}: { week: Props['week']; baselines: Props['baselines']; lang: Lang }) {
-  const t = makeT(lang)
-
-  if (!baselines.enoughHistory) {
-    return (
-      <section
-        className="rounded-xl px-4 py-4 h-full flex flex-col justify-center"
-        style={{ background: CREAM, border: `1px solid ${HAIR}` }}
-      >
-        <div className="flex items-start gap-3">
-          <RingLearningIcon />
-          <div className="min-w-0">
-            <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-              {t('Weekly rings', 'Anillos semanales')}
-            </p>
-            <p className="mt-1 text-[13px] font-semibold" style={{ color: INK }}>
-              {t('Learning your typical week', 'Aprendiendo tu semana promedio')}
-            </p>
-            <p className="mt-0.5 text-[11.5px] leading-snug" style={{ color: SLATE }}>
-              {t(
-                'After 4 weeks of activity, this fills in.',
-                'Se llena tras 4 semanas de actividad.'
-              )}
-            </p>
-          </div>
-        </div>
-      </section>
-    )
-  }
-
-  const inPct = baselines.moneyIn && baselines.moneyIn > 0 ? week.moneyIn / baselines.moneyIn : 0
-  const outPct = baselines.moneyOut && baselines.moneyOut > 0 ? week.moneyOut / baselines.moneyOut : 0
-  // Net rings are a special case: if the baseline is negative or zero,
-  // any positive net is "beat typical". Cap fill at 1.5x for the visual.
-  const netPct = (() => {
-    if (baselines.net === null) return 0
-    if (baselines.net <= 0) return week.net > 0 ? 1 : 0
-    return week.net / baselines.net
-  })()
-
-  return (
-    <section
-      className="rounded-xl px-4 py-3 h-full"
-      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
-    >
-      <div className="flex items-center gap-3 h-full">
-        <RingsSvg inPct={inPct} outPct={outPct} netPct={netPct} />
-        <div className="flex-1 min-w-0">
-          <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-            {t('vs typical', 'vs promedio')}
-          </p>
-          <div className="mt-1.5 space-y-1">
-            <RingLegend color={RING_IN} label={t('Rev.', 'Ing.')} value={inPct} baseline={baselines.moneyIn ?? 0} />
-            <RingLegend color={RING_OUT} label={t('Exp.', 'Gto.')} value={outPct} baseline={baselines.moneyOut ?? 0} />
-            <RingLegend color={RING_NET} label={t('Net', 'Neto')} value={netPct} baseline={baselines.net ?? 0} />
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function RingLegend({ color, label, value, baseline }: { color: string; label: string; value: number; baseline: number }) {
-  const pct = Math.round(Math.min(1.5, Math.max(0, value)) * 100)
-  return (
-    <div className="flex items-center gap-2 text-[11.5px]">
-      <span className="inline-block w-2 h-2 rounded-full" style={{ background: color }} />
-      <span style={{ color: INK, minWidth: 32 }}>{label}</span>
-      <span className="font-mono tabular-nums" style={{ color: SLATE, minWidth: 34 }}>{pct}%</span>
-      <span style={{ color: MUTED, fontSize: 10.5 }} className="truncate">
-        {fmt(baseline, { compact: true })}
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 32, height: 32, borderRadius: 8,
+        background: tone.tile, color: tone.ink,
+      }}>
+        <AccountGlyph kind={a.kind} />
+      </span>
+      <span style={{
+        fontSize: 12, color: MUTED, letterSpacing: '-0.005em',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {a.name}
+      </span>
+      <span style={{
+        fontFamily: MONO, fontSize: 20, fontWeight: 600,
+        letterSpacing: '-0.035em', lineHeight: 1, color: INK,
+      }}>
+        {fmtMoney(a.balance)}
+      </span>
+      <span style={{ fontSize: 11, color: FAINT }}>
+        {tileSubtitle(a)}
       </span>
     </div>
   )
 }
 
-// Rings SVG — three concentric arcs. Rendered with a subtle grow-in
-// animation from empty to their target percentages.
-function RingsSvg({ inPct, outPct, netPct }: { inPct: number; outPct: number; netPct: number }) {
-  const [animatedPct, setAnimatedPct] = useState({ i: 0, o: 0, n: 0 })
-  useEffect(() => {
-    let raf: number
-    const start = performance.now()
-    const duration = 900
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration)
-      const eased = 1 - Math.pow(1 - t, 3)
-      setAnimatedPct({ i: inPct * eased, o: outPct * eased, n: netPct * eased })
-      if (t < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [inPct, outPct, netPct])
-
-  const size = 96
-  const cx = size / 2
-  const cy = size / 2
-  const stroke = 7
-  const gap = 3
-  // radii: outer, middle, inner
-  const r1 = cx - stroke / 2 - 2
-  const r2 = r1 - stroke - gap
-  const r3 = r2 - stroke - gap
-
-  const arc = (r: number, frac: number) => {
-    const C = 2 * Math.PI * r
-    const filled = C * Math.min(1, Math.max(0, frac))
-    return { C, filled }
-  }
-  const a1 = arc(r1, animatedPct.i)
-  const a2 = arc(r2, animatedPct.o)
-  const a3 = arc(r3, animatedPct.n)
-
-  return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ overflow: 'visible' }}>
-      {/* Track circles — very light */}
-      {[r1, r2, r3].map((r) => (
-        <circle
-          key={r}
-          cx={cx} cy={cy} r={r}
-          fill="none"
-          stroke={HAIR}
-          strokeWidth={stroke}
-        />
-      ))}
-      {/* Foreground arcs — rotate -90deg so they start at 12 o'clock */}
-      <g transform={`rotate(-90 ${cx} ${cy})`}>
-        <circle
-          cx={cx} cy={cy} r={r1}
-          fill="none"
-          stroke={RING_IN}
-          strokeWidth={stroke}
-          strokeDasharray={`${a1.filled} ${a1.C}`}
-          strokeLinecap="round"
-        />
-        <circle
-          cx={cx} cy={cy} r={r2}
-          fill="none"
-          stroke={RING_OUT}
-          strokeWidth={stroke}
-          strokeDasharray={`${a2.filled} ${a2.C}`}
-          strokeLinecap="round"
-        />
-        <circle
-          cx={cx} cy={cy} r={r3}
-          fill="none"
-          stroke={RING_NET}
-          strokeWidth={stroke}
-          strokeDasharray={`${a3.filled} ${a3.C}`}
-          strokeLinecap="round"
-        />
-      </g>
-    </svg>
-  )
-}
-
-function RingLearningIcon() {
-  return (
-    <svg width={56} height={56} viewBox="0 0 56 56" style={{ flex: '0 0 auto', marginTop: 2 }}>
-      <circle cx="28" cy="28" r="22" fill="none" stroke={HAIR} strokeWidth="6" strokeDasharray="6 8" />
-      <circle cx="28" cy="28" r="14" fill="none" stroke={HAIR} strokeWidth="6" strokeDasharray="4 6" />
-      <circle cx="28" cy="28" r="6" fill={HAIR} />
-    </svg>
-  )
-}
-
-// ----------------------------------------------------------------
-// FlowCard — Money In or Money Out. Big number counting up, thin
-// sparkline underneath, attribution chip on the right.
-// ----------------------------------------------------------------
-function FlowCard({
-  direction, label, amount, spark, chip,
-}: {
-  direction: 'in' | 'out'
-  label: string
-  amount: number
-  spark: number[]
-  chip: string
-}) {
-  const shown = useCountUp(amount)
-  const accent = direction === 'in' ? UP : SPEND
-
-  return (
-    <section
-      className="rounded-xl px-4 py-3"
-      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
-    >
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-          {label}
-        </p>
-        <span
-          className="text-[10px] font-mono uppercase tracking-[0.08em] px-1.5 py-0.5 rounded"
-          style={{ background: SAND, color: SLATE }}
-        >
-          {chip}
-        </span>
-      </div>
-      <p
-        className="mt-1.5 leading-none tabular-nums"
-        style={{ fontSize: 'clamp(22px, 3vw, 28px)', fontWeight: 700, letterSpacing: '-0.6px', color: accent }}
-      >
-        {direction === 'in' ? '+' : ''}
-        {fmt(shown, { compact: true })}
-      </p>
-      <div className="mt-2">
-        <Sparkline values={spark} color={accent} />
-      </div>
-    </section>
-  )
-}
-
-// Sparkline — 7 daily values, draws left-to-right with a subtle
-// stroke-dasharray reveal. Fills the width of its container.
-function Sparkline({ values, color }: { values: number[]; color: string }) {
-  const [drawn, setDrawn] = useState(0)
-  const w = 240
-  const h = 22
-  const max = Math.max(1, ...values)
-  const pts = values.map((v, i) => {
-    const x = (i / Math.max(1, values.length - 1)) * (w - 4) + 2
-    const y = h - (v / max) * (h - 4) - 2
-    return `${x.toFixed(1)},${y.toFixed(1)}`
-  })
-  const d = `M ${pts.join(' L ')}`
-
-  useEffect(() => {
-    let raf: number
-    const start = performance.now()
-    const duration = 700
-    const tick = (now: number) => {
-      const t = Math.min(1, (now - start) / duration)
-      const eased = 1 - Math.pow(1 - t, 3)
-      setDrawn(eased)
-      if (t < 1) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(raf)
-  }, [values])
-
-  // Approximate the path length for dasharray reveal. SVG path
-  // length varies; overshooting a bit is fine (extra dash trailing
-  // off-screen is invisible).
-  const approxLen = 400
-  return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
-      <path
-        d={d}
-        fill="none"
-        stroke={color}
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={approxLen}
-        strokeDashoffset={approxLen * (1 - drawn)}
-      />
-      {/* End dot pulses at the current day */}
-      {pts.length > 0 && drawn > 0.9 && (
-        <circle
-          cx={pts[pts.length - 1].split(',')[0]}
-          cy={pts[pts.length - 1].split(',')[1]}
-          r={3}
-          fill={color}
-        />
-      )}
-    </svg>
-  )
-}
-
-// ----------------------------------------------------------------
-// NetAndNudge — compact horizontal strip combining the week's net
-// number (with optional streak line) and the smart nudge (if the
-// server picked one). Rendered on one row on desktop, stacks on
-// narrow. Uses less vertical space than two separate cards.
-// ----------------------------------------------------------------
-function NetAndNudge({
-  net, streak, nudge, lang,
-}: { net: number; streak: number; nudge: string | null; lang: Lang }) {
-  const t = makeT(lang)
-  const positive = net > 0
-  const streakLabel = (() => {
-    if (streak < 2) return null
-    if (streak === 2) return t('2 weeks in a row', '2 semanas seguidas')
-    if (streak === 3) return t('3 weeks — nice run', '3 semanas — buena racha')
-    if (streak >= 4) return t(`${streak} weeks in a row`, `${streak} semanas seguidas`)
-    return null
-  })()
-
-  return (
-    <section
-      className="rounded-xl px-4 py-2.5 flex items-center flex-wrap gap-x-4 gap-y-1"
-      style={{ background: CREAM, border: `1px solid ${HAIR}` }}
-    >
-      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-        {t('Net', 'Neto')}
-      </p>
-      <p
-        className="text-[16px] leading-none font-semibold tabular-nums"
-        style={{ color: positive ? UP : DOWN_WARM, letterSpacing: '-0.3px' }}
-      >
-        {fmtDelta(net)}
-      </p>
-      {streakLabel && (
-        <p className="text-[12px]" style={{ color: SLATE }}>
-          🎉 {streakLabel}
-        </p>
-      )}
-      {nudge && (
-        <p className="text-[12px] leading-snug flex-1 min-w-[200px]" style={{ color: SLATE }}>
-          <span style={{ marginRight: 4 }}>💬</span>
-          {nudge}
-        </p>
-      )}
-    </section>
-  )
-}
-
-// ----------------------------------------------------------------
-// RecapCard — Sunday-Monday only. Server decides when.
-// ----------------------------------------------------------------
-function RecapCard({ text, lang }: { text: string; lang: Lang }) {
-  const t = makeT(lang)
-  return (
-    <section
-      className="rounded-xl px-4 py-3"
-      style={{
-        background: `linear-gradient(180deg, ${SAND} 0%, ${CREAM} 100%)`,
-        border: `1px solid ${HAIR}`,
-      }}
-    >
-      <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: DOWN_WARM }}>
-        {t('Last week wrapped', 'Semana pasada')}
-      </p>
-      <p className="mt-1 text-[13px] leading-snug" style={{ color: INK }}>
-        {text}
-      </p>
-    </section>
-  )
-}
-
-// ----------------------------------------------------------------
-// LedgerSection — recent activity feed. Expense rows are
-// categorize-on-tap; other kinds show their meta read-only.
-// ----------------------------------------------------------------
-function LedgerSection({ rows, lang }: { rows: LedgerRow[]; lang: Lang }) {
-  const t = makeT(lang)
-
-  // Cap at 10 rows to keep the dashboard compact; owners who want
-  // more open the detailed workspace.
-  const visible = rows.slice(0, 10)
-
-  return (
-    <section>
-      <div className="flex items-baseline justify-between mb-2">
-        <p className="text-[10.5px] font-mono uppercase tracking-[0.16em]" style={{ color: MUTED }}>
-          {t('Recent activity', 'Actividad reciente')}
-        </p>
-        <span className="text-[10.5px] font-mono uppercase tracking-[0.1em]" style={{ color: MUTED }}>
-          {visible.length}
-        </span>
-      </div>
-      {visible.length === 0 ? (
-        <p className="text-[12px] px-1 py-5 text-center" style={{ color: MUTED }}>
-          {t('Nothing yet — quiet start to the week.', 'Nada aún — semana empieza tranquila.')}
-        </p>
-      ) : (
-        <ul className="rounded-xl overflow-hidden" style={{ background: CREAM, border: `1px solid ${HAIR}` }}>
-          {visible.map((r, idx) => (
-            <li
-              key={r.id}
-              style={{ borderTop: idx === 0 ? 'none' : `1px solid ${HAIR}` }}
-            >
-              <LedgerRow row={r} lang={lang} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-// Single ledger row — icon + amount + label + category chip + time.
-function LedgerRow({ row, lang }: { row: LedgerRow; lang: Lang }) {
-  const t = makeT(lang)
-  const isIn = row.kind === 'order' || row.kind === 'bank_credit'
-  const iconColor = isIn ? UP : SPEND
-
-  return (
-    <div
-      className="grid gap-2 px-3 py-1.5 items-center"
-      style={{ gridTemplateColumns: '20px minmax(0, 1fr) minmax(0, auto) 80px' }}
-    >
-      {/* Icon */}
-      <div
-        className="flex items-center justify-center w-5 h-5 rounded-full text-[11px] font-bold"
-        style={{ background: `${iconColor}18`, color: iconColor }}
-        aria-hidden="true"
-      >
-        {isIn ? '+' : '−'}
-      </div>
-
-      {/* Label + sub — sub inlined next to label to save vertical space */}
-      <div className="min-w-0 flex items-baseline gap-2">
-        <p className="text-[13px] font-semibold truncate" style={{ color: INK }}>
-          {row.label}
-        </p>
-        {row.sub && (
-          <p className="text-[11px] truncate" style={{ color: MUTED }}>
-            · {row.sub}
-          </p>
-        )}
-      </div>
-
-      {/* Category chip (editable for expenses) */}
-      <div className="min-w-0">
-        {row.categoryEditable && row.category ? (
-          <CategoryChip
-            expenseId={row.id.replace(/^e:/, '')}
-            initial={row.category}
-            lang={lang}
-          />
-        ) : row.category ? (
-          <span
-            className="text-[10px] font-mono uppercase tracking-[0.08em] px-1.5 py-0.5 rounded"
-            style={{ background: SAND, color: SLATE }}
-          >
-            {row.category}
-          </span>
-        ) : (
-          <span className="text-[10px] font-mono uppercase tracking-[0.08em]" style={{ color: MUTED }}>
-            {row.kind === 'order' ? t('Sale', 'Venta') : t('Bank', 'Banco')}
-          </span>
-        )}
-      </div>
-
-      {/* Amount + time inlined on one line */}
-      <div className="text-right min-w-0 flex items-baseline justify-end gap-2">
-        <p
-          className="text-[13px] font-semibold font-mono tabular-nums"
-          style={{ color: isIn ? UP : SPEND }}
-        >
-          {isIn ? '+' : '−'}{fmt(row.amount)}
-        </p>
-        <p className="text-[10.5px]" style={{ color: MUTED }}>
-          {formatTime(row.timestamp)}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-// CategoryChip — tap opens an inline select of EXPENSE_CATEGORIES.
-// Optimistic update: chip flips immediately; server error rolls
-// back with a soft red flash.
-function CategoryChip({ expenseId, initial, lang }: { expenseId: string; initial: string; lang: Lang }) {
-  const t = makeT(lang)
-  const [open, setOpen] = useState(false)
-  const [current, setCurrent] = useState(initial)
-  const [pending, startTransition] = useTransition()
-  const [errored, setErrored] = useState(false)
-
-  const commit = (next: string) => {
-    setOpen(false)
-    if (next === current) return
-    const prev = current
-    setCurrent(next) // optimistic
-    startTransition(async () => {
-      const res = await updateExpenseCategory(expenseId, next)
-      if (res?.error) {
-        setCurrent(prev)
-        setErrored(true)
-        setTimeout(() => setErrored(false), 1200)
-      }
-    })
-  }
-
-  if (open) {
-    return (
-      <select
-        autoFocus
-        value={current}
-        onChange={(e) => commit(e.target.value)}
-        onBlur={() => setOpen(false)}
-        className="text-[11px] font-mono uppercase tracking-[0.08em] px-2 py-1 rounded-md focus:outline-none"
-        style={{
-          background: CREAM,
-          color: INK,
-          border: `1px solid ${INK}`,
-        }}
-      >
-        {EXPENSE_CATEGORIES.map((c) => (
-          <option key={c} value={c}>{c}</option>
-        ))}
-      </select>
-    )
-  }
-
+function AddAccountTile({ t }: { t: (en: string, es?: string) => string }) {
   return (
     <button
       type="button"
-      onClick={() => setOpen(true)}
-      title={t('Change category', 'Cambiar categoría')}
-      className="text-[10.5px] font-mono uppercase tracking-[0.1em] px-2 py-1 rounded-md transition-all cursor-pointer"
+      disabled
+      title={t('Coming in the next commit', 'Próximamente')}
       style={{
-        background: errored ? '#FDE4E1' : SAND,
-        color: errored ? '#B91C1C' : SLATE,
-        border: `1px dashed ${errored ? '#F5B7B1' : HAIR}`,
-        opacity: pending ? 0.6 : 1,
+        border: `1px dashed ${LINE}`, borderRadius: 12, background: 'transparent',
+        padding: '14px 16px 16px', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: 6,
+        color: FAINT, fontSize: 13, fontWeight: 500,
+        cursor: 'not-allowed', minHeight: 120, font: 'inherit',
       }}
     >
-      {current}
+      <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
+      {t('Add account', 'Añadir cuenta')}
     </button>
   )
 }
 
-// ----------------------------------------------------------------
-// Small helpers
-// ----------------------------------------------------------------
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  const now = new Date()
-  const diffMs = now.getTime() - d.getTime()
-  const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
-  const diffHr = Math.floor(diffMin / 60)
-  if (diffHr < 24) return `${diffHr}h ago`
-  const diffDay = Math.floor(diffHr / 24)
-  if (diffDay < 7) return `${diffDay}d ago`
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+function EmptyAccounts({ t }: { t: (en: string, es?: string) => string }) {
+  return (
+    <div style={{
+      border: `1px dashed ${LINE}`, borderRadius: 12, padding: '28px 16px',
+      textAlign: 'center', color: MUTED, fontSize: 13,
+    }}>
+      {t('No accounts yet. POS + Register seed automatically; add Venmo / Cash App / Bank as you use them.',
+         'Sin cuentas aún. POS + Caja se cargan automáticamente; añade Venmo / Cash App / Banco al usarlos.')}
+    </div>
+  )
 }
 
-// The `mono` helper is referenced from the shared style block; keep it
-// alive here to satisfy the linter even if unused directly today.
-export const _mono = mono
-
 // ================================================================
-// Phone Money tab — inline sub-component.
-// Renders the "am I making money?" check-in: hero net, in/out
-// stats, unreviewed-bank confirm queue, and payment-source split.
-// Reuses week-scoped server data (no ?date param on finance yet).
+// Movement row
 // ================================================================
 
-type PhoneT = (en: string, es?: string) => string
-
-function PhoneMoney({
-  t, money,
+function MovementRow({
+  m, locale, t,
 }: {
-  t: PhoneT
-  money: Props['phoneMoney'] | null
+  m: FinanceMovement
+  locale: string
+  t: (en: string, es?: string) => string
 }) {
-  if (!money) {
-    return (
-      <PhonePage
-        hero="—"
-        unit={t('THIS WEEK', 'ESTA SEMANA')}
-        stats={[]}
-        chip={t('Not connected', 'No conectado')}
-        chipPair={PHONE_PAIR.neutral}
-        avatarInitials={'A'}
-        feed={[
-          { kind: 'empty', message: t('Connect a bank to see the money picture.', 'Conecta un banco para ver el panorama.') },
-        ]}
-      />
-    )
-  }
-
-  const total = money.paymentSources.reduce((s, r) => s + r.total, 0)
-  const feed: PhoneRow[] = []
-
-  // NEEDS A YES OR NO — unreviewed bank groups. Buttons go to
-  // /finance/details where the full settle flow lives (the phone
-  // stays read-only until proven otherwise; a one-tap confirm
-  // silently writing a settled_kind would be too easy to mis-tap).
-  if (money.reviewGroups.length > 0) {
-    feed.push({
-      kind: 'section',
-      label: t('NEEDS A YES OR NO', 'REQUIERE UN SÍ O NO'),
-      meta: `${money.reviewGroups.length} ${money.reviewGroups.length === 1 ? t('left', 'pendiente') : t('left', 'pendientes')}`,
-    })
-    money.reviewGroups.forEach((g, i) => {
-      const dateStr = g.firstTxnPostedAt
-        ? new Date(g.firstTxnPostedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        : ''
-      const detail = [
-        dateStr,
-        (g.firstTxnDescription ?? g.label).toUpperCase(),
-        `$${g.totalAmount.toFixed(2)}`,
-      ].filter(Boolean).join(' · ')
-      feed.push({
-        kind: 'confirm',
-        key: g.key,
-        title: g.reason || g.label,
-        sub: detail,
-        onYes: () => { window.location.href = '/finance/details' },
-        onNo: () => { window.location.href = '/finance/details' },
-        last: i === money.reviewGroups.length - 1,
-      })
-    })
-  }
-
-  // WHERE IT CAME FROM — payment-source split.
-  if (money.paymentSources.length > 0) {
-    feed.push({ kind: 'section', label: t('WHERE IT CAME FROM', 'DE DÓNDE VINO') })
-    money.paymentSources.forEach((s, i) => {
-      const pair = s.key === 'card' ? PHONE_PAIR.card
-        : s.key === 'cash' ? PHONE_PAIR.success
-          : PHONE_PAIR.neutral
-      const pct = total > 0 ? Math.round((s.total / total) * 100) : 0
-      feed.push({
-        kind: 'row',
-        key: `src-${s.key}`,
-        initial: s.key === 'card' ? 'C' : s.key === 'cash' ? '$' : '·',
-        pair,
-        title: s.label,
-        sub: `${s.count} ${s.count === 1 ? t('payment', 'pago') : t('payments', 'pagos')}`,
-        subMono: true,
-        value: `$${Math.round(s.total).toLocaleString('en-US')}`,
-        trail: `${pct}%`,
-        last: i === money.paymentSources.length - 1,
-      })
-    })
-  }
-
-  if (feed.length === 0) {
-    feed.push({ kind: 'empty', message: t('Nothing this week yet.', 'Nada esta semana todavía.') })
-  }
-
-  const netPositive = money.net >= 0
-  const heroVal = `$${Math.abs(Math.round(money.net)).toLocaleString('en-US')}`
-  const hero = netPositive ? heroVal : `-${heroVal}`
-
-  const stats: [string, string][] = [
-    [`$${Math.round(money.moneyIn).toLocaleString('en-US')}`, t('came in', 'entró')],
-    [`$${Math.round(money.moneyOut).toLocaleString('en-US')}`, t('went out', 'salió')],
-  ]
-
-  const chipCount = money.reviewGroups.length
-  const chip = chipCount > 0
-    ? `${chipCount} ${chipCount === 1 ? t('to confirm', 'por confirmar') : t('to confirm', 'por confirmar')}`
-    : (netPositive ? t('Making money', 'Ganando') : t('Behind', 'Atrás'))
-  const chipPair = chipCount > 0
-    ? PHONE_PAIR.warning
-    : (netPositive ? PHONE_PAIR.success : PHONE_PAIR.warning)
+  const dirColor = m.direction === 'income' ? INCOME
+    : m.direction === 'expense' ? EXPENSE
+      : MUTED
+  const sign = m.direction === 'income' ? '+'
+    : m.direction === 'expense' ? '−'
+      : '⇄'
+  const title = m.note?.trim() || m.category?.name || defaultTitle(m, t)
+  const time = fmtRowTime(m.occurred_at, locale)
+  const day = fmtRelativeDay(m.occurred_at, t)
 
   return (
-    <PhonePage
-      hero={hero}
-      unit={t('LEFT OVER THIS WEEK', 'RESTANTE ESTA SEMANA')}
-      heroTone={netPositive ? undefined : '#B45309'}
-      stats={stats}
-      chip={chip}
-      chipPair={chipPair}
-      avatarInitials={'A'}
-      feed={feed}
-    />
+    <div
+      style={{
+        display: 'flex', alignItems: 'center', gap: 13,
+        padding: '13px 18px', borderTop: `1px solid ${LINE_SOFT}`,
+      }}
+    >
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        width: 34, height: 34, borderRadius: 10, flex: '0 0 auto',
+        background: iconTileFor(m).tile, color: iconTileFor(m).ink,
+      }}>
+        <MovementGlyph m={m} />
+      </span>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{
+          display: 'block', fontSize: 14, fontWeight: 600, letterSpacing: '-0.015em',
+          color: INK, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>
+          {title}
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: FAINT }}>{day}</span>
+          <Dot />
+          <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{time}</span>
+          {m.direction === 'transfer' && m.source && m.dest && (
+            <>
+              <Dot />
+              <AccountPill name={m.source.name} tone={tintForRef(m.source)} />
+              <span style={{ fontSize: 11, color: FAINT }}>→</span>
+              <AccountPill name={m.dest.name} tone={tintForRef(m.dest)} />
+            </>
+          )}
+          {m.direction === 'income' && m.dest && (
+            <>
+              <Dot />
+              <AccountPill name={m.dest.name} tone={tintForRef(m.dest)} />
+            </>
+          )}
+          {m.direction === 'expense' && (
+            <>
+              <Dot />
+              {m.category && (
+                <AccountPill name={m.category.name} tone={{ tile: '#FEE2E2', ink: '#B91C1C', dot: '#DC2626' }} />
+              )}
+              {m.source && (
+                <AccountPill name={m.source.name} tone={tintForRef(m.source)} />
+              )}
+            </>
+          )}
+        </span>
+      </span>
+      <span style={{
+        fontFamily: MONO, fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em',
+        color: dirColor, whiteSpace: 'nowrap',
+      }}>
+        {sign}{fmtMoney(m.amount)}
+      </span>
+    </div>
   )
+}
+
+function defaultTitle(m: FinanceMovement, t: (en: string, es?: string) => string): string {
+  if (m.direction === 'transfer') return t('Transfer', 'Transferencia')
+  if (m.direction === 'income') return t('Income', 'Ingreso')
+  return t('Expense', 'Gasto')
+}
+
+function iconTileFor(m: FinanceMovement): { tile: string; ink: string } {
+  if (m.direction === 'transfer') return { tile: '#EEF2FF', ink: '#4F46E5' }
+  if (m.direction === 'income') {
+    return m.dest ? tintForRef(m.dest) : { tile: '#ECFDF5', ink: '#059669' }
+  }
+  // expense
+  return { tile: '#FEE2E2', ink: '#B91C1C' }
+}
+
+// ================================================================
+// Chips
+// ================================================================
+
+function FilterChip({
+  label, count, active, onClick, tone,
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+  tone?: { dot?: string }
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 7,
+        borderRadius: 999, padding: '5px 12px',
+        font: 'inherit', fontSize: 12, cursor: 'pointer',
+        border: `1px solid ${active ? INK : LINE}`,
+        background: active ? INK : '#fff',
+        color: active ? PAPER : '#3F3F46',
+        fontWeight: active ? 600 : 500,
+      }}
+    >
+      {tone?.dot && (
+        <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: tone.dot }} />
+      )}
+      {label}
+      <span style={{
+        fontFamily: MONO, fontSize: 10,
+        color: active ? 'rgba(250,249,246,0.65)' : FAINT,
+      }}>
+        {count}
+      </span>
+    </button>
+  )
+}
+
+function AccountPill({
+  name, tone,
+}: {
+  name: string
+  tone: { tile: string; ink: string; dot?: string }
+}) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 999,
+      padding: '1px 8px', fontSize: 10, fontWeight: 600,
+      background: tone.tile, color: tone.ink,
+    }}>
+      {tone.dot && (
+        <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
+      )}
+      {name}
+    </span>
+  )
+}
+
+function Dot() {
+  return <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#D6D5D1', alignSelf: 'center' }} />
+}
+
+// ================================================================
+// Glyphs
+// ================================================================
+
+function AccountGlyph({ kind }: { kind: FinanceAccountKind }) {
+  if (kind === 'pos') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect x="2" y="5" width="16" height="11" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M2 9h16" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+  if (kind === 'cash') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect x="2" y="6" width="16" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="10" cy="10.5" r="2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+  if (kind === 'digital_wallet') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M3 6h11a3 3 0 0 1 3 3v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="13.5" cy="11.5" r="1" fill="currentColor" />
+    </svg>
+  )
+  if (kind === 'bank') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M2 8l8-4 8 4" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M4 8v7M8 8v7M12 8v7M16 8v7M2 16h16" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <circle cx="10" cy="10" r="6" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  )
+}
+
+function MovementGlyph({ m }: { m: FinanceMovement }) {
+  if (m.direction === 'transfer') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M4 7h11M12 4l3 3-3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16 13H5M8 16l-3-3 3-3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+  if (m.direction === 'income') return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M10 15V5M6 9l4-4 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+  // expense — receipt icon
+  return (
+    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M5 3h10v14l-2-1-1.5 1L10 16l-1.5 1L7 16l-2 1V3z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M7.5 7h5M7.5 10h5M7.5 13h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+// ================================================================
+// Formatting + palette helpers
+// ================================================================
+
+function fmtMoney(n: number): string {
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+function fmtRowTime(iso: string, locale: string): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' })
+}
+
+function fmtRelativeDay(iso: string, t: (en: string, es?: string) => string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const midnightThat = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const diff = Math.round((midnightToday.getTime() - midnightThat.getTime()) / 86_400_000)
+  if (diff === 0) return t('Today', 'Hoy')
+  if (diff === 1) return t('Yesterday', 'Ayer')
+  if (diff > 1 && diff < 7) {
+    return d.toLocaleDateString(undefined, { weekday: 'long' })
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+function weekRangeLabel(now: Date, locale: string): string {
+  const day = now.getDay()
+  const diff = (day + 6) % 7
+  const start = new Date(now)
+  start.setDate(now.getDate() - diff)
+  const end = new Date(start)
+  end.setDate(start.getDate() + 6)
+  const startStr = start.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  const endStr = end.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  return `${startStr} – ${endStr}`
+}
+
+function tintForAccount(a: FinanceAccount): { tile: string; ink: string; dot: string } {
+  const base = a.color ?? ACCOUNT_KIND_DEFAULTS[a.kind].color
+  return { tile: base, ink: darkFor(a.kind), dot: darkFor(a.kind) }
+}
+
+function tintForRef(ref: { kind: FinanceAccountKind; color: string | null }): { tile: string; ink: string; dot: string } {
+  const base = ref.color ?? ACCOUNT_KIND_DEFAULTS[ref.kind].color
+  return { tile: base, ink: darkFor(ref.kind), dot: darkFor(ref.kind) }
+}
+
+function darkFor(kind: FinanceAccountKind): string {
+  switch (kind) {
+    case 'pos': return '#4F46E5'
+    case 'cash': return '#047857'
+    case 'digital_wallet': return '#0EA5E9'
+    case 'bank': return '#7C3AED'
+    default: return '#52525B'
+  }
+}
+
+function tileSubtitle(a: FinanceAccount): string {
+  const ago = timeAgo(new Date(a.updated_at))
+  if (a.kind === 'pos') return 'To be deposited'
+  if (a.kind === 'cash') return `Last counted · ${ago}`
+  if (a.kind === 'bank') return `Deposit · ${ago}`
+  if (a.kind === 'digital_wallet') return `Payment · ${ago}`
+  return ago
+}
+
+function timeAgo(d: Date): string {
+  const diff = Date.now() - d.getTime()
+  const mins = Math.round(diff / 60000)
+  if (mins < 60) return `${mins} min ago`
+  const hrs = Math.round(mins / 60)
+  if (hrs < 24) return `${hrs} hr ago`
+  const days = Math.round(hrs / 24)
+  if (days === 1) return 'yesterday'
+  if (days < 7) return `${days} days ago`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }

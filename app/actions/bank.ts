@@ -101,7 +101,10 @@ export async function createPlaidLinkToken(
     const plaid = getPlaidClient()
     const res = await plaid.linkTokenCreate({
       user: { client_user_id: gate.userId },
-      client_name: 'Restaurant App',
+      // client_name is what Plaid shows in Link's headline ("X uses
+      // Plaid to connect your account") and on the phone-verify /
+      // consent screens. Reads as our product identity to the buyer.
+      client_name: 'Checked',
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
       language: 'en',

@@ -306,7 +306,18 @@ function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string
  *  exactly once per attempt, then unmount cleanly on success/exit.
  *  After exchange, bridgePlaidAccountsToFinance mirrors the newly
  *  connected accounts into finance_accounts so the tile row picks
- *  them up on refresh. */
+ *  them up on refresh.
+ *
+ *  OAuth institutions (Cash App, Venmo, PayPal, most big banks)
+ *  need a round-trip: Link → institution's site → back to /finance
+ *  carrying ?oauth_state_id=. We stash the link_token in
+ *  localStorage right before opening Link so the return trip
+ *  finds it, re-opens Link with receivedRedirectUri set, and
+ *  Plaid resumes right where it left off. Cleared on success or
+ *  exit so a stale token doesn't poison the next attempt.
+ */
+const PLAID_TOKEN_KEY = 'checked:finance:plaid_link_token'
+
 function AddAccountTile({
   t, plaidConfigured, activePlaceId,
 }: {
@@ -316,19 +327,45 @@ function AddAccountTile({
 }) {
   const router = useRouter()
   const [linkToken, setLinkToken] = useState<string | null>(null)
+  // OAuth resumption: when the page loads with ?oauth_state_id=,
+  // we re-open Link with the previous token and this URL so
+  // Plaid finishes the flow. Undefined = normal (non-resumed)
+  // Link open.
+  const [receivedRedirectUri, setReceivedRedirectUri] = useState<string | undefined>(undefined)
   const [isFetching, setIsFetching] = useState(false)
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
+
+  // On mount, detect a Plaid OAuth return and resume Link. Runs
+  // once — the effect's empty deps mean it fires on the initial
+  // client render only, not on any router.refresh() afterwards.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    if (!params.has('oauth_state_id')) return
+    let stored: string | null = null
+    try { stored = window.localStorage.getItem(PLAID_TOKEN_KEY) } catch { /* private mode */ }
+    if (!stored) return
+    setReceivedRedirectUri(window.location.href)
+    setLinkToken(stored)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const handleClick = useCallback(async () => {
     if (!plaidConfigured || isFetching || isPending || linkToken) return
     setError(null)
     setIsFetching(true)
     try {
-      const res = await createPlaidLinkToken()
+      // Absolute redirect URI must match an entry on the Plaid
+      // dashboard's Allowed redirect URIs list. Using the current
+      // origin + /finance keeps dev + prod pointing at the right
+      // place without an env-var handoff.
+      const redirectUri = `${window.location.origin}/finance`
+      const res = await createPlaidLinkToken(redirectUri)
       if ('error' in res) {
         setError(res.error)
       } else {
+        try { window.localStorage.setItem(PLAID_TOKEN_KEY, res.linkToken) } catch { /* private mode */ }
         setLinkToken(res.linkToken)
       }
     } finally {
@@ -340,7 +377,14 @@ function AddAccountTile({
     // Drop the token first so <PlaidLinker/> unmounts and the
     // Plaid script doesn't re-init on the router.refresh().
     setLinkToken(null)
+    setReceivedRedirectUri(undefined)
     setError(null)
+    try { window.localStorage.removeItem(PLAID_TOKEN_KEY) } catch { /* ignore */ }
+    // Strip Plaid's OAuth query params off the URL so a page
+    // reload doesn't attempt to resume the completed flow.
+    if (typeof window !== 'undefined' && window.location.search.includes('oauth_state_id')) {
+      window.history.replaceState(null, '', window.location.pathname)
+    }
     startTransition(async () => {
       const fd = new FormData()
       fd.set('public_token', publicToken)
@@ -358,7 +402,14 @@ function AddAccountTile({
     })
   }, [router, activePlaceId])
 
-  const handleExit = useCallback(() => setLinkToken(null), [])
+  const handleExit = useCallback(() => {
+    setLinkToken(null)
+    setReceivedRedirectUri(undefined)
+    try { window.localStorage.removeItem(PLAID_TOKEN_KEY) } catch { /* ignore */ }
+    if (typeof window !== 'undefined' && window.location.search.includes('oauth_state_id')) {
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  }, [])
 
   const busy = isFetching || isPending || linkToken !== null
   const disabled = !plaidConfigured || busy
@@ -402,6 +453,7 @@ function AddAccountTile({
         <PlaidLinker
           key={linkToken}
           token={linkToken}
+          receivedRedirectUri={receivedRedirectUri}
           onSuccess={handleSuccess}
           onExit={handleExit}
         />
@@ -414,12 +466,15 @@ function AddAccountTile({
 // PlaidLinker — owns the usePlaidLink hook and pops the modal
 // as soon as it's ready. Rendered only while a link_token is
 // live so Plaid's link-initialize.js embeds exactly once per
-// attempt. Same shape as components/bank/connect-bank-button.tsx.
+// attempt. Same shape as components/bank/connect-bank-button.tsx,
+// with receivedRedirectUri wired for OAuth resumption from
+// Cash App / Venmo / PayPal / OAuth banks.
 // ----------------------------------------------------------------
 function PlaidLinker({
-  token, onSuccess, onExit,
+  token, receivedRedirectUri, onSuccess, onExit,
 }: {
   token: string
+  receivedRedirectUri?: string
   onSuccess: (publicToken: string) => void
   onExit: () => void
 }) {
@@ -427,6 +482,7 @@ function PlaidLinker({
     token,
     onSuccess: (publicToken) => onSuccess(publicToken),
     onExit: () => onExit(),
+    ...(receivedRedirectUri && { receivedRedirectUri }),
   })
   useEffect(() => {
     if (ready) open()

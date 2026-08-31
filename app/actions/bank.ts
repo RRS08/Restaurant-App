@@ -85,7 +85,14 @@ async function gateOwner(): Promise<
 // ================================================================
 // 1. createPlaidLinkToken
 // ================================================================
-export async function createPlaidLinkToken(): Promise<Result<{ ok: true; linkToken: string }>> {
+export async function createPlaidLinkToken(
+  /** Absolute URL Plaid should redirect back to after an OAuth
+   *  round trip (Cash App, Venmo, PayPal, and most bank OAuth
+   *  flows). Must exactly match an entry in the Plaid dashboard's
+   *  Allowed redirect URIs. Omit for non-OAuth institutions —
+   *  Link will still work, they just can't OAuth. */
+  redirectUri?: string,
+): Promise<Result<{ ok: true; linkToken: string }>> {
   if (!isPlaidConfigured()) return { error: PLAID_NOT_CONFIGURED }
   const gate = await gateOwner()
   if (!gate.ok) return { error: gate.error }
@@ -98,6 +105,7 @@ export async function createPlaidLinkToken(): Promise<Result<{ ok: true; linkTok
       products: [Products.Transactions],
       country_codes: [CountryCode.Us],
       language: 'en',
+      ...(redirectUri && { redirect_uri: redirectUri }),
     })
     return { ok: true, linkToken: res.data.link_token }
   } catch (err) {

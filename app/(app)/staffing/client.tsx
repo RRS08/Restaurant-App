@@ -2655,9 +2655,11 @@ function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
   //      + step size. Kept local so a future tweak here doesn't
   //      accidentally shift the calendar's math. 60m wiggle each
   //      side matches AXIS_PRE / AXIS_POST in staffing-calendar.
+  //      15-minute step gives finer control on shift edges (many
+  //      shops open on quarter-hour boundaries — 10:15, 6:45, etc.).
   const PRE = 60
   const POST = 60
-  const STEP = 30
+  const STEP = 15
 
   const [closed, setClosed] = useState(initialHours.closed)
   const [openMin, setOpenMin] = useState(initialHours.openMin)
@@ -2914,7 +2916,7 @@ function EditHoursDrawer({ lang, dayIso, initialHours, onClose }: {
 //   'edit'   → click a placed shift bar.
 //              Everything prefilled; footer becomes Remove + Save.
 //
-// Times are 30-min steppers clamped to [openMin-90, closeMin+90]
+// Times are 15-min steppers clamped to [openMin-90, closeMin+90]
 // (matches the calendar's shift window shading). Break is a
 // three-option pill row (0/30/60); free entry is a future add.
 //
@@ -2949,9 +2951,10 @@ function ShiftDrawer({ lang, source, dayIso, dayHours, employees, weekShifts, ro
 
   // 60m wiggle each side matches the calendar's AXIS_PRE / AXIS_POST
   // so the drawer's clamp range agrees with the axis width.
+  // 15-minute step for finer control on shift edges.
   const PRE = 60
   const POST = 60
-  const STEP = 30
+  const STEP = 15
 
   const day = new Date(dayIso)
   const locale = lang === 'es' ? 'es-ES' : 'en-US'

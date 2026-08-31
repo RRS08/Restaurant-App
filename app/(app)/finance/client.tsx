@@ -898,29 +898,30 @@ function AddAccountDrawer({
         border: `1px solid ${LINE}`, borderRadius: 12, background: SURFACE,
         padding: '14px 14px 14px', marginBottom: 16,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          {/* Plaid brand mark — the rounded-square "P" from their
+              favicon / app icon. Ink background, paper glyph so it
+              reads at a small tile size. */}
           <span style={{
             display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 32, height: 32, borderRadius: 8, background: '#EEF2FF', color: '#4F46E5',
+            width: 32, height: 32, borderRadius: 8, background: '#000', color: '#fff',
           }}>
-            <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
-              <path d="M6 4h3l1 1h4a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4V6a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-              <path d="M4 10h14" stroke="currentColor" strokeWidth="1.6" />
+            <svg width="18" height="18" viewBox="0 0 32 32" fill="none" aria-hidden>
+              <rect width="32" height="32" rx="7" fill="#000" />
+              <path
+                d="M11 8h6.2c3.4 0 5.6 2 5.6 5.1 0 3.1-2.2 5.1-5.6 5.1H14V24h-3V8zm3 2.6v4.9h2.9c1.9 0 3-1 3-2.5s-1.1-2.4-3-2.4H14z"
+                fill="#fff"
+              />
             </svg>
           </span>
-          <span style={{ minWidth: 0, flex: 1 }}>
-            <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: INK }}>
-              {t('Connect via Plaid', 'Conectar con Plaid')}
-            </span>
-            <span style={{ display: 'block', fontSize: 11, color: MUTED, marginTop: 2 }}>
-              {t('Venmo · Cash App · Zelle · every US bank', 'Venmo · Cash App · Zelle · cualquier banco de EE.UU.')}
-            </span>
+          <span style={{ minWidth: 0, flex: 1, fontSize: 13, fontWeight: 600, color: INK }}>
+            {t('Connect via Plaid', 'Conectar con Plaid')}
           </span>
           <button
             type="button"
             onClick={openPlaid}
             style={{
-              border: 0, background: '#4F46E5', color: '#fff',
+              border: 0, background: INK, color: PAPER,
               borderRadius: 8, padding: '7px 12px', font: 'inherit',
               fontSize: 12, fontWeight: 600, cursor: 'pointer', flex: '0 0 auto',
             }}

@@ -17,10 +17,12 @@
 // eyeball the surface first.
 // ----------------------------------------------------------------
 
-import { useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
-import { addExpense, createAccount } from '@/app/actions/finance'
+import { addExpense, bridgePlaidAccountsToFinance } from '@/app/actions/finance'
+import { createPlaidLinkToken, exchangePlaidPublicToken } from '@/app/actions/bank'
 import type {
   FinanceAccount,
   FinanceCategory,
@@ -44,7 +46,7 @@ const EXPENSE = '#DC2626'
 
 export default function FinanceClient({
   lang, accounts, categories, movements,
-  cashOnHand, weekIn, weekOut, activePlaceId,
+  cashOnHand, weekIn, weekOut, activePlaceId, plaidConfigured,
 }: {
   lang: Lang
   accounts: FinanceAccount[]
@@ -54,13 +56,16 @@ export default function FinanceClient({
   weekIn: number
   weekOut: number
   activePlaceId: string | null
+  /** Server tells us if PLAID_CLIENT_ID + PLAID_SECRET are set.
+   *  When false, the + Add account tile disables itself with a
+   *  short hint instead of triggering a call that would 500. */
+  plaidConfigured: boolean
 }) {
   const t = makeT(lang)
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
 
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
   const [expenseOpen, setExpenseOpen] = useState(false)
-  const [accountOpen, setAccountOpen] = useState(false)
 
   // Ledger view — filter by account (source OR dest touches it)
   // or by direction (expenses only). "All" shows everything.
@@ -175,7 +180,11 @@ export default function FinanceClient({
             {accounts.map(a => (
               <AccountTile key={a.id} a={a} locale={locale} />
             ))}
-            <AddAccountTile t={t} onClick={() => setAccountOpen(true)} />
+            <AddAccountTile
+              t={t}
+              plaidConfigured={plaidConfigured}
+              activePlaceId={activePlaceId}
+            />
           </div>
         )}
       </div>
@@ -246,13 +255,6 @@ export default function FinanceClient({
           t={t}
         />
       )}
-      {accountOpen && (
-        <AddAccountDrawer
-          activePlaceId={activePlaceId}
-          onClose={() => setAccountOpen(false)}
-          t={t}
-        />
-      )}
     </div>
   )
 }
@@ -296,29 +298,140 @@ function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string
   )
 }
 
+/** Add-account tile — triggers Plaid Link directly (Plaid's own
+ *  centered modal overlay). Same lifecycle discipline as
+ *  ConnectBankButton in components/bank/connect-bank-button.tsx:
+ *  fetch link_token only on click, mount the Plaid hook inside a
+ *  short-lived <PlaidLinker/> child so the Plaid script embeds
+ *  exactly once per attempt, then unmount cleanly on success/exit.
+ *  After exchange, bridgePlaidAccountsToFinance mirrors the newly
+ *  connected accounts into finance_accounts so the tile row picks
+ *  them up on refresh. */
 function AddAccountTile({
-  t, onClick,
+  t, plaidConfigured, activePlaceId,
 }: {
   t: (en: string, es?: string) => string
-  onClick: () => void
+  plaidConfigured: boolean
+  activePlaceId: string | null
 }) {
+  const router = useRouter()
+  const [linkToken, setLinkToken] = useState<string | null>(null)
+  const [isFetching, setIsFetching] = useState(false)
+  const [isPending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  const handleClick = useCallback(async () => {
+    if (!plaidConfigured || isFetching || isPending || linkToken) return
+    setError(null)
+    setIsFetching(true)
+    try {
+      const res = await createPlaidLinkToken()
+      if ('error' in res) {
+        setError(res.error)
+      } else {
+        setLinkToken(res.linkToken)
+      }
+    } finally {
+      setIsFetching(false)
+    }
+  }, [plaidConfigured, isFetching, isPending, linkToken])
+
+  const handleSuccess = useCallback((publicToken: string) => {
+    // Drop the token first so <PlaidLinker/> unmounts and the
+    // Plaid script doesn't re-init on the router.refresh().
+    setLinkToken(null)
+    setError(null)
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.set('public_token', publicToken)
+      const exchange = await exchangePlaidPublicToken(null, fd)
+      if (exchange && 'error' in exchange) {
+        setError(exchange.error)
+        return
+      }
+      const bridge = await bridgePlaidAccountsToFinance(activePlaceId)
+      if ('error' in bridge) {
+        setError(bridge.error)
+        return
+      }
+      router.refresh()
+    })
+  }, [router, activePlaceId])
+
+  const handleExit = useCallback(() => setLinkToken(null), [])
+
+  const busy = isFetching || isPending || linkToken !== null
+  const disabled = !plaidConfigured || busy
+
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        border: `1px dashed ${LINE}`, borderRadius: 12, background: 'transparent',
-        padding: '14px 16px 16px', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', gap: 6,
-        color: MUTED, fontSize: 13, fontWeight: 500,
-        cursor: 'pointer', minHeight: 120, font: 'inherit',
-        transition: 'border-color .12s ease, color .12s ease, background .12s ease',
-      }}
-    >
-      <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
-      {t('Add account', 'Añadir cuenta')}
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={disabled}
+        title={!plaidConfigured
+          ? t('Plaid not configured yet.', 'Plaid aún no está configurado.')
+          : undefined}
+        style={{
+          border: `1px dashed ${LINE}`, borderRadius: 12, background: 'transparent',
+          padding: '14px 16px 16px', display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 6,
+          color: disabled ? FAINT : MUTED, fontSize: 13, fontWeight: 500,
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          minHeight: 120, font: 'inherit',
+          transition: 'border-color .12s ease, color .12s ease, background .12s ease',
+        }}
+      >
+        <span style={{ fontSize: 18, lineHeight: 1 }}>
+          {isFetching ? '…' : isPending ? '…' : linkToken ? '…' : '+'}
+        </span>
+        {isFetching
+          ? t('Preparing…', 'Preparando…')
+          : isPending
+            ? t('Linking…', 'Vinculando…')
+            : linkToken
+              ? t('Opening…', 'Abriendo…')
+              : t('Add account', 'Añadir cuenta')}
+        {error && (
+          <span style={{ fontSize: 11, color: '#B91C1C', marginTop: 2, textAlign: 'center' }}>
+            {error}
+          </span>
+        )}
+      </button>
+      {linkToken && (
+        <PlaidLinker
+          key={linkToken}
+          token={linkToken}
+          onSuccess={handleSuccess}
+          onExit={handleExit}
+        />
+      )}
+    </>
   )
+}
+
+// ----------------------------------------------------------------
+// PlaidLinker — owns the usePlaidLink hook and pops the modal
+// as soon as it's ready. Rendered only while a link_token is
+// live so Plaid's link-initialize.js embeds exactly once per
+// attempt. Same shape as components/bank/connect-bank-button.tsx.
+// ----------------------------------------------------------------
+function PlaidLinker({
+  token, onSuccess, onExit,
+}: {
+  token: string
+  onSuccess: (publicToken: string) => void
+  onExit: () => void
+}) {
+  const { open, ready } = usePlaidLink({
+    token,
+    onSuccess: (publicToken) => onSuccess(publicToken),
+    onExit: () => onExit(),
+  })
+  useEffect(() => {
+    if (ready) open()
+  }, [ready, open])
+  return null
 }
 
 function EmptyAccounts({ t }: { t: (en: string, es?: string) => string }) {
@@ -795,211 +908,6 @@ function AddExpenseDrawer({
           }}
         />
       </Field>
-    </DrawerShell>
-  )
-}
-
-// ================================================================
-// Add account drawer
-// ================================================================
-
-function AddAccountDrawer({
-  activePlaceId, onClose, t,
-}: {
-  activePlaceId: string | null
-  onClose: () => void
-  t: (en: string, es?: string) => string
-}) {
-  const router = useRouter()
-  const [pending, startTransition] = useTransition()
-  const [error, setError] = useState<string | null>(null)
-  const [plaidNotice, setPlaidNotice] = useState<string | null>(null)
-
-  const [name, setName] = useState('')
-  const [kind, setKind] = useState<FinanceAccountKind>('digital_wallet')
-  const [balanceStr, setBalanceStr] = useState('')
-
-  function save() {
-    setError(null)
-    if (!name.trim()) {
-      setError(t('Give the account a name.', 'Ponle un nombre a la cuenta.'))
-      return
-    }
-    const balance = balanceStr.trim() === '' ? 0 : parseFloat(balanceStr)
-    if (!Number.isFinite(balance)) {
-      setError(t('Starting balance must be a number.', 'El saldo inicial debe ser un número.'))
-      return
-    }
-    startTransition(async () => {
-      const result = await createAccount({
-        name: name.trim(),
-        kind,
-        // Every account is location-scoped for now — the pilot
-        // target is single-place vendors, and scoping matches
-        // their mental model. Shop-wide accounts across multiple
-        // locations get a picker back when we have that user.
-        location_id: activePlaceId,
-        color: ACCOUNT_KIND_DEFAULTS[kind].color,
-        balance,
-      })
-      if ('error' in result) {
-        setError(result.error)
-      } else {
-        router.refresh()
-        onClose()
-      }
-    })
-  }
-
-  function openPlaid() {
-    // Plaid Link fires from here once the tenant has Plaid Dev
-    // credentials configured on the server (PLAID_CLIENT_ID +
-    // PLAID_SECRET + PLAID_ENV env vars). Until then, this
-    // surface exists so the operator can see where the flow
-    // will live — a stub notice tells them what's missing.
-    setPlaidNotice(t(
-      'Plaid credentials not configured yet. Set up a Plaid Development account (free, ~1 day) — Chat says: I have Plaid keys — and this button connects to your Venmo, Cash App, Zelle, and every US bank in one flow.',
-      'Plaid aún no está configurado. Regístrate en Plaid Development (gratis, ~1 día) y este botón conectará Venmo, Cash App, Zelle y cualquier banco de EE.UU.',
-    ))
-  }
-
-  const kindOptions: Array<{ value: FinanceAccountKind; label: string }> = [
-    { value: 'digital_wallet', label: t('Digital wallet', 'Billetera digital') },
-    { value: 'bank',           label: t('Bank', 'Banco') },
-    { value: 'cash',           label: t('Cash drawer', 'Caja') },
-    { value: 'pos',            label: t('POS', 'POS') },
-    { value: 'other',          label: t('Other', 'Otra') },
-  ]
-
-  return (
-    <DrawerShell
-      title={t('Add account', 'Añadir cuenta')}
-      eyebrow={t('NEW ACCOUNT', 'NUEVA CUENTA')}
-      onClose={onClose}
-      pending={pending}
-      footer={
-        <DrawerFooter
-          onCancel={onClose}
-          onSave={save}
-          saveLabel={pending ? t('Saving…', 'Guardando…') : t('Add account', 'Añadir cuenta')}
-          pending={pending}
-          error={error}
-          t={t}
-        />
-      }
-    >
-      {/* Plaid connect — one integration unlocks Venmo, Cash App,
-          Zelle, and every US bank in a single Link flow. Sits at
-          the top so an operator with a payment app to add reaches
-          for it first; the manual form below is the fallback for
-          accounts Plaid can't touch (own cash drawer, unlisted
-          neo-bank, etc.). */}
-      <div style={{
-        border: `1px solid ${LINE}`, borderRadius: 12, background: SURFACE,
-        padding: '14px 14px 14px', marginBottom: 16,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          {/* Plaid brand mark — the rounded-square "P" from their
-              favicon / app icon. Ink background, paper glyph so it
-              reads at a small tile size. */}
-          <span style={{
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 32, height: 32, borderRadius: 8, background: '#000', color: '#fff',
-          }}>
-            <svg width="18" height="18" viewBox="0 0 32 32" fill="none" aria-hidden>
-              <rect width="32" height="32" rx="7" fill="#000" />
-              <path
-                d="M11 8h6.2c3.4 0 5.6 2 5.6 5.1 0 3.1-2.2 5.1-5.6 5.1H14V24h-3V8zm3 2.6v4.9h2.9c1.9 0 3-1 3-2.5s-1.1-2.4-3-2.4H14z"
-                fill="#fff"
-              />
-            </svg>
-          </span>
-          <span style={{ minWidth: 0, flex: 1, fontSize: 13, fontWeight: 600, color: INK }}>
-            {t('Connect via Plaid', 'Conectar con Plaid')}
-          </span>
-          <button
-            type="button"
-            onClick={openPlaid}
-            style={{
-              border: 0, background: INK, color: PAPER,
-              borderRadius: 8, padding: '7px 12px', font: 'inherit',
-              fontSize: 12, fontWeight: 600, cursor: 'pointer', flex: '0 0 auto',
-            }}
-          >
-            {t('Connect', 'Conectar')}
-          </button>
-        </div>
-        {plaidNotice && (
-          <div style={{
-            marginTop: 10, padding: '9px 11px', border: `1px solid #FCD34D`,
-            borderRadius: 8, background: '#FFFBEB',
-            fontSize: 12, color: '#78350F', lineHeight: 1.5,
-          }}>
-            {plaidNotice}
-          </div>
-        )}
-      </div>
-
-      {/* Divider — "or add manually" so the two paths are clear. */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        margin: '4px 0 14px',
-        fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
-        color: FAINT, textTransform: 'uppercase',
-      }}>
-        <span style={{ flex: 1, height: 1, background: LINE }} />
-        {t('or add manually', 'o añadir manualmente')}
-        <span style={{ flex: 1, height: 1, background: LINE }} />
-      </div>
-
-      <Field label={t('Kind', 'Tipo')} required>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {kindOptions.map(o => {
-            const previewTone = tintForKind(o.value)
-            return (
-              <PickerPill
-                key={o.value}
-                label={o.label}
-                tone={previewTone}
-                active={kind === o.value}
-                onClick={() => setKind(o.value)}
-              />
-            )
-          })}
-        </div>
-      </Field>
-
-      <Field label={t('Name', 'Nombre')} required hint={t('e.g. Venmo, Chase Business, Zelle', 'ej. Venmo, Chase Business, Zelle')}>
-        <input
-          type="text"
-          value={name}
-          onChange={e => setName(e.target.value)}
-          placeholder={t('Account name', 'Nombre de la cuenta')}
-          autoFocus
-          style={fieldInputStyle()}
-        />
-      </Field>
-
-      <Field label={t('Starting balance', 'Saldo inicial')} hint={t('Current amount in the account. Leave blank for zero.', 'Cantidad actual en la cuenta. Deja en blanco para cero.')}>
-        <span style={{
-          display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px',
-          border: `1px solid ${LINE}`, borderRadius: 8, background: '#fff',
-        }}>
-          <span style={{ fontFamily: MONO, fontSize: 14, color: MUTED }}>$</span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={balanceStr}
-            onChange={e => setBalanceStr(e.target.value)}
-            placeholder="0.00"
-            style={{
-              flex: 1, border: 0, outline: 'none', background: 'transparent',
-              font: 'inherit', fontFamily: MONO, fontSize: 14, color: INK, minWidth: 0,
-            }}
-          />
-        </span>
-      </Field>
-
     </DrawerShell>
   )
 }

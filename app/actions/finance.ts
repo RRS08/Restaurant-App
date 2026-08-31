@@ -19,9 +19,10 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import type {
-  FinanceAccountKind,
-  FinanceCategoryKind,
+import {
+  ACCOUNT_KIND_DEFAULTS,
+  type FinanceAccountKind,
+  type FinanceCategoryKind,
 } from '@/lib/finance/types'
 
 type ActionResult<T = undefined> =
@@ -277,6 +278,78 @@ export async function deleteMovement(id: string): Promise<ActionResult> {
   if (mv.dest_account_id) await bumpBalance(admin, mv.dest_account_id as string, -amount)
   revalidatePath('/finance')
   return { ok: true }
+}
+
+// ---------------------------------------------------------------- Plaid bridge
+
+/** Mirror every Plaid-connected `connected_bank_accounts` row for
+ *  this restaurant into `finance_accounts` so the Finance tile
+ *  row shows a fresh tile the moment a Link exchange finishes.
+ *  Idempotent — running twice on the same
+ *  (restaurant, provider_account_id) no-ops via a lookup by
+ *  provider='plaid' + provider_ref=<account_id>.
+ *
+ *  Institution-based kind inference: Venmo / Cash App / PayPal
+ *  land as 'digital_wallet' tiles; everything else is 'bank'.
+ *
+ *  `locationId` scopes the new tiles to the active place so a
+ *  Mercado-workspace connect lands on Mercado's tile row instead
+ *  of shop-wide. Null = shop-wide.
+ */
+export async function bridgePlaidAccountsToFinance(
+  locationId?: string | null,
+): Promise<ActionResult<{ inserted: number }>> {
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  const admin = createAdminClient()
+
+  const { data: connected } = await admin
+    .from('connected_bank_accounts')
+    .select('provider_account_id, account_name, account_mask, account_type, account_subtype, institution_name')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'plaid')
+    .eq('active', true)
+  if (!connected || connected.length === 0) return { ok: true, data: { inserted: 0 } }
+
+  const providerRefs = connected.map(c => c.provider_account_id as string).filter(Boolean)
+  if (providerRefs.length === 0) return { ok: true, data: { inserted: 0 } }
+
+  const { data: existing } = await admin
+    .from('finance_accounts')
+    .select('provider_ref')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'plaid')
+    .in('provider_ref', providerRefs)
+  const existingRefs = new Set((existing ?? []).map(r => (r as { provider_ref: string }).provider_ref))
+
+  const toInsert = connected.filter(c => !existingRefs.has(c.provider_account_id as string))
+  if (toInsert.length === 0) return { ok: true, data: { inserted: 0 } }
+
+  const rows = toInsert.map(c => {
+    const inst = String(c.institution_name ?? '').toLowerCase()
+    const walletMatch = /venmo|cash\s*app|paypal|apple\s*cash|zelle/.test(inst)
+    const kind: FinanceAccountKind = walletMatch ? 'digital_wallet' : 'bank'
+    const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
+    const name = `${c.institution_name || c.account_name || 'Account'}${suffix}`.trim()
+    return {
+      restaurant_id: ctx.restaurantId,
+      location_id: locationId ?? null,
+      name,
+      kind,
+      color: ACCOUNT_KIND_DEFAULTS[kind].color,
+      balance: 0,
+      provider: 'plaid' as const,
+      provider_ref: c.provider_account_id,
+      active: true,
+    }
+  })
+  const { error } = await admin.from('finance_accounts').insert(rows)
+  if (error) {
+    console.error('[finance:bridgePlaid] insert failed', error)
+    return { error: 'Could not link Plaid accounts to Finance.' }
+  }
+  revalidatePath('/finance')
+  return { ok: true, data: { inserted: rows.length } }
 }
 
 // ---------------------------------------------------------------- categories

@@ -23,6 +23,7 @@ import { resolveActivePlace } from '@/lib/places'
 import { ensureFinanceSeeds } from '@/lib/finance/seed'
 import { listAccounts, listCategories, listMovements, cashOnHand, inOutTotals } from '@/lib/finance/data'
 import { getLang } from '@/lib/i18n-server'
+import { isPlaidConfigured } from '@/lib/plaid/client'
 import FinanceClient from './client'
 import ComingSoon from '@/components/coming-soon'
 
@@ -77,6 +78,7 @@ export default async function FinancePage() {
       weekIn={io.in}
       weekOut={io.out}
       activePlaceId={activePlace?.id ?? null}
+      plaidConfigured={isPlaidConfigured()}
     />
   )
 }

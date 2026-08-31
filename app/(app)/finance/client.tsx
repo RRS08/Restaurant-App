@@ -17,8 +17,10 @@
 // eyeball the surface first.
 // ----------------------------------------------------------------
 
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useTransition } from 'react'
+import { useRouter } from 'next/navigation'
 import { makeT, type Lang } from '@/lib/i18n'
+import { addExpense, createAccount } from '@/app/actions/finance'
 import type {
   FinanceAccount,
   FinanceCategory,
@@ -41,8 +43,8 @@ const INCOME = '#059669'
 const EXPENSE = '#DC2626'
 
 export default function FinanceClient({
-  lang, accounts, categories: _categories, movements,
-  cashOnHand, weekIn, weekOut, activePlaceId: _activePlaceId,
+  lang, accounts, categories, movements,
+  cashOnHand, weekIn, weekOut, activePlaceId,
 }: {
   lang: Lang
   accounts: FinanceAccount[]
@@ -57,6 +59,8 @@ export default function FinanceClient({
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
 
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
+  const [expenseOpen, setExpenseOpen] = useState(false)
+  const [accountOpen, setAccountOpen] = useState(false)
 
   // Ledger view — filter by account (source OR dest touches it)
   // or by direction (expenses only). "All" shows everything.
@@ -113,13 +117,17 @@ export default function FinanceClient({
           </div>
           <button
             type="button"
-            disabled
-            title={t('Coming in the next commit', 'Próximamente')}
+            onClick={() => setExpenseOpen(true)}
+            disabled={accounts.length === 0}
+            title={accounts.length === 0
+              ? t('Add an account first to attach the expense to.', 'Añade primero una cuenta para vincular el gasto.')
+              : undefined}
             style={{
               border: 0, background: INK, color: PAPER,
               borderRadius: 10, padding: '9px 16px',
               font: 'inherit', fontSize: 13, fontWeight: 600,
-              cursor: 'not-allowed', opacity: 0.55,
+              cursor: accounts.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: accounts.length === 0 ? 0.55 : 1,
             }}
           >
             {t('Add expense', 'Añadir gasto')}
@@ -167,7 +175,7 @@ export default function FinanceClient({
             {accounts.map(a => (
               <AccountTile key={a.id} a={a} locale={locale} />
             ))}
-            <AddAccountTile t={t} />
+            <AddAccountTile t={t} onClick={() => setAccountOpen(true)} />
           </div>
         )}
       </div>
@@ -229,6 +237,22 @@ export default function FinanceClient({
           <MovementRow key={m.id} m={m} locale={locale} t={t} />
         ))}
       </div>
+
+      {expenseOpen && (
+        <AddExpenseDrawer
+          accounts={accounts}
+          categories={categories}
+          onClose={() => setExpenseOpen(false)}
+          t={t}
+        />
+      )}
+      {accountOpen && (
+        <AddAccountDrawer
+          activePlaceId={activePlaceId}
+          onClose={() => setAccountOpen(false)}
+          t={t}
+        />
+      )}
     </div>
   )
 }
@@ -272,18 +296,23 @@ function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string
   )
 }
 
-function AddAccountTile({ t }: { t: (en: string, es?: string) => string }) {
+function AddAccountTile({
+  t, onClick,
+}: {
+  t: (en: string, es?: string) => string
+  onClick: () => void
+}) {
   return (
     <button
       type="button"
-      disabled
-      title={t('Coming in the next commit', 'Próximamente')}
+      onClick={onClick}
       style={{
         border: `1px dashed ${LINE}`, borderRadius: 12, background: 'transparent',
         padding: '14px 16px 16px', display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center', gap: 6,
-        color: FAINT, fontSize: 13, fontWeight: 500,
-        cursor: 'not-allowed', minHeight: 120, font: 'inherit',
+        color: MUTED, fontSize: 13, fontWeight: 500,
+        cursor: 'pointer', minHeight: 120, font: 'inherit',
+        transition: 'border-color .12s ease, color .12s ease, background .12s ease',
       }}
     >
       <span style={{ fontSize: 18, lineHeight: 1 }}>+</span>
@@ -472,16 +501,21 @@ function Dot() {
 // ================================================================
 
 function AccountGlyph({ kind }: { kind: FinanceAccountKind }) {
+  // POS + cash glyphs mirror the ones in the Sales row tiles
+  // (CardIcon + CashIcon in app/(app)/sales/client.tsx) so the
+  // same real-world thing reads identically on both surfaces.
   if (kind === 'pos') return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
-      <rect x="2" y="5" width="16" height="11" rx="2" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M2 9h16" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="1.5" y="4" width="17" height="12" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M1.5 8h17" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4.5 12.5h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
   if (kind === 'cash') return (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
-      <rect x="2" y="6" width="16" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
-      <circle cx="10" cy="10.5" r="2" stroke="currentColor" strokeWidth="1.6" />
+    <svg width="17" height="17" viewBox="0 0 20 20" fill="none" aria-hidden>
+      <ellipse cx="10" cy="5.3" rx="6.4" ry="2.5" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M3.6 5.3v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V5.3" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M3.6 9.7v4.4c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V9.7" stroke="currentColor" strokeWidth="1.7" />
     </svg>
   )
   if (kind === 'digital_wallet') return (
@@ -601,4 +635,503 @@ function timeAgo(d: Date): string {
   if (days === 1) return 'yesterday'
   if (days < 7) return `${days} days ago`
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// ================================================================
+// Add expense drawer
+// ================================================================
+
+function AddExpenseDrawer({
+  accounts, categories, onClose, t,
+}: {
+  accounts: FinanceAccount[]
+  categories: FinanceCategory[]
+  onClose: () => void
+  t: (en: string, es?: string) => string
+}) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  // Only expense categories are pickable here; income/transfer
+  // categories don't apply to an expense event.
+  const expenseCategories = categories.filter(c => c.kind === 'expense')
+
+  const [sourceId, setSourceId] = useState<string>(accounts[0]?.id ?? '')
+  const [categoryId, setCategoryId] = useState<string>('')
+  const [amountStr, setAmountStr] = useState('')
+  const [note, setNote] = useState('')
+  const [memo, setMemo] = useState('')
+  const [occurred, setOccurred] = useState<string>(defaultLocalDateTimeInput())
+
+  function save() {
+    setError(null)
+    const amt = parseFloat(amountStr)
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setError(t('Amount must be greater than zero.', 'El monto debe ser mayor que cero.'))
+      return
+    }
+    if (!sourceId) {
+      setError(t('Pick an account.', 'Elige una cuenta.'))
+      return
+    }
+    startTransition(async () => {
+      const result = await addExpense({
+        source_account_id: sourceId,
+        amount: amt,
+        category_id: categoryId || null,
+        note: note.trim() || null,
+        memo: memo.trim() || null,
+        occurred_at: new Date(occurred).toISOString(),
+      })
+      if ('error' in result) {
+        setError(result.error)
+      } else {
+        router.refresh()
+        onClose()
+      }
+    })
+  }
+
+  return (
+    <DrawerShell
+      title={t('Add expense', 'Añadir gasto')}
+      eyebrow={t('NEW EXPENSE', 'NUEVO GASTO')}
+      onClose={onClose}
+      pending={pending}
+      footer={
+        <DrawerFooter
+          onCancel={onClose}
+          onSave={save}
+          saveLabel={pending ? t('Saving…', 'Guardando…') : t('Save expense', 'Guardar gasto')}
+          pending={pending}
+          error={error}
+          t={t}
+        />
+      }
+    >
+      <Field label={t('Amount', 'Monto')} required>
+        <span style={{
+          display: 'flex', alignItems: 'baseline', gap: 6, padding: '10px 12px',
+          border: `1px solid ${LINE}`, borderRadius: 8, background: '#fff',
+        }}>
+          <span style={{ fontFamily: MONO, fontSize: 20, color: MUTED }}>$</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={amountStr}
+            onChange={e => setAmountStr(e.target.value)}
+            placeholder="0.00"
+            style={{
+              flex: 1, border: 0, outline: 'none', background: 'transparent',
+              font: 'inherit', fontFamily: MONO, fontSize: 22, fontWeight: 600,
+              letterSpacing: '-0.02em', color: INK, minWidth: 0,
+            }}
+          />
+        </span>
+      </Field>
+
+      <Field label={t('Pay from', 'Pagar de')} required>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {accounts.map(a => (
+            <PickerPill
+              key={a.id}
+              label={a.name}
+              tone={tintForAccount(a)}
+              active={sourceId === a.id}
+              onClick={() => setSourceId(a.id)}
+            />
+          ))}
+        </div>
+      </Field>
+
+      <Field label={t('Category', 'Categoría')}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <PickerPill
+            label={t('None', 'Ninguna')}
+            active={categoryId === ''}
+            onClick={() => setCategoryId('')}
+          />
+          {expenseCategories.map(c => (
+            <PickerPill
+              key={c.id}
+              label={c.name}
+              tone={{ tile: c.color ? `${c.color}22` : '#F4F4F5', ink: c.color ?? '#52525B' }}
+              active={categoryId === c.id}
+              onClick={() => setCategoryId(c.id)}
+            />
+          ))}
+        </div>
+      </Field>
+
+      <Field label={t('When', 'Cuándo')}>
+        <input
+          type="datetime-local"
+          value={occurred}
+          onChange={e => setOccurred(e.target.value)}
+          style={fieldInputStyle()}
+        />
+      </Field>
+
+      <Field label={t('Note', 'Nota')} hint={t('Short — shows on the row.', 'Corta — se muestra en la fila.')}>
+        <input
+          type="text"
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder={t('e.g. Rent · September', 'ej. Renta · septiembre')}
+          style={fieldInputStyle()}
+        />
+      </Field>
+
+      <Field label={t('Memo', 'Memo')} hint={t('Optional detail for the export.', 'Detalle opcional para el reporte.')}>
+        <textarea
+          value={memo}
+          rows={3}
+          onChange={e => setMemo(e.target.value)}
+          style={{
+            ...fieldInputStyle(),
+            resize: 'vertical', lineHeight: 1.5,
+            fontFamily: "'Geist', system-ui, sans-serif",
+          }}
+        />
+      </Field>
+    </DrawerShell>
+  )
+}
+
+// ================================================================
+// Add account drawer
+// ================================================================
+
+function AddAccountDrawer({
+  activePlaceId, onClose, t,
+}: {
+  activePlaceId: string | null
+  onClose: () => void
+  t: (en: string, es?: string) => string
+}) {
+  const router = useRouter()
+  const [pending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+
+  const [name, setName] = useState('')
+  const [kind, setKind] = useState<FinanceAccountKind>('digital_wallet')
+  const [balanceStr, setBalanceStr] = useState('')
+  const [scope, setScope] = useState<'location' | 'shop'>('location')
+
+  function save() {
+    setError(null)
+    if (!name.trim()) {
+      setError(t('Give the account a name.', 'Ponle un nombre a la cuenta.'))
+      return
+    }
+    const balance = balanceStr.trim() === '' ? 0 : parseFloat(balanceStr)
+    if (!Number.isFinite(balance)) {
+      setError(t('Starting balance must be a number.', 'El saldo inicial debe ser un número.'))
+      return
+    }
+    startTransition(async () => {
+      const result = await createAccount({
+        name: name.trim(),
+        kind,
+        location_id: scope === 'location' ? activePlaceId : null,
+        color: ACCOUNT_KIND_DEFAULTS[kind].color,
+        balance,
+      })
+      if ('error' in result) {
+        setError(result.error)
+      } else {
+        router.refresh()
+        onClose()
+      }
+    })
+  }
+
+  const kindOptions: Array<{ value: FinanceAccountKind; label: string }> = [
+    { value: 'digital_wallet', label: t('Digital wallet', 'Billetera digital') },
+    { value: 'bank',           label: t('Bank', 'Banco') },
+    { value: 'cash',           label: t('Cash drawer', 'Caja') },
+    { value: 'pos',            label: t('POS', 'POS') },
+    { value: 'other',          label: t('Other', 'Otra') },
+  ]
+
+  return (
+    <DrawerShell
+      title={t('Add account', 'Añadir cuenta')}
+      eyebrow={t('NEW ACCOUNT', 'NUEVA CUENTA')}
+      onClose={onClose}
+      pending={pending}
+      footer={
+        <DrawerFooter
+          onCancel={onClose}
+          onSave={save}
+          saveLabel={pending ? t('Saving…', 'Guardando…') : t('Add account', 'Añadir cuenta')}
+          pending={pending}
+          error={error}
+          t={t}
+        />
+      }
+    >
+      <Field label={t('Kind', 'Tipo')} required>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {kindOptions.map(o => {
+            const previewTone = tintForKind(o.value)
+            return (
+              <PickerPill
+                key={o.value}
+                label={o.label}
+                tone={previewTone}
+                active={kind === o.value}
+                onClick={() => setKind(o.value)}
+              />
+            )
+          })}
+        </div>
+      </Field>
+
+      <Field label={t('Name', 'Nombre')} required hint={t('e.g. Venmo, Chase Business, Zelle', 'ej. Venmo, Chase Business, Zelle')}>
+        <input
+          type="text"
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder={t('Account name', 'Nombre de la cuenta')}
+          autoFocus
+          style={fieldInputStyle()}
+        />
+      </Field>
+
+      <Field label={t('Starting balance', 'Saldo inicial')} hint={t('Current amount in the account. Leave blank for zero.', 'Cantidad actual en la cuenta. Deja en blanco para cero.')}>
+        <span style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px',
+          border: `1px solid ${LINE}`, borderRadius: 8, background: '#fff',
+        }}>
+          <span style={{ fontFamily: MONO, fontSize: 14, color: MUTED }}>$</span>
+          <input
+            type="text"
+            inputMode="decimal"
+            value={balanceStr}
+            onChange={e => setBalanceStr(e.target.value)}
+            placeholder="0.00"
+            style={{
+              flex: 1, border: 0, outline: 'none', background: 'transparent',
+              font: 'inherit', fontFamily: MONO, fontSize: 14, color: INK, minWidth: 0,
+            }}
+          />
+        </span>
+      </Field>
+
+      {activePlaceId && (
+        <Field label={t('Scope', 'Alcance')} hint={t('Location-scoped accounts (like a cash drawer) only show in that place. Shop-wide accounts show everywhere.', 'Las cuentas de un lugar (como una caja) solo aparecen ahí. Las de toda la tienda aparecen en todas partes.')}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <PickerPill
+              label={t('This location only', 'Solo este lugar')}
+              active={scope === 'location'}
+              onClick={() => setScope('location')}
+            />
+            <PickerPill
+              label={t('Shop-wide', 'Toda la tienda')}
+              active={scope === 'shop'}
+              onClick={() => setScope('shop')}
+            />
+          </div>
+        </Field>
+      )}
+    </DrawerShell>
+  )
+}
+
+// ================================================================
+// Drawer primitives — shared between the two drawers so both read
+// as one visual system.
+// ================================================================
+
+function DrawerShell({
+  title, eyebrow, onClose, pending, footer, children,
+}: {
+  title: string
+  eyebrow: string
+  onClose: () => void
+  pending: boolean
+  footer: React.ReactNode
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 40, display: 'flex', justifyContent: 'flex-end',
+      color: INK, fontFamily: "'Geist', system-ui, sans-serif",
+    }}>
+      <div
+        onClick={pending ? undefined : onClose}
+        style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(24,24,27,0.28)',
+          cursor: pending ? 'wait' : 'pointer',
+        }}
+      />
+      <div style={{
+        position: 'relative', width: 460, maxWidth: '100%', flex: '0 0 460px',
+        height: '100vh', background: '#fff',
+        borderLeft: `1px solid ${LINE}`, boxShadow: '-24px 0 48px rgba(24,24,27,0.10)',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        <div style={{
+          padding: '18px 22px 14px', borderBottom: `1px solid ${LINE}`,
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16,
+        }}>
+          <div>
+            <div style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em', color: FAINT }}>
+              {eyebrow}
+            </div>
+            <div style={{ marginTop: 4, fontSize: 18, fontWeight: 600, letterSpacing: '-0.02em' }}>
+              {title}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={pending}
+            aria-label="Close"
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+              width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              font: 'inherit', fontSize: 15, color: MUTED,
+              cursor: pending ? 'not-allowed' : 'pointer',
+              opacity: pending ? 0.4 : 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 22px 22px' }}>
+          {children}
+        </div>
+        {footer}
+      </div>
+    </div>
+  )
+}
+
+function DrawerFooter({
+  onCancel, onSave, saveLabel, pending, error, t,
+}: {
+  onCancel: () => void
+  onSave: () => void
+  saveLabel: string
+  pending: boolean
+  error: string | null
+  t: (en: string, es?: string) => string
+}) {
+  return (
+    <div style={{
+      borderTop: `1px solid ${LINE}`, padding: '14px 22px',
+      display: 'flex', alignItems: 'center', gap: 10, background: '#fff',
+      flexWrap: 'wrap',
+    }}>
+      {error && <span style={{ fontSize: 12, color: '#B91C1C' }}>{error}</span>}
+      <div style={{ marginLeft: 'auto' }} />
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={pending}
+        style={{
+          border: `1px solid ${LINE}`, background: '#fff', color: '#3F3F46',
+          borderRadius: 9, padding: '9px 14px', font: 'inherit',
+          fontSize: 13, fontWeight: 500, cursor: pending ? 'not-allowed' : 'pointer',
+        }}
+      >
+        {t('Cancel', 'Cancelar')}
+      </button>
+      <button
+        type="button"
+        onClick={onSave}
+        disabled={pending}
+        style={{
+          border: 0, background: INK, color: PAPER,
+          borderRadius: 9, padding: '10px 16px', font: 'inherit',
+          fontSize: 13, fontWeight: 600, cursor: pending ? 'wait' : 'pointer',
+          opacity: pending ? 0.75 : 1,
+        }}
+      >
+        {saveLabel}
+      </button>
+    </div>
+  )
+}
+
+function Field({
+  label, hint, required, children,
+}: {
+  label: string
+  hint?: string
+  required?: boolean
+  children: React.ReactNode
+}) {
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{
+        fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase',
+        color: MUTED, fontWeight: 600, marginBottom: 6,
+      }}>
+        {label}{required && <span style={{ color: '#B91C1C', marginLeft: 3 }}>*</span>}
+      </div>
+      {children}
+      {hint && <div style={{ fontSize: 11, color: FAINT, marginTop: 5 }}>{hint}</div>}
+    </div>
+  )
+}
+
+function PickerPill({
+  label, tone, active, onClick,
+}: {
+  label: string
+  tone?: { tile: string; ink: string; dot?: string }
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+        border: `1px solid ${active ? INK : LINE}`,
+        background: active ? INK : (tone ? tone.tile : '#fff'),
+        color: active ? PAPER : (tone ? tone.ink : '#3F3F46'),
+        borderRadius: 999, padding: '6px 12px',
+        font: 'inherit', fontSize: 12.5, fontWeight: active ? 600 : 500,
+        cursor: 'pointer',
+      }}
+    >
+      {tone?.dot && !active && (
+        <span aria-hidden style={{ width: 6, height: 6, borderRadius: '50%', background: tone.dot }} />
+      )}
+      {label}
+    </button>
+  )
+}
+
+function fieldInputStyle(): React.CSSProperties {
+  return {
+    width: '100%', padding: '10px 12px', font: 'inherit', fontSize: 13,
+    border: `1px solid ${LINE}`, borderRadius: 8, background: '#fff',
+    color: INK, outline: 'none',
+  }
+}
+
+function tintForKind(kind: FinanceAccountKind): { tile: string; ink: string } {
+  const base = ACCOUNT_KIND_DEFAULTS[kind].color
+  return { tile: base, ink: darkFor(kind) }
+}
+
+/** Local datetime input format: YYYY-MM-DDTHH:mm. Anchors on
+ *  "right now" so the operator only edits it when the expense
+ *  hit at a different time. */
+function defaultLocalDateTimeInput(): string {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  const h = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${y}-${m}-${day}T${h}:${min}`
 }

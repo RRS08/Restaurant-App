@@ -101,14 +101,18 @@ async function seedAccounts(supabase: SupabaseClient, restaurantId: string): Pro
   order += 10
 
   // Register drawer per retail location. Online locations don't
-  // get one — no cash lives there.
+  // get one — no cash lives there. Name stays plain "Register"
+  // (not "Register — <location>") since the active-place filter
+  // already scopes what the operator sees; a manager in Mcallen
+  // sees Mcallen's Register, a manager in Weslaco sees Weslaco's,
+  // and each register is unambiguously tied to its location_id
+  // in the DB.
   for (const loc of locations ?? []) {
     if ((loc as { kind?: string }).kind === 'online') continue
-    const locName = (loc as { name?: string }).name
     rows.push({
       restaurant_id: restaurantId,
       location_id: loc.id as string,
-      name: locName ? `Register — ${locName}` : 'Register drawer',
+      name: 'Register',
       kind: 'cash',
       color: '#ECFDF5',
       sort_order: order,

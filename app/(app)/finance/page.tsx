@@ -54,10 +54,15 @@ export default async function FinancePage() {
   // 90-day window feeds every tab: Overview reads 12 weeks, the
   // Transactions ledger scopes to whatever the operator picks, and
   // Recurring detection needs enough history to spot ≥2 charges at
-  // a monthly cadence. The header's "this week" numbers are
+  // a monthly cadence. The header's "this month" numbers are
   // derived from a subset below.
+  //
+  // Finance is a monthly heartbeat, not a weekly one — rent,
+  // payroll, subscriptions, and every recurring obligation cycles
+  // monthly, so a merchant's "am I ahead or behind" only reads
+  // right on a month scope.
   const now = new Date()
-  const weekStart = startOfWeek(now)
+  const monthStart = startOfMonth(now)
   const windowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
 
   const [accounts, categories, movements] = await Promise.all([
@@ -67,7 +72,7 @@ export default async function FinancePage() {
   ])
 
   const cash = cashOnHand(accounts)
-  const io = inOutTotals(movements.filter(m => new Date(m.occurred_at) >= weekStart))
+  const io = inOutTotals(movements.filter(m => new Date(m.occurred_at) >= monthStart))
 
   const lang = await getLang()
 
@@ -78,23 +83,19 @@ export default async function FinancePage() {
       categories={categories}
       movements={movements}
       cashOnHand={cash}
-      weekIn={io.in}
-      weekOut={io.out}
+      periodIn={io.in}
+      periodOut={io.out}
+      periodStart={monthStart.toISOString()}
       activePlaceId={activePlace?.id ?? null}
       plaidConfigured={isPlaidConfigured()}
     />
   )
 }
 
-/** Monday 00:00 of the week that contains `d`, local time. Not
- *  timezone-aware yet — v1 uses the browser / server local tz
- *  which is fine for the pilot. Move to the active place's tz
- *  when the ledger grows date-range navigation. */
-function startOfWeek(d: Date): Date {
-  const day = d.getDay() // 0 = Sun
-  const diff = (day + 6) % 7 // Monday-based
-  const out = new Date(d)
-  out.setDate(d.getDate() - diff)
+/** First of the month, local time, 00:00. Same tz caveat as the
+ *  sales page — pilot works in browser/server local tz. */
+function startOfMonth(d: Date): Date {
+  const out = new Date(d.getFullYear(), d.getMonth(), 1)
   out.setHours(0, 0, 0, 0)
   return out
 }

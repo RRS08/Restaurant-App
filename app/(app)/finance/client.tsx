@@ -53,15 +53,20 @@ const EXPENSE = '#DC2626'
 
 export default function FinanceClient({
   lang, accounts, categories, movements,
-  cashOnHand, weekIn, weekOut, activePlaceId, plaidConfigured,
+  cashOnHand, periodIn, periodOut, periodStart,
+  activePlaceId, plaidConfigured,
 }: {
   lang: Lang
   accounts: FinanceAccount[]
   categories: FinanceCategory[]
   movements: FinanceMovement[]
   cashOnHand: number
-  weekIn: number
-  weekOut: number
+  periodIn: number
+  periodOut: number
+  /** ISO of the first day of the current period (a month, at v1).
+   *  Fed by the server so client/server share the same anchor
+   *  even across midnight. */
+  periodStart: string
   activePlaceId: string | null
   /** Server tells us if PLAID_CLIENT_ID + PLAID_SECRET are set.
    *  When false, the + Add account tile disables itself with a
@@ -105,7 +110,12 @@ export default function FinanceClient({
     return { byAccount: byId, expenses: expenseCount, all: movements.length }
   }, [movements])
 
-  const weekLabel = weekRangeLabel(new Date(), locale)
+  const periodStartDate = useMemo(() => new Date(periodStart), [periodStart])
+  const monthTitle = useMemo(
+    () => periodStartDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' }),
+    [periodStartDate, locale],
+  )
+  const relativeChip = useMemo(() => monthRelativeLabel(periodStartDate, new Date(), t), [periodStartDate, t])
 
   return (
     <div style={{
@@ -113,86 +123,92 @@ export default function FinanceClient({
       fontFamily: "'Geist', system-ui, sans-serif",
       padding: 0,
     }}>
-      {/* Header — cash on hand, weekly delta, date range, add
-          expense CTA. */}
+      {/* Header — matches the Sales pattern: title button on the
+          top-left with a relative chip beside it, big mono total
+          below with USD + stat pairs, right-side CTAs. Money-out
+          reads black to keep the eye on cash on hand and inflow;
+          red would over-weight normal spend as a warning. */}
       <div style={{
-        padding: '20px 24px 18px', borderBottom: `1px solid ${LINE}`,
-        display: 'flex', flexDirection: 'column', gap: 14,
+        padding: '16px 24px 14px', borderBottom: `1px solid ${LINE}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: 24, flexWrap: 'wrap',
       }}>
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 16, flexWrap: 'wrap',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em' }}>
-              {t('Finance', 'Finanzas')}
-            </span>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
-              padding: '3px 10px', fontSize: 11, fontWeight: 500,
-              background: SURFACE, color: MUTED, border: `1px solid ${LINE}`,
-            }}>
-              {weekLabel}
-              <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <a
-              href="/finance/report?days=30"
-              target="_blank"
-              rel="noopener"
-              style={{
-                border: `1px solid ${LINE}`, background: PAPER, color: INK,
-                borderRadius: 10, padding: '8px 14px',
-                font: 'inherit', fontSize: 13, fontWeight: 500,
-                textDecoration: 'none', cursor: 'pointer',
-              }}
-            >
-              {t('Export report', 'Exportar reporte')}
-            </a>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            {/* Month title. Chevron is a hook for the future month
+                picker; today it's a static affordance so the header
+                already reads like a picker even before the popover
+                lands. */}
             <button
               type="button"
-              onClick={() => setExpenseOpen(true)}
-              disabled={accounts.length === 0}
-              title={accounts.length === 0
-                ? t('Add an account first to attach the expense to.', 'Añade primero una cuenta para vincular el gasto.')
-                : undefined}
               style={{
-                border: 0, background: INK, color: PAPER,
-                borderRadius: 10, padding: '9px 16px',
-                font: 'inherit', fontSize: 13, fontWeight: 600,
-                cursor: accounts.length === 0 ? 'not-allowed' : 'pointer',
-                opacity: accounts.length === 0 ? 0.55 : 1,
+                display: 'inline-flex', alignItems: 'center', gap: 7,
+                border: '1px solid transparent', background: 'transparent',
+                borderRadius: 9, padding: '2px 8px', marginLeft: -8,
+                font: 'inherit', color: INK, cursor: 'default',
               }}
             >
-              {t('Add expense', 'Añadir gasto')}
+              <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
+                {capitalize(monthTitle)}
+              </span>
+              <span style={{ fontSize: 10, color: FAINT }}>▾</span>
             </button>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999,
+              padding: '3px 10px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+              background: relativeChip.kind === 'this' ? '#F4F4F2' : '#EFF6FF',
+              color: relativeChip.kind === 'this' ? MUTED : '#2563EB',
+            }}>
+              {relativeChip.label}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 8, flexWrap: 'wrap' }}>
+            <span style={{
+              fontFamily: MONO, fontSize: 30, fontWeight: 600,
+              letterSpacing: '-0.045em', lineHeight: 1, color: INK,
+            }}>
+              {fmtMoney(cashOnHand)}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>
+              {t('CASH ON HAND', 'EFECTIVO')}
+            </span>
+            <Dot />
+            <Stat value={`+${fmtMoney(periodIn)}`} label={t('in', 'entradas')} tone={INCOME} />
+            <Dot />
+            <Stat value={`−${fmtMoney(periodOut)}`} label={t('out', 'salidas')} />
           </div>
         </div>
-
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          <span style={{
-            fontFamily: MONO, fontSize: 34, fontWeight: 600,
-            letterSpacing: '-0.045em', lineHeight: 1, color: INK,
-          }}>
-            {fmtMoney(cashOnHand)}
-          </span>
-          <span style={{
-            fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
-            textTransform: 'uppercase', color: FAINT,
-          }}>
-            {t('CASH ON HAND', 'EFECTIVO A LA MANO')}
-          </span>
-          <Dot />
-          <span style={{ fontSize: 13, color: INCOME, fontFamily: MONO, fontWeight: 600 }}>
-            +{fmtMoney(weekIn)}
-          </span>
-          <span style={{ fontSize: 12, color: MUTED }}>{t('in this week', 'esta semana')}</span>
-          <Dot />
-          <span style={{ fontSize: 13, color: EXPENSE, fontFamily: MONO, fontWeight: 600 }}>
-            −{fmtMoney(weekOut)}
-          </span>
-          <span style={{ fontSize: 12, color: MUTED }}>{t('out', 'salida')}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto' }}>
+          <a
+            href="/finance/report?days=30"
+            target="_blank"
+            rel="noopener"
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', color: INK,
+              borderRadius: 10, height: 34, padding: '0 14px',
+              font: 'inherit', fontSize: 13, fontWeight: 500,
+              textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+            }}
+          >
+            {t('Export', 'Exportar')}
+          </a>
+          <button
+            type="button"
+            onClick={() => setExpenseOpen(true)}
+            disabled={accounts.length === 0}
+            title={accounts.length === 0
+              ? t('Add an account first to attach the expense to.', 'Añade primero una cuenta para vincular el gasto.')
+              : undefined}
+            style={{
+              border: 0, background: INK, color: PAPER,
+              borderRadius: 10, height: 34, padding: '0 16px',
+              font: 'inherit', fontSize: 13, fontWeight: 600,
+              cursor: accounts.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: accounts.length === 0 ? 0.55 : 1,
+            }}
+          >
+            {t('Add expense', 'Añadir gasto')}
+          </button>
         </div>
       </div>
 
@@ -580,8 +596,11 @@ function MovementRow({
   locale: string
   t: (en: string, es?: string) => string
 }) {
+  // Expense rows read ink (not red) so a ledger doesn't feel like
+  // a bank warning list — the "−" prefix + right-aligned column
+  // already carries the outflow signal.
   const dirColor = m.direction === 'income' ? INCOME
-    : m.direction === 'expense' ? EXPENSE
+    : m.direction === 'expense' ? INK
       : MUTED
   const sign = m.direction === 'income' ? '+'
     : m.direction === 'expense' ? '−'
@@ -765,7 +784,7 @@ function OverviewPanel({
         <Kpi
           label={t('Money out', 'Salidas')}
           value={fmtMoney(kpis.expenses)}
-          tone={EXPENSE}
+          tone={INK}
           sub={t('90-day', '90 días')}
         />
         <Kpi
@@ -1187,6 +1206,18 @@ function Dot() {
   return <span style={{ width: 3, height: 3, borderRadius: '50%', background: '#D6D5D1', alignSelf: 'center' }} />
 }
 
+/** Value + label pair — same shape as Sales' Stat so the two
+ *  headers scan identically. Money-out passes no tone so the
+ *  value renders in ink (black) instead of red. */
+function Stat({ value, label, tone }: { value: string; label: string; tone?: string }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 600, color: tone ?? INK }}>{value}</span>
+      <span style={{ fontSize: 12, color: MUTED }}>{label}</span>
+    </span>
+  )
+}
+
 // ================================================================
 // Glyphs
 // ================================================================
@@ -1275,16 +1306,23 @@ function fmtRelativeDay(iso: string, t: (en: string, es?: string) => string): st
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
-function weekRangeLabel(now: Date, locale: string): string {
-  const day = now.getDay()
-  const diff = (day + 6) % 7
-  const start = new Date(now)
-  start.setDate(now.getDate() - diff)
-  const end = new Date(start)
-  end.setDate(start.getDate() + 6)
-  const startStr = start.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
-  const endStr = end.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
-  return `${startStr} – ${endStr}`
+function monthRelativeLabel(
+  periodStart: Date,
+  now: Date,
+  t: (en: string, es?: string) => string,
+): { kind: 'this' | 'past'; label: string } {
+  const sameMonth = periodStart.getFullYear() === now.getFullYear() &&
+                    periodStart.getMonth() === now.getMonth()
+  if (sameMonth) return { kind: 'this', label: t('This month', 'Este mes') }
+  const monthsBack =
+    (now.getFullYear() - periodStart.getFullYear()) * 12 +
+    (now.getMonth() - periodStart.getMonth())
+  if (monthsBack === 1) return { kind: 'past', label: t('Last month', 'Mes pasado') }
+  return { kind: 'past', label: t(`${monthsBack} months ago`, `hace ${monthsBack} meses`) }
+}
+
+function capitalize(s: string): string {
+  return s.length === 0 ? s : s[0].toUpperCase() + s.slice(1)
 }
 
 function tintForAccount(a: FinanceAccount): { tile: string; ink: string; dot: string } {

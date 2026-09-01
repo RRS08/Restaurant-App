@@ -373,7 +373,6 @@ export default function FinanceClient({
           }}
           onClose={() => setCalOpen(false)}
           locale={locale}
-          t={t}
         />,
         document.body,
       )}
@@ -734,7 +733,7 @@ function iconTileFor(m: FinanceMovement): { tile: string; ink: string } {
 // ================================================================
 
 function MonthPickerOverlay({
-  selected, today, anchor, onPick, onClose, locale, t,
+  selected, today, anchor, onPick, onClose, locale,
 }: {
   selected: Date
   today: Date
@@ -743,7 +742,6 @@ function MonthPickerOverlay({
   onPick: (iso: string) => void
   onClose: () => void
   locale: string
-  t: (en: string, es?: string) => string
 }) {
   const [year, setYear] = useState<number>(selected.getFullYear())
   const currentY = today.getFullYear()
@@ -753,7 +751,7 @@ function MonthPickerOverlay({
 
   const monthNames = useMemo(
     () => Array.from({ length: 12 }, (_, i) =>
-      new Date(2024, i, 1).toLocaleDateString(locale, { month: 'short' })
+      capitalize(new Date(2024, i, 1).toLocaleDateString(locale, { month: 'short' }))
     ),
     [locale],
   )
@@ -799,7 +797,6 @@ function MonthPickerOverlay({
                     : isSelected ? PAPER
                       : '#3F3F46',
                   fontWeight: isSelected ? 600 : 400,
-                  textTransform: 'lowercase',
                 }}
                 onMouseEnter={e => { if (!isSelected && !isFuture) e.currentTarget.style.background = LINE_SOFT }}
                 onMouseLeave={e => { if (!isSelected && !isFuture) e.currentTarget.style.background = 'transparent' }}
@@ -816,24 +813,6 @@ function MonthPickerOverlay({
           })}
         </div>
 
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-          marginTop: 10, paddingTop: 10, borderTop: `1px solid ${LINE}`,
-        }}>
-          <span style={{ fontSize: 11, color: FAINT }}>
-            {t('Pick a month to see its totals', 'Elige un mes para ver sus totales')}
-          </span>
-          <button
-            type="button"
-            onClick={() => onPick(`${currentY}-${String(currentM + 1).padStart(2, '0')}`)}
-            style={{
-              border: 0, background: 'transparent', padding: 0,
-              font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer',
-            }}
-          >
-            {t('This month', 'Este mes')}
-          </button>
-        </div>
       </div>
     </>
   )

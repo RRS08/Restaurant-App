@@ -30,7 +30,7 @@ export default async function FinanceSyncCard({ restaurantId }: { restaurantId: 
       <div className="mb-4">
         <h3 className="text-sm font-semibold text-gray-900">Finance sync</h3>
         <p className="mt-1 text-xs text-gray-500">
-          Plaid webhooks post here whenever new transactions land; a background job double-checks every 30 minutes.
+          Plaid webhooks post new transactions as they land; a background job double-checks every 30 minutes.
           Use this only if something looks out of date.
         </p>
       </div>

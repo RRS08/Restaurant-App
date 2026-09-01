@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <!-- Square-canvas variant of the Checked mark, padded so the
+       clipboard glyph centers inside a 100x100 tile. Sized for
+       Plaid's app-logo requirement (100x100 PNG). Convert to PNG
+       via any SVG→PNG tool at 100x100 and upload under Plaid
+       dashboard → Team Settings → Customization. -->
+  <g transform="translate(35, 22)">
+    <path d="M6 0h16a4 4 0 0 1 4 4v48a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V4a4 4 0 0 1 4-4z" fill="#18181B"/>
+    <rect x="8" y="8" width="14" height="3" rx="1.5" fill="#FAF9F6"/>
+    <rect x="8" y="15" width="11" height="3" rx="1.5" fill="#FAF9F6"/>
+    <rect x="8" y="22" width="8" height="3" rx="1.5" fill="#FAF9F6"/>
+    <path d="M9 33l4 4 8-9" fill="none" stroke="#FAF9F6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

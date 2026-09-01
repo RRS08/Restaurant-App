@@ -19,6 +19,9 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getPlaidClient, isPlaidConfigured } from '@/lib/plaid/client'
+import { syncPlaidItem } from '@/lib/bank/providers/plaid'
+import { materializeFinanceMovements } from '@/lib/finance/materialize'
 import {
   ACCOUNT_KIND_DEFAULTS,
   type FinanceAccountKind,
@@ -305,7 +308,7 @@ export async function bridgePlaidAccountsToFinance(
 
   const { data: connected } = await admin
     .from('connected_bank_accounts')
-    .select('provider_account_id, account_name, account_mask, account_type, account_subtype, institution_name')
+    .select('provider_item_id, provider_account_id, account_name, account_mask, account_type, account_subtype, institution_name')
     .eq('restaurant_id', ctx.restaurantId)
     .eq('provider', 'plaid')
     .eq('active', true)
@@ -325,19 +328,29 @@ export async function bridgePlaidAccountsToFinance(
   const toInsert = connected.filter(c => !existingRefs.has(c.provider_account_id as string))
   if (toInsert.length === 0) return { ok: true, data: { inserted: 0 } }
 
+  // Live balance fetch — one Plaid call per unique item covers
+  // every account underneath it. Missed accounts (Plaid error,
+  // stale token) fall back to 0 so the tile still lands.
+  const balances = await fetchPlaidBalances(
+    admin,
+    ctx.restaurantId,
+    Array.from(new Set(toInsert.map(c => c.provider_item_id as string).filter(Boolean))),
+  )
+
   const rows = toInsert.map(c => {
     const inst = String(c.institution_name ?? '').toLowerCase()
     const walletMatch = /venmo|cash\s*app|paypal|apple\s*cash|zelle/.test(inst)
     const kind: FinanceAccountKind = walletMatch ? 'digital_wallet' : 'bank'
     const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
     const name = `${c.institution_name || c.account_name || 'Account'}${suffix}`.trim()
+    const live = balances.get(c.provider_account_id as string)
     return {
       restaurant_id: ctx.restaurantId,
       location_id: locationId ?? null,
       name,
       kind,
       color: ACCOUNT_KIND_DEFAULTS[kind].color,
-      balance: 0,
+      balance: live ?? 0,
       provider: 'plaid' as const,
       provider_ref: c.provider_account_id,
       active: true,
@@ -348,8 +361,261 @@ export async function bridgePlaidAccountsToFinance(
     console.error('[finance:bridgePlaid] insert failed', error)
     return { error: 'Could not link Plaid accounts to Finance.' }
   }
+
+  // Kick off first sync for every fresh Item so the ledger fills
+  // with the 30-day backfill before the operator's next paint.
+  // Errors here don't fail the bridge — the tile is already live
+  // and a manual refresh (or the next auto sync) will retry.
+  const freshItemIds = Array.from(
+    new Set(toInsert.map(c => c.provider_item_id as string).filter(Boolean))
+  )
+  for (const itemId of freshItemIds) {
+    const sync = await syncPlaidItem(admin, ctx.restaurantId, itemId)
+    if (sync.error) console.error('[finance:bridgePlaid] initial sync failed', itemId, sync.error)
+  }
+  const mat = await materializeFinanceMovements(admin, ctx.restaurantId)
+  if (mat.error) console.error('[finance:bridgePlaid] materialize failed', mat.error)
+
   revalidatePath('/finance')
   return { ok: true, data: { inserted: rows.length } }
+}
+
+/** Manual refresh entry point. Drains `/transactions/sync` for
+ *  every active Plaid item, materializes fresh rows into the
+ *  ledger, and refreshes live balances. Idempotent — safe to
+ *  fire repeatedly (e.g. a "Refresh" button, or a background
+ *  cron once we wire one up). */
+export async function syncPlaidToFinance(): Promise<
+  ActionResult<{ items: number; movementsInserted: number; transfersPaired: number }>
+> {
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  if (!isPlaidConfigured()) return { error: 'Plaid not configured.' }
+  const admin = createAdminClient()
+
+  const { data: items } = await admin
+    .from('bank_provider_secrets')
+    .select('provider_item_id')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'plaid')
+  const itemIds = Array.from(
+    new Set((items ?? []).map(r => (r as { provider_item_id: string }).provider_item_id).filter(Boolean))
+  )
+  if (itemIds.length === 0) return { ok: true, data: { items: 0, movementsInserted: 0, transfersPaired: 0 } }
+
+  for (const itemId of itemIds) {
+    const sync = await syncPlaidItem(admin, ctx.restaurantId, itemId)
+    if (sync.error) console.error('[finance:sync] item failed', itemId, sync.error)
+  }
+  const mat = await materializeFinanceMovements(admin, ctx.restaurantId)
+  if (mat.error) console.error('[finance:sync] materialize failed', mat.error)
+
+  // Refresh live balances on every Plaid tile so the header cash
+  // total stays honest even if a manual movement drifted it.
+  await refreshPlaidBalances(admin, ctx.restaurantId, itemIds)
+
+  revalidatePath('/finance')
+  return {
+    ok: true,
+    data: {
+      items: itemIds.length,
+      movementsInserted: mat.inserted,
+      transfersPaired: mat.transfersPaired,
+    },
+  }
+}
+
+/** Rewrite each Plaid-linked finance_accounts.balance to the live
+ *  value from Plaid. Called from the manual sync path; the bridge
+ *  path doesn't need it since it just wrote the same value. */
+async function refreshPlaidBalances(
+  admin: Admin,
+  restaurantId: string,
+  itemIds: string[],
+): Promise<void> {
+  if (!isPlaidConfigured() || itemIds.length === 0) return
+  const { data: secrets } = await admin
+    .from('bank_provider_secrets')
+    .select('provider_item_id, access_token')
+    .eq('restaurant_id', restaurantId)
+    .eq('provider', 'plaid')
+    .in('provider_item_id', itemIds)
+  if (!secrets || secrets.length === 0) return
+
+  const plaid = getPlaidClient()
+  const nextBalanceByRef = new Map<string, number>()
+  await Promise.all(secrets.map(async (s) => {
+    try {
+      const res = await plaid.accountsBalanceGet({ access_token: (s as { access_token: string }).access_token })
+      for (const acct of res.data.accounts ?? []) {
+        const bal = acct.balances?.available ?? acct.balances?.current
+        if (typeof bal === 'number' && Number.isFinite(bal)) {
+          nextBalanceByRef.set(acct.account_id, bal)
+        }
+      }
+    } catch (err) {
+      console.error('[finance:refreshBalances] item failed', s.provider_item_id, err)
+    }
+  }))
+  if (nextBalanceByRef.size === 0) return
+
+  const { data: tiles } = await admin
+    .from('finance_accounts')
+    .select('id, provider_ref')
+    .eq('restaurant_id', restaurantId)
+    .eq('provider', 'plaid')
+    .eq('active', true)
+  await Promise.all((tiles ?? []).map(async (t) => {
+    const pr = (t as { provider_ref: string | null }).provider_ref
+    if (!pr) return
+    const next = nextBalanceByRef.get(pr)
+    if (next === undefined) return
+    await admin
+      .from('finance_accounts')
+      .update({ balance: next, updated_at: new Date().toISOString() })
+      .eq('id', (t as { id: string }).id)
+  }))
+}
+
+/** Read the live balance for each Plaid account under the given
+ *  item ids. Returns a Map keyed by `provider_account_id` →
+ *  numeric balance (available if present, else current). Missing
+ *  entries mean the fetch failed and the caller should fall back
+ *  to 0 rather than block the bridge. */
+async function fetchPlaidBalances(
+  admin: Admin,
+  restaurantId: string,
+  itemIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>()
+  if (!isPlaidConfigured() || itemIds.length === 0) return out
+
+  const { data: secrets } = await admin
+    .from('bank_provider_secrets')
+    .select('provider_item_id, access_token')
+    .eq('restaurant_id', restaurantId)
+    .eq('provider', 'plaid')
+    .in('provider_item_id', itemIds)
+  if (!secrets || secrets.length === 0) return out
+
+  const plaid = getPlaidClient()
+  await Promise.all(secrets.map(async (s) => {
+    const token = (s as { access_token: string }).access_token
+    if (!token) return
+    try {
+      const res = await plaid.accountsBalanceGet({ access_token: token })
+      for (const acct of res.data.accounts ?? []) {
+        const bal = acct.balances?.available ?? acct.balances?.current
+        if (typeof bal === 'number' && Number.isFinite(bal)) {
+          out.set(acct.account_id, bal)
+        }
+      }
+    } catch (err) {
+      console.error('[finance:fetchPlaidBalances] item failed', s.provider_item_id, err)
+    }
+  }))
+  return out
+}
+
+/** Remove a Plaid-linked Finance account. Locally marks the tile
+ *  inactive; when it was the last active tile under its Plaid
+ *  item, also revokes the item at Plaid (`/item/remove`) and
+ *  drops the stored access token so a future re-link isn't
+ *  double-billed against the item quota.
+ *
+ *  Non-plaid accounts fall back to a plain soft delete. */
+export async function disconnectFinanceAccount(id: string): Promise<ActionResult> {
+  if (!id) return { error: 'Missing account id.' }
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  const admin = createAdminClient()
+
+  const { data: account } = await admin
+    .from('finance_accounts')
+    .select('id, restaurant_id, provider, provider_ref')
+    .eq('id', id)
+    .maybeSingle()
+  if (!account || account.restaurant_id !== ctx.restaurantId) {
+    return { error: 'Account not found.' }
+  }
+
+  // Non-plaid → plain soft delete.
+  if (account.provider !== 'plaid' || !account.provider_ref) {
+    return updateAccount(id, { active: false })
+  }
+
+  // Find the underlying connected_bank_accounts row so we know
+  // which Plaid item this tile lived under.
+  const { data: connected } = await admin
+    .from('connected_bank_accounts')
+    .select('id, provider_item_id')
+    .eq('restaurant_id', ctx.restaurantId)
+    .eq('provider', 'plaid')
+    .eq('provider_account_id', account.provider_ref)
+    .maybeSingle()
+
+  // Flip the tile inactive first — user-visible state is now correct.
+  const { error: finErr } = await admin
+    .from('finance_accounts')
+    .update({ active: false, updated_at: new Date().toISOString() })
+    .eq('id', id)
+  if (finErr) {
+    console.error('[finance:disconnect] finance_accounts update failed', finErr)
+    return { error: 'Could not remove account.' }
+  }
+
+  if (connected?.provider_item_id) {
+    const itemId = connected.provider_item_id as string
+
+    // Mark the underlying bank row inactive too.
+    await admin
+      .from('connected_bank_accounts')
+      .update({ active: false })
+      .eq('id', connected.id as string)
+
+    // Are there any other active tiles for this restaurant that
+    // still reference an account under this item? If so, keep the
+    // item alive (revoking it would kill the sibling accounts). If
+    // this was the last one, revoke at Plaid + drop the secret.
+    const { data: siblings } = await admin
+      .from('connected_bank_accounts')
+      .select('id')
+      .eq('restaurant_id', ctx.restaurantId)
+      .eq('provider', 'plaid')
+      .eq('provider_item_id', itemId)
+      .eq('active', true)
+      .limit(1)
+
+    if (!siblings || siblings.length === 0) {
+      if (isPlaidConfigured()) {
+        try {
+          const { data: secret } = await admin
+            .from('bank_provider_secrets')
+            .select('access_token')
+            .eq('restaurant_id', ctx.restaurantId)
+            .eq('provider', 'plaid')
+            .eq('provider_item_id', itemId)
+            .maybeSingle()
+          if (secret?.access_token) {
+            const plaid = getPlaidClient()
+            await plaid.itemRemove({ access_token: secret.access_token as string }).catch(() => null)
+          }
+        } catch (err) {
+          // Best-effort — local state is already cleaned up.
+          console.error('[finance:disconnect] itemRemove failed', err)
+        }
+      }
+      await admin
+        .from('bank_provider_secrets')
+        .delete()
+        .eq('restaurant_id', ctx.restaurantId)
+        .eq('provider', 'plaid')
+        .eq('provider_item_id', itemId)
+    }
+  }
+
+  revalidatePath('/finance')
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------- categories

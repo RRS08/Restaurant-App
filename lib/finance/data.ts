@@ -50,8 +50,25 @@ export async function listAccounts(
   q = q.order('sort_order', { ascending: true, nullsFirst: false })
        .order('created_at', { ascending: true })
 
-  const { data } = await q
-  return (data ?? []).map(rowToAccount)
+  // Fetch masks in parallel so Plaid tiles can render "··4321"
+  // in the subtitle without carrying a mask column of their own.
+  const [{ data: rows }, { data: cbaMasks }] = await Promise.all([
+    q,
+    supabase
+      .from('connected_bank_accounts')
+      .select('provider_account_id, account_mask')
+      .eq('restaurant_id', restaurantId)
+      .eq('provider', 'plaid'),
+  ])
+
+  const maskByRef = new Map<string, string>()
+  for (const r of cbaMasks ?? []) {
+    const pr = (r as { provider_account_id: string | null }).provider_account_id
+    const mask = (r as { account_mask: string | null }).account_mask
+    if (pr && mask) maskByRef.set(pr, mask)
+  }
+
+  return (rows ?? []).map(row => rowToAccount(row, maskByRef))
 }
 
 export async function listCategories(
@@ -91,8 +108,8 @@ export async function listMovements(
     .from('finance_movements')
     .select(`
       *,
-      source:source_account_id ( id, name, kind, color ),
-      dest:dest_account_id ( id, name, kind, color ),
+      source:source_account_id ( id, name, kind, color, glyph ),
+      dest:dest_account_id ( id, name, kind, color, glyph ),
       category:category_id ( id, name, kind, color )
     `)
     .eq('restaurant_id', restaurantId)
@@ -145,8 +162,14 @@ export function inOutTotals(movements: FinanceMovement[]): { in: number; out: nu
 
 // ---------------------------------------------------------------- normalizers
 
-function rowToAccount(raw: FinanceAccountRow): FinanceAccount {
-  return { ...raw, balance: toNumber(raw.balance) }
+function rowToAccount(
+  raw: FinanceAccountRow,
+  maskByRef?: Map<string, string>,
+): FinanceAccount {
+  const mask = raw.provider === 'plaid' && raw.provider_ref
+    ? maskByRef?.get(raw.provider_ref) ?? null
+    : null
+  return { ...raw, balance: toNumber(raw.balance), mask }
 }
 
 interface EmbeddedRef {
@@ -154,6 +177,7 @@ interface EmbeddedRef {
   name: string | null
   kind: string | null
   color: string | null
+  glyph?: string | null
 }
 
 function rowToMovement(
@@ -184,12 +208,14 @@ function rowToMovement(
       name: source.name ?? '—',
       kind: (source.kind as FinanceMovement['source'] extends null ? never : NonNullable<FinanceMovement['source']>['kind']) ?? 'other',
       color: source.color,
+      glyph: source.glyph ?? null,
     } : null,
     dest: dest && dest.id ? {
       id: dest.id,
       name: dest.name ?? '—',
       kind: (dest.kind as NonNullable<FinanceMovement['dest']>['kind']) ?? 'other',
       color: dest.color,
+      glyph: dest.glyph ?? null,
     } : null,
     category: category && category.id ? {
       id: category.id,

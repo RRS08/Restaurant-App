@@ -371,18 +371,19 @@ export async function bridgePlaidAccountsToFinance(
     //  - Banks: prefer institution + prettified subtype + mask so
     //    "Chase Checking ··4321" reads distinct from
     //    "Chase Savings ··8765".
-    const bank = String(c.institution_name ?? '').trim()
+    const bank = titleCase(String(c.institution_name ?? '').trim())
     let name: string
     if (walletBrand) {
       name = bank || 'Wallet'
     } else {
+      // Bank tiles: title-cased "Bank + Subtype" (Chase Savings).
+      // Mask is DROPPED from the title and rendered in the subtitle
+      // at read time. Plaid's raw account_name gets ignored because
+      // Chase ships SHOUTING CAPS ("CHASE SAVINGS") that reads
+      // badly against the other tile labels.
       const subtypePretty = prettifyAccountSubtype(String(c.account_subtype ?? ''))
       const composed = [bank, subtypePretty].filter(Boolean).join(' ')
-      const base = c.account_name && String(c.account_name).trim().length > 0
-        ? String(c.account_name).trim()
-        : (composed || 'Account')
-      const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
-      name = `${base}${suffix}`.trim()
+      name = composed || titleCase(String(c.account_name ?? '').trim()) || 'Account'
     }
 
     // Glyph slug — client AccountGlyph checks this first for a
@@ -554,12 +555,21 @@ const WALLET_TILE_COLOR: Record<WalletBrand, string> = {
  *  ("checking", "savings", "credit card", "money market"). Turn
  *  them into a title-cased word for tile labels. */
 function prettifyAccountSubtype(raw: string): string {
+  return titleCase(raw)
+}
+
+/** Uppercase first letter of each word, lowercase the rest. Handles
+ *  the CHASE-shouts-in-caps case, empty strings, single letters,
+ *  and mixed-separator inputs ("BANK_OF_AMERICA" → "Bank Of America").
+ *  Not smart about small words (of/the) — a merchant-facing bank
+ *  name isn't the place for that finicky style pass. */
+function titleCase(raw: string): string {
   const s = raw.trim()
   if (!s) return ''
   return s
     .split(/[_\s]+/)
     .filter(Boolean)
-    .map(w => w[0].toUpperCase() + w.slice(1))
+    .map(w => w[0].toUpperCase() + w.slice(1).toLowerCase())
     .join(' ')
 }
 

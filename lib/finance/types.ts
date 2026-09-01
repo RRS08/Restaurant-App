@@ -80,9 +80,13 @@ export interface FinanceMovementRow {
 
 /** Account tile / picker shape — same as the row, but with the
  *  balance coerced to number so downstream math never worries
- *  about the numeric ↔ string quirk of pg-node. */
+ *  about the numeric ↔ string quirk of pg-node. `mask` is joined
+ *  in for Plaid tiles from connected_bank_accounts so the tile
+ *  can render "··4321" in the subtitle without keeping a mask
+ *  column of its own. */
 export interface FinanceAccount extends Omit<FinanceAccountRow, 'balance'> {
   balance: number
+  mask: string | null
 }
 
 export interface FinanceCategory extends FinanceCategoryRow {}
@@ -98,12 +102,14 @@ export interface FinanceMovement extends Omit<FinanceMovementRow, 'amount'> {
     name: string
     kind: FinanceAccountKind
     color: string | null
+    glyph: string | null
   } | null
   dest: {
     id: string
     name: string
     kind: FinanceAccountKind
     color: string | null
+    glyph: string | null
   } | null
   category: {
     id: string

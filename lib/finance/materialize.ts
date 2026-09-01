@@ -322,21 +322,53 @@ const MERCHANT_PATTERNS: Array<[RegExp, string]> = [
   [/^gdp\*/i, ''],  // GoDaddy Payments prefix — strip and keep the rest
 ]
 
-/** Strip common trailing ACH junk: "CCD ID: 1234...", "PPD ID:",
- *  transaction reference numbers, trailing hash strings. */
+/** Strip common trailing ACH / bank-descriptor junk before we
+ *  hand a merchant name to the ledger. Chase, BofA, Wells all
+ *  ship long descriptors with transaction ids, dates, and account
+ *  abbreviations — human eyes skip over "transaction#: 30607813209
+ *  08/31" to find the merchant, so we just remove it. */
 function stripAchNoise(name: string): string {
   return name
+    // NACHA ACH channel IDs — trailing ID metadata
     .replace(/\s+(CCD|PPD|WEB|TEL|ARC|BOC|POP)\s+ID:.*$/i, '')
     .replace(/\s+ID:\s*\d+.*$/i, '')
-    .replace(/\s+ST-[A-Z0-9]{6,}\b.*$/i, '')  // Stripe reference tail
-    .replace(/\s+#\s*\w{6,}\b.*$/i, '')       // Order/ref numbers
+    // Chase transaction reference — "transaction#: 30607813209" or "trn: 12345"
+    .replace(/\s+transaction\s*#?\s*:?\s*\d+.*$/i, '')
+    .replace(/\s+trn\s*#?\s*:?\s*\d+.*$/i, '')
+    // Stripe reference tail
+    .replace(/\s+ST-[A-Z0-9]{6,}\b.*$/i, '')
+    // Order / ref numbers (# followed by ≥6 alphanumeric)
+    .replace(/\s+#\s*\w{6,}\b.*$/i, '')
+    // Trailing MM/DD date banks tack onto transfer descriptors
+    .replace(/\s+\d{1,2}\/\d{1,2}(\/\d{2,4})?\s*$/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** Rewrite common bank-shorthand tokens INSIDE a descriptor so
+ *  "Online Transfer to CHK ...3107" reads as "Transfer to Checking
+ *  ··3107". Runs before the payout-provider whitelist because these
+ *  are content-preserving edits, not full replacements. */
+function rewriteBankTokens(name: string): string {
+  return name
+    // Chase-style leading "Online Transfer" → "Transfer"
+    .replace(/^online\s+transfer\b/i, 'Transfer')
+    // Account subtype abbreviations — word-bounded so we don't
+    // mangle "checked" or a merchant name that happens to contain
+    // "sav".
+    .replace(/\bCHK\b/g, 'Checking')
+    .replace(/\bSAV\b/g, 'Savings')
+    .replace(/\bDDA\b/g, 'Checking')  // Demand Deposit Account
+    .replace(/\bMMK?T?\b/g, 'Money market')
+    // Mask style — turn "...NNNN" into our tile-matching "··NNNN"
+    .replace(/\.{3,}(\d{3,})/g, '··$1')
     .replace(/\s{2,}/g, ' ')
     .trim()
 }
 
 function cleanMerchant(raw: string | null | undefined): string {
   if (!raw) return ''
-  let name = String(raw).trim()
+  let name = rewriteBankTokens(String(raw).trim())
   if (!name) return ''
 
   // Explicit prefix strip (e.g. GDP*Hatziri Botanicals → Hatziri Botanicals)

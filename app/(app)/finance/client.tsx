@@ -32,13 +32,9 @@ import type {
   FinanceMovementDirection,
 } from '@/lib/finance/types'
 import { ACCOUNT_KIND_DEFAULTS } from '@/lib/finance/types'
-import {
-  computeKpis, weeklySeries, expenseByCategory, topMerchants,
-  type WeekPoint, type CategorySlice, type MerchantRow,
-} from '@/lib/finance/overview'
-import { detectRecurring, type RecurringCharge } from '@/lib/finance/recurring'
+import { expenseByCategory, type CategorySlice } from '@/lib/finance/overview'
 
-type TabId = 'overview' | 'transactions' | 'recurring'
+type TabId = 'overview' | 'transactions'
 
 // ---------------------------------------------------------------- Palette
 const INK = '#18181B'
@@ -81,6 +77,7 @@ export default function FinanceClient({
   const [tab, setTab] = useState<TabId>('overview')
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
   const [expenseOpen, setExpenseOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
 
   // Month picker — click the title button, portal opens anchored
   // to the button's bottom-left. Anchor recomputes on scroll/resize
@@ -103,30 +100,31 @@ export default function FinanceClient({
     }
   }, [calOpen])
 
-  // 12-week series feeds Overview's bar chart. Empty movements
-  // still returns 12 zero-buckets so the chart doesn't collapse.
-  const weeklyBars = useMemo(() => weeklySeries(movements, 12), [movements])
-  const kpis = useMemo(() => computeKpis(movements), [movements])
   const expenseCats = useMemo(() => expenseByCategory(movements), [movements])
-  const merchants = useMemo(() => topMerchants(movements, 6), [movements])
-  const recurring = useMemo(() => detectRecurring(movements), [movements])
 
-  // Ledger view — filter by account (source OR dest touches it)
-  // or by direction (expenses only). "All" shows everything.
+  // Ledger view — filter chips are MUTUALLY EXCLUSIVE with the
+  // Expenses chip: money leaving an account belongs under
+  // Expenses, not under that account's chip. So a Chase Savings
+  // expense stops appearing under "Chase Savings" and only lives
+  // under "Expenses." Paired transfers still show under both
+  // their source and dest accounts since neither side is an
+  // expense from the operator's perspective.
   const shown = useMemo(() => {
     if (accountFilter === 'all') return movements
     if (accountFilter === 'expenses') return movements.filter(m => m.direction === 'expense')
-    return movements.filter(m =>
-      m.source?.id === accountFilter || m.dest?.id === accountFilter,
-    )
+    return movements.filter(m => {
+      if (m.direction === 'expense') return false
+      return m.source?.id === accountFilter || m.dest?.id === accountFilter
+    })
   }, [movements, accountFilter])
 
-  // Per-account count for the chip badges + per-direction count.
+  // Chip counts follow the same exclusion so the numbers add up
+  // (Chase Savings 4 + Expenses 1 = All 5, no double-count).
   const counts = useMemo(() => {
     const byId = new Map<string, number>()
     let expenseCount = 0
     for (const m of movements) {
-      if (m.direction === 'expense') expenseCount++
+      if (m.direction === 'expense') { expenseCount++; continue }
       if (m.source?.id) byId.set(m.source.id, (byId.get(m.source.id) ?? 0) + 1)
       if (m.dest?.id) byId.set(m.dest.id, (byId.get(m.dest.id) ?? 0) + 1)
     }
@@ -139,6 +137,14 @@ export default function FinanceClient({
     [periodStartDate, locale],
   )
   const relativeChip = useMemo(() => monthRelativeLabel(periodStartDate, new Date(), t), [periodStartDate, t])
+  // YYYY-MM string threaded into the Report modal's iframe URL so
+  // whichever month the picker has selected is what the report
+  // opens for. Locked to local time (matches how the server
+  // parses ?period=).
+  const periodParam = useMemo(
+    () => `${periodStartDate.getFullYear()}-${String(periodStartDate.getMonth() + 1).padStart(2, '0')}`,
+    [periodStartDate],
+  )
 
   return (
     <div style={{
@@ -203,19 +209,18 @@ export default function FinanceClient({
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto' }}>
-          <a
-            href="/finance/report?days=30"
-            target="_blank"
-            rel="noopener"
+          <button
+            type="button"
+            onClick={() => setReportOpen(true)}
             style={{
               border: `1px solid ${LINE}`, background: '#fff', color: INK,
               borderRadius: 10, height: 34, padding: '0 14px',
               font: 'inherit', fontSize: 13, fontWeight: 500,
-              textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+              cursor: 'pointer', display: 'inline-flex', alignItems: 'center',
             }}
           >
-            {t('Export', 'Exportar')}
-          </a>
+            {t('Report', 'Reporte')}
+          </button>
           <button
             type="button"
             onClick={() => setExpenseOpen(true)}
@@ -260,28 +265,22 @@ export default function FinanceClient({
         )}
       </div>
 
-      {/* Tab bar — Overview / Transactions / Recurring. Underline
-          marks the active one; hover raises the ink on the others. */}
+      {/* Tab bar — Overview / Transactions. Underline marks the
+          active one; hover raises the ink on the others. */}
       <div style={{
         padding: '4px 24px 0', borderBottom: `1px solid ${LINE}`,
         display: 'flex', alignItems: 'flex-end', gap: 4,
       }}>
         <TabButton label={t('Overview', 'Resumen')} active={tab === 'overview'} onClick={() => setTab('overview')} />
         <TabButton label={t('Transactions', 'Transacciones')} active={tab === 'transactions'} onClick={() => setTab('transactions')} />
-        <TabButton
-          label={t('Recurring', 'Recurrentes')}
-          badge={recurring.length > 0 ? String(recurring.length) : undefined}
-          active={tab === 'recurring'}
-          onClick={() => setTab('recurring')}
-        />
       </div>
 
       {tab === 'overview' && (
         <OverviewPanel
-          kpis={kpis}
-          weeklyBars={weeklyBars}
+          movements={movements}
+          cashOnHand={cashOnHand}
           expenseCats={expenseCats}
-          merchants={merchants}
+          periodStartDate={periodStartDate}
           locale={locale}
           t={t}
         />
@@ -346,16 +345,21 @@ export default function FinanceClient({
         </div>
       )}
 
-      {tab === 'recurring' && (
-        <RecurringPanel items={recurring} locale={locale} t={t} />
-      )}
-
       {expenseOpen && (
         <AddExpenseDrawer
           accounts={accounts}
           categories={categories}
           onClose={() => setExpenseOpen(false)}
           t={t}
+        />
+      )}
+
+      {reportOpen && (
+        <ReportModal
+          onClose={() => setReportOpen(false)}
+          t={t}
+          period={periodParam}
+          periodTitle={capitalize(monthTitle)}
         />
       )}
 
@@ -727,6 +731,13 @@ function MovementRow({
           <span style={{ fontSize: 11, color: FAINT }}>{day}</span>
           <Dot />
           <span style={{ fontFamily: MONO, fontSize: 11, color: FAINT }}>{time}</span>
+          {/* Transfer between two in-system accounts: this is the
+              only case that shows a source→dest account-pill pair.
+              Pills use a colored dot only — brand identity already
+              lives in the leading tile glyph, so a full Venmo V
+              inside a trailing pill would double up on identity
+              instead of communicating "money moved between these
+              two accounts." */}
           {m.direction === 'transfer' && m.source && m.dest && (
             <>
               <Dot />
@@ -735,21 +746,22 @@ function MovementRow({
               <AccountPill name={m.dest.name} tone={tintForRef(m.dest)} />
             </>
           )}
-          {m.direction === 'income' && m.dest && (
+          {/* Standalone income/expense: pill ONLY when a category
+              is assigned. Uncategorized rows render clean — the
+              leading glyph + signed amount already say what this
+              is, and an "Uncategorized" chip on every unlabeled
+              row just adds noise. Categorizing will be a separate
+              surface (bulk review) rather than a per-row nag. */}
+          {m.direction === 'income' && m.category && (
             <>
               <Dot />
-              <AccountPill name={m.dest.name} tone={tintForRef(m.dest)} />
+              <AccountPill name={m.category.name} tone={{ tile: '#DCFCE7', ink: '#166534', dot: '#059669' }} />
             </>
           )}
-          {m.direction === 'expense' && (
+          {m.direction === 'expense' && m.category && (
             <>
               <Dot />
-              {m.category && (
-                <AccountPill name={m.category.name} tone={{ tile: '#FEE2E2', ink: '#B91C1C', dot: '#DC2626' }} />
-              )}
-              {m.source && (
-                <AccountPill name={m.source.name} tone={tintForRef(m.source)} />
-              )}
+              <AccountPill name={m.category.name} tone={{ tile: '#FEE2E2', ink: '#B91C1C', dot: '#DC2626' }} />
             </>
           )}
         </span>
@@ -771,12 +783,34 @@ function defaultTitle(m: FinanceMovement, t: (en: string, es?: string) => string
 }
 
 function iconTileFor(m: FinanceMovement): { tile: string; ink: string } {
-  if (m.direction === 'transfer') return { tile: '#EEF2FF', ink: '#4F46E5' }
-  if (m.direction === 'income') {
-    return m.dest ? tintForRef(m.dest) : { tile: '#ECFDF5', ink: '#059669' }
+  // Wallet-brand tint wins first — matches the account tile.
+  const brand = counterpartyGlyph(m)
+  if (brand) {
+    const tone = WALLET_TILE_TONE[brand]
+    if (tone) return tone
   }
-  // expense
-  return { tile: '#FEE2E2', ink: '#B91C1C' }
+  // Income landing in a bank account gets the bank tint (piggy in
+  // purple, matching the account tile) instead of the generic
+  // income green. Same reasoning as the piggy glyph itself: the
+  // row IS a bank deposit, so it should read as bank-colored.
+  const kind = counterpartyKind(m)
+  if (m.direction === 'income' && kind === 'bank') {
+    return { tile: ACCOUNT_KIND_DEFAULTS.bank.color, ink: '#7C3AED' }
+  }
+  if (m.direction === 'transfer') return { tile: '#EEF2FF', ink: '#4F46E5' }
+  if (m.direction === 'income') return { tile: '#ECFDF5', ink: '#059669' }
+  return { tile: '#FEE2E2', ink: '#B91C1C' }  // expense
+}
+
+/** Pastel tile + ink pair per wallet brand — matches the account
+ *  tile tints so the ledger's leading icon and the top-of-page
+ *  tile scan as the same thing. */
+const WALLET_TILE_TONE: Record<string, { tile: string; ink: string }> = {
+  venmo:        { tile: '#DFF0FE', ink: '#3D95CE' },
+  cashapp:      { tile: '#DFF6E7', ink: '#00A73A' },
+  paypal:       { tile: '#DDE7FA', ink: '#003087' },
+  'apple-cash': { tile: '#F1F1F3', ink: '#18181B' },
+  zelle:        { tile: '#EFE0F5', ink: '#6D1ED4' },
 }
 
 // ================================================================
@@ -938,409 +972,471 @@ function TabButton({
 }
 
 // ================================================================
-// Overview panel
+// Overview panel — two cards: a 30-day (or picked-month) running
+// balance line chart and an expense donut, both interactive.
+//
+// Windowing: mirrors the report. Current month → rolling last-30
+// days (context beyond the month start). Past month → that whole
+// month, clamped at "now" when relevant. Chart endpoint dot lands
+// on the freshest cash-on-hand number so the tile row and the
+// chart tell the same story.
+//
+// Balance derivation: cumulate BACKWARD from cashOnHand. For
+// each day, delta = income − expense (transfers between the
+// operator's own accounts net to zero because source+dest cancel).
+// Personal-tagged rows COUNT here — cash is cash regardless of
+// how the P&L classifies it.
 // ================================================================
 
 function OverviewPanel({
-  kpis, weeklyBars, expenseCats, merchants, locale, t,
+  movements, cashOnHand: endBalance, expenseCats,
+  periodStartDate, locale, t,
 }: {
-  kpis: ReturnType<typeof computeKpis>
-  weeklyBars: WeekPoint[]
+  movements: FinanceMovement[]
+  cashOnHand: number
   expenseCats: CategorySlice[]
-  merchants: MerchantRow[]
+  periodStartDate: Date
   locale: string
   t: (en: string, es?: string) => string
 }) {
-  const noData = kpis.txCount === 0
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null)
+  const [hoverCat, setHoverCat] = useState<string | null>(null)
 
-  if (noData) {
+  // Windowing: current month → rolling 30d; past month → that
+  // whole month (clamped at now if the picked month is somehow
+  // still ongoing — defensive).
+  const now = new Date()
+  const isCurrentMonth =
+    periodStartDate.getFullYear() === now.getFullYear() &&
+    periodStartDate.getMonth() === now.getMonth()
+  const win = isCurrentMonth
+    ? rollingBalanceWindow(30)
+    : monthBalanceWindow(periodStartDate)
+  const balanceSeries = useMemo(
+    () => cumulativeBalance(movements, endBalance, win.from, win.to),
+    [movements, endBalance, win.from, win.to],
+  )
+
+  const totalExpense = expenseCats.reduce((s, r) => s + r.total, 0)
+  const hoveredCatObj = hoverCat ? expenseCats.find(c => c.name === hoverCat) : null
+
+  return (
+    <div style={{
+      padding: '20px 24px 32px',
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0, 1.8fr) minmax(0, 1fr)',
+      gap: 22, alignItems: 'stretch',
+      // Taller cards so the pair fills the viewport space that
+      // used to be dead. Balance chart + donut both scale their
+      // inner content on the extra height via flex: 1 rules
+      // inside each card.
+      minHeight: 520,
+    }}>
+      {/* Card 1 — Cash balance line chart */}
+      <BalanceCard
+        series={balanceSeries}
+        eyebrow={
+          isCurrentMonth
+            ? t('Last 30 days', 'Últimos 30 días')
+            : periodStartDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' })
+        }
+        hoverIdx={hoverIdx}
+        onHoverIdx={setHoverIdx}
+        locale={locale}
+        t={t}
+      />
+
+      {/* Card 2 — Donut */}
+      <DonutCard
+        cats={expenseCats}
+        total={totalExpense}
+        hoveredCat={hoveredCatObj?.name ?? null}
+        onHover={setHoverCat}
+        t={t}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------- balance card
+
+interface BalancePoint { date: string; balance: number; delta: number }
+
+function BalanceCard({
+  series, eyebrow, hoverIdx, onHoverIdx, locale, t,
+}: {
+  series: BalancePoint[]
+  eyebrow: string
+  hoverIdx: number | null
+  onHoverIdx: (i: number | null) => void
+  locale: string
+  t: (en: string, es?: string) => string
+}) {
+  const n = series.length
+  const totalDelta = series.length > 0
+    ? series[series.length - 1].balance - series[0].balance + series[0].delta
+    : 0
+  const min = n > 0 ? Math.min(...series.map(p => p.balance)) : 0
+  const max = n > 0 ? Math.max(...series.map(p => p.balance)) : 0
+  const range = max - min || 1
+  const W = 600, TOP = 8, BOT = 182, H = 190
+
+  const x = (i: number) => n > 1 ? (i / (n - 1)) * W : W / 2
+  const y = (v: number) => BOT - ((v - min) / range) * (BOT - TOP)
+  const pts = series.map((p, i) => [x(i), y(p.balance)])
+  const linePath = pts.length > 0
+    ? 'M' + pts.map(p => p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' L')
+    : ''
+  const areaPath = pts.length > 0 ? linePath + ` L${W} ${H} L0 ${H} Z` : ''
+  const lastPt = pts[pts.length - 1] ?? [0, 0]
+
+  const halfBand = n > 1 ? W / (n - 1) / 2 : 0
+
+  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (n === 0) return
+    const rect = e.currentTarget.getBoundingClientRect()
+    const idx = Math.max(0, Math.min(n - 1,
+      Math.round(((e.clientX - rect.left) / rect.width) * (n - 1))))
+    if (idx !== hoverIdx) onHoverIdx(idx)
+  }
+
+  const fmtDay = (isoDate: string) => {
+    const d = new Date(isoDate + 'T12:00:00')
+    return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  }
+
+  // Four axis-label anchors (start / two mids / end)
+  const axisAnchors = n > 0
+    ? [0, Math.floor(n / 3), Math.floor((2 * n) / 3), n - 1].map(i => series[i]?.date).filter(Boolean)
+    : []
+
+  const hoverPt = hoverIdx !== null ? series[hoverIdx] : null
+
+  if (n === 0) {
     return (
-      <div style={{
-        margin: '20px 24px 32px', padding: '48px 20px',
-        borderRadius: 14, border: `1px dashed ${LINE}`, background: '#fff',
-        textAlign: 'center', color: FAINT, fontSize: 13,
-      }}>
-        {t(
-          'No movements yet. Link an account or add a cash expense — Overview populates automatically.',
-          'Sin movimientos aún. Vincula una cuenta o añade un gasto en efectivo — el resumen aparece solo.',
-        )}
-      </div>
+      <section style={cardStyles.card}>
+        <div style={cardStyles.header}>
+          <span style={cardStyles.title}>{t('Cash balance', 'Saldo en efectivo')}</span>
+          <span style={cardStyles.eyebrow}>{eyebrow}</span>
+        </div>
+        <div style={{ padding: '48px 18px', textAlign: 'center', color: FAINT, fontSize: 12 }}>
+          {t('No history to plot yet.', 'Sin historial que graficar aún.')}
+        </div>
+      </section>
     )
   }
 
   return (
-    <div style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* KPI strip */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-        gap: 12,
-      }}>
-        <Kpi
-          label={t('Money in', 'Entradas')}
-          value={fmtMoney(kpis.revenue)}
-          tone={INCOME}
-          sub={t('90-day', '90 días')}
-        />
-        <Kpi
-          label={t('Money out', 'Salidas')}
-          value={fmtMoney(kpis.expenses)}
-          tone={INK}
-          sub={t('90-day', '90 días')}
-        />
-        <Kpi
-          label={t('Net', 'Neto')}
-          value={`${kpis.net >= 0 ? '+' : ''}${fmtMoney(kpis.net)}`}
-          tone={kpis.net >= 0 ? INCOME : EXPENSE}
-          sub={t('90-day', '90 días')}
-        />
-        <Kpi
-          label={t('Biggest expense', 'Mayor gasto')}
-          value={kpis.biggestExpense ? fmtMoney(kpis.biggestExpense.amount) : '—'}
-          tone={INK}
-          sub={kpis.biggestExpense?.note ?? undefined}
-        />
+    <section style={cardStyles.card}>
+      <div style={{ ...cardStyles.header, paddingBottom: 4 }}>
+        <span style={cardStyles.title}>{t('Cash balance', 'Saldo en efectivo')}</span>
+        <span style={cardStyles.eyebrow}>
+          {eyebrow} · {totalDelta >= 0 ? '+' : ''}{fmtMoney(totalDelta)}
+        </span>
       </div>
-
-      {/* Chart + donut side-by-side */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'minmax(0, 2fr) minmax(240px, 1fr)',
-        gap: 14,
-      }}>
-        <Card title={t('Money in / out, weekly', 'Entradas / salidas, semanal')}
-              subtitle={t('Last 12 weeks', 'Últimas 12 semanas')}>
-          <WeeklyBars series={weeklyBars} locale={locale} />
-        </Card>
-        <Card title={t('Expense breakdown', 'Desglose de gastos')}
-              subtitle={t('Where the money went', 'A dónde fue el dinero')}>
-          <CategoryList rows={expenseCats.slice(0, 8)} total={kpis.expenses} t={t} />
-        </Card>
+      <div style={{ flex: 1, padding: '12px 18px 6px', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'relative', flex: 1, minHeight: 180 }}>
+          <svg
+            viewBox={`0 0 ${W} ${H}`}
+            preserveAspectRatio="none"
+            onMouseMove={onMove}
+            onMouseLeave={() => onHoverIdx(null)}
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', cursor: 'crosshair' }}
+          >
+            <line x1={0} y1={TOP} x2={W} y2={TOP} stroke={LINE_SOFT} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <line x1={0} y1={(TOP + BOT) / 2} x2={W} y2={(TOP + BOT) / 2} stroke={LINE_SOFT} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            <line x1={0} y1={BOT} x2={W} y2={BOT} stroke={LINE_SOFT} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+            {hoverIdx !== null && (
+              <rect
+                x={Math.max(0, pts[hoverIdx][0] - halfBand)}
+                y={TOP}
+                width={Math.min(W, pts[hoverIdx][0] + halfBand) - Math.max(0, pts[hoverIdx][0] - halfBand)}
+                height={BOT - TOP}
+                fill={INK}
+                opacity={0.04}
+              />
+            )}
+            <path d={areaPath} fill={INCOME} opacity={0.07} />
+            <path d={linePath} fill="none" stroke={INCOME} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+            <circle cx={lastPt[0]} cy={lastPt[1]} r={3.5} fill={INCOME} />
+          </svg>
+          {hoverIdx !== null && hoverPt && (
+            <>
+              <div style={{
+                position: 'absolute',
+                left: `${(hoverIdx / Math.max(1, n - 1)) * 100}%`,
+                top: `${(pts[hoverIdx][1] / H) * 100}%`,
+                width: 10, height: 10, borderRadius: 999,
+                background: '#fff', border: `2.5px solid ${INCOME}`,
+                transform: 'translate(-50%, -50%)',
+                pointerEvents: 'none',
+                boxShadow: '0 1px 3px rgba(24,24,27,0.15)',
+              }} />
+              <div style={{
+                position: 'absolute',
+                left: `${Math.max(14, Math.min(86, (hoverIdx / Math.max(1, n - 1)) * 100))}%`,
+                top: `${Math.max(42, (pts[hoverIdx][1] / H) * 100 - 6)}%`,
+                transform: 'translate(-50%, -100%)',
+                pointerEvents: 'none',
+                background: '#fff', borderRadius: 12,
+                boxShadow: '0 4px 16px rgba(24,24,27,0.12), 0 1px 3px rgba(24,24,27,0.08)',
+                padding: '10px 14px', whiteSpace: 'nowrap', zIndex: 5,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600 }}>
+                  <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: 999, background: INCOME }} />
+                  {fmtDay(hoverPt.date)}
+                </div>
+                <div style={{
+                  fontFamily: MONO, fontSize: 15, fontWeight: 600,
+                  letterSpacing: '-0.03em', marginTop: 2,
+                }}>{fmtMoney(hoverPt.balance)}</div>
+                <div style={{
+                  fontFamily: MONO, fontSize: 10.5, marginTop: 2,
+                  color: hoverPt.delta > 0 ? INCOME : hoverPt.delta < 0 ? EXPENSE : FAINT,
+                }}>
+                  {hoverPt.delta === 0
+                    ? t('no activity', 'sin actividad')
+                    : `${hoverPt.delta > 0 ? '+' : '−'}${fmtMoney(Math.abs(hoverPt.delta))} ${t('that day', 'ese día')}`
+                  }
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', marginTop: 6,
+          fontFamily: MONO, fontSize: 10, color: FAINT,
+        }}>
+          {axisAnchors.map(d => <span key={d}>{fmtDay(d)}</span>)}
+        </div>
       </div>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between',
+        padding: '10px 18px 14px', borderTop: `1px solid ${LINE_SOFT}`,
+        fontSize: 11, color: MUTED,
+      }}>
+        <span>{t('Low', 'Mínimo')}: <span style={{ fontFamily: MONO }}>{fmtMoney(min)}</span></span>
+        <span>{t('High', 'Máximo')}: <span style={{ fontFamily: MONO }}>{fmtMoney(max)}</span></span>
+      </div>
+    </section>
+  )
+}
 
-      {/* Top merchants — full width, understated */}
-      {merchants.length > 0 && (
-        <Card title={t('Top merchants', 'Comercios principales')}
-              subtitle={t('By total spent, 90 days', 'Por total gastado, 90 días')}>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {merchants.map((m, i) => (
-              <div key={m.name} style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 2px',
-                borderTop: i === 0 ? 0 : `1px solid ${LINE_SOFT}`,
+// ---------------------------------------------------------------- donut card
+
+function DonutCard({
+  cats, total, hoveredCat, onHover, t,
+}: {
+  cats: CategorySlice[]
+  total: number
+  hoveredCat: string | null
+  onHover: (n: string | null) => void
+  t: (en: string, es?: string) => string
+}) {
+  const R = 70
+  const C = 2 * Math.PI * R
+  const gap = 2  // px in stroke-space (matches design)
+  let acc = 0
+
+  const hoveredObj = hoveredCat ? cats.find(c => c.name === hoveredCat) : null
+  const centerAmt = hoveredObj ? fmtMoney(hoveredObj.total) : fmtMoney(total)
+  const centerLabel = hoveredObj && total > 0
+    ? `${hoveredObj.name.toUpperCase()} · ${Math.round((hoveredObj.total / total) * 100)}%`
+    : t('TOTAL SPEND', 'GASTO TOTAL')
+
+  return (
+    <section style={cardStyles.card}>
+      <div style={{ ...cardStyles.header, paddingBottom: 4 }}>
+        <span style={cardStyles.title}>{t('Where the money went', 'A dónde fue el dinero')}</span>
+        <span style={cardStyles.eyebrow}>{t('30 days', '30 días')}</span>
+      </div>
+      <div style={{
+        flex: 1, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        gap: 16, padding: '16px 18px 18px', minHeight: 0,
+      }}>
+        <div style={{ position: 'relative', width: 260, height: 260, flex: '0 0 auto' }}>
+          {cats.length === 0 || total <= 0 ? (
+            // Empty state — hollow ring with a single "no expenses"
+            // line in the middle. The center readout stays hidden
+            // here (would just render "$0.00 · TOTAL SPEND" on top
+            // of the copy and look broken).
+            <div style={{
+              width: '100%', height: '100%',
+              borderRadius: '50%', border: `22px solid ${LINE_SOFT}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: FAINT, fontSize: 12, textAlign: 'center', padding: 24,
+              boxSizing: 'border-box',
+            }}>
+              {t('No expenses in this window.', 'Sin gastos en este período.')}
+            </div>
+          ) : (
+            <>
+              <svg viewBox="0 0 168 168" style={{ width: 260, height: 260, display: 'block', transform: 'rotate(-90deg)' }}>
+                {cats.map(c => {
+                  const frac = c.total / total
+                  const active = hoveredCat === null || hoveredCat === c.name
+                  const dashOn = Math.max(0.1, frac * C - gap)
+                  const dashOff = C - dashOn
+                  const offset = -acc * C
+                  acc += frac
+                  const isHovered = hoveredCat === c.name
+                  return (
+                    <circle
+                      key={c.name}
+                      cx={84} cy={84} r={R}
+                      fill="none"
+                      stroke={c.color ?? FAINT}
+                      strokeWidth={isHovered ? 27 : 22}
+                      strokeDasharray={`${dashOn.toFixed(1)} ${dashOff.toFixed(1)}`}
+                      strokeDashoffset={offset.toFixed(1)}
+                      opacity={active ? 1 : 0.22}
+                      onMouseEnter={() => onHover(c.name)}
+                      onMouseLeave={() => onHover(null)}
+                      style={{ cursor: 'pointer', transition: 'opacity 0.15s ease, stroke-width 0.15s ease' }}
+                    />
+                  )
+                })}
+              </svg>
+              <div style={{
+                position: 'absolute', inset: 0,
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                pointerEvents: 'none',
               }}>
                 <span style={{
-                  fontFamily: MONO, fontSize: 10, color: FAINT,
-                  width: 18, textAlign: 'right',
-                }}>{i + 1}</span>
-                <span style={{ flex: 1, fontSize: 13, color: INK, minWidth: 0,
-                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {m.name}
-                </span>
-                <span style={{ fontSize: 11, color: FAINT, fontFamily: MONO }}>
-                  {m.count}×
-                </span>
-                <span style={{ fontFamily: MONO, fontSize: 14, color: INK, fontWeight: 600,
-                               letterSpacing: '-0.02em', minWidth: 90, textAlign: 'right' }}>
-                  {fmtMoney(m.total)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-    </div>
-  )
-}
-
-function Kpi({ label, value, tone, sub }: { label: string; value: string; tone: string; sub?: string }) {
-  return (
-    <div style={{
-      border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
-      padding: '14px 16px',
-    }}>
-      <div style={{
-        fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
-        color: FAINT, textTransform: 'uppercase',
-      }}>{label}</div>
-      <div style={{
-        marginTop: 6, fontFamily: MONO, fontSize: 22, fontWeight: 600,
-        letterSpacing: '-0.04em', color: tone, lineHeight: 1.1,
-      }}>{value}</div>
-      {sub && (
-        <div style={{
-          marginTop: 4, fontSize: 11, color: MUTED,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}>{sub}</div>
-      )}
-    </div>
-  )
-}
-
-function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
-  return (
-    <div style={{
-      border: `1px solid ${LINE}`, borderRadius: 14, background: '#fff',
-      padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12,
-    }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-        <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', color: INK }}>{title}</span>
-        {subtitle && <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: FAINT, textTransform: 'uppercase' }}>{subtitle}</span>}
-      </div>
-      {children}
-    </div>
-  )
-}
-
-function WeeklyBars({ series, locale }: { series: WeekPoint[]; locale: string }) {
-  const max = Math.max(1, ...series.map(w => Math.max(w.income, w.expense)))
-  const H = 140
-  return (
-    <div>
-      <div style={{
-        display: 'grid', gridTemplateColumns: `repeat(${series.length}, 1fr)`,
-        gap: 6, alignItems: 'end', height: H,
-      }}>
-        {series.map(w => {
-          const inPct = (w.income / max) * 100
-          const outPct = (w.expense / max) * 100
-          return (
-            <div key={w.weekStart} title={`${weekChartLabel(w.weekStart, locale)}: +${fmtMoney(w.income)} / −${fmtMoney(w.expense)}`}
-                 style={{ display: 'flex', gap: 3, alignItems: 'end', height: '100%' }}>
-              <div style={{
-                flex: 1, background: INCOME, opacity: 0.85, borderRadius: '4px 4px 0 0',
-                height: `${Math.max(inPct, w.income > 0 ? 2 : 0)}%`,
-                minHeight: w.income > 0 ? 3 : 0,
-              }} />
-              <div style={{
-                flex: 1, background: EXPENSE, opacity: 0.85, borderRadius: '4px 4px 0 0',
-                height: `${Math.max(outPct, w.expense > 0 ? 2 : 0)}%`,
-                minHeight: w.expense > 0 ? 3 : 0,
-              }} />
-            </div>
-          )
-        })}
-      </div>
-      <div style={{
-        display: 'grid', gridTemplateColumns: `repeat(${series.length}, 1fr)`,
-        gap: 6, marginTop: 8,
-      }}>
-        {series.map((w, i) => (
-          <span key={w.weekStart} style={{
-            fontFamily: MONO, fontSize: 9, color: FAINT, textAlign: 'center',
-            letterSpacing: '0.05em',
-          }}>
-            {i % 2 === 0 ? weekChartLabel(w.weekStart, locale) : ''}
-          </span>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 11, color: MUTED }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 8, height: 8, background: INCOME, borderRadius: 2, display: 'inline-block' }} /> In
-        </span>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ width: 8, height: 8, background: EXPENSE, borderRadius: 2, display: 'inline-block' }} /> Out
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function CategoryList({ rows, total, t }: { rows: CategorySlice[]; total: number; t: (en: string, es?: string) => string }) {
-  if (rows.length === 0) {
-    return <div style={{ color: FAINT, fontSize: 12 }}>{t('No expenses yet.', 'Sin gastos aún.')}</div>
-  }
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {rows.map(r => {
-        const pct = total > 0 ? Math.round(r.share * 100) : 0
-        return (
-          <div key={r.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  fontFamily: MONO, fontSize: 19, fontWeight: 600,
+                  letterSpacing: '-0.03em', color: INK,
+                }}>{centerAmt}</span>
                 <span style={{
-                  width: 8, height: 8, borderRadius: 2,
-                  background: r.color ?? FAINT, flex: '0 0 auto',
-                }} />
-                <span style={{ fontSize: 12.5, color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {r.name}
-                </span>
-              </span>
-              <span style={{ fontFamily: MONO, fontSize: 12, color: INK, fontWeight: 600, letterSpacing: '-0.02em' }}>
-                {fmtMoney(r.total)}
-              </span>
-            </div>
-            <div style={{ height: 4, background: SURFACE, borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', width: `${pct}%`,
-                background: r.color ?? INK, opacity: 0.85,
-              }} />
-            </div>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function weekChartLabel(iso: string, locale: string): string {
-  const d = new Date(iso + 'T00:00:00')
-  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
-}
-
-// ================================================================
-// Recurring panel
-// ================================================================
-
-function RecurringPanel({
-  items, locale, t,
-}: {
-  items: RecurringCharge[]
-  locale: string
-  t: (en: string, es?: string) => string
-}) {
-  const monthly = items.reduce((s, r) => {
-    switch (r.cadence) {
-      case 'weekly':   return s + r.averageAmount * 4.33
-      case 'biweekly': return s + r.averageAmount * 2.17
-      case 'monthly':  return s + r.averageAmount
-      case 'yearly':   return s + r.averageAmount / 12
-      default: return s
-    }
-  }, 0)
-
-  if (items.length === 0) {
-    return (
-      <div style={{
-        margin: '20px 24px 32px', padding: '48px 20px',
-        borderRadius: 14, border: `1px dashed ${LINE}`, background: '#fff',
-        textAlign: 'center', color: MUTED, fontSize: 13, maxWidth: 520,
-        marginLeft: 'auto', marginRight: 'auto',
-      }}>
-        <div style={{
-          fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
-          color: FAINT, textTransform: 'uppercase', marginBottom: 8,
-        }}>{t('WATCHING YOUR LEDGER', 'OBSERVANDO TU LIBRO')}</div>
-        <div style={{ color: INK, fontSize: 14, fontWeight: 500, marginBottom: 4 }}>
-          {t('Nothing on repeat yet.', 'Nada recurrente aún.')}
-        </div>
-        <div style={{ color: MUTED, fontSize: 12.5, lineHeight: 1.5 }}>
-          {t(
-            'As soon as two charges from the same source land on a similar cadence, they’ll show up here — rent, subscriptions, payroll, anything you can plan around.',
-            'En cuanto dos cargos del mismo origen aparezcan con la misma frecuencia, se mostrarán aquí — renta, suscripciones, nómina, todo lo que puedas planear.',
+                  fontFamily: MONO, fontSize: 9, letterSpacing: '0.14em',
+                  color: FAINT, textTransform: 'uppercase', marginTop: 3,
+                }}>{centerLabel}</span>
+              </div>
+            </>
           )}
         </div>
       </div>
-    )
-  }
-
-  return (
-    <div style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      {/* Summary strip */}
-      <div style={{
-        display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap',
-        padding: '14px 16px', borderRadius: 12, background: SURFACE,
-        border: `1px solid ${LINE_SOFT}`,
-      }}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: FAINT, textTransform: 'uppercase' }}>
-            {t('Locked in, monthly', 'Comprometido, mensual')}
-          </span>
-          <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 600, letterSpacing: '-0.04em', color: INK }}>
-            {fmtMoney(monthly)}
-          </span>
-        </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ fontSize: 12, color: MUTED, maxWidth: 360, lineHeight: 1.5 }}>
-          {t(
-            'Detected from your ledger — no setup. Amounts averaged across occurrences.',
-            'Detectado desde tu libro — sin configuración. Montos promediados.',
-          )}
-        </div>
-      </div>
-
-      {/* List */}
-      <div style={{
-        border: `1px solid ${LINE}`, borderRadius: 14, background: '#fff', overflow: 'hidden',
-      }}>
+      {cats.length > 0 && (
         <div style={{
-          display: 'grid',
-          gridTemplateColumns: '1.6fr 0.9fr 1fr 1fr auto',
-          gap: 12, padding: '12px 18px',
-          borderBottom: `1px solid ${LINE_SOFT}`, background: SURFACE,
-          fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
-          color: FAINT, textTransform: 'uppercase',
+          display: 'flex', justifyContent: 'center', flexWrap: 'wrap',
+          gap: '2px 12px', padding: '10px 14px 12px',
+          borderTop: `1px solid ${LINE_SOFT}`,
         }}>
-          <span>{t('Charge', 'Cargo')}</span>
-          <span>{t('Cadence', 'Frecuencia')}</span>
-          <span>{t('Account', 'Cuenta')}</span>
-          <span>{t('Next expected', 'Próximo')}</span>
-          <span style={{ textAlign: 'right' }}>{t('Avg', 'Prom')}</span>
-        </div>
-        {items.map((r, i) => (
-          <div key={r.fingerprint} style={{
-            display: 'grid',
-            gridTemplateColumns: '1.6fr 0.9fr 1fr 1fr auto',
-            gap: 12, padding: '14px 18px', alignItems: 'center',
-            borderTop: i === 0 ? 0 : `1px solid ${LINE_SOFT}`,
-          }}>
-            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <span style={{
-                fontSize: 13.5, color: INK, fontWeight: 500,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>{r.merchant}</span>
-              <span style={{ fontSize: 11, color: FAINT, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                {r.categoryName && (
-                  <>
-                    <span style={{ width: 6, height: 6, borderRadius: 1, background: r.categoryColor ?? FAINT }} />
-                    {r.categoryName}
-                  </>
-                )}
-                {r.categoryName && <span>·</span>}
-                <span>{t(`${r.occurrences} seen`, `${r.occurrences} vistas`)}</span>
+          {cats.map(c => {
+            const isHovered = hoveredCat === c.name
+            return (
+              <span
+                key={c.name}
+                onMouseEnter={() => onHover(c.name)}
+                onMouseLeave={() => onHover(null)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '2px 6px', borderRadius: 6,
+                  background: isHovered ? SURFACE : 'transparent',
+                  cursor: 'default',
+                  transition: 'background 0.15s ease',
+                  fontSize: 11, color: MUTED,
+                }}
+              >
+                <span style={{
+                  display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+                  background: c.color ?? FAINT, flex: '0 0 auto',
+                }} />
+                {c.name}
               </span>
-            </div>
-            <span style={{
-              fontFamily: MONO, fontSize: 11, color: MUTED, letterSpacing: '0.05em',
-              textTransform: 'uppercase',
-            }}>{cadenceLabel(r.cadence, t)}</span>
-            <span style={{ fontSize: 12.5, color: MUTED,
-                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {r.accountName ?? '—'}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 12, color: INK }}>
-              {fmtRecurringDate(r.nextExpectedAt, locale, t)}
-            </span>
-            <span style={{ fontFamily: MONO, fontSize: 14, color: INK, fontWeight: 600,
-                           letterSpacing: '-0.02em', textAlign: 'right', minWidth: 90 }}>
-              {fmtMoney(r.averageAmount)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
+            )
+          })}
+        </div>
+      )}
+    </section>
   )
 }
 
-function cadenceLabel(c: RecurringCharge['cadence'], t: (en: string, es?: string) => string): string {
-  switch (c) {
-    case 'weekly':   return t('Weekly', 'Semanal')
-    case 'biweekly': return t('Bi-weekly', 'Quincenal')
-    case 'monthly':  return t('Monthly', 'Mensual')
-    case 'yearly':   return t('Yearly', 'Anual')
-  }
+// ---------------------------------------------------------------- window helpers
+
+function rollingBalanceWindow(days: number): { from: Date; to: Date } {
+  const to = new Date()
+  to.setHours(23, 59, 59, 999)
+  const from = new Date(to)
+  from.setDate(from.getDate() - (days - 1))
+  from.setHours(0, 0, 0, 0)
+  return { from, to }
 }
 
-function fmtRecurringDate(iso: string, locale: string, t: (en: string, es?: string) => string): string {
-  const d = new Date(iso)
+function monthBalanceWindow(firstOfMonth: Date): { from: Date; to: Date } {
+  const from = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth(), 1)
+  from.setHours(0, 0, 0, 0)
+  const monthEnd = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth() + 1, 1)
+  monthEnd.setMilliseconds(-1)
   const now = new Date()
-  const days = Math.round((d.getTime() - now.getTime()) / 86_400_000)
-  if (days < 0) return t('Overdue', 'Atrasado')
-  if (days === 0) return t('Today', 'Hoy')
-  if (days === 1) return t('Tomorrow', 'Mañana')
-  if (days < 7) return t(`In ${days} days`, `En ${days} días`)
-  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+  const to = monthEnd > now ? now : monthEnd
+  return { from, to }
 }
+
+/** Cumulate cash balance backward from today. For each day in
+ *  [from, to] we know the net cash delta (income − expense;
+ *  transfers cancel because both source and dest are our
+ *  accounts). Rewind from the current cashOnHand to derive the
+ *  balance at the start of each day. Local-date keys so the
+ *  bucket a movement lands in matches how the merchant would
+ *  read it on their phone. */
+function cumulativeBalance(
+  movements: FinanceMovement[],
+  endBalance: number,
+  from: Date,
+  to: Date,
+): BalancePoint[] {
+  const byDay = new Map<string, number>()
+  for (const m of movements) {
+    const d = new Date(m.occurred_at)
+    const key = localDateKey(d)
+    let delta = 0
+    if (m.direction === 'income') delta = m.amount
+    else if (m.direction === 'expense') delta = -m.amount
+    // transfer: source+dest both our accounts ⇒ net 0
+    byDay.set(key, (byDay.get(key) ?? 0) + delta)
+  }
+
+  // Walk from `to` back to `from`, cumulating backward.
+  const stack: BalancePoint[] = []
+  const cursor = new Date(to)
+  cursor.setHours(0, 0, 0, 0)
+  const stop = new Date(from)
+  stop.setHours(0, 0, 0, 0)
+  let bal = endBalance
+  while (cursor >= stop) {
+    const key = localDateKey(cursor)
+    const delta = byDay.get(key) ?? 0
+    stack.push({ date: key, balance: round2ish(bal), delta: round2ish(delta) })
+    bal -= delta
+    cursor.setDate(cursor.getDate() - 1)
+  }
+  return stack.reverse()
+}
+
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function round2ish(n: number): number { return Math.round(n * 100) / 100 }
+
+const cardStyles: Record<string, React.CSSProperties> = {
+  card: {
+    border: `1px solid ${LINE}`, borderRadius: 14, overflow: 'hidden',
+    display: 'flex', flexDirection: 'column', background: '#fff',
+  },
+  header: {
+    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+    gap: 12, padding: '15px 18px 12px',
+  },
+  title: { fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em' },
+  eyebrow: {
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+    color: FAINT, textTransform: 'uppercase',
+  },
+}
+
 
 // ================================================================
 // Chips
@@ -1384,22 +1480,128 @@ function FilterChip({
 }
 
 function AccountPill({
-  name, tone,
+  name, tone, glyph, kind,
 }: {
   name: string
   tone: { tile: string; ink: string; dot?: string }
+  /** Wallet brand slug ('venmo' / 'cashapp' / etc). When set, we
+   *  render the brand glyph in place of the dot so the ledger row
+   *  matches the account tile at a glance. */
+  glyph?: string | null
+  /** Account kind. Used as a fallback when there's no brand slug
+   *  — bank tiles get a piggy, cash a register, POS a card, etc. */
+  kind?: FinanceAccountKind
 }) {
+  const showGlyph = !!glyph || !!kind
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 5, borderRadius: 999,
       padding: '1px 8px', fontSize: 10, fontWeight: 600,
       background: tone.tile, color: tone.ink,
     }}>
-      {tone.dot && (
-        <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
-      )}
+      {showGlyph
+        ? <PillBrandGlyph glyph={glyph ?? null} kind={kind ?? null} />
+        : tone.dot && (
+          <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: tone.dot }} />
+        )
+      }
       {name}
     </span>
+  )
+}
+
+/** 10px glyph for the ledger row pills. Reuses the same SVG
+ *  paths as AccountGlyph but sized down; renders currentColor so
+ *  it inherits the pill's ink and stays legible on any tint.
+ *  Brand slug wins if set; otherwise falls back to a kind-based
+ *  glyph so bank / cash / POS / wallet rows still get an icon. */
+function PillBrandGlyph({
+  glyph, kind,
+}: {
+  glyph: string | null
+  kind: FinanceAccountKind | null
+}) {
+  const S = 10
+  if (glyph === 'venmo') return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M18.9 4.5c.7 1.1 1 2.3 1 3.9 0 4.9-4.2 11.3-7.6 15.6H5l-3-18 6.5-.6 1.6 12.6c1.5-2.4 3.3-6.2 3.3-8.8 0-1.4-.24-2.4-.62-3.2l6.12-1z"
+        fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinejoin="round" />
+    </svg>
+  )
+  if (glyph === 'cashapp') return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M15.3 9.3c-.7-.7-1.7-1.1-2.7-1.1-1 0-1.7.4-1.7 1 0 .7 1 1 2.2 1.4 1.9.6 3.3 1.4 3.3 3.2 0 2-1.5 3.4-4 3.6l-.3 1.5h-1.7l.3-1.5c-1.1-.2-2.1-.7-2.8-1.4l1-1c.8.8 1.9 1.2 3 1.2 1.2 0 1.9-.5 1.9-1.2 0-.7-.9-.9-2.2-1.4-1.6-.5-3.2-1.3-3.2-3.1 0-1.9 1.5-3.3 3.7-3.5l.3-1.5h1.7l-.3 1.5c1 .2 1.8.7 2.4 1.2z" fill="currentColor" />
+    </svg>
+  )
+  if (glyph === 'paypal') return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M8.3 4h6.9c2.7 0 4.6 1.4 4 4.6-.7 3.8-3.5 5.4-6.8 5.4h-1.6c-.4 0-.7.3-.8.7L9.3 20H6l2.3-16z" fill="currentColor" />
+    </svg>
+  )
+  if (glyph === 'apple-cash') return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M17 12.8c0-2.5 2-3.6 2.1-3.7-1.2-1.7-3-2-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.4-.8-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.3.8 1.2 1.8 2.6 3.2 2.6 1.3 0 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.2-2.5.9-1.3 1.3-2.6 1.4-2.7-.1 0-2.9-1.1-3-4.3z" fill="currentColor" />
+    </svg>
+  )
+  if (glyph === 'zelle') return (
+    <svg width={S} height={S} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M10.6 4h2.8v2.4h3.7v2.3l-5.7 8.6h5.7V20h-3.7v2h-2.8v-2H6.9v-2.3l5.7-8.6H6.9V6.4h3.7V4z" fill="currentColor" />
+    </svg>
+  )
+  // Uncategorized state — a dashed circle enclosing a "?" reads
+  // as "we don't know yet, tap to assign" without the alarm of
+  // a red tint. Distinct from category / direction glyphs so a
+  // scan can tell "categorized" from "not" at a glance.
+  if (glyph === 'uncategorized') return (
+    <svg width={S + 1} height={S + 1} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <circle cx={10} cy={10} r={7} stroke="currentColor" strokeWidth={1.4} strokeDasharray="2 2" />
+      <path d="M8 8.2c0-1.2 1-2 2-2s2 .8 2 1.9c0 1.2-1.7 1.4-1.7 2.9" stroke="currentColor" strokeWidth={1.4} strokeLinecap="round" fill="none" />
+      <circle cx={10.2} cy={13.8} r={0.7} fill="currentColor" />
+    </svg>
+  )
+  // Kind-based fallbacks — outline style, currentColor.
+  if (kind === 'bank') return (
+    <svg width={S + 2} height={S + 2} viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 13c0-3.9 3.6-7 8-7 2 0 3.9.6 5.3 1.7l2.7-1.4v3.6c.6.8 1 1.7 1 2.6 0 1-.4 1.9-1 2.7v2.3h-2.6c-.6.7-1.4 1.3-2.4 1.7v1.3h-3v-1c-.3 0-.7 0-1 0-.3 0-.7 0-1 0v1h-3v-1.3C5 17.7 4 15.4 4 13z"
+        stroke="currentColor" strokeWidth={1.7} strokeLinejoin="round"
+      />
+      <circle cx={15.5} cy={12} r={0.9} fill="currentColor" />
+    </svg>
+  )
+  if (kind === 'pos') return (
+    <svg width={S + 2} height={S + 2} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <rect x={1.5} y={4} width={17} height={12} rx={2.5} stroke="currentColor" strokeWidth={1.6} />
+      <path d="M1.5 8h17" stroke="currentColor" strokeWidth={1.6} />
+    </svg>
+  )
+  if (kind === 'cash') return (
+    <svg width={S + 2} height={S + 2} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <ellipse cx={10} cy={5.3} rx={6.4} ry={2.5} stroke="currentColor" strokeWidth={1.7} />
+      <path d="M3.6 5.3v8.8c0 1.38 2.87 2.5 6.4 2.5s6.4-1.12 6.4-2.5V5.3" stroke="currentColor" strokeWidth={1.7} />
+    </svg>
+  )
+  if (kind === 'digital_wallet') return (
+    <svg width={S + 2} height={S + 2} viewBox="0 0 20 20" fill="none" aria-hidden>
+      <path d="M3 6h11a3 3 0 0 1 3 3v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z" stroke="currentColor" strokeWidth={1.7} />
+      <circle cx={13.5} cy={11.5} r={1} fill="currentColor" />
+    </svg>
+  )
+  return <span aria-hidden style={{ width: 5, height: 5, borderRadius: '50%', background: 'currentColor' }} />
+}
+
+/** Soft grey pill used when a movement has no category assigned.
+ *  Distinct from every category chip (which uses the seed's own
+ *  color) so a scan reads "needs review" vs "already labeled" at
+ *  a glance. Dashed-circle "?" glyph inside signals uncertainty
+ *  without the alarm of a red tint. */
+function UncategorizedPill() {
+  return (
+    <AccountPill
+      name="Uncategorized"
+      tone={{ tile: '#F4F4F2', ink: '#6B6B70' }}
+      glyph="uncategorized"
+    />
   )
 }
 
@@ -1502,6 +1704,23 @@ function AccountGlyph({ kind, glyph }: { kind: FinanceAccountKind; glyph?: strin
 }
 
 function MovementGlyph({ m }: { m: FinanceMovement }) {
+  // Row-leading glyph rule:
+  //   • Wallet-brand rows (Venmo / Cash App / PayPal / …) get
+  //     their brand glyph — the brand IS the identity.
+  //   • Income landing in a bank account → piggy. It reads as
+  //     "deposit into your bank," which is the right mental
+  //     model for Square payouts, cash tips deposits, and
+  //     "Online Transfer from Checking" style movements.
+  //   • Everything else uses the DIRECTION arrow. Expenses out
+  //     to any account get the receipt (leaving), non-bank
+  //     income (rare) gets the up arrow, paired transfers get
+  //     the swap.
+  const brandGlyph = counterpartyGlyph(m)
+  if (brandGlyph) return <AccountGlyph kind="digital_wallet" glyph={brandGlyph} />
+
+  const kind = counterpartyKind(m)
+  if (m.direction === 'income' && kind === 'bank') return <AccountGlyph kind="bank" />
+
   if (m.direction === 'transfer') return (
     <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
       <path d="M4 7h11M12 4l3 3-3 3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
@@ -1520,6 +1739,24 @@ function MovementGlyph({ m }: { m: FinanceMovement }) {
       <path d="M7.5 7h5M7.5 10h5M7.5 13h3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   )
+}
+
+/** Which counterparty account carries the visual identity for this
+ *  row: income → dest, expense → source, transfer → whichever side
+ *  has a brand slug (usually one does when a wallet is involved).
+ *  Returns null when no brand should override the direction arrow. */
+function counterpartyGlyph(m: FinanceMovement): string | null {
+  if (m.direction === 'income') return m.dest?.glyph ?? null
+  if (m.direction === 'expense') return m.source?.glyph ?? null
+  return m.source?.glyph ?? m.dest?.glyph ?? null
+}
+
+/** Kind fallback when no brand slug — bank/cash/pos/digital_wallet.
+ *  Same counterparty rule as counterpartyGlyph. */
+function counterpartyKind(m: FinanceMovement): FinanceAccountKind | null {
+  if (m.direction === 'income') return m.dest?.kind ?? null
+  if (m.direction === 'expense') return m.source?.kind ?? null
+  return m.source?.kind ?? m.dest?.kind ?? null
 }
 
 // ================================================================
@@ -1589,11 +1826,17 @@ function darkFor(kind: FinanceAccountKind): string {
 
 function tileSubtitle(a: FinanceAccount): string {
   const ago = timeAgo(new Date(a.updated_at))
-  if (a.kind === 'pos') return 'To be deposited'
-  if (a.kind === 'cash') return `Last counted · ${ago}`
-  if (a.kind === 'bank') return `Deposit · ${ago}`
-  if (a.kind === 'digital_wallet') return `Payment · ${ago}`
-  return ago
+  const parts: string[] = []
+  // Mask lands in the subtitle for Plaid-linked tiles so the
+  // title can stay clean ("Chase Savings") while the ··NNNN still
+  // shows for disambiguation when the merchant has siblings.
+  if (a.mask) parts.push(`··${a.mask}`)
+  if (a.kind === 'pos') parts.push('To be deposited')
+  else if (a.kind === 'cash') parts.push(`Last counted · ${ago}`)
+  else if (a.kind === 'bank') parts.push(`Deposit · ${ago}`)
+  else if (a.kind === 'digital_wallet') parts.push(`Payment · ${ago}`)
+  else parts.push(ago)
+  return parts.join(' · ')
 }
 
 function timeAgo(d: Date): string {
@@ -1606,6 +1849,142 @@ function timeAgo(d: Date): string {
   if (days === 1) return 'yesterday'
   if (days < 7) return `${days} days ago`
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+// ================================================================
+// Report modal — inline preview of /finance/report inside an
+// overlay, so the operator never leaves the Finance page. The
+// iframe loads the report in embedded mode (no toolbar) and the
+// modal's own chrome supplies Download CSV + Print + Close.
+// Print targets the iframe's window so only the report prints,
+// not the Finance page underneath.
+// ================================================================
+
+function ReportModal({
+  onClose, t, period, periodTitle,
+}: {
+  onClose: () => void
+  t: (en: string, es?: string) => string
+  /** YYYY-MM — mirrors the Finance page's selected month so the
+   *  report opens for whatever the picker had. */
+  period: string
+  /** Human-readable version of `period` — "September 2026". */
+  periodTitle: string
+}) {
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+
+  // Escape closes + body scroll lock while open. Same pattern as
+  // the Add expense drawer so keyboard behavior stays consistent.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+    }
+  }, [onClose])
+
+  const doPrint = () => {
+    const win = iframeRef.current?.contentWindow
+    if (!win) return
+    try {
+      win.focus()
+      win.print()
+    } catch (err) {
+      console.error('[finance:report] iframe print failed', err)
+    }
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 60,
+        background: 'rgba(24,24,27,0.42)',
+        display: 'flex', alignItems: 'stretch', justifyContent: 'center',
+        padding: '24px 24px 24px',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 14, overflow: 'hidden',
+          border: `1px solid ${LINE}`,
+          boxShadow: '0 20px 60px rgba(24,24,27,0.28)',
+          width: '100%', maxWidth: 980,
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        {/* Modal chrome */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', borderBottom: `1px solid ${LINE}`,
+          background: '#fff', flex: '0 0 auto',
+        }}>
+          <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.01em' }}>
+            {t('Cash-basis P&L', 'P&L base efectivo')}
+          </span>
+          <span style={{
+            fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+            color: FAINT, textTransform: 'uppercase',
+          }}>
+            {periodTitle}
+          </span>
+          <div style={{ flex: 1 }} />
+          <a
+            href={`/finance/report/csv?period=${period}`}
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', color: INK,
+              borderRadius: 10, height: 32, padding: '0 12px',
+              font: 'inherit', fontSize: 12.5, fontWeight: 500,
+              textDecoration: 'none', display: 'inline-flex', alignItems: 'center',
+            }}
+          >
+            {t('Download CSV', 'Descargar CSV')}
+          </a>
+          <button
+            type="button"
+            onClick={doPrint}
+            style={{
+              border: 0, background: INK, color: PAPER,
+              borderRadius: 10, height: 32, padding: '0 14px',
+              font: 'inherit', fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+            }}
+          >
+            {t('Print', 'Imprimir')}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={t('Close', 'Cerrar')}
+            style={{
+              border: `1px solid ${LINE}`, background: '#fff', color: MUTED,
+              borderRadius: 8, width: 32, height: 32, cursor: 'pointer',
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              font: 'inherit', fontSize: 16, lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Iframe body — loads the embedded report. Sandbox omitted
+            deliberately: same-origin, so Print + CSS + fonts all
+            work without extra plumbing. */}
+        <iframe
+          ref={iframeRef}
+          src={`/finance/report?period=${period}&embedded=1`}
+          title={t('Cash-basis P&L', 'P&L base efectivo')}
+          style={{
+            flex: 1, width: '100%', border: 0, background: '#F1F0EC',
+            minHeight: 400,
+          }}
+        />
+      </div>
+    </div>
+  )
 }
 
 // ================================================================

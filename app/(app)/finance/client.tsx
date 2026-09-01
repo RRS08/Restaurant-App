@@ -1430,7 +1430,8 @@ function AccountGlyph({ kind, glyph }: { kind: FinanceAccountKind; glyph?: strin
   // generic below.
   if (glyph === 'venmo') return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-      <path d="M18.9 4.5c.7 1.1 1 2.3 1 3.9 0 4.9-4.2 11.3-7.6 15.6H5l-3-18 6.5-.6 1.6 12.6c1.5-2.4 3.3-6.2 3.3-8.8 0-1.4-.24-2.4-.62-3.2l6.12-1z" fill="#3D95CE" />
+      <path d="M18.9 4.5c.7 1.1 1 2.3 1 3.9 0 4.9-4.2 11.3-7.6 15.6H5l-3-18 6.5-.6 1.6 12.6c1.5-2.4 3.3-6.2 3.3-8.8 0-1.4-.24-2.4-.62-3.2l6.12-1z"
+        fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
   )
   if (glyph === 'cashapp') return (
@@ -1481,9 +1482,16 @@ function AccountGlyph({ kind, glyph }: { kind: FinanceAccountKind; glyph?: strin
     </svg>
   )
   if (kind === 'bank') return (
-    <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden>
-      <path d="M2 8l8-4 8 4" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M4 8v7M8 8v7M12 8v7M16 8v7M2 16h16" stroke="currentColor" strokeWidth="1.6" />
+    // Piggy bank — outline style so it sits at the same visual
+    // weight as the other kind glyphs. Coin slot on top, ear
+    // curl, curly tail, two legs.
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 13c0-3.9 3.6-7 8-7 2 0 3.9.6 5.3 1.7l2.7-1.4v3.6c.6.8 1 1.7 1 2.6 0 1-.4 1.9-1 2.7v2.3h-2.6c-.6.7-1.4 1.3-2.4 1.7v1.3h-3v-1c-.3 0-.7 0-1 0-.3 0-.7 0-1 0v1h-3v-1.3C5 17.7 4 15.4 4 13z"
+        stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"
+      />
+      <circle cx="15.5" cy="12" r="0.9" fill="currentColor" />
+      <path d="M9 9c1-.4 2.2-.5 3.3-.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   )
   return (

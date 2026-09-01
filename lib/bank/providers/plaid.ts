@@ -73,6 +73,7 @@ export async function syncPlaidItem(
     .eq('restaurant_id', restaurantId)
     .eq('provider', 'plaid')
     .eq('provider_item_id', providerItemId)
+    .eq('active', true)
   if (!accounts || accounts.length === 0) {
     result.error = 'No connected accounts for this Plaid item.'
     return result

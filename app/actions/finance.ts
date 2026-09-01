@@ -540,13 +540,27 @@ async function fetchPlaidBalances(
   return out
 }
 
-/** Remove a Plaid-linked Finance account. Locally marks the tile
- *  inactive; when it was the last active tile under its Plaid
- *  item, also revokes the item at Plaid (`/item/remove`) and
- *  drops the stored access token so a future re-link isn't
- *  double-billed against the item quota.
+/** Remove a Finance account and everything downstream from it —
+ *  hard delete, not a soft flag. Wipes:
  *
- *  Non-plaid accounts fall back to a plain soft delete. */
+ *    finance_movements  — every row touching this account
+ *    bank_transactions  — cascaded by the connected_bank_accounts
+ *                         FK's ON DELETE CASCADE
+ *    connected_bank_accounts — the raw bank row
+ *    bank_provider_secrets   — dropped when this was the last
+ *                              account under its Plaid item
+ *    finance_accounts   — the tile itself
+ *
+ *  When this was the last account under its Plaid Item, also
+ *  calls /item/remove at Plaid so the trial slot frees.
+ *
+ *  The user asked for hard delete explicitly: they want a
+ *  removed tile to leave no trace in totals, ledger, or sync
+ *  cost. Soft-delete leaked historical movements into Overview
+ *  and kept the sync running against inactive rows.
+ *
+ *  Non-plaid tiles get the same hard treatment — movements go,
+ *  the tile goes. No provider secret to clean up. */
 export async function disconnectFinanceAccount(id: string): Promise<ActionResult> {
   if (!id) return { error: 'Missing account id.' }
   const ctx = await resolveOperator()
@@ -562,79 +576,90 @@ export async function disconnectFinanceAccount(id: string): Promise<ActionResult
     return { error: 'Account not found.' }
   }
 
-  // Non-plaid → plain soft delete.
-  if (account.provider !== 'plaid' || !account.provider_ref) {
-    return updateAccount(id, { active: false })
-  }
-
-  // Find the underlying connected_bank_accounts row so we know
-  // which Plaid item this tile lived under.
-  const { data: connected } = await admin
-    .from('connected_bank_accounts')
-    .select('id, provider_item_id')
+  // 1) Purge every movement that touches this account. Deleting a
+  //    finance_accounts row first would either violate an FK or
+  //    silently null out source/dest; explicit delete keeps the
+  //    ledger totals honest either way.
+  const { error: mvErr } = await admin
+    .from('finance_movements')
+    .delete()
     .eq('restaurant_id', ctx.restaurantId)
-    .eq('provider', 'plaid')
-    .eq('provider_account_id', account.provider_ref)
-    .maybeSingle()
-
-  // Flip the tile inactive first — user-visible state is now correct.
-  const { error: finErr } = await admin
-    .from('finance_accounts')
-    .update({ active: false, updated_at: new Date().toISOString() })
-    .eq('id', id)
-  if (finErr) {
-    console.error('[finance:disconnect] finance_accounts update failed', finErr)
-    return { error: 'Could not remove account.' }
+    .or(`source_account_id.eq.${id},dest_account_id.eq.${id}`)
+  if (mvErr) {
+    console.error('[finance:disconnect] movement purge failed', mvErr)
+    return { error: 'Could not remove account movements.' }
   }
 
-  if (connected?.provider_item_id) {
-    const itemId = connected.provider_item_id as string
-
-    // Mark the underlying bank row inactive too.
-    await admin
+  // 2) For Plaid tiles: also purge the underlying bank rows +
+  //    revoke the item at Plaid when this was the last one under
+  //    it. connected_bank_accounts is FK'd from bank_transactions
+  //    with ON DELETE CASCADE, so deleting the CBA row wipes the
+  //    raw tx too.
+  if (account.provider === 'plaid' && account.provider_ref) {
+    const { data: connected } = await admin
       .from('connected_bank_accounts')
-      .update({ active: false })
-      .eq('id', connected.id as string)
-
-    // Are there any other active tiles for this restaurant that
-    // still reference an account under this item? If so, keep the
-    // item alive (revoking it would kill the sibling accounts). If
-    // this was the last one, revoke at Plaid + drop the secret.
-    const { data: siblings } = await admin
-      .from('connected_bank_accounts')
-      .select('id')
+      .select('id, provider_item_id')
       .eq('restaurant_id', ctx.restaurantId)
       .eq('provider', 'plaid')
-      .eq('provider_item_id', itemId)
-      .eq('active', true)
-      .limit(1)
+      .eq('provider_account_id', account.provider_ref)
+      .maybeSingle()
 
-    if (!siblings || siblings.length === 0) {
-      if (isPlaidConfigured()) {
-        try {
-          const { data: secret } = await admin
+    if (connected) {
+      await admin
+        .from('connected_bank_accounts')
+        .delete()
+        .eq('id', connected.id as string)
+
+      const itemId = connected.provider_item_id as string | null
+      if (itemId) {
+        // Any sibling accounts still under this Plaid Item? If not,
+        // /item/remove at Plaid + drop the secret so the trial slot
+        // frees. Otherwise leave the item alive for siblings.
+        const { data: siblings } = await admin
+          .from('connected_bank_accounts')
+          .select('id')
+          .eq('restaurant_id', ctx.restaurantId)
+          .eq('provider', 'plaid')
+          .eq('provider_item_id', itemId)
+          .limit(1)
+
+        if (!siblings || siblings.length === 0) {
+          if (isPlaidConfigured()) {
+            try {
+              const { data: secret } = await admin
+                .from('bank_provider_secrets')
+                .select('access_token')
+                .eq('restaurant_id', ctx.restaurantId)
+                .eq('provider', 'plaid')
+                .eq('provider_item_id', itemId)
+                .maybeSingle()
+              if (secret?.access_token) {
+                const plaid = getPlaidClient()
+                await plaid.itemRemove({ access_token: secret.access_token as string }).catch(() => null)
+              }
+            } catch (err) {
+              console.error('[finance:disconnect] itemRemove failed', err)
+            }
+          }
+          await admin
             .from('bank_provider_secrets')
-            .select('access_token')
+            .delete()
             .eq('restaurant_id', ctx.restaurantId)
             .eq('provider', 'plaid')
             .eq('provider_item_id', itemId)
-            .maybeSingle()
-          if (secret?.access_token) {
-            const plaid = getPlaidClient()
-            await plaid.itemRemove({ access_token: secret.access_token as string }).catch(() => null)
-          }
-        } catch (err) {
-          // Best-effort — local state is already cleaned up.
-          console.error('[finance:disconnect] itemRemove failed', err)
         }
       }
-      await admin
-        .from('bank_provider_secrets')
-        .delete()
-        .eq('restaurant_id', ctx.restaurantId)
-        .eq('provider', 'plaid')
-        .eq('provider_item_id', itemId)
     }
+  }
+
+  // 3) The tile itself.
+  const { error: finErr } = await admin
+    .from('finance_accounts')
+    .delete()
+    .eq('id', id)
+  if (finErr) {
+    console.error('[finance:disconnect] finance_accounts delete failed', finErr)
+    return { error: 'Could not remove account.' }
   }
 
   revalidatePath('/finance')

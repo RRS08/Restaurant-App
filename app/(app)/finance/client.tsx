@@ -31,6 +31,13 @@ import type {
   FinanceMovementDirection,
 } from '@/lib/finance/types'
 import { ACCOUNT_KIND_DEFAULTS } from '@/lib/finance/types'
+import {
+  computeKpis, weeklySeries, expenseByCategory, topMerchants,
+  type WeekPoint, type CategorySlice, type MerchantRow,
+} from '@/lib/finance/overview'
+import { detectRecurring, type RecurringCharge } from '@/lib/finance/recurring'
+
+type TabId = 'overview' | 'transactions' | 'recurring'
 
 // ---------------------------------------------------------------- Palette
 const INK = '#18181B'
@@ -64,8 +71,17 @@ export default function FinanceClient({
   const t = makeT(lang)
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
 
+  const [tab, setTab] = useState<TabId>('overview')
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
   const [expenseOpen, setExpenseOpen] = useState(false)
+
+  // 12-week series feeds Overview's bar chart. Empty movements
+  // still returns 12 zero-buckets so the chart doesn't collapse.
+  const weeklyBars = useMemo(() => weeklySeries(movements, 12), [movements])
+  const kpis = useMemo(() => computeKpis(movements), [movements])
+  const expenseCats = useMemo(() => expenseByCategory(movements), [movements])
+  const merchants = useMemo(() => topMerchants(movements, 6), [movements])
+  const recurring = useMemo(() => detectRecurring(movements), [movements])
 
   // Ledger view — filter by account (source OR dest touches it)
   // or by direction (expenses only). "All" shows everything.
@@ -204,63 +220,95 @@ export default function FinanceClient({
         )}
       </div>
 
-      {/* Every movement — filter chips + row list. */}
+      {/* Tab bar — Overview / Transactions / Recurring. Underline
+          marks the active one; hover raises the ink on the others. */}
       <div style={{
-        margin: '20px 24px 32px', borderRadius: 14,
-        border: `1px solid ${LINE}`, background: '#fff', overflow: 'hidden',
+        padding: '4px 24px 0', borderBottom: `1px solid ${LINE}`,
+        display: 'flex', alignItems: 'flex-end', gap: 4,
       }}>
-        <div style={{
-          padding: '14px 18px 12px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          gap: 12, flexWrap: 'wrap',
-        }}>
-          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em' }}>
-            {t('Every movement', 'Todo movimiento')}
-          </span>
-          <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.14em' }}>
-            {weekLabel.toUpperCase()}
-          </span>
-        </div>
-        <div style={{
-          padding: '10px 18px', borderTop: `1px solid ${LINE_SOFT}`,
-          background: SURFACE,
-          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-        }}>
-          <FilterChip
-            label={t('All', 'Todo')}
-            count={counts.all}
-            active={accountFilter === 'all'}
-            onClick={() => setAccountFilter('all')}
-          />
-          {accounts.map(a => (
-            <FilterChip
-              key={a.id}
-              label={a.name}
-              count={counts.byAccount.get(a.id) ?? 0}
-              tone={tintForAccount(a)}
-              active={accountFilter === a.id}
-              onClick={() => setAccountFilter(a.id)}
-            />
-          ))}
-          <FilterChip
-            label={t('Expenses', 'Gastos')}
-            count={counts.expenses}
-            tone={{ dot: EXPENSE }}
-            active={accountFilter === 'expenses'}
-            onClick={() => setAccountFilter('expenses')}
-          />
-        </div>
-
-        {shown.length === 0 ? (
-          <div style={{ padding: '32px 18px', textAlign: 'center', color: FAINT, fontSize: 13 }}>
-            {movements.length === 0
-              ? t('Nothing has moved yet this week.', 'Nada se ha movido esta semana.')
-              : t('No movements match this filter.', 'Ningún movimiento coincide.')}
-          </div>
-        ) : shown.map(m => (
-          <MovementRow key={m.id} m={m} locale={locale} t={t} />
-        ))}
+        <TabButton label={t('Overview', 'Resumen')} active={tab === 'overview'} onClick={() => setTab('overview')} />
+        <TabButton label={t('Transactions', 'Transacciones')} active={tab === 'transactions'} onClick={() => setTab('transactions')} />
+        <TabButton
+          label={t('Recurring', 'Recurrentes')}
+          badge={recurring.length > 0 ? String(recurring.length) : undefined}
+          active={tab === 'recurring'}
+          onClick={() => setTab('recurring')}
+        />
       </div>
+
+      {tab === 'overview' && (
+        <OverviewPanel
+          kpis={kpis}
+          weeklyBars={weeklyBars}
+          expenseCats={expenseCats}
+          merchants={merchants}
+          locale={locale}
+          t={t}
+        />
+      )}
+
+      {tab === 'transactions' && (
+        <div style={{
+          margin: '20px 24px 32px', borderRadius: 14,
+          border: `1px solid ${LINE}`, background: '#fff', overflow: 'hidden',
+        }}>
+          <div style={{
+            padding: '14px 18px 12px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: 12, flexWrap: 'wrap',
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em' }}>
+              {t('Every movement', 'Todo movimiento')}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.14em' }}>
+              {t('LAST 90 DAYS', 'ÚLTIMOS 90 DÍAS')}
+            </span>
+          </div>
+          <div style={{
+            padding: '10px 18px', borderTop: `1px solid ${LINE_SOFT}`,
+            background: SURFACE,
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          }}>
+            <FilterChip
+              label={t('All', 'Todo')}
+              count={counts.all}
+              active={accountFilter === 'all'}
+              onClick={() => setAccountFilter('all')}
+            />
+            {accounts.map(a => (
+              <FilterChip
+                key={a.id}
+                label={a.name}
+                count={counts.byAccount.get(a.id) ?? 0}
+                tone={tintForAccount(a)}
+                active={accountFilter === a.id}
+                onClick={() => setAccountFilter(a.id)}
+              />
+            ))}
+            <FilterChip
+              label={t('Expenses', 'Gastos')}
+              count={counts.expenses}
+              tone={{ dot: EXPENSE }}
+              active={accountFilter === 'expenses'}
+              onClick={() => setAccountFilter('expenses')}
+            />
+          </div>
+
+          {shown.length === 0 ? (
+            <div style={{ padding: '32px 18px', textAlign: 'center', color: FAINT, fontSize: 13 }}>
+              {movements.length === 0
+                ? t('Nothing has moved yet.', 'Nada se ha movido todavía.')
+                : t('No movements match this filter.', 'Ningún movimiento coincide.')}
+            </div>
+          ) : shown.map(m => (
+            <MovementRow key={m.id} m={m} locale={locale} t={t} />
+          ))}
+        </div>
+      )}
+
+      {tab === 'recurring' && (
+        <RecurringPanel items={recurring} locale={locale} t={t} />
+      )}
 
       {expenseOpen && (
         <AddExpenseDrawer
@@ -617,6 +665,461 @@ function iconTileFor(m: FinanceMovement): { tile: string; ink: string } {
   }
   // expense
   return { tile: '#FEE2E2', ink: '#B91C1C' }
+}
+
+// ================================================================
+// Tabs
+// ================================================================
+
+function TabButton({
+  label, active, badge, onClick,
+}: {
+  label: string
+  active: boolean
+  badge?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        position: 'relative',
+        border: 0, background: 'transparent', cursor: 'pointer',
+        padding: '10px 14px 12px',
+        font: 'inherit', fontSize: 13,
+        fontWeight: active ? 600 : 500,
+        letterSpacing: '-0.01em',
+        color: active ? INK : MUTED,
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+      }}
+      onMouseEnter={e => { if (!active) e.currentTarget.style.color = INK }}
+      onMouseLeave={e => { if (!active) e.currentTarget.style.color = MUTED }}
+    >
+      {label}
+      {badge && (
+        <span style={{
+          fontFamily: MONO, fontSize: 10, fontWeight: 600,
+          background: SURFACE, color: MUTED,
+          border: `1px solid ${LINE}`, borderRadius: 999,
+          padding: '1px 6px', minWidth: 18, textAlign: 'center',
+        }}>{badge}</span>
+      )}
+      {/* Underline indicator — sits right on top of the header
+          border so the tab-and-border line up as one continuous
+          rule instead of a floating pill. */}
+      <span style={{
+        position: 'absolute', left: 10, right: 10, bottom: -1,
+        height: 2, background: active ? INK : 'transparent',
+        borderRadius: 2,
+      }} />
+    </button>
+  )
+}
+
+// ================================================================
+// Overview panel
+// ================================================================
+
+function OverviewPanel({
+  kpis, weeklyBars, expenseCats, merchants, locale, t,
+}: {
+  kpis: ReturnType<typeof computeKpis>
+  weeklyBars: WeekPoint[]
+  expenseCats: CategorySlice[]
+  merchants: MerchantRow[]
+  locale: string
+  t: (en: string, es?: string) => string
+}) {
+  const noData = kpis.txCount === 0
+
+  if (noData) {
+    return (
+      <div style={{
+        margin: '20px 24px 32px', padding: '48px 20px',
+        borderRadius: 14, border: `1px dashed ${LINE}`, background: '#fff',
+        textAlign: 'center', color: FAINT, fontSize: 13,
+      }}>
+        {t(
+          'No movements yet. Link an account or add a cash expense — Overview populates automatically.',
+          'Sin movimientos aún. Vincula una cuenta o añade un gasto en efectivo — el resumen aparece solo.',
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* KPI strip */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+        gap: 12,
+      }}>
+        <Kpi
+          label={t('Money in', 'Entradas')}
+          value={fmtMoney(kpis.revenue)}
+          tone={INCOME}
+          sub={t('90-day', '90 días')}
+        />
+        <Kpi
+          label={t('Money out', 'Salidas')}
+          value={fmtMoney(kpis.expenses)}
+          tone={EXPENSE}
+          sub={t('90-day', '90 días')}
+        />
+        <Kpi
+          label={t('Net', 'Neto')}
+          value={`${kpis.net >= 0 ? '+' : ''}${fmtMoney(kpis.net)}`}
+          tone={kpis.net >= 0 ? INCOME : EXPENSE}
+          sub={t('90-day', '90 días')}
+        />
+        <Kpi
+          label={t('Biggest expense', 'Mayor gasto')}
+          value={kpis.biggestExpense ? fmtMoney(kpis.biggestExpense.amount) : '—'}
+          tone={INK}
+          sub={kpis.biggestExpense?.note ?? undefined}
+        />
+      </div>
+
+      {/* Chart + donut side-by-side */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 2fr) minmax(240px, 1fr)',
+        gap: 14,
+      }}>
+        <Card title={t('Money in / out, weekly', 'Entradas / salidas, semanal')}
+              subtitle={t('Last 12 weeks', 'Últimas 12 semanas')}>
+          <WeeklyBars series={weeklyBars} locale={locale} />
+        </Card>
+        <Card title={t('Expense breakdown', 'Desglose de gastos')}
+              subtitle={t('Where the money went', 'A dónde fue el dinero')}>
+          <CategoryList rows={expenseCats.slice(0, 8)} total={kpis.expenses} t={t} />
+        </Card>
+      </div>
+
+      {/* Top merchants — full width, understated */}
+      {merchants.length > 0 && (
+        <Card title={t('Top merchants', 'Comercios principales')}
+              subtitle={t('By total spent, 90 days', 'Por total gastado, 90 días')}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {merchants.map((m, i) => (
+              <div key={m.name} style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 2px',
+                borderTop: i === 0 ? 0 : `1px solid ${LINE_SOFT}`,
+              }}>
+                <span style={{
+                  fontFamily: MONO, fontSize: 10, color: FAINT,
+                  width: 18, textAlign: 'right',
+                }}>{i + 1}</span>
+                <span style={{ flex: 1, fontSize: 13, color: INK, minWidth: 0,
+                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {m.name}
+                </span>
+                <span style={{ fontSize: 11, color: FAINT, fontFamily: MONO }}>
+                  {m.count}×
+                </span>
+                <span style={{ fontFamily: MONO, fontSize: 14, color: INK, fontWeight: 600,
+                               letterSpacing: '-0.02em', minWidth: 90, textAlign: 'right' }}>
+                  {fmtMoney(m.total)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function Kpi({ label, value, tone, sub }: { label: string; value: string; tone: string; sub?: string }) {
+  return (
+    <div style={{
+      border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+      padding: '14px 16px',
+    }}>
+      <div style={{
+        fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+        color: FAINT, textTransform: 'uppercase',
+      }}>{label}</div>
+      <div style={{
+        marginTop: 6, fontFamily: MONO, fontSize: 22, fontWeight: 600,
+        letterSpacing: '-0.04em', color: tone, lineHeight: 1.1,
+      }}>{value}</div>
+      {sub && (
+        <div style={{
+          marginTop: 4, fontSize: 11, color: MUTED,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{sub}</div>
+      )}
+    </div>
+  )
+}
+
+function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+  return (
+    <div style={{
+      border: `1px solid ${LINE}`, borderRadius: 14, background: '#fff',
+      padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: '-0.02em', color: INK }}>{title}</span>
+        {subtitle && <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: FAINT, textTransform: 'uppercase' }}>{subtitle}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
+function WeeklyBars({ series, locale }: { series: WeekPoint[]; locale: string }) {
+  const max = Math.max(1, ...series.map(w => Math.max(w.income, w.expense)))
+  const H = 140
+  return (
+    <div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: `repeat(${series.length}, 1fr)`,
+        gap: 6, alignItems: 'end', height: H,
+      }}>
+        {series.map(w => {
+          const inPct = (w.income / max) * 100
+          const outPct = (w.expense / max) * 100
+          return (
+            <div key={w.weekStart} title={`${weekChartLabel(w.weekStart, locale)}: +${fmtMoney(w.income)} / −${fmtMoney(w.expense)}`}
+                 style={{ display: 'flex', gap: 3, alignItems: 'end', height: '100%' }}>
+              <div style={{
+                flex: 1, background: INCOME, opacity: 0.85, borderRadius: '4px 4px 0 0',
+                height: `${Math.max(inPct, w.income > 0 ? 2 : 0)}%`,
+                minHeight: w.income > 0 ? 3 : 0,
+              }} />
+              <div style={{
+                flex: 1, background: EXPENSE, opacity: 0.85, borderRadius: '4px 4px 0 0',
+                height: `${Math.max(outPct, w.expense > 0 ? 2 : 0)}%`,
+                minHeight: w.expense > 0 ? 3 : 0,
+              }} />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{
+        display: 'grid', gridTemplateColumns: `repeat(${series.length}, 1fr)`,
+        gap: 6, marginTop: 8,
+      }}>
+        {series.map((w, i) => (
+          <span key={w.weekStart} style={{
+            fontFamily: MONO, fontSize: 9, color: FAINT, textAlign: 'center',
+            letterSpacing: '0.05em',
+          }}>
+            {i % 2 === 0 ? weekChartLabel(w.weekStart, locale) : ''}
+          </span>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 14, marginTop: 10, fontSize: 11, color: MUTED }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 8, height: 8, background: INCOME, borderRadius: 2, display: 'inline-block' }} /> In
+        </span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ width: 8, height: 8, background: EXPENSE, borderRadius: 2, display: 'inline-block' }} /> Out
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function CategoryList({ rows, total, t }: { rows: CategorySlice[]; total: number; t: (en: string, es?: string) => string }) {
+  if (rows.length === 0) {
+    return <div style={{ color: FAINT, fontSize: 12 }}>{t('No expenses yet.', 'Sin gastos aún.')}</div>
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {rows.map(r => {
+        const pct = total > 0 ? Math.round(r.share * 100) : 0
+        return (
+          <div key={r.name} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: 2,
+                  background: r.color ?? FAINT, flex: '0 0 auto',
+                }} />
+                <span style={{ fontSize: 12.5, color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.name}
+                </span>
+              </span>
+              <span style={{ fontFamily: MONO, fontSize: 12, color: INK, fontWeight: 600, letterSpacing: '-0.02em' }}>
+                {fmtMoney(r.total)}
+              </span>
+            </div>
+            <div style={{ height: 4, background: SURFACE, borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', width: `${pct}%`,
+                background: r.color ?? INK, opacity: 0.85,
+              }} />
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function weekChartLabel(iso: string, locale: string): string {
+  const d = new Date(iso + 'T00:00:00')
+  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
+}
+
+// ================================================================
+// Recurring panel
+// ================================================================
+
+function RecurringPanel({
+  items, locale, t,
+}: {
+  items: RecurringCharge[]
+  locale: string
+  t: (en: string, es?: string) => string
+}) {
+  const monthly = items.reduce((s, r) => {
+    switch (r.cadence) {
+      case 'weekly':   return s + r.averageAmount * 4.33
+      case 'biweekly': return s + r.averageAmount * 2.17
+      case 'monthly':  return s + r.averageAmount
+      case 'yearly':   return s + r.averageAmount / 12
+      default: return s
+    }
+  }, 0)
+
+  if (items.length === 0) {
+    return (
+      <div style={{
+        margin: '20px 24px 32px', padding: '48px 20px',
+        borderRadius: 14, border: `1px dashed ${LINE}`, background: '#fff',
+        textAlign: 'center', color: MUTED, fontSize: 13, maxWidth: 520,
+        marginLeft: 'auto', marginRight: 'auto',
+      }}>
+        <div style={{
+          fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+          color: FAINT, textTransform: 'uppercase', marginBottom: 8,
+        }}>{t('WATCHING YOUR LEDGER', 'OBSERVANDO TU LIBRO')}</div>
+        <div style={{ color: INK, fontSize: 14, fontWeight: 500, marginBottom: 4 }}>
+          {t('Nothing on repeat yet.', 'Nada recurrente aún.')}
+        </div>
+        <div style={{ color: MUTED, fontSize: 12.5, lineHeight: 1.5 }}>
+          {t(
+            'As soon as two charges from the same source land on a similar cadence, they’ll show up here — rent, subscriptions, payroll, anything you can plan around.',
+            'En cuanto dos cargos del mismo origen aparezcan con la misma frecuencia, se mostrarán aquí — renta, suscripciones, nómina, todo lo que puedas planear.',
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '20px 24px 32px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* Summary strip */}
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 14, flexWrap: 'wrap',
+        padding: '14px 16px', borderRadius: 12, background: SURFACE,
+        border: `1px solid ${LINE_SOFT}`,
+      }}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em', color: FAINT, textTransform: 'uppercase' }}>
+            {t('Locked in, monthly', 'Comprometido, mensual')}
+          </span>
+          <span style={{ fontFamily: MONO, fontSize: 22, fontWeight: 600, letterSpacing: '-0.04em', color: INK }}>
+            {fmtMoney(monthly)}
+          </span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 12, color: MUTED, maxWidth: 360, lineHeight: 1.5 }}>
+          {t(
+            'Detected from your ledger — no setup. Amounts averaged across occurrences.',
+            'Detectado desde tu libro — sin configuración. Montos promediados.',
+          )}
+        </div>
+      </div>
+
+      {/* List */}
+      <div style={{
+        border: `1px solid ${LINE}`, borderRadius: 14, background: '#fff', overflow: 'hidden',
+      }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1.6fr 0.9fr 1fr 1fr auto',
+          gap: 12, padding: '12px 18px',
+          borderBottom: `1px solid ${LINE_SOFT}`, background: SURFACE,
+          fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+          color: FAINT, textTransform: 'uppercase',
+        }}>
+          <span>{t('Charge', 'Cargo')}</span>
+          <span>{t('Cadence', 'Frecuencia')}</span>
+          <span>{t('Account', 'Cuenta')}</span>
+          <span>{t('Next expected', 'Próximo')}</span>
+          <span style={{ textAlign: 'right' }}>{t('Avg', 'Prom')}</span>
+        </div>
+        {items.map((r, i) => (
+          <div key={r.fingerprint} style={{
+            display: 'grid',
+            gridTemplateColumns: '1.6fr 0.9fr 1fr 1fr auto',
+            gap: 12, padding: '14px 18px', alignItems: 'center',
+            borderTop: i === 0 ? 0 : `1px solid ${LINE_SOFT}`,
+          }}>
+            <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <span style={{
+                fontSize: 13.5, color: INK, fontWeight: 500,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{r.merchant}</span>
+              <span style={{ fontSize: 11, color: FAINT, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                {r.categoryName && (
+                  <>
+                    <span style={{ width: 6, height: 6, borderRadius: 1, background: r.categoryColor ?? FAINT }} />
+                    {r.categoryName}
+                  </>
+                )}
+                {r.categoryName && <span>·</span>}
+                <span>{t(`${r.occurrences} seen`, `${r.occurrences} vistas`)}</span>
+              </span>
+            </div>
+            <span style={{
+              fontFamily: MONO, fontSize: 11, color: MUTED, letterSpacing: '0.05em',
+              textTransform: 'uppercase',
+            }}>{cadenceLabel(r.cadence, t)}</span>
+            <span style={{ fontSize: 12.5, color: MUTED,
+                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {r.accountName ?? '—'}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: INK }}>
+              {fmtRecurringDate(r.nextExpectedAt, locale, t)}
+            </span>
+            <span style={{ fontFamily: MONO, fontSize: 14, color: INK, fontWeight: 600,
+                           letterSpacing: '-0.02em', textAlign: 'right', minWidth: 90 }}>
+              {fmtMoney(r.averageAmount)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function cadenceLabel(c: RecurringCharge['cadence'], t: (en: string, es?: string) => string): string {
+  switch (c) {
+    case 'weekly':   return t('Weekly', 'Semanal')
+    case 'biweekly': return t('Bi-weekly', 'Quincenal')
+    case 'monthly':  return t('Monthly', 'Mensual')
+    case 'yearly':   return t('Yearly', 'Anual')
+  }
+}
+
+function fmtRecurringDate(iso: string, locale: string, t: (en: string, es?: string) => string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const days = Math.round((d.getTime() - now.getTime()) / 86_400_000)
+  if (days < 0) return t('Overdue', 'Atrasado')
+  if (days === 0) return t('Today', 'Hoy')
+  if (days === 1) return t('Tomorrow', 'Mañana')
+  if (days < 7) return t(`In ${days} days`, `En ${days} días`)
+  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 // ================================================================

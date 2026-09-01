@@ -51,20 +51,23 @@ export default async function FinancePage() {
 
   const activePlace = await resolveActivePlace(supabase, restaurantId)
 
-  // Weekly window — Monday 00:00 of the current week through now,
-  // in the restaurant's tz. The header's "in this week / out"
-  // numbers derive from movements in this window.
+  // 90-day window feeds every tab: Overview reads 12 weeks, the
+  // Transactions ledger scopes to whatever the operator picks, and
+  // Recurring detection needs enough history to spot ≥2 charges at
+  // a monthly cadence. The header's "this week" numbers are
+  // derived from a subset below.
   const now = new Date()
   const weekStart = startOfWeek(now)
+  const windowStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000)
 
   const [accounts, categories, movements] = await Promise.all([
     listAccounts(admin, restaurantId, { locationId: activePlace?.id ?? null }),
     listCategories(admin, restaurantId),
-    listMovements(admin, restaurantId, { from: weekStart, limit: 200 }),
+    listMovements(admin, restaurantId, { from: windowStart, limit: 2000 }),
   ])
 
   const cash = cashOnHand(accounts)
-  const io = inOutTotals(movements)
+  const io = inOutTotals(movements.filter(m => new Date(m.occurred_at) >= weekStart))
 
   const lang = await getLang()
 

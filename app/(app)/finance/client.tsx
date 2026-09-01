@@ -359,7 +359,7 @@ function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string
         <AccountGlyph kind={a.kind} />
       </span>
       <span style={{
-        fontSize: 12, color: MUTED, letterSpacing: '-0.005em',
+        fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
       }}>
         {a.name}

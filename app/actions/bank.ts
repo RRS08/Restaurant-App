@@ -99,6 +99,17 @@ export async function createPlaidLinkToken(
 
   try {
     const plaid = getPlaidClient()
+    // Webhook URL registered on the Item at Link time — Plaid
+    // will POST SYNC_UPDATES_AVAILABLE (and other webhook codes)
+    // here whenever new transaction data lands. Requires HTTPS in
+    // production. NEXT_PUBLIC_APP_URL is set by Vercel to the
+    // canonical deploy URL; we fall back to skipping when it's
+    // absent so local dev without a tunnel still works.
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, '')
+    const webhookUrl = appUrl && /^https:\/\//i.test(appUrl)
+      ? `${appUrl}/api/plaid/webhook`
+      : undefined
+
     const res = await plaid.linkTokenCreate({
       user: { client_user_id: gate.userId },
       // client_name is what Plaid shows in Link's headline ("X uses
@@ -109,6 +120,7 @@ export async function createPlaidLinkToken(
       country_codes: [CountryCode.Us],
       language: 'en',
       ...(redirectUri && { redirect_uri: redirectUri }),
+      ...(webhookUrl && { webhook: webhookUrl }),
     })
     return { ok: true, linkToken: res.data.link_token }
   } catch (err) {

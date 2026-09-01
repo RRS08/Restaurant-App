@@ -30,6 +30,7 @@ import BusinessCard from './business-card'
 import OperationsCard from './operations-card'
 import NativePosToggleCard from './native-pos-toggle-card'
 import IntegrationsCard from './integrations-card'
+import FinanceSyncCard from './finance-sync-card'
 import SystemStatusCard from './system-status-card'
 import TeamCard from './team-card'
 import AccessCodesCard from './access-codes-card'
@@ -314,6 +315,10 @@ export default async function SettingsPage() {
             posPendingReviewCount={posPendingReviewCount}
             isDev={isDev}
           />
+        )}
+
+        {(isOwner && restaurantId) && (
+          <FinanceSyncCard restaurantId={restaurantId} />
         )}
 
         {/* Access codes — owner-only. Kiosk passcodes (owner + staff)

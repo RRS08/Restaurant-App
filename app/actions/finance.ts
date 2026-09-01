@@ -341,8 +341,18 @@ export async function bridgePlaidAccountsToFinance(
     const inst = String(c.institution_name ?? '').toLowerCase()
     const walletMatch = /venmo|cash\s*app|paypal|apple\s*cash|zelle/.test(inst)
     const kind: FinanceAccountKind = walletMatch ? 'digital_wallet' : 'bank'
+    // Tile name — bank name + subtype (checking/savings) + mask so
+    // "Chase Checking ··4321" reads distinct from "Chase Savings
+    // ··8765". When Plaid returns a friendlier account_name we
+    // prefer it and fall back to the composed form.
+    const subtypePretty = prettifyAccountSubtype(String(c.account_subtype ?? ''))
+    const bank = String(c.institution_name ?? '').trim()
+    const composed = [bank, subtypePretty].filter(Boolean).join(' ')
+    const base = c.account_name && String(c.account_name).trim().length > 0
+      ? String(c.account_name).trim()
+      : (composed || 'Account')
     const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
-    const name = `${c.institution_name || c.account_name || 'Account'}${suffix}`.trim()
+    const name = `${base}${suffix}`.trim()
     const live = balances.get(c.provider_account_id as string)
     return {
       restaurant_id: ctx.restaurantId,
@@ -475,6 +485,19 @@ async function refreshPlaidBalances(
       .update({ balance: next, updated_at: new Date().toISOString() })
       .eq('id', (t as { id: string }).id)
   }))
+}
+
+/** Plaid's account_subtype values are lowercased with underscores
+ *  ("checking", "savings", "credit card", "money market"). Turn
+ *  them into a title-cased word for tile labels. */
+function prettifyAccountSubtype(raw: string): string {
+  const s = raw.trim()
+  if (!s) return ''
+  return s
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1))
+    .join(' ')
 }
 
 /** Read the live balance for each Plaid account under the given

@@ -17,7 +17,8 @@
 // eyeball the surface first.
 // ----------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
@@ -76,9 +77,31 @@ export default function FinanceClient({
   const t = makeT(lang)
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
 
+  const router = useRouter()
   const [tab, setTab] = useState<TabId>('overview')
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
   const [expenseOpen, setExpenseOpen] = useState(false)
+
+  // Month picker — click the title button, portal opens anchored
+  // to the button's bottom-left. Anchor recomputes on scroll/resize
+  // so the popover tracks the button even inside a sticky header.
+  const titleBtnRef = useRef<HTMLButtonElement | null>(null)
+  const [calOpen, setCalOpen] = useState(false)
+  const [pickerAnchor, setPickerAnchor] = useState<{ top: number; left: number } | null>(null)
+  useEffect(() => {
+    if (!calOpen) return
+    const compute = () => {
+      const r = titleBtnRef.current?.getBoundingClientRect()
+      if (r) setPickerAnchor({ top: r.bottom + 8, left: r.left })
+    }
+    compute()
+    window.addEventListener('resize', compute)
+    window.addEventListener('scroll', compute, true)
+    return () => {
+      window.removeEventListener('resize', compute)
+      window.removeEventListener('scroll', compute, true)
+    }
+  }, [calOpen])
 
   // 12-week series feeds Overview's bar chart. Empty movements
   // still returns 12 zero-buckets so the chart doesn't collapse.
@@ -135,17 +158,18 @@ export default function FinanceClient({
       }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            {/* Month title. Chevron is a hook for the future month
-                picker; today it's a static affordance so the header
-                already reads like a picker even before the popover
-                lands. */}
+            {/* Month title — click to open the month picker. Same
+                pattern as the sales date title: portal-rendered
+                popover anchors under the button, tracks scroll. */}
             <button
+              ref={titleBtnRef}
               type="button"
+              onClick={() => setCalOpen((v) => !v)}
               style={{
                 display: 'inline-flex', alignItems: 'center', gap: 7,
                 border: '1px solid transparent', background: 'transparent',
                 borderRadius: 9, padding: '2px 8px', marginLeft: -8,
-                font: 'inherit', color: INK, cursor: 'default',
+                font: 'inherit', color: INK, cursor: 'pointer',
               }}
             >
               <span style={{ fontSize: 21, fontWeight: 700, letterSpacing: '-0.035em', whiteSpace: 'nowrap' }}>
@@ -333,6 +357,25 @@ export default function FinanceClient({
           onClose={() => setExpenseOpen(false)}
           t={t}
         />
+      )}
+
+      {/* Month picker — portaled to body so a scrolling ancestor's
+          overflow can't clip it. Highlights the current month;
+          disables future months. */}
+      {calOpen && typeof document !== 'undefined' && pickerAnchor && createPortal(
+        <MonthPickerOverlay
+          selected={periodStartDate}
+          today={new Date()}
+          anchor={pickerAnchor}
+          onPick={(iso) => {
+            router.push(`/finance?period=${iso}`)
+            setCalOpen(false)
+          }}
+          onClose={() => setCalOpen(false)}
+          locale={locale}
+          t={t}
+        />,
+        document.body,
       )}
     </div>
   )
@@ -684,6 +727,134 @@ function iconTileFor(m: FinanceMovement): { tile: string; ink: string } {
   }
   // expense
   return { tile: '#FEE2E2', ink: '#B91C1C' }
+}
+
+// ================================================================
+// Month picker overlay
+// ================================================================
+
+function MonthPickerOverlay({
+  selected, today, anchor, onPick, onClose, locale, t,
+}: {
+  selected: Date
+  today: Date
+  anchor: { top: number; left: number }
+  /** iso in YYYY-MM form */
+  onPick: (iso: string) => void
+  onClose: () => void
+  locale: string
+  t: (en: string, es?: string) => string
+}) {
+  const [year, setYear] = useState<number>(selected.getFullYear())
+  const currentY = today.getFullYear()
+  const currentM = today.getMonth()
+  const selectedY = selected.getFullYear()
+  const selectedM = selected.getMonth()
+
+  const monthNames = useMemo(
+    () => Array.from({ length: 12 }, (_, i) =>
+      new Date(2024, i, 1).toLocaleDateString(locale, { month: 'short' })
+    ),
+    [locale],
+  )
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+      <div style={{
+        position: 'fixed',
+        top: anchor.top,
+        left: anchor.left,
+        zIndex: 41, width: 280,
+        border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+        boxShadow: '0 12px 32px rgba(24,24,27,0.14)', padding: 12,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+          <NavBtn dir="‹" onClick={() => setYear(y => y - 1)} />
+          <span style={{ fontFamily: MONO, fontSize: 13, fontWeight: 600, letterSpacing: '-0.01em', color: INK }}>
+            {year}
+          </span>
+          <NavBtn dir="›" onClick={() => setYear(y => y + 1)} disabled={year >= currentY} />
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+          {monthNames.map((name, i) => {
+            const isFuture = year > currentY || (year === currentY && i > currentM)
+            const isSelected = year === selectedY && i === selectedM
+            const isThisMonth = year === currentY && i === currentM
+            const iso = `${year}-${String(i + 1).padStart(2, '0')}`
+            return (
+              <button
+                key={i}
+                type="button"
+                disabled={isFuture}
+                onClick={() => onPick(iso)}
+                style={{
+                  position: 'relative',
+                  border: 0, borderRadius: 8, height: 34,
+                  font: 'inherit', fontFamily: MONO, fontSize: 12,
+                  cursor: isFuture ? 'not-allowed' : 'pointer',
+                  background: isSelected ? INK : 'transparent',
+                  color: isFuture ? '#E5E5E5'
+                    : isSelected ? PAPER
+                      : '#3F3F46',
+                  fontWeight: isSelected ? 600 : 400,
+                  textTransform: 'lowercase',
+                }}
+                onMouseEnter={e => { if (!isSelected && !isFuture) e.currentTarget.style.background = LINE_SOFT }}
+                onMouseLeave={e => { if (!isSelected && !isFuture) e.currentTarget.style.background = 'transparent' }}
+              >
+                {name}
+                {isThisMonth && !isSelected && (
+                  <span style={{
+                    position: 'absolute', left: '50%', bottom: 5, transform: 'translateX(-50%)',
+                    width: 3, height: 3, borderRadius: '50%', background: FAINT,
+                  }} />
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+          marginTop: 10, paddingTop: 10, borderTop: `1px solid ${LINE}`,
+        }}>
+          <span style={{ fontSize: 11, color: FAINT }}>
+            {t('Pick a month to see its totals', 'Elige un mes para ver sus totales')}
+          </span>
+          <button
+            type="button"
+            onClick={() => onPick(`${currentY}-${String(currentM + 1).padStart(2, '0')}`)}
+            style={{
+              border: 0, background: 'transparent', padding: 0,
+              font: 'inherit', fontSize: 12, fontWeight: 500, color: '#2563EB', cursor: 'pointer',
+            }}
+          >
+            {t('This month', 'Este mes')}
+          </button>
+        </div>
+      </div>
+    </>
+  )
+}
+
+function NavBtn({ dir, onClick, disabled }: { dir: string; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        border: `1px solid ${LINE}`, background: '#fff', borderRadius: 8,
+        width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        font: 'inherit', fontSize: 12, color: disabled ? '#D6D5D1' : '#52525B',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+      }}
+    >
+      {dir}
+    </button>
+  )
 }
 
 // ================================================================

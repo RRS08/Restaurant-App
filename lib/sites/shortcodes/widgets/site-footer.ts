@@ -40,7 +40,19 @@ const FALLBACK_TAGLINE = 'Making wellness flavorful, affordable, cultural, and i
 
 export function renderSiteFooter(_args: unknown, ctx: ShortcodeContext): string {
   const config = (ctx.site.config ?? {}) as Record<string, unknown>
-  const footer = (config.footer ?? {}) as { tagline?: string; cols?: unknown }
+  // Multilingual sites drop a `footer_<lang>` block next to
+  // `footer` (e.g. `footer_es`) with localized tagline + cols. When
+  // the current page declares `seo.lang`, prefer that variant and
+  // fall back to the default `footer` if the variant is missing.
+  const pageLang = readPageLang(ctx)
+  const localizedKey = pageLang ? `footer_${pageLang}` : null
+  const localized = localizedKey ? (config[localizedKey] as unknown) : null
+  const footer = ((localized && typeof localized === 'object' ? localized : config.footer) ?? {}) as {
+    tagline?: string
+    cols?: unknown
+    copyright?: unknown
+    locations_label?: unknown
+  }
 
   const tagline = typeof footer.tagline === 'string' ? footer.tagline : FALLBACK_TAGLINE
   // Explicit [] means "no link columns" — footer collapses to just
@@ -53,7 +65,7 @@ export function renderSiteFooter(_args: unknown, ctx: ShortcodeContext): string 
   const siteName = ctx.site.name ?? ctx.site.slug
   const logoUrl = readLogoUrl(config)
   const brand = splitBrand(config, siteName)
-  const copyright = readCopyrightLine(config, siteName)
+  const copyright = readCopyrightLine(footer, siteName)
 
   const colsHtml = cols.map(col => {
     const links = Array.isArray(col.links) ? col.links : []
@@ -131,16 +143,29 @@ function splitBrand(config: Record<string, unknown>, siteName: string): { mark: 
   return { mark, kicker: (explicit ?? derivedKicker).toUpperCase() }
 }
 
-/** Build "© YEAR Site Name · location suffix" from config. Falls
- *  back to just year + site name when no locations_label is set. */
-function readCopyrightLine(config: Record<string, unknown>, siteName: string): string {
+/** Build "© YEAR Site Name · location suffix" from the resolved
+ *  footer block (default or lang-specific variant). Falls back to
+ *  just year + site name when no locations_label is set. */
+function readCopyrightLine(
+  footer: { locations_label?: unknown; copyright?: unknown },
+  siteName: string,
+): string {
   const year = new Date().getFullYear()
-  const footer = (config.footer ?? {}) as { locations_label?: unknown; copyright?: unknown }
   if (typeof footer.copyright === 'string' && footer.copyright.length > 0) {
     return `© ${year} ${footer.copyright}`
   }
   const label = typeof footer.locations_label === 'string' ? footer.locations_label : ''
   return label ? `© ${year} ${siteName} · ${label}` : `© ${year} ${siteName}`
+}
+
+/** Read the current page's declared language (from seo.lang) as a
+ *  lowercase 2-letter tag, or null if unset/malformed. Used to pick
+ *  the lang-specific footer variant. */
+function readPageLang(ctx: ShortcodeContext): string | null {
+  const seo = (ctx.page.seo ?? {}) as { lang?: unknown }
+  if (typeof seo.lang !== 'string') return null
+  const m = seo.lang.trim().toLowerCase().match(/^([a-z]{2})(?:[-_].*)?$/)
+  return m ? m[1] : null
 }
 
 // Widget-local CSS. Overrides earlier footer rules from

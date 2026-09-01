@@ -35,8 +35,6 @@ import { isDevEmail } from '@/lib/dev'
 import {
   CountryCode,
   Products,
-  DepositoryAccountSubtype,
-  CreditAccountSubtype,
   Transaction as PlaidTransaction,
   RemovedTransaction,
 } from 'plaid'
@@ -123,26 +121,13 @@ export async function createPlaidLinkToken(
       language: 'en',
       ...(redirectUri && { redirect_uri: redirectUri }),
       ...(webhookUrl && { webhook: webhookUrl }),
-      // Only show account types that make sense for a cash-flow
-      // dashboard. Depository = checking/savings/money market/etc,
-      // credit = wallet cards + card products (Cash App card, etc).
-      // Skips mortgages, auto loans, investment accounts, student
-      // loans — those don't move day-to-day cash and would clutter
-      // the tile row with balances the operator can't act on.
-      account_filters: {
-        depository: {
-          account_subtypes: [
-            DepositoryAccountSubtype.Checking,
-            DepositoryAccountSubtype.Savings,
-            DepositoryAccountSubtype.MoneyMarket,
-            DepositoryAccountSubtype.Paypal,
-            DepositoryAccountSubtype.Prepaid,
-          ],
-        },
-        credit: {
-          account_subtypes: [CreditAccountSubtype.CreditCard],
-        },
-      },
+      // No account_filters here — the previous whitelist blocked
+      // whole institutions (Cash App via Sutton Bank reports a
+      // subtype that fell outside the list, so Plaid rendered
+      // "Institution Not Supported"). The wanted-vs-unwanted
+      // filter runs server-side in bridgePlaidAccountsToFinance
+      // instead, where we can be permissive by default and only
+      // skip subtypes that don't belong in a cash-flow dashboard.
     })
     return { ok: true, linkToken: res.data.link_token }
   } catch (err) {

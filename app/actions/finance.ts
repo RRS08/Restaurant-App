@@ -306,13 +306,32 @@ export async function bridgePlaidAccountsToFinance(
   if ('error' in ctx) return ctx
   const admin = createAdminClient()
 
-  const { data: connected } = await admin
+  const { data: connectedRaw } = await admin
     .from('connected_bank_accounts')
     .select('provider_item_id, provider_account_id, account_name, account_mask, account_type, account_subtype, institution_name')
     .eq('restaurant_id', ctx.restaurantId)
     .eq('provider', 'plaid')
     .eq('active', true)
-  if (!connected || connected.length === 0) return { ok: true, data: { inserted: 0 } }
+  if (!connectedRaw || connectedRaw.length === 0) return { ok: true, data: { inserted: 0 } }
+
+  // Skip subtypes that don't belong in a cash-flow dashboard —
+  // long-term liabilities, retirement accounts, brokerage. Plaid
+  // still fetches them (some institutions bundle them), we just
+  // don't materialize a Finance tile. Kept as a small deny-list
+  // so anything unexpected still lands rather than getting
+  // silently dropped.
+  const SKIP_SUBTYPES = new Set([
+    'mortgage', 'auto', 'student', 'business',
+    'commercial', 'home equity', 'line of credit',
+    '401k', '401a', '403b', '457b', '529',
+    'brokerage', 'ira', 'roth', 'roth 401k', 'trust',
+    'hsa', 'pension',
+  ])
+  const connected = connectedRaw.filter(c => {
+    const sub = String(c.account_subtype ?? '').toLowerCase().trim()
+    return !SKIP_SUBTYPES.has(sub)
+  })
+  if (connected.length === 0) return { ok: true, data: { inserted: 0 } }
 
   const providerRefs = connected.map(c => c.provider_account_id as string).filter(Boolean)
   if (providerRefs.length === 0) return { ok: true, data: { inserted: 0 } }

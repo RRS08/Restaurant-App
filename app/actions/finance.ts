@@ -358,27 +358,44 @@ export async function bridgePlaidAccountsToFinance(
 
   const rows = toInsert.map(c => {
     const inst = String(c.institution_name ?? '').toLowerCase()
-    const walletMatch = /venmo|cash\s*app|paypal|apple\s*cash|zelle/.test(inst)
-    const kind: FinanceAccountKind = walletMatch ? 'digital_wallet' : 'bank'
-    // Tile name — bank name + subtype (checking/savings) + mask so
-    // "Chase Checking ··4321" reads distinct from "Chase Savings
-    // ··8765". When Plaid returns a friendlier account_name we
-    // prefer it and fall back to the composed form.
-    const subtypePretty = prettifyAccountSubtype(String(c.account_subtype ?? ''))
+    const walletBrand = detectWalletBrand(inst)   // 'venmo' | 'cashapp' | 'paypal' | 'apple-cash' | 'zelle' | null
+    const kind: FinanceAccountKind = walletBrand ? 'digital_wallet' : 'bank'
+
+    // Tile name policy:
+    //  - Digital wallets: always show the brand name. Plaid returns
+    //    "Personal Profile" as account_name for Venmo, which
+    //    reads like a device setting screen, not a payment
+    //    account. Institution name is the merchant's mental
+    //    model. Skip the mask suffix too — wallets don't have
+    //    meaningful masks to disambiguate.
+    //  - Banks: prefer institution + prettified subtype + mask so
+    //    "Chase Checking ··4321" reads distinct from
+    //    "Chase Savings ··8765".
     const bank = String(c.institution_name ?? '').trim()
-    const composed = [bank, subtypePretty].filter(Boolean).join(' ')
-    const base = c.account_name && String(c.account_name).trim().length > 0
-      ? String(c.account_name).trim()
-      : (composed || 'Account')
-    const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
-    const name = `${base}${suffix}`.trim()
+    let name: string
+    if (walletBrand) {
+      name = bank || 'Wallet'
+    } else {
+      const subtypePretty = prettifyAccountSubtype(String(c.account_subtype ?? ''))
+      const composed = [bank, subtypePretty].filter(Boolean).join(' ')
+      const base = c.account_name && String(c.account_name).trim().length > 0
+        ? String(c.account_name).trim()
+        : (composed || 'Account')
+      const suffix = c.account_mask ? ` ··${c.account_mask}` : ''
+      name = `${base}${suffix}`.trim()
+    }
+
+    // Glyph slug — client AccountGlyph checks this first for a
+    // brand SVG; falls back to a kind-based generic when unset.
+    const glyph = walletBrand ?? null
     const live = balances.get(c.provider_account_id as string)
     return {
       restaurant_id: ctx.restaurantId,
       location_id: locationId ?? null,
       name,
       kind,
-      color: ACCOUNT_KIND_DEFAULTS[kind].color,
+      color: walletBrand ? WALLET_TILE_COLOR[walletBrand] : ACCOUNT_KIND_DEFAULTS[kind].color,
+      glyph,
       balance: live ?? 0,
       provider: 'plaid' as const,
       provider_ref: c.provider_account_id,
@@ -504,6 +521,33 @@ async function refreshPlaidBalances(
       .update({ balance: next, updated_at: new Date().toISOString() })
       .eq('id', (t as { id: string }).id)
   }))
+}
+
+export type WalletBrand = 'venmo' | 'cashapp' | 'paypal' | 'apple-cash' | 'zelle'
+
+/** Match a Plaid institution name to a known wallet brand so we
+ *  can badge the tile with the right logo + label. Returns null
+ *  for regular banks and anything unrecognized. */
+function detectWalletBrand(instLower: string): WalletBrand | null {
+  if (!instLower) return null
+  if (/venmo/.test(instLower)) return 'venmo'
+  if (/cash\s*app|square\s+cash|sutton\s+bank/.test(instLower)) return 'cashapp'
+  if (/paypal/.test(instLower)) return 'paypal'
+  if (/apple\s*cash/.test(instLower)) return 'apple-cash'
+  if (/zelle/.test(instLower)) return 'zelle'
+  return null
+}
+
+/** Pastel background tint per wallet brand — mirrors the tone of
+ *  each brand's real logo but softened so the tile still reads as
+ *  a Checked surface, not a Venmo/Cash App billboard. Matches the
+ *  ACCOUNT_KIND_DEFAULTS palette in feel. */
+const WALLET_TILE_COLOR: Record<WalletBrand, string> = {
+  venmo:        '#DFF0FE',  // Venmo light blue
+  cashapp:      '#DFF6E7',  // Cash green
+  paypal:       '#DDE7FA',  // PayPal blue
+  'apple-cash': '#F1F1F3',  // muted grey
+  zelle:        '#EFE0F5',  // Zelle purple
 }
 
 /** Plaid's account_subtype values are lowercased with underscores

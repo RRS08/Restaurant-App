@@ -449,7 +449,7 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
         width: 32, height: 32, borderRadius: 8,
         background: tone.tile, color: tone.ink,
       }}>
-        <AccountGlyph kind={a.kind} />
+        <AccountGlyph kind={a.kind} glyph={a.glyph} />
       </span>
       <span style={{
         fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
@@ -1423,7 +1423,40 @@ function Stat({ value, label, tone }: { value: string; label: string; tone?: str
 // Glyphs
 // ================================================================
 
-function AccountGlyph({ kind }: { kind: FinanceAccountKind }) {
+function AccountGlyph({ kind, glyph }: { kind: FinanceAccountKind; glyph?: string | null }) {
+  // Brand glyphs first — a Plaid-linked Venmo tile is a Venmo
+  // tile, not a generic wallet. Slug values come from the bridge
+  // step; anything unrecognized falls through to the kind-based
+  // generic below.
+  if (glyph === 'venmo') return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M18.9 4.5c.7 1.1 1 2.3 1 3.9 0 4.9-4.2 11.3-7.6 15.6H5l-3-18 6.5-.6 1.6 12.6c1.5-2.4 3.3-6.2 3.3-8.8 0-1.4-.24-2.4-.62-3.2l6.12-1z" fill="#3D95CE" />
+    </svg>
+  )
+  if (glyph === 'cashapp') return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#00D64F" />
+      <path d="M15.3 9.3c-.7-.7-1.7-1.1-2.7-1.1-1 0-1.7.4-1.7 1 0 .7 1 1 2.2 1.4 1.9.6 3.3 1.4 3.3 3.2 0 2-1.5 3.4-4 3.6l-.3 1.5c0 .1-.1.2-.3.2h-1.4c-.2 0-.3-.1-.2-.3l.3-1.5c-1.1-.2-2.1-.7-2.8-1.4-.1-.1-.1-.3 0-.4l1-1c.1-.1.3-.1.4 0 .8.8 1.9 1.2 3 1.2 1.2 0 1.9-.5 1.9-1.2 0-.7-.9-.9-2.2-1.4-1.6-.5-3.2-1.3-3.2-3.1 0-1.9 1.5-3.3 3.7-3.5l.3-1.5c0-.1.1-.2.3-.2h1.4c.2 0 .3.1.2.3l-.3 1.5c1 .2 1.8.7 2.4 1.2.1.1.1.3 0 .4l-1 1c-.1.1-.3.1-.3 0z" fill="#fff" />
+    </svg>
+  )
+  if (glyph === 'paypal') return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M8.3 4h6.9c2.7 0 4.6 1.4 4 4.6-.7 3.8-3.5 5.4-6.8 5.4h-1.6c-.4 0-.7.3-.8.7L9.3 20H6l2.3-16z" fill="#003087" />
+      <path d="M9.5 6h4.8c2 0 3.3 1 2.9 3.2-.5 2.7-2.5 3.9-4.9 3.9h-1.2c-.3 0-.5.2-.6.5l-.7 4.4H7.6L9.5 6z" fill="#009cde" />
+    </svg>
+  )
+  if (glyph === 'apple-cash') return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M17 12.8c0-2.5 2-3.6 2.1-3.7-1.2-1.7-3-2-3.6-2-1.5-.2-3 .9-3.8.9-.8 0-2-.9-3.4-.8-1.7 0-3.3 1-4.2 2.6-1.8 3.1-.5 7.7 1.3 10.3.8 1.2 1.8 2.6 3.2 2.6 1.3 0 1.8-.8 3.4-.8 1.6 0 2 .8 3.4.8 1.4 0 2.3-1.3 3.2-2.5.9-1.3 1.3-2.6 1.4-2.7-.1 0-2.9-1.1-3-4.3zM14.5 5.3c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.3 2-1.1 3.2 1.2.1 2.3-.6 3-1.5z" fill="#111" />
+    </svg>
+  )
+  if (glyph === 'zelle') return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <rect x="2" y="2" width="20" height="20" rx="5" fill="#6D1ED4" />
+      <path d="M10.6 4h2.8v2.4h3.7v2.3l-5.7 8.6h5.7V20h-3.7v2h-2.8v-2H6.9v-2.3l5.7-8.6H6.9V6.4h3.7V4z" fill="#fff" />
+    </svg>
+  )
+
   // POS + cash glyphs mirror the ones in the Sales row tiles
   // (CardIcon + CashIcon in app/(app)/sales/client.tsx) so the
   // same real-world thing reads identically on both surfaces.

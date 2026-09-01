@@ -516,11 +516,17 @@ async function safeGetInstitutionName(institutionId: string): Promise<string | n
 function formatPlaidError(step: string, err: unknown): string {
   // Plaid SDK throws Axios-shaped errors with response.data.
   const anyErr = err as {
-    response?: { data?: { error_code?: string; error_message?: string } }
+    response?: { data?: { error_code?: string; error_message?: string; display_message?: string; error_type?: string } }
     message?: string
   }
   const code = anyErr?.response?.data?.error_code
+  const type = anyErr?.response?.data?.error_type
   const msg = anyErr?.response?.data?.error_message ?? anyErr?.message ?? 'Unknown error'
+  // Log the full Plaid payload server-side (never contains a secret
+  // — Plaid errors are safe to log) so Vercel Runtime Logs show the
+  // exact code/type/message when the client only sees the friendly
+  // "please try again" fallback.
+  console.error(`[plaid] ${step} failed`, { code, type, msg })
   if (process.env.NODE_ENV === 'development') {
     return `[DEV] ${step} failed — ${msg}${code ? ` (${code})` : ''}`
   }

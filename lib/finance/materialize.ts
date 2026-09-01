@@ -50,6 +50,7 @@ interface BankTxRow {
   pending: boolean
   provider_metadata: {
     personal_finance_category?: { primary?: string | null; detailed?: string | null } | null
+    pending_transaction_id?: string | null
   } | null
 }
 
@@ -79,7 +80,29 @@ export async function materializeFinanceMovements(
     .order('posted_at', { ascending: true })
   if (!rawTx || rawTx.length === 0) return { inserted: 0, transfersPaired: 0, error: null }
 
-  // 2. Load already-materialized origin refs so we skip them.
+  // 2. Pending → posted dedup pass.
+  //    Plaid returns a NEW transaction_id when a pending row posts,
+  //    and sets pending_transaction_id on the new row pointing to
+  //    the original. If we've already materialized the pending
+  //    version, wipe it now — the posted row will replace it.
+  //    Also collect the pending IDs referenced so we don't
+  //    re-materialize them below.
+  const postedRefsThatReplace = new Map<string, string>()  // pending_id → posted_id
+  for (const t of rawTx as BankTxRow[]) {
+    const pending = t.provider_metadata?.pending_transaction_id
+    if (pending) postedRefsThatReplace.set(pending, t.provider_transaction_id)
+  }
+  if (postedRefsThatReplace.size > 0) {
+    await admin
+      .from('finance_movements')
+      .delete()
+      .eq('restaurant_id', restaurantId)
+      .eq('origin', 'auto')
+      .in('origin_ref', Array.from(postedRefsThatReplace.keys()))
+  }
+  const supersededPendingIds = new Set(postedRefsThatReplace.keys())
+
+  // 3. Load already-materialized origin refs so we skip them.
   const providerRefs = (rawTx as BankTxRow[]).map(t => t.provider_transaction_id)
   const { data: existing } = await admin
     .from('finance_movements')
@@ -90,7 +113,10 @@ export async function materializeFinanceMovements(
   const materialized = new Set(
     (existing ?? []).map(r => (r as { origin_ref: string | null }).origin_ref).filter((x): x is string => !!x)
   )
-  const fresh = (rawTx as BankTxRow[]).filter(t => !materialized.has(t.provider_transaction_id))
+  const fresh = (rawTx as BankTxRow[]).filter(
+    t => !materialized.has(t.provider_transaction_id) &&
+         !supersededPendingIds.has(t.provider_transaction_id),
+  )
   if (fresh.length === 0) return { inserted: 0, transfersPaired: 0, error: null }
 
   // 3. Build connected_bank_account → finance_account map.
@@ -216,7 +242,7 @@ export async function materializeFinanceMovements(
         source_account_id: p.financeAccountId,
         dest_account_id: inflowPrep.financeAccountId,
         category_id: cat?.id ?? null,
-        note: p.raw.merchant_name || p.raw.description || 'Transfer',
+        note: cleanMerchant(p.raw.merchant_name || p.raw.description) || 'Transfer',
         memo: null,
         origin: 'auto',
         origin_ref: p.raw.provider_transaction_id,
@@ -224,15 +250,21 @@ export async function materializeFinanceMovements(
       continue
     }
 
-    // Standalone income (inflow) or expense (outflow)
+    // Standalone income (inflow) or expense (outflow) — the row
+    // is NOT a paired transfer. If the Plaid mapping suggested a
+    // 'transfer'-kind seed (Between accounts, Card settlement,
+    // etc.), we deliberately drop it here: Zelle to a person or
+    // a card payment that doesn't have a matching internal leg
+    // isn't a transfer, it's a real payment. Leave it Uncategorized
+    // so the operator (or a future rules engine) can label it.
     const isInflow = p.raw.direction === 'inflow'
     const seed = p.seedName ? categoryByName.get(p.seedName.toLowerCase()) : null
-    // Guard: an inflow tx shouldn't attach to an expense-kind category, etc.
     const kindOk =
       !seed ||
       (isInflow && seed.kind === 'income') ||
-      (!isInflow && seed.kind === 'expense') ||
-      seed.kind === 'transfer'
+      (!isInflow && seed.kind === 'expense')
+      // Note: seed.kind === 'transfer' intentionally NOT allowed
+      // for standalone rows — we already checked for pairing above.
     insertRows.push({
       restaurant_id: restaurantId,
       occurred_at: p.raw.posted_at,
@@ -240,7 +272,7 @@ export async function materializeFinanceMovements(
       source_account_id: isInflow ? null : p.financeAccountId,
       dest_account_id: isInflow ? p.financeAccountId : null,
       category_id: kindOk ? (seed?.id ?? null) : null,
-      note: p.raw.merchant_name || p.raw.description || (isInflow ? 'Deposit' : 'Charge'),
+      note: cleanMerchant(p.raw.merchant_name || p.raw.description) || (isInflow ? 'Deposit' : 'Charge'),
       memo: null,
       origin: 'auto',
       origin_ref: p.raw.provider_transaction_id,
@@ -255,4 +287,68 @@ export async function materializeFinanceMovements(
     return { inserted: 0, transfersPaired: pairs.size, error: error.message }
   }
   return { inserted: insertRows.length, transfersPaired: pairs.size, error: null }
+}
+
+// ---------------------------------------------------------------- merchant cleanup
+
+/** Turn a raw bank descriptor into a human-legible merchant name.
+ *
+ *  Bank feeds ship names like "STRIPE TRANSFER ST-C8G0E0F9A7R9 CCD
+ *  ID: 4270465600" — the merchant is Stripe, the rest is ACH
+ *  metadata. Cleaning at materialize time (rather than at render)
+ *  keeps the ledger, report, and CSV export all consistent, and
+ *  the Categorize UI (later) can key rules off a stable name.
+ *
+ *  Only handles the top payout/wallet providers explicitly —
+ *  everything else keeps its original name, trimmed. Regex
+ *  maintenance is deliberately bounded: a generic "always clean
+ *  everything" approach chases its tail forever. */
+const MERCHANT_PATTERNS: Array<[RegExp, string]> = [
+  [/\bstripe\b.*(?:transfer|payout|ach)/i, 'Stripe payout'],
+  [/\bstripe\b/i, 'Stripe'],
+  [/\bsquare\s+(inc|payments|payout|transfer)/i, 'Square payout'],
+  [/^sq\s*\*/i, 'Square'],
+  [/\bshopify\b.*(?:transfer|payout|ach)/i, 'Shopify payout'],
+  [/\bshopify\b/i, 'Shopify'],
+  [/\bpaypal\b.*(?:transfer|payout|ach|inst\s*xfer)/i, 'PayPal payout'],
+  [/\bpaypal\b/i, 'PayPal'],
+  [/\bvenmo\b.*(?:cashout|transfer|payout)/i, 'Venmo cashout'],
+  [/\bvenmo\b/i, 'Venmo'],
+  [/\bcash\s*app\b/i, 'Cash App'],
+  [/^amazon(\.com|\s+mktp|\s+mktplace)/i, 'Amazon'],
+  [/^amzn\s*mktp/i, 'Amazon'],
+  [/\bdoordash\b/i, 'DoorDash'],
+  [/\buber\s+eats\b/i, 'Uber Eats'],
+  [/^gdp\*/i, ''],  // GoDaddy Payments prefix — strip and keep the rest
+]
+
+/** Strip common trailing ACH junk: "CCD ID: 1234...", "PPD ID:",
+ *  transaction reference numbers, trailing hash strings. */
+function stripAchNoise(name: string): string {
+  return name
+    .replace(/\s+(CCD|PPD|WEB|TEL|ARC|BOC|POP)\s+ID:.*$/i, '')
+    .replace(/\s+ID:\s*\d+.*$/i, '')
+    .replace(/\s+ST-[A-Z0-9]{6,}\b.*$/i, '')  // Stripe reference tail
+    .replace(/\s+#\s*\w{6,}\b.*$/i, '')       // Order/ref numbers
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+function cleanMerchant(raw: string | null | undefined): string {
+  if (!raw) return ''
+  let name = String(raw).trim()
+  if (!name) return ''
+
+  // Explicit prefix strip (e.g. GDP*Hatziri Botanicals → Hatziri Botanicals)
+  for (const [pattern, replacement] of MERCHANT_PATTERNS) {
+    if (pattern.test(name)) {
+      if (replacement === '') {
+        name = name.replace(pattern, '').trim()
+      } else {
+        return replacement
+      }
+    }
+  }
+
+  return stripAchNoise(name)
 }

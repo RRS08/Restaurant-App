@@ -176,6 +176,11 @@ interface PlaidTx {
   datetime?: string | null
   authorized_datetime?: string | null
   pending?: boolean
+  /** When a pending tx posts, Plaid sends a new tx with this
+   *  field pointing back at the original pending row's id. We
+   *  persist it so the materialize pass can dedupe the pair
+   *  and suppress the ghost. */
+  pending_transaction_id?: string | null
 }
 
 /** Turn a Plaid tx into the shape `ingestBankTransactions`
@@ -209,6 +214,7 @@ function normalizePlaidTx(tx: PlaidTx): NormalizedBankTransaction | null {
     providerMetadata: {
       personal_finance_category: tx.personal_finance_category ?? null,
       category: tx.category ?? null,
+      pending_transaction_id: tx.pending_transaction_id ?? null,
     },
   }
 }

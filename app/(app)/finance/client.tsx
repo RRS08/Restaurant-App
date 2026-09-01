@@ -22,7 +22,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
-import { addExpense, bridgePlaidAccountsToFinance } from '@/app/actions/finance'
+import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount } from '@/app/actions/finance'
 import { createPlaidLinkToken, exchangePlaidPublicToken } from '@/app/actions/bank'
 import type {
   FinanceAccount,
@@ -249,7 +249,7 @@ export default function FinanceClient({
             gap: 12,
           }}>
             {accounts.map(a => (
-              <AccountTile key={a.id} a={a} locale={locale} />
+              <AccountTile key={a.id} a={a} locale={locale} t={t} />
             ))}
             <AddAccountTile
               t={t}
@@ -384,15 +384,66 @@ export default function FinanceClient({
 // Tiles
 // ================================================================
 
-function AccountTile({ a, locale: _locale }: { a: FinanceAccount; locale: string }) {
+function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: string; t: (en: string, es?: string) => string }) {
+  const router = useRouter()
   const tone = tintForAccount(a)
+  const [hover, setHover] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [removing, setRemoving] = useState(false)
+
+  const onRemove = () => {
+    setRemoving(true)
+    disconnectFinanceAccount(a.id)
+      .then((res) => {
+        if ('error' in res) {
+          setRemoving(false)
+          setConfirming(false)
+          window.alert(res.error)
+          return
+        }
+        router.refresh()
+      })
+      .catch(() => setRemoving(false))
+  }
+
   return (
     <div
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => { setHover(false); setConfirming(false) }}
       style={{
+        position: 'relative',
         border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
         padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: 8,
       }}
     >
+      {/* Hover-revealed remove control. Two-step (× → Remove label)
+          so a stray click can't dismiss a tile the operator meant
+          to inspect. `disconnectFinanceAccount` also calls
+          /item/remove when this is the last tile under a Plaid
+          Item, so the trial slot frees up automatically. */}
+      {(hover || confirming) && (
+        <button
+          type="button"
+          disabled={removing}
+          onClick={() => confirming ? onRemove() : setConfirming(true)}
+          title={confirming
+            ? t('Click again to remove', 'Haz clic de nuevo para quitar')
+            : t('Remove account', 'Quitar cuenta')}
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            border: `1px solid ${confirming ? INK : LINE}`,
+            background: confirming ? INK : '#fff',
+            color: confirming ? PAPER : MUTED,
+            borderRadius: 8, height: 22,
+            padding: confirming ? '0 8px' : 0, minWidth: 22,
+            font: 'inherit', fontSize: 11, fontWeight: 500,
+            cursor: removing ? 'wait' : 'pointer', lineHeight: 1,
+          }}
+        >
+          {removing ? '…' : confirming ? t('Remove', 'Quitar') : '×'}
+        </button>
+      )}
+
       <span style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
         width: 32, height: 32, borderRadius: 8,

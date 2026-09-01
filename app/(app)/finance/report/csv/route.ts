@@ -23,9 +23,25 @@ export async function GET(req: Request) {
   const restaurantId = role.restaurant_id as string
 
   const url = new URL(req.url)
-  const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') ?? '', 10) || 30))
-  const to = new Date()
-  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+  const periodRaw = url.searchParams.get('period')
+  // `?period=YYYY-MM` scopes to that calendar month (matches the
+  // Report modal's iframe). Absent → rolling last-N-days window.
+  let from: Date, to: Date
+  const periodMatch = periodRaw ? /^(\d{4})-(\d{2})$/.exec(periodRaw.trim()) : null
+  if (periodMatch) {
+    const y = parseInt(periodMatch[1], 10)
+    const mo = parseInt(periodMatch[2], 10)
+    from = new Date(y, mo - 1, 1)
+    from.setHours(0, 0, 0, 0)
+    const monthEnd = new Date(y, mo, 1)
+    monthEnd.setMilliseconds(-1)
+    const now = new Date()
+    to = monthEnd > now ? now : monthEnd
+  } else {
+    const days = Math.max(1, Math.min(365, parseInt(url.searchParams.get('days') ?? '', 10) || 30))
+    to = new Date()
+    from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+  }
 
   const admin = createAdminClient()
   const movements = await listMovements(admin, restaurantId, { from, to, limit: 10000 })

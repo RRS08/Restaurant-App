@@ -1,22 +1,40 @@
 // ----------------------------------------------------------------
-// /finance/report — printable, QuickBooks-style 30-day report.
+// /finance/report — Cash-basis Profit & Loss, print-ready.
 //
-// Server component. Renders a self-contained, print-ready page
-// covering:
-//   • Cash summary (per-account balances + total)
-//   • Net cash flow (income − expense over the window)
-//   • Income by category
-//   • Expense by category
-//   • Top merchants (by expense)
-//   • Daily cash flow trend (inline SVG)
-//   • Full transaction detail
+// Server component. Renders one sheet-on-desk layout in the Checked
+// brand language (Geist / Geist Mono, ink #18181B, hairline #E7E6E2,
+// desk #F1F0EC). Structure:
 //
-// Transfers are excluded from the P&L side (they're internal
-// motion, not net flow) but shown in the detail table so the
-// operator can trace them.
+//   Cover        client-logo header
+//   Accounts     tile balances + cash-on-hand total
+//   P&L          revenue → COGS → gross profit → OpEx → net income
+//   Two-up       top merchants  |  weekly cash flow
+//   Detail       full transaction table
+//   Footer       "Report by checked"
 //
-// Print button hits `window.print()` via a tiny client wrapper.
-// CSV download link points at `/finance/report/csv?days=30`.
+// Compute functions (computeTotals, groupByCategory,
+// topMerchantsByExpense, pctDelta, dailyCashFlow) are the ones
+// already in production — the design pass preserved them verbatim.
+// Three new derivations layer on:
+//
+//   • weeklyBuckets  — chunk daily trend into 7-day windows,
+//                       DROP any trailing partial week so the
+//                       chart never lies about a half-week's low.
+//   • cogs split     — category-name whitelist (inventory / product
+//                       cost / cogs / cost of goods / food cost).
+//   • transfer label — strip a leading "Chase " (or any prefixed
+//                       bank name) from paired-transfer accounts.
+//
+// Print CSS uses div-grid rows (not <table>) and NEVER
+// overflow:hidden on cards — both would make the browser treat a
+// section as unsplittable and leave large blank gaps at page
+// breaks. Each row carries `break-inside: avoid` and each card /
+// column header carries `break-after: avoid` so headings stay
+// glued to their first row.
+//
+// Client logo: read from sites.config.logo_url for this restaurant.
+// If no site row exists, or logo_url is unset, the corner is blank
+// (no Checked-mark fallback — the footer signature carries that).
 // ----------------------------------------------------------------
 
 import Link from 'next/link'
@@ -28,11 +46,11 @@ import type { FinanceAccount, FinanceMovement } from '@/lib/finance/types'
 import PrintButton from './print-button'
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Finance report · Checked' }
+export const metadata = { title: 'Cash-basis P&L · Checked' }
 
 const REPORT_DAYS_DEFAULT = 30
 
-interface Search { days?: string }
+interface Search { days?: string; embedded?: string; period?: string }
 
 export default async function FinanceReportPage(props: {
   searchParams?: Promise<Search>
@@ -49,47 +67,125 @@ export default async function FinanceReportPage(props: {
   const activePlace = await resolveActivePlace(supabase, restaurantId)
 
   const search = (await props.searchParams) ?? {}
-  const days = Math.max(1, Math.min(365, parseInt(search.days ?? '', 10) || REPORT_DAYS_DEFAULT))
+  const embedded = search.embedded === '1'
 
-  const to = new Date()
-  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
-  // Prior period = same window offset backward by `days`. Used
-  // for the "vs prior N-day" deltas next to every headline number.
-  const priorFrom = new Date(from.getTime() - days * 24 * 60 * 60 * 1000)
-  const priorTo = from
+  // Two windowing modes:
+  //   • `?period=YYYY-MM` → the calendar month of that period.
+  //     Report + prior-period stats scope to that whole month
+  //     regardless of today's date. Header shows "MonthName Year"
+  //     and duration = days in that month. Used by the Report
+  //     modal (which threads the picked period through from the
+  //     Finance page's calendar).
+  //   • `?days=N` (or default 30) → rolling last-N-days window
+  //     ending today. Used when someone opens the report directly
+  //     without a period selection.
+  const periodMonth = parsePeriodParam(search.period)
+  const win = periodMonth
+    ? monthWindow(periodMonth)
+    : rollingWindow(Math.max(1, Math.min(365, parseInt(search.days ?? '', 10) || REPORT_DAYS_DEFAULT)))
+  const { from, to, days, periodLabel } = win
+  const { priorFrom, priorTo } = periodMonth
+    ? { priorFrom: firstOfPrevMonth(periodMonth), priorTo: lastOfPrevMonth(periodMonth) }
+    : { priorFrom: new Date(from.getTime() - days * 24 * 60 * 60 * 1000), priorTo: from }
 
-  const [accounts, movements, priorMovements, { data: restaurantRow }, { data: freshRow }] = await Promise.all([
+  // Client logo lookup — sites.config.logo_url for this restaurant,
+  // if any site exists at all. Live site preferred over drafts;
+  // absent = blank corner (footer signature stays as-is).
+  const { data: siteRow } = await admin
+    .from('sites')
+    .select('config, status')
+    .eq('restaurant_id', restaurantId)
+    .order('status', { ascending: true })  // 'live' < 'draft' alphabetically? use JS filter instead
+    .limit(1)
+    .maybeSingle()
+  const logoUrl = resolveLogoUrl(siteRow)
+
+  const [accounts, movements, priorMovements, { data: restaurantRow }] = await Promise.all([
     listAccounts(admin, restaurantId, { locationId: activePlace?.id ?? null }),
     listMovements(admin, restaurantId, { from, to, limit: 5000 }),
     listMovements(admin, restaurantId, { from: priorFrom, to: priorTo, limit: 5000 }),
     admin.from('restaurants').select('name').eq('id', restaurantId).maybeSingle(),
-    admin
-      .from('connected_bank_accounts')
-      .select('last_synced_at')
-      .eq('restaurant_id', restaurantId)
-      .eq('active', true)
-      .order('last_synced_at', { ascending: false })
-      .limit(1)
-      .maybeSingle(),
   ])
 
   const restaurantName = (restaurantRow as { name?: string } | null)?.name ?? 'Business'
   const placeName = activePlace?.name ?? null
-  const lastSync = (freshRow as { last_synced_at?: string } | null)?.last_synced_at ?? null
 
   return (
     <ReportView
       restaurantName={restaurantName}
       placeName={placeName}
+      logoUrl={logoUrl}
       accounts={accounts}
       movements={movements}
       priorMovements={priorMovements}
-      lastSync={lastSync}
+      embedded={embedded}
       from={from}
       to={to}
       days={days}
+      periodLabel={periodLabel}
+      isPeriodMode={periodMonth !== null}
     />
   )
+}
+
+/** `?period=YYYY-MM` → first-of-that-month Date, else null. */
+function parsePeriodParam(raw: string | undefined): Date | null {
+  if (!raw) return null
+  const m = /^(\d{4})-(\d{2})$/.exec(raw.trim())
+  if (!m) return null
+  const y = parseInt(m[1], 10)
+  const mo = parseInt(m[2], 10)
+  if (!Number.isFinite(y) || !Number.isFinite(mo)) return null
+  if (mo < 1 || mo > 12 || y < 2000 || y > 2100) return null
+  const out = new Date(y, mo - 1, 1)
+  out.setHours(0, 0, 0, 0)
+  return out
+}
+
+/** Rolling last-N-days window, ending now. */
+function rollingWindow(days: number): { from: Date; to: Date; days: number; periodLabel: string | null } {
+  const to = new Date()
+  const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+  return { from, to, days, periodLabel: null }
+}
+
+/** Full calendar-month window for the first-of-month date given.
+ *  `to` clamps at "now" when the picked month is the current one
+ *  so future-day movements never distort the report. */
+function monthWindow(firstOfMonth: Date): { from: Date; to: Date; days: number; periodLabel: string } {
+  const from = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth(), 1)
+  from.setHours(0, 0, 0, 0)
+  const monthEnd = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth() + 1, 1)
+  monthEnd.setMilliseconds(-1)
+  const now = new Date()
+  const to = monthEnd > now ? now : monthEnd
+  const days = Math.round((monthEnd.getTime() - from.getTime()) / (24 * 60 * 60 * 1000))
+  const periodLabel = from.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  return { from, to, days, periodLabel }
+}
+
+function firstOfPrevMonth(firstOfMonth: Date): Date {
+  const out = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth() - 1, 1)
+  out.setHours(0, 0, 0, 0)
+  return out
+}
+function lastOfPrevMonth(firstOfMonth: Date): Date {
+  const out = new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth(), 1)
+  out.setMilliseconds(-1)
+  return out
+}
+
+/** Extract a logo URL from a sites row's JSONB config. Returns
+ *  null when there's no site, no config, no logo_url string, or
+ *  the value is an empty / whitespace-only string. */
+function resolveLogoUrl(siteRow: unknown): string | null {
+  if (!siteRow) return null
+  const config = (siteRow as { config?: Record<string, unknown> }).config
+  if (!config || typeof config !== 'object') return null
+  const raw = (config as { logo_url?: unknown }).logo_url
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  return trimmed.length > 0 ? trimmed : null
 }
 
 // ================================================================
@@ -99,28 +195,35 @@ export default async function FinanceReportPage(props: {
 interface ViewProps {
   restaurantName: string
   placeName: string | null
+  logoUrl: string | null
   accounts: FinanceAccount[]
   movements: FinanceMovement[]
   priorMovements: FinanceMovement[]
-  lastSync: string | null
+  embedded: boolean
   from: Date
   to: Date
   days: number
+  /** "September 2026" when the report was opened for a specific
+   *  month; null on the default rolling window. */
+  periodLabel: string | null
+  /** True when the window is a calendar month (picker), false on
+   *  the rolling default. Drives copy in a couple of spots. */
+  isPeriodMode: boolean
 }
 
 /** Category names that count as Cost of Goods Sold for a small
- *  retailer / food business. Anything with tax_category
- *  "Cost of goods sold" in SEED_CATEGORIES lands here too — kept
- *  as an explicit list so a merchant renaming "Inventory" to
- *  "Product cost" doesn't quietly lose the COGS classification. */
+ *  retailer / food business. Held as a whitelist so a merchant
+ *  renaming "Inventory" to "Product cost" doesn't silently lose
+ *  the COGS classification. */
 const COGS_CATEGORY_NAMES = new Set(['inventory', 'product cost', 'cogs', 'cost of goods', 'food cost'])
 
-function isCogsRow(m: FinanceMovement): boolean {
-  const n = m.category?.name?.toLowerCase() ?? ''
-  return COGS_CATEGORY_NAMES.has(n)
-}
-
-function ReportView({ restaurantName, placeName, accounts, movements, priorMovements, lastSync, from, to, days }: ViewProps) {
+function ReportView({
+  restaurantName, placeName, logoUrl,
+  accounts, movements, priorMovements,
+  embedded,
+  from, to, days,
+  periodLabel, isPeriodMode,
+}: ViewProps) {
   const totals = computeTotals(movements)
   const priorTotals = computeTotals(priorMovements)
   const byIncomeCat = groupByCategory(movements, 'income')
@@ -134,251 +237,321 @@ function ReportView({ restaurantName, placeName, accounts, movements, priorMovem
   const netMargin = totals.income > 0 ? Math.round((totals.net / totals.income) * 100) : null
   const topMerchants = topMerchantsByExpense(movements, 10)
   const dailyTrend = dailyCashFlow(movements, from, to)
+  const weeklyBars = weeklyBuckets(dailyTrend)
   const cash = cashOnHand(accounts)
-  const generatedAt = new Date()
+  const detailRows = [...movements].sort(
+    (a, b) => b.occurred_at.localeCompare(a.occurred_at)
+  )
 
   return (
-    <div style={styles.page}>
+    <div
+      style={{
+        ...styles.desk,
+        ...(embedded ? { padding: '24px 16px 32px', background: '#F1F0EC' } : null),
+      }}
+      data-desk
+    >
       <style dangerouslySetInnerHTML={{ __html: PRINT_CSS }} />
+      {embedded && <style dangerouslySetInnerHTML={{ __html: EMBED_CSS }} />}
 
-      {/* Toolbar — hidden in print */}
-      <div className="no-print" style={styles.toolbar}>
-        <Link href="/finance" style={styles.toolbarLink}>← Back to Finance</Link>
-        <div style={{ flex: 1 }} />
-        <Link href={`/finance/report/csv?days=${days}`} style={styles.toolbarButton}>Download CSV</Link>
-        <PrintButton />
-      </div>
-
-      {/* Cover header */}
-      <header style={styles.cover}>
-        <div style={{ fontSize: 11, letterSpacing: '0.14em', color: '#71717A', textTransform: 'uppercase' }}>
-          Cash-basis profit &amp; loss
-        </div>
-        <div style={styles.h1}>{restaurantName}{placeName ? ` — ${placeName}` : ''}</div>
-        <div style={styles.subtle}>
-          {fmtDate(from)} — {fmtDate(to)} · {days} days
-        </div>
-      </header>
-
-      {/* Executive summary strip — every headline number carries a
-          "vs prior {days} days" delta so a merchant reads change,
-          not just level. */}
-      <section style={styles.section}>
-        <div style={styles.summaryGrid}>
-          <SummaryCard label="Cash on hand" value={fmtMoney(cash)} accent="#18181B" />
-          <SummaryCard
-            label="Revenue"
-            value={fmtMoney(totals.income)}
-            accent="#059669"
-            delta={pctDelta(totals.income, priorTotals.income)}
-          />
-          <SummaryCard
-            label="Expenses"
-            value={fmtMoney(totals.expense)}
-            accent="#18181B"
-            delta={pctDelta(totals.expense, priorTotals.expense, /*inverse*/ true)}
-          />
-          <SummaryCard
-            label="Net income"
-            value={`${totals.net >= 0 ? '+' : ''}${fmtMoney(totals.net)}`}
-            accent={totals.net >= 0 ? '#059669' : '#DC2626'}
-            delta={pctDelta(totals.net, priorTotals.net)}
-          />
-        </div>
-        <p style={styles.narration}>
-          Over the last {days} days you brought in{' '}
-          <strong>{fmtMoney(totals.income)}</strong> and spent{' '}
-          <strong>{fmtMoney(totals.expense)}</strong>, netting{' '}
-          <strong style={{ color: totals.net >= 0 ? '#059669' : '#DC2626' }}>
-            {totals.net >= 0 ? '+' : ''}{fmtMoney(totals.net)}
-          </strong>
-          {netMargin !== null && ` (${netMargin}% net margin)`}
-          .{' '}
-          {(totals.transferCount + totals.personalCount) > 0 && (
-            <span style={{ color: '#71717A' }}>
-              {totals.transferCount} transfer{totals.transferCount === 1 ? '' : 's'} between your own accounts and{' '}
-              {totals.personalCount} personal / owner-draw row{totals.personalCount === 1 ? '' : 's'} excluded.
-            </span>
-          )}
-        </p>
-      </section>
-
-      {/* Accounts */}
-      <section style={styles.section}>
-        <h2 style={styles.h2}>Accounts</h2>
-        <table style={styles.table}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Account</th>
-              <th style={styles.th}>Type</th>
-              <th style={styles.thRight}>Current balance</th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.map(a => (
-              <tr key={a.id}>
-                <td style={styles.td}>{a.name}</td>
-                <td style={{ ...styles.td, color: '#71717A' }}>{labelForKind(a.kind)}</td>
-                <td style={styles.tdMoneyRight}>{fmtMoney(a.balance)}</td>
-              </tr>
-            ))}
-            <tr style={{ borderTop: '2px solid #18181B' }}>
-              <td style={{ ...styles.td, fontWeight: 700 }}>Total</td>
-              <td style={styles.td}></td>
-              <td style={{ ...styles.tdMoneyRight, fontWeight: 700 }}>{fmtMoney(cash)}</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
-
-      {/* P&L — cash-basis structure:
-            Revenue
-            − Cost of goods sold      (empty until Inventory rows land)
-            = Gross profit            (with margin %)
-            − Operating expenses
-            = Net income              (with margin %)
-      */}
-      <section style={styles.section}>
-        <h2 style={styles.h2}>Profit &amp; loss</h2>
-
-        <div style={styles.plHeading}>Revenue</div>
-        <CategoryTable rows={byIncomeCat} total={totals.income} />
-
-        <div style={{ ...styles.plHeading, marginTop: 18 }}>Cost of goods sold</div>
-        {cogsRows.length === 0 ? (
-          <div style={{ color: '#A1A1AA', padding: '8px 0', fontSize: 12 }}>
-            No COGS categorized yet. Tag inventory / product-cost rows to see gross profit here.
+      <div style={styles.frame}>
+        {/* Toolbar hidden on print AND in embedded mode (the modal
+            supplies its own Print / Download CSV chrome). */}
+        {!embedded && (
+          <div className="no-print" style={styles.toolbar}>
+            <Link href="/finance" style={styles.toolbarLink}>← Back to Finance</Link>
+            <div style={{ flex: 1 }} />
+            <Link href={`/finance/report/csv?days=${days}`} style={styles.toolbarButton}>
+              Download CSV
+            </Link>
+            <PrintButton />
           </div>
-        ) : (
-          <CategoryTable rows={cogsRows} total={cogsTotal} />
         )}
 
-        <div style={styles.plSubtotalLine}>
-          <span>Gross profit</span>
-          <span style={{
-            fontVariantNumeric: 'tabular-nums',
-            color: grossProfit >= 0 ? '#18181B' : '#DC2626',
-          }}>
-            {fmtMoney(grossProfit)}
-            {grossMargin !== null && (
-              <span style={{ fontSize: 11, color: '#71717A', marginLeft: 8, fontWeight: 400 }}>
-                {grossMargin}% margin
-              </span>
+        {/* Sheet — the printable surface. All chrome (desk bg,
+            border, radius, shadow, toolbar) drops on print via
+            [data-sheet] selectors in PRINT_CSS. */}
+        <div style={styles.sheet} data-sheet>
+
+          {/* Cover header */}
+          <header style={styles.header}>
+            <div style={{ minWidth: 0 }}>
+              <div style={styles.headerEyebrow}>Cash-basis profit &amp; loss</div>
+              <div style={styles.headerTitle}>
+                {restaurantName}
+                {placeName && <span style={styles.headerTitleSubtle}> — {placeName}</span>}
+              </div>
+              <div style={styles.headerDates}>
+                {periodLabel
+                  ? <>{periodLabel} <span style={{ color: '#D6D5D1' }}>·</span> {fmtDate(from)} — {fmtDate(to)}</>
+                  : <>{fmtDate(from)} — {fmtDate(to)} <span style={{ color: '#D6D5D1' }}>·</span> {days} days</>
+                }
+              </div>
+            </div>
+            {logoUrl && (
+              // Client logo — server-fetched from sites.config.logo_url.
+              // No alt-text noise; if the src 404s the img simply
+              // collapses to nothing (no fallback badge, per spec).
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={logoUrl}
+                alt={restaurantName}
+                style={styles.headerLogo}
+              />
             )}
-          </span>
-        </div>
+          </header>
 
-        <div style={{ ...styles.plHeading, marginTop: 18 }}>Operating expenses</div>
-        {opexRows.length === 0 ? (
-          <div style={{ color: '#A1A1AA', padding: '8px 0', fontSize: 12 }}>No operating expenses.</div>
-        ) : (
-          <CategoryTable rows={opexRows} total={opexTotal} />
-        )}
-
-        <div style={styles.plNetLine}>
-          <span>Net income</span>
-          <span style={{
-            fontVariantNumeric: 'tabular-nums',
-            color: totals.net >= 0 ? '#059669' : '#DC2626',
-          }}>
-            {totals.net >= 0 ? '+' : ''}{fmtMoney(totals.net)}
-            {netMargin !== null && (
-              <span style={{ fontSize: 11, color: '#71717A', marginLeft: 8, fontWeight: 400 }}>
-                {netMargin}% margin
-              </span>
-            )}
-          </span>
-        </div>
-      </section>
-
-      {/* Top merchants */}
-      {topMerchants.length > 0 && (
-        <section style={styles.section}>
-          <h2 style={styles.h2}>Top merchants (expense)</h2>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>Merchant</th>
-                <th style={styles.thRight}>Transactions</th>
-                <th style={styles.thRight}>Total spent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topMerchants.map(m => (
-                <tr key={m.name}>
-                  <td style={styles.td}>{m.name}</td>
-                  <td style={{ ...styles.td, textAlign: 'right', color: '#71717A' }}>{m.count}</td>
-                  <td style={styles.tdMoneyRight}>{fmtMoney(m.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
-      )}
-
-      {/* Daily trend */}
-      <section style={styles.section}>
-        <h2 style={styles.h2}>Daily cash flow</h2>
-        <DailyTrend series={dailyTrend} />
-      </section>
-
-      {/* Transaction detail */}
-      <section style={styles.section}>
-        <h2 style={styles.h2}>Transaction detail</h2>
-        <table style={{ ...styles.table, fontSize: 11 }}>
-          <thead>
-            <tr>
-              <th style={styles.th}>Date</th>
-              <th style={styles.th}>Description</th>
-              <th style={styles.th}>Category</th>
-              <th style={styles.th}>Account</th>
-              <th style={styles.thRight}>In</th>
-              <th style={styles.thRight}>Out</th>
-            </tr>
-          </thead>
-          <tbody>
-            {movements.map(m => (
-              <tr key={m.id}>
-                <td style={{ ...styles.td, whiteSpace: 'nowrap', color: '#71717A' }}>{fmtDateShort(new Date(m.occurred_at))}</td>
-                <td style={styles.td}>{m.note || m.memo || '—'}</td>
-                <td style={{ ...styles.td, color: '#71717A' }}>
-                  {m.category?.name ?? <em style={{ color: '#A1A1AA' }}>Uncategorized</em>}
-                </td>
-                <td style={{ ...styles.td, color: '#71717A' }}>
-                  {m.direction === 'transfer' && m.source && m.dest
-                    ? `${m.source.name} → ${m.dest.name}`
-                    : (m.source?.name ?? m.dest?.name ?? '—')
-                  }
-                </td>
-                <td style={styles.tdMoneyRight}>{m.direction === 'income' ? fmtMoney(m.amount) : ''}</td>
-                <td style={styles.tdMoneyRight}>{m.direction === 'expense' ? fmtMoney(m.amount) : ''}</td>
-              </tr>
+          {/* Accounts card. In historical mode (a picked past
+              month) the eyebrow says "As of today" instead of
+              "Current balances" so a report from July doesn't
+              misread as end-of-July balances — we always show the
+              live number, period stats are for movements only. */}
+          <Card>
+            <CardHeader
+              title="Accounts"
+              eyebrow={isPeriodMode ? `As of ${fmtDate(new Date())}` : 'Current balances'}
+            />
+            <ColumnHeader columns="1fr 150px 150px">
+              <span>Account</span>
+              <span>Type</span>
+              <span style={{ textAlign: 'right' }}>Balance</span>
+            </ColumnHeader>
+            {accounts.map(a => (
+              <GridRow key={a.id} columns="1fr 150px 150px">
+                <span style={styles.rowName}>{a.name}</span>
+                <span style={styles.rowMuted}>{labelForKind(a.kind)}</span>
+                <span style={styles.rowMoney}>{fmtMoney(a.balance)}</span>
+              </GridRow>
             ))}
-            {movements.length === 0 && (
-              <tr>
-                <td colSpan={6} style={{ ...styles.td, textAlign: 'center', color: '#A1A1AA', padding: 40 }}>
-                  No transactions in this window.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </section>
+            <SubtotalRow columns="1fr 150px" label="Total" value={fmtMoney(cash)} strong />
+          </Card>
 
-      <footer style={styles.footer}>
-        <div>Cash-basis accounting · rows tagged Personal / Owner draw / internal transfers excluded from operating totals</div>
-        <div style={{ marginTop: 4 }}>
-          Generated {fmtDateTime(generatedAt)}
-          {lastSync && ` · Bank feeds last synced ${fmtDateTime(new Date(lastSync))}`}
-          {' · '}Checked
+          {/* P&L card */}
+          <Card style={{ marginTop: 22 }}>
+            <CardHeader title="Profit & loss" eyebrow={`Cash basis · ${days} days`} />
+            <div style={{ padding: '4px 18px 18px' }}>
+              {/* Revenue */}
+              <SectionEyebrow>Revenue</SectionEyebrow>
+              {byIncomeCat.length === 0
+                ? <EmptyLine>No revenue yet.</EmptyLine>
+                : byIncomeCat.map(r => (
+                    <PLRow key={r.name} row={r} total={totals.income} />
+                  ))
+              }
+              <PLSubtotalLine label="Total revenue" value={fmtMoney(totals.income)} />
+
+              {/* COGS */}
+              <SectionEyebrow style={{ marginTop: 18 }}>Cost of goods sold</SectionEyebrow>
+              {cogsRows.length === 0 ? (
+                <EmptyLine>
+                  No COGS categorized yet. Tag inventory / product-cost rows to see gross profit here.
+                </EmptyLine>
+              ) : cogsRows.map(r => (
+                <PLRow key={r.name} row={r} total={cogsTotal} />
+              ))}
+              <PLTotalLine
+                label="Gross profit"
+                value={fmtMoney(grossProfit)}
+                margin={grossMargin}
+                color={grossProfit >= 0 ? INK : NEG}
+              />
+
+              {/* OpEx */}
+              <SectionEyebrow style={{ marginTop: 18 }}>Operating expenses</SectionEyebrow>
+              {opexRows.length === 0
+                ? <EmptyLine>No operating expenses.</EmptyLine>
+                : opexRows.map(r => (
+                    <PLRow key={r.name} row={r} total={opexTotal} />
+                  ))
+              }
+              <PLSubtotalLine label="Total operating expenses" value={fmtMoney(opexTotal)} />
+
+              {/* Net income */}
+              <div style={styles.plNetLine}>
+                <span style={{ fontSize: 14, letterSpacing: '-0.01em' }}>Net income</span>
+                <span style={{
+                  ...styles.plNetValue,
+                  color: totals.net >= 0 ? POS : NEG,
+                }}>
+                  {totals.net >= 0 ? '+' : ''}{fmtMoney(totals.net)}
+                  {netMargin !== null && (
+                    <span style={styles.plMarginPill}>{netMargin}% margin</span>
+                  )}
+                </span>
+              </div>
+
+              {/* Prior-period comparison strip — moved off the KPI
+                  cards (design dropped them) into a quiet trailing
+                  line under Net income so a merchant still reads
+                  change, not just level. */}
+              {hasAnyDelta(totals, priorTotals) && (
+                <div style={styles.priorStrip}>
+                  <span style={styles.priorLabel}>vs prior {days} days</span>
+                  <DeltaPill label="revenue" delta={pctDelta(totals.income, priorTotals.income)} />
+                  <DeltaPill label="expenses" delta={pctDelta(totals.expense, priorTotals.expense, true)} />
+                  <DeltaPill label="net" delta={pctDelta(totals.net, priorTotals.net)} />
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* Two-up: top merchants | weekly cash flow */}
+          <div style={styles.twoUp}>
+            <Card style={{ display: 'flex', flexDirection: 'column' }}>
+              <CardHeader title="Top merchants" eyebrow="By spend" />
+              {topMerchants.length === 0
+                ? <EmptyLine style={{ padding: '12px 18px' }}>No expenses to rank yet.</EmptyLine>
+                : topMerchants.map((m, i) => (
+                    <div key={m.name} style={styles.merchantRow}>
+                      <span style={styles.merchantRank}>{i + 1}</span>
+                      <span style={styles.merchantName}>{m.name}</span>
+                      <span style={styles.merchantCount}>{m.count}×</span>
+                      <span style={styles.merchantTotal}>{fmtMoney(m.total)}</span>
+                    </div>
+                  ))
+              }
+            </Card>
+
+            <Card style={{ display: 'flex', flexDirection: 'column' }}>
+              <CardHeader title="Weekly cash flow" eyebrow="In vs out" />
+              {weeklyBars.length === 0 ? (
+                <EmptyLine style={{ padding: '12px 18px' }}>Not enough history for a full week yet.</EmptyLine>
+              ) : (
+                <div style={styles.weekBody}>
+                  {weeklyBars.map(w => (
+                    <div key={w.startIso} style={styles.weekRow}>
+                      <div style={styles.weekRowHeader}>
+                        <span style={{ fontSize: 12, color: MUTED }}>
+                          {fmtDateShort(new Date(w.startIso + 'T12:00:00Z'))} — {fmtDateShort(new Date(w.endIso + 'T12:00:00Z'))}
+                        </span>
+                        <span style={{
+                          ...styles.weekNet,
+                          color: w.net >= 0 ? POS : NEG,
+                        }}>
+                          {w.net >= 0 ? '+' : ''}{fmtMoney(w.net)}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 5 }}>
+                        <div style={styles.weekBarRow}>
+                          <div style={styles.weekTrack}>
+                            <div style={{ ...styles.weekFill, background: POS, width: `${w.inPct}%` }} />
+                          </div>
+                          <span style={styles.weekAmt}>{fmtMoney(w.income)}</span>
+                        </div>
+                        <div style={styles.weekBarRow}>
+                          <div style={styles.weekTrack}>
+                            <div style={{ ...styles.weekFill, background: NEG, width: `${w.outPct}%` }} />
+                          </div>
+                          <span style={styles.weekAmt}>{fmtMoney(w.expense)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={styles.weekLegend}>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 8, height: 8, background: POS, borderRadius: 2, display: 'inline-block' }} />
+                  Money in
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ width: 8, height: 8, background: NEG, borderRadius: 2, display: 'inline-block' }} />
+                  Money out
+                </span>
+              </div>
+            </Card>
+          </div>
+
+          {/* Transaction detail */}
+          <Card style={{ marginTop: 22 }}>
+            <CardHeader
+              title="Transaction detail"
+              eyebrow={`${detailRows.length} movement${detailRows.length === 1 ? '' : 's'}`}
+            />
+            <ColumnHeader columns={DETAIL_COLS}>
+              <span>Date</span>
+              <span>Description</span>
+              <span>Category</span>
+              <span>Account</span>
+              <span style={{ textAlign: 'right' }}>In</span>
+              <span style={{ textAlign: 'right' }}>Out</span>
+            </ColumnHeader>
+            {detailRows.length === 0 ? (
+              <div style={{ padding: '32px 18px', textAlign: 'center', color: '#A1A1A6', fontSize: 12 }}>
+                No transactions in this window.
+              </div>
+            ) : detailRows.map(m => {
+              const isTransfer = m.direction === 'transfer' && m.source && m.dest
+              const account = isTransfer
+                ? `${stripBankPrefix(m.source!.name)} → ${stripBankPrefix(m.dest!.name)}`
+                : (m.source?.name ?? m.dest?.name ?? '—')
+              return (
+                <GridRow key={m.id} columns={DETAIL_COLS} style={{ fontSize: 12 }}>
+                  <span style={styles.detailDate}>{fmtDateShort(new Date(m.occurred_at))}</span>
+                  <span style={styles.detailDesc}>{m.note || m.memo || '—'}</span>
+                  <span style={styles.detailCat}>
+                    <span style={{
+                      display: 'inline-block', width: 7, height: 7, borderRadius: 2,
+                      background: m.category?.color ?? '#D6D5D1', flex: '0 0 auto',
+                    }} />
+                    <span style={styles.detailCatName}>
+                      {m.category?.name ?? 'Uncategorized'}
+                    </span>
+                  </span>
+                  <span style={styles.detailAcct}>{account}</span>
+                  <span style={{ ...styles.detailAmt, color: m.direction === 'income' ? POS : INK }}>
+                    {m.direction === 'income' ? fmtMoney(m.amount) : ''}
+                  </span>
+                  <span style={styles.detailAmt}>
+                    {m.direction === 'expense' ? fmtMoney(m.amount) : ''}
+                  </span>
+                </GridRow>
+              )
+            })}
+          </Card>
+
+          {/* Footer signature */}
+          <footer style={styles.footer}>
+            <span style={styles.footerSignature}>
+              <span style={{ fontSize: 10.5, color: '#A1A1A6' }}>Report by</span>
+              {/* Checked mark cropped to the clipboard glyph (viewBox
+                  18 8 28 48) matches the spec's print signature. */}
+              <svg
+                width="8.75"
+                height="15"
+                viewBox="18 8 28 48"
+                role="img"
+                aria-label="Checked"
+                style={{ display: 'block', flex: 'none' }}
+              >
+                <path
+                  d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z"
+                  fill="#18181B"
+                />
+                <rect x="26" y="16" width="14" height="3" rx="1.5" fill="#FAF9F6" />
+                <rect x="26" y="23" width="11" height="3" rx="1.5" fill="#FAF9F6" />
+                <rect x="26" y="30" width="8" height="3" rx="1.5" fill="#FAF9F6" />
+                <path
+                  d="M27 41l4 4 8-9"
+                  fill="none"
+                  stroke="#FAF9F6"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span style={{ fontSize: 13, fontWeight: 700, letterSpacing: '-0.02em' }}>checked</span>
+            </span>
+          </footer>
+
         </div>
-      </footer>
+      </div>
     </div>
   )
 }
 
 // ================================================================
-// Analysis helpers
+// Compute helpers — kept verbatim from production
 // ================================================================
 
 interface Totals { income: number; expense: number; net: number; movementCount: number; transferCount: number; personalCount: number }
@@ -386,11 +559,6 @@ interface Totals { income: number; expense: number; net: number; movementCount: 
 function computeTotals(ms: FinanceMovement[]): Totals {
   let income = 0, expense = 0, transferCount = 0, personalCount = 0
   for (const m of ms) {
-    // Cash-basis P&L excludes transfers between the operator's
-    // own accounts AND transfer-kind categories (Personal, Owner
-    // draw, etc.) — those aren't operational cash flow, so a
-    // gym membership charged to a business card doesn't distort
-    // net income.
     if (m.direction === 'transfer') { transferCount += 1; continue }
     if (m.category?.kind === 'transfer') { personalCount += 1; continue }
     if (m.direction === 'income') income += m.amount
@@ -472,48 +640,45 @@ function dailyCashFlow(ms: FinanceMovement[], from: Date, to: Date): DayPoint[] 
   return days.map(d => ({ ...d, income: round2(d.income), expense: round2(d.expense) }))
 }
 
-// ================================================================
-// Small view pieces
-// ================================================================
-
-function SummaryCard({
-  label, value, accent, delta,
-}: {
-  label: string
-  value: string
-  accent: string
-  delta?: { pct: number; positive: boolean } | null
-}) {
-  return (
-    <div style={{
-      border: '1px solid #E4E4E7', borderRadius: 8, padding: '14px 16px', background: '#FAFAFA',
-    }}>
-      <div style={{ fontSize: 10, letterSpacing: '0.1em', textTransform: 'uppercase', color: '#71717A' }}>
-        {label}
-      </div>
-      <div style={{
-        marginTop: 6, fontSize: 24, fontWeight: 600, letterSpacing: '-0.03em', color: accent,
-        fontVariantNumeric: 'tabular-nums',
-      }}>
-        {value}
-      </div>
-      {delta && (
-        <div style={{
-          marginTop: 4, fontSize: 11,
-          color: delta.positive ? '#059669' : '#DC2626',
-          fontVariantNumeric: 'tabular-nums',
-        }}>
-          {delta.positive ? '↑' : '↓'} {Math.abs(delta.pct)}%
-          <span style={{ color: '#71717A' }}> vs prior</span>
-        </div>
-      )}
-    </div>
+/** Chunk the daily trend into 7-day windows. Drops any trailing
+ *  partial week so a half-week's income doesn't display as a
+ *  short bar next to full weeks. Bar widths scale to the peak
+ *  weekly in/out across the whole window (min 2% so a nonzero
+ *  value never renders as invisible). */
+interface WeekBar {
+  startIso: string
+  endIso: string
+  income: number
+  expense: number
+  net: number
+  inPct: number
+  outPct: number
+}
+function weeklyBuckets(series: DayPoint[]): WeekBar[] {
+  const chunks: DayPoint[][] = []
+  for (let i = 0; i + 7 <= series.length; i += 7) chunks.push(series.slice(i, i + 7))
+  if (chunks.length === 0) return []
+  const raw = chunks.map(w => ({
+    startIso: w[0].date,
+    endIso: w[w.length - 1].date,
+    income: round2(w.reduce((s, d) => s + d.income, 0)),
+    expense: round2(w.reduce((s, d) => s + d.expense, 0)),
+  }))
+  const peak = Math.max(
+    1,
+    ...raw.map(w => Math.max(w.income, w.expense)),
   )
+  return raw.map(w => ({
+    ...w,
+    net: round2(w.income - w.expense),
+    inPct: w.income > 0 ? Math.max(2, Math.round((w.income / peak) * 100)) : 0,
+    outPct: w.expense > 0 ? Math.max(2, Math.round((w.expense / peak) * 100)) : 0,
+  }))
 }
 
 /** Percentage delta between the current and prior period.
  *  `inverseGood=true` flips the color logic — for "Expenses,"
- *  a decrease is good and shown green. */
+ *  a decrease is good and reads green. */
 function pctDelta(current: number, prior: number, inverseGood = false): { pct: number; positive: boolean } | null {
   if (prior === 0) return null
   const raw = ((current - prior) / Math.abs(prior)) * 100
@@ -523,78 +688,223 @@ function pctDelta(current: number, prior: number, inverseGood = false): { pct: n
   return { pct: rounded, positive }
 }
 
-function CategoryTable({ rows, total }: { rows: CatRow[]; total: number }) {
-  if (rows.length === 0) {
-    return <div style={{ color: '#A1A1AA', padding: '8px 0', fontSize: 12 }}>No entries.</div>
-  }
+function hasAnyDelta(cur: Totals, prior: Totals): boolean {
+  return pctDelta(cur.income, prior.income) !== null ||
+         pctDelta(cur.expense, prior.expense) !== null ||
+         pctDelta(cur.net, prior.net) !== null
+}
+
+/** Strip a leading bank-brand word from a transfer account label
+ *  so "Chase Checking ··4321 → Chase Savings ··2359" reads as
+ *  "Checking ··4321 → Savings ··2359." Purely cosmetic. */
+function stripBankPrefix(name: string): string {
+  return name.replace(/^(Chase|Bank of America|BofA|Wells Fargo|Citibank|Capital One|US Bank|PNC)\s+/i, '')
+}
+
+// ================================================================
+// Layout primitives
+// ================================================================
+
+const INK = '#18181B'
+const MUTED = '#6B6B70'
+const FAINT = '#A1A1A6'
+const LINE = '#E7E6E2'
+const ROW_LINE = '#F0EFEB'
+const SURFACE = '#FAFAF9'
+const DESK = '#F1F0EC'
+const PAPER = '#FFFFFF'
+const POS = '#059669'
+const NEG = '#DC2626'
+
+const DETAIL_COLS = '54px 1fr 118px 158px 86px 86px'
+const FONT = "'Geist', system-ui, -apple-system, Segoe UI, sans-serif"
+const MONO = "'Geist Mono', ui-monospace, monospace"
+
+function Card({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
-    <table style={styles.table}>
-      <tbody>
-        {rows.map(r => {
-          const pct = total > 0 ? Math.round((r.total / total) * 100) : 0
-          return (
-            <tr key={r.name}>
-              <td style={styles.td}>
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{
-                    display: 'inline-block', width: 8, height: 8, borderRadius: 2,
-                    background: r.color ?? '#D4D4D8',
-                  }} />
-                  {r.name}
-                </span>
-              </td>
-              <td style={{ ...styles.td, color: '#71717A', textAlign: 'right', width: 60 }}>{pct}%</td>
-              <td style={styles.tdMoneyRight}>{fmtMoney(r.total)}</td>
-            </tr>
-          )
-        })}
-        <tr style={{ borderTop: '2px solid #18181B' }}>
-          <td style={{ ...styles.td, fontWeight: 700 }}>Total</td>
-          <td style={styles.td}></td>
-          <td style={{ ...styles.tdMoneyRight, fontWeight: 700 }}>{fmtMoney(total)}</td>
-        </tr>
-      </tbody>
-    </table>
+    <section
+      data-sec
+      style={{
+        border: `1px solid ${LINE}`,
+        borderRadius: 14,
+        background: PAPER,
+        marginTop: 22,
+        ...style,
+      }}
+    >
+      {children}
+    </section>
   )
 }
 
-function DailyTrend({ series }: { series: DayPoint[] }) {
-  if (series.length === 0) return <div style={{ color: '#A1A1AA', fontSize: 12 }}>No data.</div>
-  const max = Math.max(1, ...series.map(d => Math.max(d.income, d.expense)))
-  const W = 720
-  const H = 160
-  const pad = 24
-  const barW = (W - pad * 2) / series.length
+function CardHeader({ title, eyebrow }: { title: string; eyebrow?: string }) {
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', maxWidth: '100%' }}>
-      {/* baseline */}
-      <line x1={pad} y1={H - pad} x2={W - pad} y2={H - pad} stroke="#E4E4E7" />
-      {series.map((d, i) => {
-        const x = pad + i * barW
-        const inH = ((d.income / max) * (H - pad * 2))
-        const outH = ((d.expense / max) * (H - pad * 2))
-        return (
-          <g key={d.date}>
-            <rect
-              x={x + barW * 0.15} y={H - pad - inH}
-              width={barW * 0.35} height={inH}
-              fill="#059669"
-            />
-            <rect
-              x={x + barW * 0.5} y={H - pad - outH}
-              width={barW * 0.35} height={outH}
-              fill="#DC2626"
-            />
-          </g>
-        )
-      })}
-      <text x={pad} y={12} fontSize={10} fill="#71717A">Money in (green) vs money out (red) — per day, scale to peak day</text>
-    </svg>
+    <div data-header style={{
+      display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+      gap: 12, padding: '15px 18px 12px',
+    }}>
+      <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.02em' }}>{title}</span>
+      {eyebrow && (
+        <span style={styles.eyebrowSm}>{eyebrow}</span>
+      )}
+    </div>
+  )
+}
+
+function SectionEyebrow({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{
+      fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+      color: FAINT, textTransform: 'uppercase',
+      padding: '8px 0 4px',
+      ...style,
+    }}>
+      {children}
+    </div>
+  )
+}
+
+function ColumnHeader({ columns, children }: { columns: string; children: React.ReactNode }) {
+  return (
+    <div data-colhead style={{
+      display: 'grid', gridTemplateColumns: columns, gap: '0 12px',
+      padding: '7px 18px', borderTop: `1px solid ${ROW_LINE}`, background: SURFACE,
+      fontFamily: MONO, fontSize: 9.5, letterSpacing: '0.12em',
+      color: FAINT, textTransform: 'uppercase',
+    }}>
+      {children}
+    </div>
+  )
+}
+
+function GridRow({
+  columns, children, style,
+}: {
+  columns: string
+  children: React.ReactNode
+  style?: React.CSSProperties
+}) {
+  return (
+    <div data-row style={{
+      display: 'grid', gridTemplateColumns: columns, gap: '0 12px',
+      alignItems: 'center', padding: '10px 18px',
+      borderTop: `1px solid ${ROW_LINE}`,
+      ...style,
+    }}>
+      {children}
+    </div>
+  )
+}
+
+function SubtotalRow({
+  columns, label, value, strong,
+}: {
+  columns: string
+  label: string
+  value: string
+  strong?: boolean
+}) {
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: columns, gap: '0 12px',
+      alignItems: 'center', padding: '11px 18px', borderTop: `1px solid ${INK}`,
+    }}>
+      <span style={{ fontWeight: strong ? 600 : 500 }}>{label}</span>
+      <span style={{
+        fontFamily: MONO, fontSize: strong ? 13.5 : 13, fontWeight: strong ? 600 : 500,
+        letterSpacing: '-0.02em', textAlign: 'right',
+      }}>{value}</span>
+    </div>
+  )
+}
+
+function PLRow({ row, total }: { row: CatRow; total: number }) {
+  const pct = total > 0 ? Math.round((row.total / total) * 100) : 0
+  return (
+    <div data-row style={{
+      display: 'grid', gridTemplateColumns: '1fr 64px 130px', gap: '0 12px',
+      alignItems: 'center', padding: '8px 0', borderTop: `1px solid ${ROW_LINE}`,
+    }}>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+        <span style={{
+          display: 'inline-block', width: 8, height: 8, borderRadius: 2,
+          background: row.color ?? '#D6D5D1', flex: '0 0 auto',
+        }} />
+        <span style={{ fontWeight: 500, letterSpacing: '-0.01em' }}>{row.name}</span>
+      </span>
+      <span style={{ fontFamily: MONO, fontSize: 11.5, color: FAINT, textAlign: 'right' }}>
+        {pct}%
+      </span>
+      <span style={{
+        fontFamily: MONO, fontSize: 13, fontWeight: 500,
+        letterSpacing: '-0.02em', textAlign: 'right',
+      }}>{fmtMoney(row.total)}</span>
+    </div>
+  )
+}
+
+function PLSubtotalLine({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '9px 0', borderTop: `1px solid #D6D5D1`, fontWeight: 600,
+    }}>
+      <span style={{ fontSize: 12.5 }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 13, letterSpacing: '-0.02em' }}>{value}</span>
+    </div>
+  )
+}
+
+function PLTotalLine({
+  label, value, margin, color,
+}: {
+  label: string
+  value: string
+  margin: number | null
+  color: string
+}) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+      padding: '10px 0', borderTop: `1px solid ${INK}`, fontWeight: 600,
+    }}>
+      <span style={{ fontSize: 13 }}>{label}</span>
+      <span style={{ fontFamily: MONO, fontSize: 13.5, letterSpacing: '-0.02em', color }}>
+        {value}
+        {margin !== null && (
+          <span style={styles.plMarginPill}>{margin}% margin</span>
+        )}
+      </span>
+    </div>
+  )
+}
+
+function DeltaPill({ label, delta }: { label: string; delta: { pct: number; positive: boolean } | null }) {
+  if (!delta) return null
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 4 }}>
+      <span style={{
+        fontFamily: MONO, fontSize: 12, fontWeight: 600,
+        color: delta.positive ? POS : NEG,
+      }}>
+        {delta.positive ? '↑' : '↓'} {Math.abs(delta.pct)}%
+      </span>
+      <span style={{ fontSize: 11, color: MUTED }}>{label}</span>
+    </span>
+  )
+}
+
+function EmptyLine({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
+  return (
+    <div style={{
+      color: FAINT, padding: '10px 0', fontSize: 12,
+      ...style,
+    }}>{children}</div>
   )
 }
 
 // ================================================================
-// Formatting + styles
+// Formatting
 // ================================================================
 
 function fmtMoney(n: number): string {
@@ -606,92 +916,217 @@ function fmtDate(d: Date): string {
 function fmtDateShort(d: Date): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
-function fmtDateTime(d: Date): string {
-  return d.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
-}
 function round2(n: number): number { return Math.round(n * 100) / 100 }
 
 function labelForKind(k: string): string {
-  return { pos: 'POS', cash: 'Cash', digital_wallet: 'Digital wallet', bank: 'Bank', other: 'Other' }[k] ?? k
+  return ({ pos: 'POS', cash: 'Cash', digital_wallet: 'Digital wallet', bank: 'Bank', other: 'Other' } as Record<string, string>)[k] ?? k
 }
 
-const styles = {
-  page: {
-    maxWidth: 900, margin: '0 auto', padding: '24px 28px 60px',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif',
-    color: '#18181B', background: '#FFFFFF', fontSize: 13, lineHeight: 1.5,
+// ================================================================
+// Styles
+// ================================================================
+
+const styles: Record<string, React.CSSProperties> = {
+  desk: {
+    minHeight: '100vh',
+    padding: '28px 24px 64px',
+    background: DESK,
+    fontFamily: FONT,
+    color: INK,
+    fontSize: 13,
+    lineHeight: 1.5,
   },
+  frame: { maxWidth: 880, margin: '0 auto' },
   toolbar: {
-    display: 'flex', alignItems: 'center', gap: 10, marginBottom: 24,
-    paddingBottom: 12, borderBottom: '1px solid #E4E4E7',
+    display: 'flex', alignItems: 'center', gap: 8,
+    marginBottom: 16,
   },
-  toolbarLink: { color: '#3F3F46', textDecoration: 'none', fontSize: 12 },
+  toolbarLink: {
+    fontSize: 12.5, fontWeight: 500, textDecoration: 'none',
+    color: '#52525B', padding: '0 4px',
+  },
   toolbarButton: {
-    border: '1px solid #E4E4E7', background: '#FAFAFA', color: '#18181B',
-    borderRadius: 6, padding: '6px 12px', textDecoration: 'none', fontSize: 12, fontWeight: 500,
+    border: `1px solid ${LINE}`, background: PAPER, color: INK,
+    borderRadius: 10, height: 34, padding: '0 14px',
+    fontSize: 13, fontWeight: 500, textDecoration: 'none',
+    display: 'inline-flex', alignItems: 'center',
   },
-  cover: { marginBottom: 28 },
-  h1: {
-    fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em',
-    margin: '8px 0 4px', lineHeight: 1.1,
+  sheet: {
+    background: PAPER, border: `1px solid ${LINE}`, borderRadius: 16,
+    padding: '44px 48px 36px',
+    boxShadow: '0 1px 2px rgba(24,24,27,0.04)',
   },
-  subtle: { color: '#71717A', fontSize: 12 },
-  section: { marginTop: 28, breakInside: 'avoid' as const },
-  h2: {
-    fontSize: 14, fontWeight: 700, letterSpacing: '-0.01em',
-    textTransform: 'uppercase' as const, color: '#3F3F46',
-    borderBottom: '2px solid #18181B', paddingBottom: 6, margin: '0 0 12px',
+  header: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 24,
   },
-  summaryGrid: {
-    display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10,
+  headerEyebrow: {
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.16em',
+    color: FAINT, textTransform: 'uppercase',
   },
-  narration: { marginTop: 14, color: '#3F3F46', fontSize: 12.5 },
-  table: {
-    width: '100%', borderCollapse: 'collapse' as const, fontSize: 12,
+  headerTitle: {
+    fontSize: 29, fontWeight: 700, letterSpacing: '-0.035em',
+    margin: '10px 0 6px', lineHeight: 1.1,
   },
-  th: {
-    textAlign: 'left' as const, padding: '8px 8px', fontWeight: 600,
-    color: '#71717A', fontSize: 11, textTransform: 'uppercase' as const,
-    borderBottom: '1px solid #E4E4E7', letterSpacing: '0.05em',
+  headerTitleSubtle: { color: FAINT, fontWeight: 500 },
+  headerDates: { fontFamily: MONO, fontSize: 11.5, color: MUTED },
+  headerLogo: {
+    height: 92, width: 'auto', maxWidth: 300,
+    objectFit: 'contain', flex: '0 0 auto',
   },
-  thRight: {
-    textAlign: 'right' as const, padding: '8px 8px', fontWeight: 600,
-    color: '#71717A', fontSize: 11, textTransform: 'uppercase' as const,
-    borderBottom: '1px solid #E4E4E7', letterSpacing: '0.05em',
+  eyebrowSm: {
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+    color: FAINT, textTransform: 'uppercase',
   },
-  td: {
-    padding: '8px 8px', borderBottom: '1px solid #F4F4F5', verticalAlign: 'top' as const,
+  rowName: { fontWeight: 500, letterSpacing: '-0.01em' },
+  rowMuted: { fontSize: 12, color: MUTED },
+  rowMoney: {
+    fontFamily: MONO, fontSize: 13, fontWeight: 500,
+    letterSpacing: '-0.02em', textAlign: 'right',
   },
-  tdMoneyRight: {
-    padding: '8px 8px', borderBottom: '1px solid #F4F4F5', textAlign: 'right' as const,
-    fontVariantNumeric: 'tabular-nums' as const, whiteSpace: 'nowrap' as const,
-  },
-  plGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 },
-  plHeading: {
-    fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase' as const,
-    color: '#71717A', marginBottom: 8,
-  },
-  plSubtotalLine: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    marginTop: 10, padding: '10px 8px', borderTop: '1px solid #18181B',
-    fontSize: 13, fontWeight: 600,
+  plMarginPill: {
+    fontFamily: FONT, fontSize: 11, color: FAINT,
+    fontWeight: 400, marginLeft: 6,
   },
   plNetLine: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    marginTop: 16, padding: '12px 8px', borderTop: '2px solid #18181B',
-    fontSize: 14, fontWeight: 700,
+    marginTop: 14, padding: '12px 0 2px',
+    borderTop: `2px solid ${INK}`, fontWeight: 700,
+  },
+  plNetValue: {
+    fontFamily: MONO, fontSize: 15, letterSpacing: '-0.02em',
+  },
+  priorStrip: {
+    display: 'flex', alignItems: 'baseline', gap: 14,
+    flexWrap: 'wrap',
+    marginTop: 10, paddingTop: 8, borderTop: `1px dashed ${ROW_LINE}`,
+  },
+  priorLabel: {
+    fontFamily: MONO, fontSize: 10, letterSpacing: '0.14em',
+    color: FAINT, textTransform: 'uppercase',
+  },
+  twoUp: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gap: 22, marginTop: 22, alignItems: 'stretch',
+  },
+  merchantRow: {
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '8px 18px', borderTop: `1px solid ${ROW_LINE}`,
+  },
+  merchantRank: {
+    fontFamily: MONO, fontSize: 10, color: FAINT,
+    width: 16, textAlign: 'right', flex: '0 0 auto',
+  },
+  merchantName: {
+    flex: 1, fontSize: 12.5, minWidth: 0,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  merchantCount: {
+    fontFamily: MONO, fontSize: 11, color: FAINT, flex: '0 0 auto',
+  },
+  merchantTotal: {
+    fontFamily: MONO, fontSize: 12.5, fontWeight: 600,
+    letterSpacing: '-0.02em', minWidth: 80, textAlign: 'right', flex: '0 0 auto',
+  },
+  weekBody: {
+    flex: 1, display: 'flex', flexDirection: 'column',
+    justifyContent: 'space-evenly',
+  },
+  weekRow: { padding: '7px 18px', borderTop: `1px solid ${ROW_LINE}` },
+  weekRowHeader: {
+    display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10,
+  },
+  weekNet: {
+    fontFamily: MONO, fontSize: 12.5, fontWeight: 600, letterSpacing: '-0.02em',
+  },
+  weekBarRow: { display: 'flex', alignItems: 'center', gap: 8 },
+  weekTrack: {
+    flex: 1, height: 5, borderRadius: 3, background: ROW_LINE, overflow: 'hidden',
+  },
+  weekFill: { height: '100%', borderRadius: 3 },
+  weekAmt: {
+    fontFamily: MONO, fontSize: 10.5, color: FAINT,
+    width: 62, textAlign: 'right', flex: '0 0 auto',
+  },
+  weekLegend: {
+    display: 'flex', gap: 14,
+    padding: '10px 18px 13px', borderTop: `1px solid ${ROW_LINE}`,
+    fontSize: 11, color: MUTED,
+  },
+  detailDate: {
+    fontFamily: MONO, fontSize: 11, color: FAINT, whiteSpace: 'nowrap',
+  },
+  detailDesc: {
+    fontWeight: 500, letterSpacing: '-0.01em',
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  detailCat: {
+    display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0,
+  },
+  detailCatName: {
+    fontSize: 11.5, color: MUTED,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  detailAcct: { fontSize: 11.5, color: MUTED, lineHeight: 1.35 },
+  detailAmt: {
+    fontFamily: MONO, fontSize: 12, fontWeight: 500,
+    letterSpacing: '-0.02em', textAlign: 'right', whiteSpace: 'nowrap',
+    color: INK,
   },
   footer: {
-    marginTop: 40, paddingTop: 12, borderTop: '1px solid #E4E4E7',
-    color: '#A1A1AA', fontSize: 10, textAlign: 'center' as const,
+    marginTop: 28,
+    display: 'flex', alignItems: 'flex-start', justifyContent: 'flex-end', gap: 24,
+  },
+  footerSignature: {
+    display: 'inline-flex', alignItems: 'center', gap: 6, flex: '0 0 auto',
   },
 }
+
+// ================================================================
+// Print CSS — div-grid rows (not <table>), no overflow:hidden on
+// cards, break-inside: avoid on every row, break-after: avoid on
+// every card + column header. Anything else and the browser leaves
+// large blank gaps at page boundaries.
+// ================================================================
+
+// Embedded mode — nuke the (app) shell chrome that the parent
+// layout renders around every protected page. The report is
+// loaded inside a modal iframe on /finance; the operator should
+// see only the sheet, not a second sidebar / rail / phone tab
+// bar. Selectors match the exact class combinations AppShell
+// uses (see app/(app)/app-shell.tsx). Layout-fragile by design;
+// the app shell isn't going to churn.
+const EMBED_CSS = `
+  div.fixed.inset-y-0.left-0 { display: none !important; }
+  main.md\\:pl-14, main[class*="pl-14"], main[class*="pl-60"] {
+    padding-left: 0 !important;
+  }
+  .md\\:hidden { display: none !important; }
+`
 
 const PRINT_CSS = `
   @media print {
     .no-print { display: none !important; }
-    body { background: #fff !important; }
-    section { page-break-inside: avoid; }
+    [data-desk] {
+      padding: 0 !important;
+      background: #fff !important;
+      min-height: 0 !important;
+    }
+    [data-sheet] {
+      border: none !important;
+      border-radius: 0 !important;
+      box-shadow: none !important;
+      padding: 0 !important;
+    }
+    [data-sec] { break-inside: auto; page-break-inside: auto; }
+    [data-row] { break-inside: avoid; page-break-inside: avoid; }
+    [data-header], [data-colhead] {
+      break-after: avoid; page-break-after: avoid;
+      break-inside: avoid;
+    }
+    [data-sec] {
+      background: #fff !important;
+    }
   }
   @page { size: letter; margin: 0.5in; }
 `

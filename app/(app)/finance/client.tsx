@@ -120,23 +120,38 @@ export default function FinanceClient({
               <span style={{ fontSize: 9, opacity: 0.6 }}>▾</span>
             </span>
           </div>
-          <button
-            type="button"
-            onClick={() => setExpenseOpen(true)}
-            disabled={accounts.length === 0}
-            title={accounts.length === 0
-              ? t('Add an account first to attach the expense to.', 'Añade primero una cuenta para vincular el gasto.')
-              : undefined}
-            style={{
-              border: 0, background: INK, color: PAPER,
-              borderRadius: 10, padding: '9px 16px',
-              font: 'inherit', fontSize: 13, fontWeight: 600,
-              cursor: accounts.length === 0 ? 'not-allowed' : 'pointer',
-              opacity: accounts.length === 0 ? 0.55 : 1,
-            }}
-          >
-            {t('Add expense', 'Añadir gasto')}
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <a
+              href="/finance/report?days=30"
+              target="_blank"
+              rel="noopener"
+              style={{
+                border: `1px solid ${LINE}`, background: PAPER, color: INK,
+                borderRadius: 10, padding: '8px 14px',
+                font: 'inherit', fontSize: 13, fontWeight: 500,
+                textDecoration: 'none', cursor: 'pointer',
+              }}
+            >
+              {t('Export report', 'Exportar reporte')}
+            </a>
+            <button
+              type="button"
+              onClick={() => setExpenseOpen(true)}
+              disabled={accounts.length === 0}
+              title={accounts.length === 0
+                ? t('Add an account first to attach the expense to.', 'Añade primero una cuenta para vincular el gasto.')
+                : undefined}
+              style={{
+                border: 0, background: INK, color: PAPER,
+                borderRadius: 10, padding: '9px 16px',
+                font: 'inherit', fontSize: 13, fontWeight: 600,
+                cursor: accounts.length === 0 ? 'not-allowed' : 'pointer',
+                opacity: accounts.length === 0 ? 0.55 : 1,
+              }}
+            >
+              {t('Add expense', 'Añadir gasto')}
+            </button>
+          </div>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
@@ -359,8 +374,12 @@ function AddAccountTile({
       // Absolute redirect URI must match an entry on the Plaid
       // dashboard's Allowed redirect URIs list. Using the current
       // origin + /finance keeps dev + prod pointing at the right
-      // place without an env-var handoff.
-      const redirectUri = `${window.location.origin}/finance`
+      // place without an env-var handoff. Plaid rejects
+      // http:// redirect URIs in production, so skip it when the
+      // origin isn't https — OAuth institutions won't work in that
+      // case, but non-OAuth ones (and sandbox) still will.
+      const isHttps = window.location.protocol === 'https:'
+      const redirectUri = isHttps ? `${window.location.origin}/finance` : undefined
       const res = await createPlaidLinkToken(redirectUri)
       if ('error' in res) {
         setError(res.error)

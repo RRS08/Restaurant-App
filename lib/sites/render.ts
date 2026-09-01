@@ -176,11 +176,19 @@ export async function renderPageHTML(
     description?: string
     og_image_url?: string
     favicon_url?: string
+    lang?: string
   }
   const title = page.title ?? seo.title ?? site.name ?? site.slug
   const description = seo.description ?? ''
   const ogImage = seo.og_image_url ?? ''
   const favicon = seo.favicon_url ?? ''
+  // Per-page language override for multilingual sites — the ES
+  // mirror rows set seo.lang="es" so screen readers and search
+  // engines see the right language on that URL. Falls back to 'en'
+  // for every existing site that never set this.
+  const lang = typeof seo.lang === 'string' && /^[a-zA-Z-]{2,10}$/.test(seo.lang)
+    ? seo.lang
+    : 'en'
 
   // js_head / js_body carry raw JavaScript source, not HTML — the
   // renderer wraps them in <script> tags on the way out. Emitting
@@ -207,7 +215,7 @@ export async function renderPageHTML(
   const combinedCss = globalCss + pageCss
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${escapeHtml(lang)}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />

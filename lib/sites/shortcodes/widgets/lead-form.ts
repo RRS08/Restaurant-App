@@ -45,11 +45,12 @@ interface FieldSpec {
 }
 
 const KNOWN_FIELDS: Record<string, FieldSpec> = {
-  name:    { key: 'name',    label: 'Name',    type: 'text',     placeholder: 'Your name',              required: true },
-  email:   { key: 'email',   label: 'Email',   type: 'email',    placeholder: 'you@email.com',          required: true },
-  phone:   { key: 'phone',   label: 'Phone',   type: 'tel',      placeholder: '(956) 000-0000',         required: false },
-  message: { key: 'message', label: 'Message', type: 'textarea', placeholder: 'What can we help with?', required: true },
-  company: { key: 'company', label: 'Company', type: 'text',     placeholder: 'Acme Inc.',              required: false },
+  name:       { key: 'name',       label: 'Name',       type: 'text',     placeholder: 'Your name',              required: true },
+  email:      { key: 'email',      label: 'Email',      type: 'email',    placeholder: 'you@email.com',          required: true },
+  phone:      { key: 'phone',      label: 'Phone',      type: 'tel',      placeholder: '(956) 000-0000',         required: true },
+  message:    { key: 'message',    label: 'Message',    type: 'textarea', placeholder: 'What can we help with?', required: true },
+  company:    { key: 'company',    label: 'Company',    type: 'text',     placeholder: 'Acme Inc.',              required: false },
+  experience: { key: 'experience', label: 'Experience', type: 'text',     placeholder: 'Years driving, endorsements', required: true },
 }
 
 function fieldSpec(key: string): FieldSpec {

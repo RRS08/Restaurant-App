@@ -27,6 +27,7 @@ export function computeKpis(movements: FinanceMovement[]): OverviewKpis {
   let expenses = 0
   let biggest: { note: string; amount: number } | null = null
   for (const m of movements) {
+    if (!isOperational(m)) continue
     if (m.direction === 'income') revenue += m.amount
     else if (m.direction === 'expense') {
       expenses += m.amount
@@ -42,6 +43,18 @@ export function computeKpis(movements: FinanceMovement[]): OverviewKpis {
     biggestExpense: biggest ? { note: biggest.note, amount: round2(biggest.amount) } : null,
     txCount: movements.length,
   }
+}
+
+/** A movement counts toward the cash-basis P&L only when it's
+ *  actually operational cash flow. Anything the operator (or the
+ *  auto-transfer-pairing pass) tagged as a transfer — owner draws,
+ *  personal spend, moves between own accounts, card settlements
+ *  in the closed loop — is excluded, matching how a bookkeeper
+ *  files a cash-basis Schedule C. */
+export function isOperational(m: FinanceMovement): boolean {
+  if (m.direction === 'transfer') return false
+  if (m.category?.kind === 'transfer') return false
+  return true
 }
 
 export interface WeekPoint {
@@ -90,6 +103,7 @@ export function expenseByCategory(movements: FinanceMovement[]): CategorySlice[]
   let grand = 0
   for (const m of movements) {
     if (m.direction !== 'expense') continue
+    if (!isOperational(m)) continue
     const name = m.category?.name ?? 'Uncategorized'
     const color = m.category?.color ?? null
     const cur = map.get(name) ?? { name, color, total: 0, count: 0 }
@@ -113,6 +127,7 @@ export function topMerchants(movements: FinanceMovement[], limit: number): Merch
   const map = new Map<string, MerchantRow>()
   for (const m of movements) {
     if (m.direction !== 'expense') continue
+    if (!isOperational(m)) continue
     const key = (m.note ?? m.memo ?? '').trim()
     if (!key) continue
     const cur = map.get(key) ?? { name: key, total: 0, count: 0 }

@@ -127,12 +127,16 @@ export function cashOnHand(accounts: FinanceAccount[]): number {
 }
 
 /** Money that entered vs left the shop across a movement set.
- *  Income = +amount, Expense = -amount, Transfer = 0 (internal
- *  motion, not net flow). Used for the header's weekly delta. */
+ *  Income = +amount, Expense = -amount. Transfer-direction rows
+ *  are internal motion. Transfer-category rows (Personal, Owner
+ *  draw, etc.) are non-operational cash and also drop out, so
+ *  the header's period delta reads as a cash-basis P&L number. */
 export function inOutTotals(movements: FinanceMovement[]): { in: number; out: number } {
   let inSum = 0
   let outSum = 0
   for (const m of movements) {
+    if (m.direction === 'transfer') continue
+    if (m.category?.kind === 'transfer') continue
     if (m.direction === 'income') inSum += m.amount
     else if (m.direction === 'expense') outSum += m.amount
   }

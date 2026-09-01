@@ -32,25 +32,32 @@ export async function ensureFinanceSeeds(
 }
 
 async function seedCategories(supabase: SupabaseClient, restaurantId: string): Promise<void> {
-  // Skip the network round trip when the table already has any
-  // category for this restaurant — the first insert seeded it,
-  // so a re-run is a pure no-op we can short-circuit.
+  // Read what's already there so we only insert missing seeds.
+  // A blanket short-circuit ("any category → done") would mean
+  // that adding a new SEED_CATEGORIES entry (e.g. "Personal")
+  // never propagates to existing tenants. Per-name diff makes
+  // the seed list forward-compatible without a migration.
   const { data: existing } = await supabase
     .from('finance_categories')
-    .select('id')
+    .select('name, kind')
     .eq('restaurant_id', restaurantId)
-    .limit(1)
-  if (existing && existing.length > 0) return
+  const existingKeys = new Set(
+    (existing ?? []).map(r => `${(r as { kind: string }).kind}:${(r as { name: string }).name.toLowerCase()}`)
+  )
 
-  const rows = SEED_CATEGORIES.map(c => ({
-    restaurant_id: restaurantId,
-    name: c.name,
-    kind: c.kind,
-    color: c.color,
-    sort_order: c.sort_order,
-    tax_category: c.tax_category,
-    active: true,
-  }))
+  const rows = SEED_CATEGORIES
+    .filter(c => !existingKeys.has(`${c.kind}:${c.name.toLowerCase()}`))
+    .map(c => ({
+      restaurant_id: restaurantId,
+      name: c.name,
+      kind: c.kind,
+      color: c.color,
+      sort_order: c.sort_order,
+      tax_category: c.tax_category,
+      active: true,
+    }))
+  if (rows.length === 0) return
+
   await supabase
     .from('finance_categories')
     .insert(rows)

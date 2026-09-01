@@ -156,10 +156,13 @@ export const SEED_CATEGORIES: Array<{
   { name: 'Fees',       kind: 'expense', color: '#F59E0B', tax_category: 'Commissions and fees', sort_order: 100 },
   { name: 'Marketing',  kind: 'expense', color: '#0EA5E9', tax_category: 'Advertising',          sort_order: 110 },
   { name: 'Other',      kind: 'expense', color: '#6B7280', tax_category: 'Other expenses',       sort_order: 120 },
-  // Transfer
+  // Transfer — includes owner-side movement AND our Personal
+  // bucket. Anything with kind='transfer' is excluded from the
+  // P&L totals (cash-basis P&L excludes non-operational cash).
   { name: 'Cash deposit',     kind: 'transfer', color: '#059669', tax_category: null, sort_order: 130 },
   { name: 'Card settlement',  kind: 'transfer', color: '#6366F1', tax_category: null, sort_order: 140 },
   { name: 'Owner draw',       kind: 'transfer', color: '#DC2626', tax_category: null, sort_order: 150 },
   { name: 'Owner contribution', kind: 'transfer', color: '#16A34A', tax_category: null, sort_order: 160 },
+  { name: 'Personal',         kind: 'transfer', color: '#A855F7', tax_category: null, sort_order: 165 },
   { name: 'Between accounts', kind: 'transfer', color: '#6B7280', tax_category: null, sort_order: 170 },
 ]

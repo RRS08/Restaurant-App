@@ -53,15 +53,29 @@ export default async function FinanceReportPage(props: {
 
   const to = new Date()
   const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000)
+  // Prior period = same window offset backward by `days`. Used
+  // for the "vs prior N-day" deltas next to every headline number.
+  const priorFrom = new Date(from.getTime() - days * 24 * 60 * 60 * 1000)
+  const priorTo = from
 
-  const [accounts, movements, { data: restaurantRow }] = await Promise.all([
+  const [accounts, movements, priorMovements, { data: restaurantRow }, { data: freshRow }] = await Promise.all([
     listAccounts(admin, restaurantId, { locationId: activePlace?.id ?? null }),
     listMovements(admin, restaurantId, { from, to, limit: 5000 }),
+    listMovements(admin, restaurantId, { from: priorFrom, to: priorTo, limit: 5000 }),
     admin.from('restaurants').select('name').eq('id', restaurantId).maybeSingle(),
+    admin
+      .from('connected_bank_accounts')
+      .select('last_synced_at')
+      .eq('restaurant_id', restaurantId)
+      .eq('active', true)
+      .order('last_synced_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ])
 
   const restaurantName = (restaurantRow as { name?: string } | null)?.name ?? 'Business'
   const placeName = activePlace?.name ?? null
+  const lastSync = (freshRow as { last_synced_at?: string } | null)?.last_synced_at ?? null
 
   return (
     <ReportView
@@ -69,6 +83,8 @@ export default async function FinanceReportPage(props: {
       placeName={placeName}
       accounts={accounts}
       movements={movements}
+      priorMovements={priorMovements}
+      lastSync={lastSync}
       from={from}
       to={to}
       days={days}
@@ -85,18 +101,41 @@ interface ViewProps {
   placeName: string | null
   accounts: FinanceAccount[]
   movements: FinanceMovement[]
+  priorMovements: FinanceMovement[]
+  lastSync: string | null
   from: Date
   to: Date
   days: number
 }
 
-function ReportView({ restaurantName, placeName, accounts, movements, from, to, days }: ViewProps) {
+/** Category names that count as Cost of Goods Sold for a small
+ *  retailer / food business. Anything with tax_category
+ *  "Cost of goods sold" in SEED_CATEGORIES lands here too — kept
+ *  as an explicit list so a merchant renaming "Inventory" to
+ *  "Product cost" doesn't quietly lose the COGS classification. */
+const COGS_CATEGORY_NAMES = new Set(['inventory', 'product cost', 'cogs', 'cost of goods', 'food cost'])
+
+function isCogsRow(m: FinanceMovement): boolean {
+  const n = m.category?.name?.toLowerCase() ?? ''
+  return COGS_CATEGORY_NAMES.has(n)
+}
+
+function ReportView({ restaurantName, placeName, accounts, movements, priorMovements, lastSync, from, to, days }: ViewProps) {
   const totals = computeTotals(movements)
+  const priorTotals = computeTotals(priorMovements)
   const byIncomeCat = groupByCategory(movements, 'income')
   const byExpenseCat = groupByCategory(movements, 'expense')
+  const cogsRows = byExpenseCat.filter(r => COGS_CATEGORY_NAMES.has(r.name.toLowerCase()))
+  const opexRows = byExpenseCat.filter(r => !COGS_CATEGORY_NAMES.has(r.name.toLowerCase()))
+  const cogsTotal = round2(cogsRows.reduce((s, r) => s + r.total, 0))
+  const opexTotal = round2(opexRows.reduce((s, r) => s + r.total, 0))
+  const grossProfit = round2(totals.income - cogsTotal)
+  const grossMargin = totals.income > 0 ? Math.round((grossProfit / totals.income) * 100) : null
+  const netMargin = totals.income > 0 ? Math.round((totals.net / totals.income) * 100) : null
   const topMerchants = topMerchantsByExpense(movements, 10)
   const dailyTrend = dailyCashFlow(movements, from, to)
   const cash = cashOnHand(accounts)
+  const generatedAt = new Date()
 
   return (
     <div style={styles.page}>
@@ -113,37 +152,54 @@ function ReportView({ restaurantName, placeName, accounts, movements, from, to, 
       {/* Cover header */}
       <header style={styles.cover}>
         <div style={{ fontSize: 11, letterSpacing: '0.14em', color: '#71717A', textTransform: 'uppercase' }}>
-          Finance report
+          Cash-basis profit &amp; loss
         </div>
         <div style={styles.h1}>{restaurantName}{placeName ? ` — ${placeName}` : ''}</div>
         <div style={styles.subtle}>
-          {fmtDate(from)} — {fmtDate(to)} · {days} days · generated {fmtDateTime(new Date())}
+          {fmtDate(from)} — {fmtDate(to)} · {days} days
         </div>
       </header>
 
-      {/* Executive summary strip */}
+      {/* Executive summary strip — every headline number carries a
+          "vs prior {days} days" delta so a merchant reads change,
+          not just level. */}
       <section style={styles.section}>
         <div style={styles.summaryGrid}>
           <SummaryCard label="Cash on hand" value={fmtMoney(cash)} accent="#18181B" />
-          <SummaryCard label="Money in" value={fmtMoney(totals.income)} accent="#059669" />
-          <SummaryCard label="Money out" value={fmtMoney(totals.expense)} accent="#DC2626" />
           <SummaryCard
-            label="Net cash flow"
+            label="Revenue"
+            value={fmtMoney(totals.income)}
+            accent="#059669"
+            delta={pctDelta(totals.income, priorTotals.income)}
+          />
+          <SummaryCard
+            label="Expenses"
+            value={fmtMoney(totals.expense)}
+            accent="#18181B"
+            delta={pctDelta(totals.expense, priorTotals.expense, /*inverse*/ true)}
+          />
+          <SummaryCard
+            label="Net income"
             value={`${totals.net >= 0 ? '+' : ''}${fmtMoney(totals.net)}`}
             accent={totals.net >= 0 ? '#059669' : '#DC2626'}
+            delta={pctDelta(totals.net, priorTotals.net)}
           />
         </div>
         <p style={styles.narration}>
-          Over the last {days} days, {totals.movementCount} transactions moved through {accounts.length} account
-          {accounts.length === 1 ? '' : 's'}. Net cash flow is{' '}
+          Over the last {days} days you brought in{' '}
+          <strong>{fmtMoney(totals.income)}</strong> and spent{' '}
+          <strong>{fmtMoney(totals.expense)}</strong>, netting{' '}
           <strong style={{ color: totals.net >= 0 ? '#059669' : '#DC2626' }}>
             {totals.net >= 0 ? '+' : ''}{fmtMoney(totals.net)}
           </strong>
-          {' '}({totals.income > 0
-            ? `${Math.round((totals.expense / totals.income) * 100)}% of income spent`
-            : 'no income recorded'
-          }).{' '}
-          {totals.transferCount > 0 && `${totals.transferCount} transfers between your own accounts (excluded from the P&L).`}
+          {netMargin !== null && ` (${netMargin}% net margin)`}
+          .{' '}
+          {(totals.transferCount + totals.personalCount) > 0 && (
+            <span style={{ color: '#71717A' }}>
+              {totals.transferCount} transfer{totals.transferCount === 1 ? '' : 's'} between your own accounts and{' '}
+              {totals.personalCount} personal / owner-draw row{totals.personalCount === 1 ? '' : 's'} excluded.
+            </span>
+          )}
         </p>
       </section>
 
@@ -175,26 +231,62 @@ function ReportView({ restaurantName, placeName, accounts, movements, from, to, 
         </table>
       </section>
 
-      {/* P&L */}
+      {/* P&L — cash-basis structure:
+            Revenue
+            − Cost of goods sold      (empty until Inventory rows land)
+            = Gross profit            (with margin %)
+            − Operating expenses
+            = Net income              (with margin %)
+      */}
       <section style={styles.section}>
         <h2 style={styles.h2}>Profit &amp; loss</h2>
-        <div style={styles.plGrid}>
-          <div>
-            <div style={styles.plHeading}>Income</div>
-            <CategoryTable rows={byIncomeCat} total={totals.income} />
+
+        <div style={styles.plHeading}>Revenue</div>
+        <CategoryTable rows={byIncomeCat} total={totals.income} />
+
+        <div style={{ ...styles.plHeading, marginTop: 18 }}>Cost of goods sold</div>
+        {cogsRows.length === 0 ? (
+          <div style={{ color: '#A1A1AA', padding: '8px 0', fontSize: 12 }}>
+            No COGS categorized yet. Tag inventory / product-cost rows to see gross profit here.
           </div>
-          <div>
-            <div style={styles.plHeading}>Expenses</div>
-            <CategoryTable rows={byExpenseCat} total={totals.expense} />
-          </div>
+        ) : (
+          <CategoryTable rows={cogsRows} total={cogsTotal} />
+        )}
+
+        <div style={styles.plSubtotalLine}>
+          <span>Gross profit</span>
+          <span style={{
+            fontVariantNumeric: 'tabular-nums',
+            color: grossProfit >= 0 ? '#18181B' : '#DC2626',
+          }}>
+            {fmtMoney(grossProfit)}
+            {grossMargin !== null && (
+              <span style={{ fontSize: 11, color: '#71717A', marginLeft: 8, fontWeight: 400 }}>
+                {grossMargin}% margin
+              </span>
+            )}
+          </span>
         </div>
+
+        <div style={{ ...styles.plHeading, marginTop: 18 }}>Operating expenses</div>
+        {opexRows.length === 0 ? (
+          <div style={{ color: '#A1A1AA', padding: '8px 0', fontSize: 12 }}>No operating expenses.</div>
+        ) : (
+          <CategoryTable rows={opexRows} total={opexTotal} />
+        )}
+
         <div style={styles.plNetLine}>
-          <span>Net</span>
+          <span>Net income</span>
           <span style={{
             fontVariantNumeric: 'tabular-nums',
             color: totals.net >= 0 ? '#059669' : '#DC2626',
           }}>
             {totals.net >= 0 ? '+' : ''}{fmtMoney(totals.net)}
+            {netMargin !== null && (
+              <span style={{ fontSize: 11, color: '#71717A', marginLeft: 8, fontWeight: 400 }}>
+                {netMargin}% margin
+              </span>
+            )}
           </span>
         </div>
       </section>
@@ -274,7 +366,12 @@ function ReportView({ restaurantName, placeName, accounts, movements, from, to, 
       </section>
 
       <footer style={styles.footer}>
-        Report generated by Checked · {fmtDateTime(new Date())}
+        <div>Cash-basis accounting · rows tagged Personal / Owner draw / internal transfers excluded from operating totals</div>
+        <div style={{ marginTop: 4 }}>
+          Generated {fmtDateTime(generatedAt)}
+          {lastSync && ` · Bank feeds last synced ${fmtDateTime(new Date(lastSync))}`}
+          {' · '}Checked
+        </div>
       </footer>
     </div>
   )
@@ -284,14 +381,20 @@ function ReportView({ restaurantName, placeName, accounts, movements, from, to, 
 // Analysis helpers
 // ================================================================
 
-interface Totals { income: number; expense: number; net: number; movementCount: number; transferCount: number }
+interface Totals { income: number; expense: number; net: number; movementCount: number; transferCount: number; personalCount: number }
 
 function computeTotals(ms: FinanceMovement[]): Totals {
-  let income = 0, expense = 0, transferCount = 0
+  let income = 0, expense = 0, transferCount = 0, personalCount = 0
   for (const m of ms) {
+    // Cash-basis P&L excludes transfers between the operator's
+    // own accounts AND transfer-kind categories (Personal, Owner
+    // draw, etc.) — those aren't operational cash flow, so a
+    // gym membership charged to a business card doesn't distort
+    // net income.
+    if (m.direction === 'transfer') { transferCount += 1; continue }
+    if (m.category?.kind === 'transfer') { personalCount += 1; continue }
     if (m.direction === 'income') income += m.amount
     else if (m.direction === 'expense') expense += m.amount
-    else transferCount += 1
   }
   return {
     income: round2(income),
@@ -299,6 +402,7 @@ function computeTotals(ms: FinanceMovement[]): Totals {
     net: round2(income - expense),
     movementCount: ms.length,
     transferCount,
+    personalCount,
   }
 }
 
@@ -308,6 +412,7 @@ function groupByCategory(ms: FinanceMovement[], dir: 'income' | 'expense'): CatR
   const map = new Map<string, CatRow>()
   for (const m of ms) {
     if (m.direction !== dir) continue
+    if (m.category?.kind === 'transfer') continue
     const key = m.category?.name ?? 'Uncategorized'
     const existing = map.get(key)
     if (existing) {
@@ -332,6 +437,7 @@ function topMerchantsByExpense(ms: FinanceMovement[], limit: number): MerchantRo
   const map = new Map<string, MerchantRow>()
   for (const m of ms) {
     if (m.direction !== 'expense') continue
+    if (m.category?.kind === 'transfer') continue
     const key = (m.note || m.memo || 'Unknown').trim()
     if (!key || key === '—') continue
     const existing = map.get(key)
@@ -370,7 +476,14 @@ function dailyCashFlow(ms: FinanceMovement[], from: Date, to: Date): DayPoint[] 
 // Small view pieces
 // ================================================================
 
-function SummaryCard({ label, value, accent }: { label: string; value: string; accent: string }) {
+function SummaryCard({
+  label, value, accent, delta,
+}: {
+  label: string
+  value: string
+  accent: string
+  delta?: { pct: number; positive: boolean } | null
+}) {
   return (
     <div style={{
       border: '1px solid #E4E4E7', borderRadius: 8, padding: '14px 16px', background: '#FAFAFA',
@@ -384,8 +497,30 @@ function SummaryCard({ label, value, accent }: { label: string; value: string; a
       }}>
         {value}
       </div>
+      {delta && (
+        <div style={{
+          marginTop: 4, fontSize: 11,
+          color: delta.positive ? '#059669' : '#DC2626',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          {delta.positive ? '↑' : '↓'} {Math.abs(delta.pct)}%
+          <span style={{ color: '#71717A' }}> vs prior</span>
+        </div>
+      )}
     </div>
   )
+}
+
+/** Percentage delta between the current and prior period.
+ *  `inverseGood=true` flips the color logic — for "Expenses,"
+ *  a decrease is good and shown green. */
+function pctDelta(current: number, prior: number, inverseGood = false): { pct: number; positive: boolean } | null {
+  if (prior === 0) return null
+  const raw = ((current - prior) / Math.abs(prior)) * 100
+  const rounded = Math.round(raw)
+  if (rounded === 0) return null
+  const positive = inverseGood ? rounded < 0 : rounded > 0
+  return { pct: rounded, positive }
 }
 
 function CategoryTable({ rows, total }: { rows: CatRow[]; total: number }) {
@@ -535,6 +670,11 @@ const styles = {
   plHeading: {
     fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase' as const,
     color: '#71717A', marginBottom: 8,
+  },
+  plSubtotalLine: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginTop: 10, padding: '10px 8px', borderTop: '1px solid #18181B',
+    fontSize: 13, fontWeight: 600,
   },
   plNetLine: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',

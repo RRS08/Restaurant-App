@@ -10,7 +10,7 @@
 
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Edit site · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default function EditSitePage() {
   return (

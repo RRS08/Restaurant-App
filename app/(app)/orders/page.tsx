@@ -19,7 +19,7 @@ import { getLang } from '@/lib/i18n-server'
 import OrdersClient, { type OrderRow } from './client'
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Orders · Checked' }
+export const metadata = { title: 'Checked' }
 
 interface OrdersPageProps {
   // Next.js 16 hands searchParams as a Promise; must await.

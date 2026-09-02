@@ -46,7 +46,7 @@ import type { FinanceAccount, FinanceMovement } from '@/lib/finance/types'
 import PrintButton from './print-button'
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Cash-basis P&L · Checked' }
+export const metadata = { title: 'Checked' }
 
 const REPORT_DAYS_DEFAULT = 30
 

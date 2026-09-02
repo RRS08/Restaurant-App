@@ -9,7 +9,7 @@
 
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Customers · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default function CustomersPage() {
   return (

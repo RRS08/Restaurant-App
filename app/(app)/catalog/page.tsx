@@ -12,7 +12,7 @@ import type { SiteProductRow } from '@/lib/sites/types'
 import ComingSoon from '@/components/coming-soon'
 import CatalogClient from './client'
 
-export const metadata = { title: 'Catalog · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default async function CatalogPage() {
   const supabase = await createClient()

@@ -8,7 +8,7 @@
 
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Chat · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default function ChatPage() {
   return (

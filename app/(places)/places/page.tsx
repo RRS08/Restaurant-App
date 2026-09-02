@@ -19,7 +19,7 @@ import { listPlacesForRestaurant } from '@/lib/places'
 import { selectPlace } from '@/app/actions/places'
 import { BrandMark } from '@/components/brand'
 
-export const metadata = { title: 'Choose a place · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default async function PlacesPage() {
   const supabase = await createClient()

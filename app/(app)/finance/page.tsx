@@ -27,7 +27,7 @@ import { isPlaidConfigured } from '@/lib/plaid/client'
 import FinanceClient from './client'
 import ComingSoon from '@/components/coming-soon'
 
-export const metadata = { title: 'Finance · Checked' }
+export const metadata = { title: 'Checked' }
 
 export default async function FinancePage(props: {
   searchParams?: Promise<{ period?: string }>

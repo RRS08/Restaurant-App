@@ -30,7 +30,9 @@ export interface PoyntTokenResponse {
   accessToken: string
   refreshToken: string
   expiresIn: number
-  scope: string
+  /** Null when Poynt returns no scope string — which is what it
+   *  actually does today. See parseTokenResponse. */
+  scope: string | null
   tokenType: string
 }
 
@@ -176,7 +178,24 @@ async function parseTokenResponse(res: Response, ctx: string): Promise<PoyntToke
     accessToken: json.accessToken,
     refreshToken: json.refreshToken,
     expiresIn: json.expiresIn,
-    scope: json.scope ?? 'ALL',
+    // Record ABSENCE as null, never as a fabricated 'ALL'.
+    //
+    // Poynt's /token response carries no `scope` field, and the
+    // access token JWT has no scope/permissions claim either — its
+    // claims are just {sub, aud, poynt.biz, poynt.uid, poynt.org,
+    // exp, iat, jti}. Authorization is decided entirely by the
+    // permissions configured on the APP in the Poynt Developer
+    // Center, not by anything carried on the token.
+    //
+    // The old `?? 'ALL'` default wrote a confident "ALL" into
+    // godaddy_poynt_tokens.scope for every merchant, which reads as
+    // "this token grants everything" when the truth is "we don't
+    // know — Poynt didn't say." That fiction is actively
+    // misleading when diagnosing a 401: it makes a permission
+    // problem look impossible. The settings card already renders
+    // the honest empty state ("Poynt did not return a scope string
+    // with this token") — this makes that state reachable.
+    scope: json.scope ?? null,
     tokenType: json.tokenType ?? 'BEARER',
   }
 }

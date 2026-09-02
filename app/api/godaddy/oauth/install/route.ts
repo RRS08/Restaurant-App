@@ -18,7 +18,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { authorizeUrl } from '@/lib/godaddy/oauth'
-import { issueOAuthState } from '@/lib/godaddy/tokens'
+import { issueOAuthState, getStoredTokenForEnv } from '@/lib/godaddy/tokens'
 
 /** Short-lived cookie the callback route reads to decide which
  *  settings card should surface the success/failure banner. Set
@@ -75,13 +75,30 @@ export async function GET(req: NextRequest) {
     })
   }
 
-  // Online-payments re-auth needs Poynt to show the consent screen
-  // even when the merchant already OAuth'd this app — otherwise
-  // Poynt silently re-issues a token with the old (narrower) scope
-  // set instead of broadening to include newly-added app scopes
-  // like Poynt Collect W. First-time POS installs skip the flag
-  // and get Poynt's default (auto-consent when previously granted).
-  const forceConsent = purpose === 'online'
+  // Force Poynt's consent screen on ANY re-authorization.
+  //
+  // Poynt has no `scope` parameter on /applications/authorize (the
+  // documented params are exactly redirect_uri, client_id and
+  // context). Permissions come from what's configured on the app in
+  // the Developer Center, and the consent screen asks the merchant
+  // to approve "the resources you specified for your application".
+  //
+  // The consequence: after we widen the app's API Permissions, an
+  // existing merchant re-connecting would — without this flag — get
+  // Poynt's silent auto-consent path and a token with exactly the
+  // old capabilities. The re-auth would overwrite a working token
+  // and gain nothing, which is the specific failure we must avoid
+  // on a live merchant.
+  //
+  // So: any restaurant that ALREADY holds a token for this env is
+  // re-authorizing by definition and always gets prompt=consent.
+  // First-time installs don't need it (there's no prior consent to
+  // skip). `?reconsent=1` forces it manually if ever needed.
+  const alreadyConnected = !!(await getStoredTokenForEnv(restaurantId, env))
+  const forceConsent =
+    purpose === 'online' ||
+    alreadyConnected ||
+    url0.searchParams.get('reconsent') === '1'
 
   // Redirect URI must match exactly what's configured in the
   // Poynt Developer Center → OAuth Settings. Derive from the

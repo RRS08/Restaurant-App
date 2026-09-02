@@ -348,6 +348,21 @@ export interface PoyntTransaction {
   }
   status?: string     // e.g. 'CAPTURED', 'AUTHORIZED', 'VOIDED', 'REFUNDED'
   action?: string     // e.g. 'SALE', 'REFUND', 'AUTHORIZE'
+  // Settlement state. NOT in Poynt's published API reference, but
+  // present on every card transaction their /transactions endpoint
+  // returns — verified against Hatziri's live prod merchant.
+  //
+  // Critical quirk: both fields are ABSENT (undefined), not false,
+  // on CASH transactions — cash never reaches the processor, so
+  // there's nothing to settle. Any "is this unsettled?" test must
+  // therefore check for an explicit false/'UNSETTLED' rather than
+  // treating falsy-or-missing as pending, or every cash sale in
+  // the window lands in the pending-deposit total.
+  settled?: boolean
+  settlementStatus?: string   // 'SETTLED' | 'UNSETTLED'
+  // True once a pre-settlement reversal lands. A voided txn is
+  // never deposited, so it must drop out of the pending sum.
+  voided?: boolean
   fundingSource?: {
     type?: string     // 'CREDIT_DEBIT', 'CASH', 'CHECK', etc.
     card?: {
@@ -434,6 +449,258 @@ export async function fetchPoyntTransactions(args: FetchTransactionsArgs): Promi
   }
 
   return { businessId: tok.businessId, transactions }
+}
+
+// ================================================================
+// Current batch — the merchant's un-deposited processor balance
+// ================================================================
+//
+// WHY THE TRANSACTIONS PATH AND NOT A SETTLEMENTS ENDPOINT:
+//
+// Probed live against Hatziri's prod merchant (business
+// 7e23a8ae…, scope ALL) on 2026-09-02:
+//
+//   GET /businesses/{id}/settlements?state=OPEN  -> 404 Not Found
+//   GET /businesses/{id}/settlements             -> 404 Not Found
+//   GET /businesses/{id}/summary/today           -> 404 Not Found
+//   GET /businesses/{id}/summary                 -> 404 Not Found
+//   GET /businesses/{id}/batches                 -> 401 UNAUTHORIZED_ACCESS
+//   GET /businesses/{id}/transactions            -> 200 OK
+//
+// The first four simply don't exist on Poynt's merchant-facing
+// Cloud API — they're absent from the API reference too. /batches
+// is more interesting: it answers 401 rather than 404, so the
+// route exists but a merchant-delegated token can't reach it even
+// holding scope ALL. That reads as a processor/acquirer-side
+// resource, not something an app acting for the merchant can see.
+// Re-probing it is pointless without a different principal, so
+// don't burn a round-trip on it here.
+//
+// So we sum unsettled captured card transactions. Poynt hands us
+// the settlement state per transaction (`settled` /
+// `settlementStatus`), which is enough to reconstruct the open
+// batch without a batch resource.
+//
+// SETTLEMENT RHYTHM (observed, worth knowing): Poynt does NOT
+// only settle at a nightly close. On 2026-09-02 a 18:47Z sale
+// was already SETTLED while a 19:35Z sale was still UNSETTLED, so
+// transactions flip to settled continuously through the day. The
+// tile therefore drifts down in steps rather than dropping to
+// zero once a night.
+
+/** Result of one current-batch read. All money in CENTS. */
+export interface PosBatchSnapshot {
+  /** Sum of unsettled captured card transactions, minus refunds. */
+  pendingAmountCents: number
+  /** How many transactions contributed to that sum. */
+  transactionCount: number
+  /** createdAt of the oldest unsettled transaction — the effective
+   *  "batch opened at". Null when nothing is pending. */
+  batchOpenedAt: string | null
+  source: 'settlements' | 'transactions_fallback'
+  fetchedAt: string
+}
+
+interface FetchCurrentBatchArgs {
+  restaurantId: string
+  /** How far back to look for still-unsettled transactions.
+   *  Defaults to 7 days.
+   *
+   *  This bound is deliberate. Settlement normally completes in
+   *  1-2 business days, so a week comfortably spans a holiday
+   *  weekend's open batch. Without a bound, any transaction that
+   *  gets permanently stuck UNSETTLED (we found declined ones from
+   *  2026-08-27 still marked UNSETTLED weeks later) would sit in
+   *  the merchant's pending total forever. */
+  lookbackDays?: number
+}
+
+/** Funding sources that never settle through the processor, so
+ *  they can never be "pending deposit". Cash is the one that
+ *  actually shows up in Hatziri's data; check is included because
+ *  it behaves the same way. */
+const NON_SETTLING_FUNDING = new Set(['CASH', 'CHECK'])
+
+/** Largest page size Poynt actually honors on /transactions. */
+const PAGE_LIMIT = 100
+
+/** Max pages to walk before we refuse to answer. See the
+ *  truncation guard below for why exhausting this is an error and
+ *  not a partial result. */
+const MAX_PAGES = 40
+
+/** Read the merchant's current un-deposited processor balance.
+ *
+ *  Mirrors fetchPoyntTransactions: same restaurantId-in /
+ *  token-resolution-inside shape, same HATEOAS pagination, same
+ *  `{ ... } | { error }` return so a caller can't forget to
+ *  handle failure.
+ *
+ *  Parsing is deliberately defensive — different Poynt merchants
+ *  return slightly different transaction shapes, and the
+ *  settlement fields are undocumented, so every field access here
+ *  tolerates absence. */
+export async function fetchPoyntCurrentBatch(args: FetchCurrentBatchArgs): Promise<
+  | (PosBatchSnapshot & { businessId: string })
+  | { error: string }
+> {
+  const tok = await getValidAccessToken(args.restaurantId)
+  if ('error' in tok) return { error: tok.error }
+
+  const lookbackDays = args.lookbackDays ?? 7
+  const startAtIso = new Date(Date.now() - lookbackDays * 24 * 60 * 60 * 1000).toISOString()
+  const startingQuery = new URLSearchParams()
+  startingQuery.set('startAt', startAtIso)
+  // PAGE_LIMIT is 100 on purpose. Poynt's default page size is 10,
+  // and `limit` is honored only up to 100 — pass 200 or 500 and it
+  // silently reverts to 10 rather than clamping or erroring. 100 is
+  // the largest value that actually takes effect.
+  startingQuery.set('limit', String(PAGE_LIMIT))
+  const startingUrl =
+    `${baseUrl()}/businesses/${encodeURIComponent(tok.businessId)}/transactions?${startingQuery.toString()}`
+
+  let pendingAmountCents = 0
+  let transactionCount = 0
+  let oldestUnsettledMs: number | null = null
+  let batchOpenedAt: string | null = null
+
+  let nextUrl: string | null = startingUrl
+  let pagesWalked = 0
+
+  while (nextUrl && pagesWalked < MAX_PAGES) {
+    pagesWalked++
+    const page: { data: PoyntTransactionList } | { error: string } =
+      await getJson<PoyntTransactionList>(nextUrl, tok.accessToken)
+    if ('error' in page) return { error: page.error }
+
+    // Some Poynt deployments answer with a bare array instead of
+    // the `{ transactions, links }` envelope — accept both.
+    const raw: unknown = page.data
+    const pageTxs: PoyntTransaction[] = Array.isArray(raw)
+      ? (raw as PoyntTransaction[])
+      : (page.data.transactions ?? [])
+
+    for (const t of pageTxs) {
+      if (!isUnsettledCardCapture(t)) continue
+      const amount = pendingContribution(t)
+      if (amount === 0) continue
+      pendingAmountCents += amount
+      transactionCount++
+      const createdMs = Date.parse(t.createdAt ?? '')
+      if (Number.isFinite(createdMs) && (oldestUnsettledMs === null || createdMs < oldestUnsettledMs)) {
+        oldestUnsettledMs = createdMs
+        batchOpenedAt = t.createdAt ?? null
+      }
+    }
+
+    const next: PoyntLink | undefined = (Array.isArray(raw) ? [] : (page.data.links ?? [])).find(
+      (l: PoyntLink) => (l.rel ?? '').toLowerCase() === 'next' && !!l.href,
+    )
+    const rawHref: string | null = next?.href ?? null
+    if (rawHref) {
+      try { nextUrl = new URL(rawHref, baseUrl()).toString() } catch { nextUrl = null }
+    } else {
+      nextUrl = null
+    }
+  }
+
+  // TRUNCATION GUARD — do not remove.
+  //
+  // Poynt returns /transactions OLDEST-FIRST, so a page cap doesn't
+  // trim the tail of the result, it trims the RECENT end — exactly
+  // where every unsettled transaction lives. A truncated walk
+  // therefore doesn't under-report slightly; it reports $0.00, which
+  // looks like a legitimately closed batch and is indistinguishable
+  // from "the merchant has been paid out."
+  //
+  // This is not hypothetical: with Poynt's default page size of 10,
+  // a 30-day window on Hatziri is 45 pages, and the pre-`limit`
+  // version of this function returned a confident $0.00 while $81.00
+  // was actually pending. Refuse to answer instead.
+  if (nextUrl) {
+    console.warn('[godaddy/api] current batch truncated — refusing to report', {
+      businessId: tok.businessId,
+      pagesWalked,
+      lookbackDays,
+    })
+    return {
+      error:
+        `Poynt returned more than ${MAX_PAGES} pages of transactions for the last ` +
+        `${lookbackDays}d window; refusing to report a partial batch total.`,
+    }
+  }
+
+  console.info('[godaddy/api] current batch computed', {
+    businessId: tok.businessId,
+    pendingAmountCents,
+    transactionCount,
+    batchOpenedAt,
+    pagesWalked,
+    lookbackDays,
+  })
+
+  return {
+    businessId: tok.businessId,
+    // A batch can legitimately go negative for a moment if a refund
+    // is captured before the sale it reverses has settled. Clamping
+    // would misreport; we surface what Poynt actually implies.
+    pendingAmountCents,
+    transactionCount,
+    batchOpenedAt,
+    source: 'transactions_fallback',
+    fetchedAt: new Date().toISOString(),
+  }
+}
+
+/** Is this transaction money the processor is holding for the
+ *  merchant but hasn't paid out yet?
+ *
+ *  Requires an EXPLICIT unsettled marker. Cash sales carry neither
+ *  `settled` nor `settlementStatus`, so a `!t.settled` test would
+ *  sweep every cash sale in the window into the pending total —
+ *  44 of the 210 transactions in Hatziri's 14-day window are cash. */
+function isUnsettledCardCapture(t: PoyntTransaction): boolean {
+  const explicitlyUnsettled =
+    t.settled === false ||
+    (t.settlementStatus ?? '').toUpperCase() === 'UNSETTLED'
+  if (!explicitlyUnsettled) return false
+
+  // Declined authorizations keep settlementStatus 'UNSETTLED'
+  // permanently — they never settle because they never captured.
+  // Only CAPTURED money is genuinely awaiting deposit.
+  if ((t.status ?? '').toUpperCase() !== 'CAPTURED') return false
+
+  // A void is a pre-settlement reversal: nothing gets deposited.
+  if (t.voided === true) return false
+
+  // Exclude the funding types that never route through the
+  // processor. Checked by exclusion rather than requiring
+  // 'CREDIT_DEBIT' so an unfamiliar card-like type from another
+  // merchant's configuration still counts.
+  const funding = (t.fundingSource?.type ?? '').toUpperCase()
+  if (NON_SETTLING_FUNDING.has(funding)) return false
+
+  return true
+}
+
+/** Signed cents this transaction adds to the pending balance.
+ *  Refunds reduce what the processor will deposit. */
+function pendingContribution(t: PoyntTransaction): number {
+  // transactionAmount already includes tip; it's the figure that
+  // actually moves to the bank. Fall back to orderAmount + tip
+  // when a merchant's payload omits it.
+  const amounts = t.amounts ?? {}
+  const raw =
+    typeof amounts.transactionAmount === 'number' ? amounts.transactionAmount
+      : typeof amounts.orderAmount === 'number'
+        ? amounts.orderAmount + (typeof amounts.tipAmount === 'number' ? amounts.tipAmount : 0)
+        : 0
+  if (!Number.isFinite(raw)) return 0
+  const cents = Math.round(raw)
+  const action = (t.action ?? '').toUpperCase()
+  const status = (t.status ?? '').toUpperCase()
+  if (action === 'REFUND' || status === 'REFUNDED') return -Math.abs(cents)
+  return cents
 }
 
 /** Fetch a single Poynt order by id. Powers the webhook handler,

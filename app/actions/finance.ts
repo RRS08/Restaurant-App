@@ -22,6 +22,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { getPlaidClient, isPlaidConfigured } from '@/lib/plaid/client'
 import { syncPlaidItem } from '@/lib/bank/providers/plaid'
 import { materializeFinanceMovements } from '@/lib/finance/materialize'
+import { clearCachedPosBatch } from '@/lib/finance/pos-batch-cache'
 import {
   ACCOUNT_KIND_DEFAULTS,
   type FinanceAccountKind,
@@ -149,6 +150,23 @@ export async function updateAccount(id: string, patch: AccountPatch): Promise<Ac
  *  tile row + picker. */
 export async function deleteAccount(id: string): Promise<ActionResult> {
   return updateAccount(id, { active: false })
+}
+
+/** Force the POS tile to re-read the processor's current batch.
+ *
+ *  Drops this tenant's cached snapshot and revalidates /finance;
+ *  the next render calls Poynt for a fresh number. Read-only with
+ *  respect to the merchant — this touches nothing at the
+ *  processor, it just expires our own 60s memo.
+ *
+ *  Scoped to the caller's own restaurant via resolveOperator, so
+ *  one tenant can't invalidate (or probe) another's cache. */
+export async function refreshPosBatch(): Promise<ActionResult> {
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  clearCachedPosBatch(ctx.restaurantId)
+  revalidatePath('/finance')
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------- movements

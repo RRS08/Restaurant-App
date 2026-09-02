@@ -22,7 +22,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
-import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount } from '@/app/actions/finance'
+import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount, refreshPosBatch } from '@/app/actions/finance'
 import { createPlaidLinkToken, exchangePlaidPublicToken } from '@/app/actions/bank'
 import type {
   FinanceAccount,
@@ -394,6 +394,25 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
   const [hover, setHover] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  // Only a processor-backed POS tile has anything to re-read.
+  const canRefreshBatch = a.kind === 'pos' && !!a.livePendingSource
+
+  const onRefreshBatch = () => {
+    if (refreshing) return
+    setRefreshing(true)
+    refreshPosBatch()
+      .then((res) => {
+        if ('error' in res) {
+          window.alert(res.error)
+          return
+        }
+        router.refresh()
+      })
+      .catch(() => { /* leave the last-known number on screen */ })
+      .finally(() => setRefreshing(false))
+  }
 
   const onRemove = () => {
     setRemoving(true)
@@ -434,7 +453,10 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
             ? t('Click again to remove', 'Haz clic de nuevo para quitar')
             : t('Remove account', 'Quitar cuenta')}
           style={{
-            position: 'absolute', top: 8, right: 8,
+            // Shifts left to clear the always-present refresh icon
+            // on a live POS tile. Only the hover-revealed control
+            // moves, so nothing already on screen jumps.
+            position: 'absolute', top: 8, right: canRefreshBatch ? 36 : 8,
             border: `1px solid ${confirming ? INK : LINE}`,
             background: confirming ? INK : '#fff',
             color: confirming ? PAPER : MUTED,
@@ -447,6 +469,36 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
           {removing ? '…' : confirming ? t('Remove', 'Quitar') : '×'}
         </button>
       )}
+
+      {/* Manual re-read of the processor batch. Always visible on a
+          live POS tile (not hover-gated) — it doubles as the signal
+          that this number is live rather than stored. */}
+      {canRefreshBatch && (
+        <button
+          type="button"
+          disabled={refreshing}
+          onClick={onRefreshBatch}
+          aria-label={t('Refresh batch total', 'Actualizar total del lote')}
+          title={t('Refresh batch total', 'Actualizar total del lote')}
+          style={{
+            position: 'absolute', top: 8, right: 8,
+            border: `1px solid ${LINE}`, background: '#fff', color: MUTED,
+            borderRadius: 8, height: 22, width: 22, padding: 0,
+            font: 'inherit', fontSize: 12, lineHeight: 1,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            cursor: refreshing ? 'wait' : 'pointer',
+            opacity: refreshing ? 0.5 : 1,
+          }}
+        >
+          <span style={{
+            display: 'inline-block',
+            animation: refreshing ? 'checked-spin 0.8s linear infinite' : undefined,
+          }}>
+            ↻
+          </span>
+        </button>
+      )}
+      <style>{'@keyframes checked-spin{to{transform:rotate(360deg)}}'}</style>
 
       <span style={{
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
@@ -467,8 +519,22 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
       }}>
         {fmtMoney(a.balance)}
       </span>
-      <span style={{ fontSize: 11, color: FAINT }}>
-        {tileSubtitle(a)}
+      <span style={{ fontSize: 11, color: FAINT, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        {tileSubtitle(a, _locale, t)}
+        {/* Sync warning. Deliberately subtle — the number beside it
+            is still a real (last-known) balance, not an error
+            state, so this informs without alarming. */}
+        {a.livePendingError === 'sync_failed' && (
+          <span
+            title={t(
+              "Couldn't reach Poynt — showing last known balance.",
+              'No se pudo conectar con Poynt — mostrando el último saldo conocido.',
+            )}
+            style={{ color: '#B45309', cursor: 'help', whiteSpace: 'nowrap' }}
+          >
+            ⚠ {t('sync issue', 'error de sync')}
+          </span>
+        )}
       </span>
     </div>
   )
@@ -1824,19 +1890,53 @@ function darkFor(kind: FinanceAccountKind): string {
   }
 }
 
-function tileSubtitle(a: FinanceAccount): string {
+function tileSubtitle(a: FinanceAccount, locale?: string, t?: (en: string, es?: string) => string): string {
   const ago = timeAgo(new Date(a.updated_at))
   const parts: string[] = []
   // Mask lands in the subtitle for Plaid-linked tiles so the
   // title can stay clean ("Chase Savings") while the ··NNNN still
   // shows for disambiguation when the merchant has siblings.
   if (a.mask) parts.push(`··${a.mask}`)
-  if (a.kind === 'pos') parts.push('To be deposited')
+  // A POS tile backed by a live processor read is showing money
+  // that is still accumulating in the open batch — it is NOT yet
+  // "to be deposited", which would imply it's staged and ready.
+  // Tenants with no processor connected keep the original copy.
+  if (a.kind === 'pos' && a.livePendingSource === 'poynt') {
+    const label = t ? t('In current batch', 'En el lote actual') : 'In current batch'
+    const opened = formatBatchOpened(a.livePendingOpenedAt, locale, t)
+    parts.push(opened ? `${label} · ${opened}` : label)
+  }
+  else if (a.kind === 'pos') parts.push('To be deposited')
   else if (a.kind === 'cash') parts.push(`Last counted · ${ago}`)
   else if (a.kind === 'bank') parts.push(`Deposit · ${ago}`)
   else if (a.kind === 'digital_wallet') parts.push(`Payment · ${ago}`)
   else parts.push(ago)
   return parts.join(' · ')
+}
+
+/** "since 6:12 AM" for a batch opened today, "since Sep 1" for one
+ *  that's been carrying over. Returns '' when we have no opened-at
+ *  (an empty batch has no oldest transaction) so the caller can
+ *  omit the clause entirely. */
+function formatBatchOpened(
+  iso: string | null | undefined,
+  locale?: string,
+  t?: (en: string, es?: string) => string,
+): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const loc = locale || 'en-US'
+  const since = t ? t('since', 'desde') : 'since'
+  const now = new Date()
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  if (sameDay) {
+    return `${since} ${d.toLocaleTimeString(loc, { hour: 'numeric', minute: '2-digit' })}`
+  }
+  return `${since} ${d.toLocaleDateString(loc, { month: 'short', day: 'numeric' })}`
 }
 
 function timeAgo(d: Date): string {

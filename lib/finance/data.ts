@@ -68,7 +68,93 @@ export async function listAccounts(
     if (pr && mask) maskByRef.set(pr, mask)
   }
 
-  return (rows ?? []).map(row => rowToAccount(row, maskByRef))
+  const accounts = (rows ?? []).map(row => rowToAccount(row, maskByRef))
+  return applyLivePosBatch(accounts, restaurantId)
+}
+
+/** Overlay the live processor batch onto this restaurant's POS
+ *  tile(s).
+ *
+ *  Tenants without a connected processor are returned untouched —
+ *  no Poynt call is made at all, and none of the live-* fields are
+ *  set, so their tile renders exactly as it did before this
+ *  existed. That gate is the multi-tenant isolation guarantee:
+ *  Valley Carriers (lead-gen, no POS) never reaches the network.
+ *
+ *  Every failure mode here is non-fatal. The Finance page is a
+ *  money surface an operator opens dozens of times a day; a
+ *  processor outage must degrade it to the stored balance, never
+ *  break the page load. */
+async function applyLivePosBatch(
+  accounts: FinanceAccount[],
+  restaurantId: string,
+): Promise<FinanceAccount[]> {
+  const posAccounts = accounts.filter(a => a.kind === 'pos')
+  if (posAccounts.length === 0) return accounts
+
+  try {
+    // Cheap gate first: does this tenant have a live Poynt
+    // connection at all? One indexed lookup, and it short-circuits
+    // before any network I/O for tenants that don't.
+    const { getStoredToken } = await import('@/lib/godaddy/tokens')
+    const stored = await getStoredToken(restaurantId)
+    if (!stored?.accessToken) return accounts
+
+    const { fetchPoyntCurrentBatch } = await import('@/lib/godaddy/api')
+    const { getCachedPosBatch } = await import('./pos-batch-cache')
+
+    // The cache distinguishes "failed" from "no data" by whether
+    // the fetcher throws, so translate the api layer's
+    // `{ error }` result into a throw.
+    //
+    // The flag is set INSIDE the fetcher rather than in a .catch()
+    // on getCachedPosBatch: the cache deliberately swallows fetcher
+    // errors so it can serve a stale value, so a failure is
+    // invisible from the outside. Recording it here means a
+    // stale-but-served balance still gets the warning indicator,
+    // and a cache hit (fetcher never invoked) correctly reports no
+    // failure at all.
+    let failed = false
+    const snapshot = await getCachedPosBatch(restaurantId, async () => {
+      try {
+        const res = await fetchPoyntCurrentBatch({ restaurantId })
+        if ('error' in res) throw new Error(res.error)
+        return res
+      } catch (err) {
+        failed = true
+        throw err
+      }
+    })
+
+    if (!snapshot) {
+      // Nothing live to show. Keep the stored balance and flag the
+      // failure only if we actually tried and failed.
+      if (!failed) return accounts
+      return accounts.map(a =>
+        a.kind === 'pos' ? { ...a, livePendingError: 'sync_failed' as const } : a,
+      )
+    }
+
+    return accounts.map(a => {
+      if (a.kind !== 'pos') return a
+      return {
+        ...a,
+        // Cents → dollars. The tile formats from this.
+        balance: round2(snapshot.pendingAmountCents / 100),
+        livePendingSource: 'poynt' as const,
+        livePendingFetchedAt: snapshot.fetchedAt,
+        livePendingOpenedAt: snapshot.batchOpenedAt,
+        livePendingError: failed ? ('sync_failed' as const) : null,
+      }
+    })
+  } catch (err) {
+    // Belt-and-braces: a thrown import, a Supabase blip, anything.
+    // The page still renders with stored balances.
+    console.error('[finance/data] live POS batch overlay failed', err)
+    return accounts.map(a =>
+      a.kind === 'pos' ? { ...a, livePendingError: 'sync_failed' as const } : a,
+    )
+  }
 }
 
 export async function listCategories(

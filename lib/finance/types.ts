@@ -87,6 +87,24 @@ export interface FinanceMovementRow {
 export interface FinanceAccount extends Omit<FinanceAccountRow, 'balance'> {
   balance: number
   mask: string | null
+  // ---- Live POS batch overlay (kind === 'pos' only) ----
+  //
+  // When a tenant has a payment processor connected, the POS
+  // tile's balance is not the stored finance_accounts.balance —
+  // it's the processor's current un-deposited total, read live.
+  // These fields are all null for tenants without a POS provider,
+  // which is what keeps the tile's existing copy and behavior
+  // exactly as it was for them.
+  /** Which processor supplied the live balance, if any. */
+  livePendingSource?: 'poynt' | null
+  /** When that live figure was read (ISO). */
+  livePendingFetchedAt?: string | null
+  /** createdAt of the oldest transaction still in the open batch
+   *  (ISO) — lets the tile say how long the batch has been open. */
+  livePendingOpenedAt?: string | null
+  /** Set when the processor read failed and `balance` therefore
+   *  fell back to the stored value. */
+  livePendingError?: 'sync_failed' | null
 }
 
 export interface FinanceCategory extends FinanceCategoryRow {}

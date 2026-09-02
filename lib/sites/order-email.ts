@@ -20,7 +20,7 @@
 
 import { after } from 'next/server'
 import { sendEmail, escapeHtml } from '@/lib/email/resend'
-import { platformOriginForSlug, absoluteAssetUrl, checkedMarkUrl } from './hosts'
+import { siteOrigin, absoluteAssetUrl, checkedMarkUrl } from './hosts'
 import type { SiteRow, SiteDeliveryOption } from './types'
 import type { CartSnapshot } from './cart'
 
@@ -263,7 +263,7 @@ function buildHtml(args: OrderConfirmationArgs, orderNumber: string, siteName: s
   // site-relative path (e.g. "/images/tea.jpg") has to be absolutized
   // before it goes in an email — mail clients have no base URL to
   // resolve relative paths against and would just show a broken image.
-  const origin = platformOriginForSlug(args.site.slug)
+  const origin = siteOrigin(args.site)
 
   const itemRows = args.cart.items.map((i) => {
     const thumb = absoluteAssetUrl(origin, i.image_url)

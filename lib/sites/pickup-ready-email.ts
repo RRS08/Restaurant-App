@@ -14,7 +14,7 @@
 
 import { after } from 'next/server'
 import { sendEmail, escapeHtml } from '@/lib/email/resend'
-import { platformOriginForSlug, absoluteAssetUrl, checkedMarkUrl } from './hosts'
+import { siteOrigin, absoluteAssetUrl, checkedMarkUrl } from './hosts'
 import type { SiteRow } from './types'
 
 interface PickupReadyArgs {
@@ -140,7 +140,7 @@ function buildText(args: PickupReadyArgs, orderNumber: string, siteName: string)
 function buildHtml(args: PickupReadyArgs, orderNumber: string, siteName: string): string {
   const c = palette(args.site)
   const first = firstNameOf(args.buyerName)
-  const origin = platformOriginForSlug(args.site.slug)
+  const origin = siteOrigin(args.site)
   const logoUrl = logoUrlFor(args.site, origin)
   const { wordmark, kicker } = brandMark(args.site)
   const markUrl = checkedMarkUrl()

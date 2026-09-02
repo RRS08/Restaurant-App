@@ -63,16 +63,46 @@ export function isPlatformSubdomain(host: string | null | undefined): boolean {
   return label.length > 0 && !label.includes('.')
 }
 
-/** Public https origin for a hosted site, e.g.
- *  `https://hatziri.onchecked.app`.
- *
- *  Every tenant always answers on its platform subdomain even when a
- *  custom domain is also attached, so this is the safe origin to bake
- *  into content that outlives the request — email bodies especially,
- *  which have no request host to resolve a relative path against and
- *  may be opened months later. */
+/** Guaranteed-alive platform origin for a hosted site, e.g.
+ *  `https://hatziri.onchecked.app`. The subdomain answers even if
+ *  a custom domain lapses, so this is the ultimate fallback for
+ *  content that outlives the request (emails, receipts, links a
+ *  buyer opens months later). Use `siteOrigin()` in most places —
+ *  this is only for callers that don't have a site row on hand. */
 export function platformOriginForSlug(slug: string): string {
   return `https://${slug}.${SITE_ROOT_HOSTNAME}`
+}
+
+/** Canonical https origin for a site — the "unplug one domain,
+ *  plug in another" adapter. Resolution order:
+ *
+ *    1. `sites.config.primary_hostname` — explicit override.
+ *       Set this to the custom domain when it goes live
+ *       (`'www.hatziri.com'`) so emails and receipts brand-match
+ *       the URL buyers used. Clear it to fall back to the
+ *       subdomain if the custom domain lapses.
+ *    2. Platform subdomain (`<slug>.onchecked.app`) — always
+ *       answers, so it's the safe fallback.
+ *
+ *  Sync (no DB query) because it reads from the site row already
+ *  in memory. Every email / receipt / anything that outlives the
+ *  request should go through here instead of hardcoding the
+ *  subdomain — that way domain moves are a one-row JSONB update
+ *  with no code changes. */
+export function siteOrigin(site: {
+  slug: string
+  config?: Record<string, unknown> | null
+}): string {
+  const primary = site.config && typeof site.config === 'object'
+    ? (site.config as { primary_hostname?: unknown }).primary_hostname
+    : null
+  if (typeof primary === 'string' && primary.length > 0) {
+    // Strip any accidental scheme prefix so operators can set
+    // 'www.hatziri.com' or 'https://www.hatziri.com' interchangeably.
+    const host = primary.replace(/^https?:\/\//i, '').replace(/\/$/, '')
+    return `https://${host}`
+  }
+  return platformOriginForSlug(site.slug)
 }
 
 /** Absolutize a site-relative asset path against a site origin.

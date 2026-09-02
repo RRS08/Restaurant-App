@@ -154,24 +154,50 @@ export default async function AnalyticsPage() {
   }
   const windowStartKey = dateKeys[0]
 
+  // ---- Fetch orders alone, then join items separately ----
+  //
+  // We used to inline order_items → menu_items → menu_categories as
+  // a PostgREST embed. That died the same way Sales did months back:
+  // a schema-cache / RLS hiccup on any embedded table silently
+  // returns ZERO parent rows — the whole orders list nukes itself
+  // even though the orders are perfectly readable on their own.
+  // Sales already switched to the two-query pattern (see the note
+  // in app/(app)/sales/page.tsx above the orders fetch); Analytics
+  // now matches. Category / hour breakdowns still work because we
+  // join items ourselves after the base fetch.
   const { data: orders } = await supabase
     .from('orders')
-    .select(`
-      id, total_amount, created_at, business_date, payment_type, status,
-      order_items (
-        quantity, total_price,
-        menu_items (
-          id, name, category_id,
-          menu_categories ( id, name )
-        )
-      )
-    `)
+    .select('id, total_amount, created_at, business_date, payment_type, status')
     // Filter by business_date instead of created_at so late-evening
     // orders in the restaurant's timezone don't roll into the next
     // UTC day and disappear from their real business day.
     .gte('business_date', windowStartKey)
     .eq('location_id', orderScopeId)
     .order('created_at', { ascending: true })
+
+  // Second query — order_items for the orders we just loaded, with
+  // menu category context. Failure here degrades the per-category
+  // breakdown card but does NOT hide any orders from the chart /
+  // KPIs / payment card. That's the whole point of the split.
+  const orderIds = (orders ?? []).map((o) => (o as { id: string }).id)
+  const { data: itemRows } = orderIds.length > 0
+    ? await supabase
+        .from('order_items')
+        .select(`
+          order_id, quantity, total_price,
+          menu_items (
+            id, name, category_id,
+            menu_categories ( id, name )
+          )
+        `)
+        .in('order_id', orderIds)
+    : { data: [] as unknown[] }
+  const itemsByOrder = new Map<string, OrderItemRow[]>()
+  for (const raw of (itemRows ?? []) as Array<{ order_id: string } & OrderItemRow>) {
+    const list = itemsByOrder.get(raw.order_id) ?? []
+    list.push({ quantity: raw.quantity, total_price: raw.total_price, menu_items: raw.menu_items })
+    itemsByOrder.set(raw.order_id, list)
+  }
 
   // ---- Seed per-day maps for the full window ----
   // Pre-populating every date-key means the client can index into
@@ -220,7 +246,8 @@ export default async function AnalyticsPage() {
     dayPayment[paymentBucket].orders += 1
 
     const dayCatMap = dailyCategoryMap.get(key)!
-    for (const oi of o.order_items ?? []) {
+    const items = itemsByOrder.get(o.id) ?? []
+    for (const oi of items) {
       const item = oi.menu_items
       if (!item?.menu_categories) continue
       const cat = item.menu_categories

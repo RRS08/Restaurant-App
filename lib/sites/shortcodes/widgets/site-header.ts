@@ -59,8 +59,18 @@ export function renderSiteHeader(_args: unknown, ctx: ShortcodeContext): string 
   const logoUrl = typeof config.logo_url === 'string' ? config.logo_url : '/assets/logo-tree.png'
   const cart = renderCartCount({}, ctx)
 
-  const desktopLinks = finalItems.map(i => `    <a href="${escapeAttr(i.href)}">${escapeHtml(i.label)}</a>`).join('\n')
-  const drawerLinks = finalItems.map(i => `    <a href="${escapeAttr(i.href)}">${escapeHtml(i.label)}</a>`).join('\n')
+  // Stamp aria-current on the link matching the current page's
+  // path so Design's global_css can paint the active-state
+  // underline. Exact-match only — a prefix rule would light up
+  // "About" on /about-us, and "/" would match everything.
+  const currentPath = ctx.page.path
+  const renderLink = (i: NavItem): string => {
+    const isActive = i.href === currentPath
+    const attr = isActive ? ' aria-current="page"' : ''
+    return `    <a href="${escapeAttr(i.href)}"${attr}>${escapeHtml(i.label)}</a>`
+  }
+  const desktopLinks = finalItems.map(renderLink).join('\n')
+  const drawerLinks = finalItems.map(renderLink).join('\n')
 
   // The trailing <div class="page-enter"> opens the fade-up wrapper
   // Design specced for real navigation. {{site-footer}} closes it.

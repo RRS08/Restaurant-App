@@ -2,8 +2,10 @@
 // GET /api/plaid/cron
 //
 // Safety-net cron for the Plaid pipeline. Runs every 30 minutes
-// via Vercel Cron (configured in vercel.json). Iterates every
-// active Plaid Item across every restaurant and:
+// via GitHub Actions (.github/workflows/plaid-sync.yml) — NOT
+// Vercel Cron; the Hobby plan rejects sub-daily schedules, which
+// is why d7fe703 deleted vercel.json. Iterates every active Plaid
+// Item across every restaurant and:
 //
 //   1. Drains /transactions/sync (catches anything the webhook
 //      missed — Plaid can drop the odd delivery under load, and

@@ -1,0 +1,85 @@
+# ----------------------------------------------------------------
+# Plaid safety-net sync — external cron
+#
+# /api/plaid/cron drains /transactions/sync for every active Plaid
+# Item, materializes fresh rows into finance_movements, and
+# refreshes live balances. It exists to catch anything the webhook
+# missed.
+#
+# It was originally scheduled by vercel.json (commit 4fa7906), but
+# d7fe703 deleted that file because the Vercel Hobby plan rejects
+# sub-daily crons — and nothing replaced it. The safety net has
+# been dead ever since, which is why a broken webhook went
+# unnoticed instead of being papered over every 30 minutes.
+#
+# Same shape as godaddy-sync.yml. Requires two repo secrets:
+#   • CRON_SECRET — must match the Vercel env var, or the route 401s
+#   • SITE_URL    — https://onchecked.app (optional; falls back)
+#
+# Cost: one ~10s curl per run, 48 runs/day ≈ 240 min/month against
+# the 2000-minute free-tier allowance. Fits alongside godaddy-sync.
+# ----------------------------------------------------------------
+
+name: plaid-sync
+
+on:
+  schedule:
+    # Every 30 minutes, matching the cadence the route's own header
+    # comment documents. GitHub's shared-infra cron drifts by ~5
+    # min; effective spacing lands between 25 and 35 minutes, which
+    # is fine for a safety net behind a real-time webhook.
+    - cron: '*/30 * * * *'
+  # Manual "Run workflow" button in the Actions tab — use this to
+  # force a backfill without waiting for the next tick.
+  workflow_dispatch:
+
+# The endpoint is idempotent, but a run can take up to 60s (its
+# maxDuration) when there are several items to drain. Don't let a
+# new tick pile on top of one still in flight.
+concurrency:
+  group: plaid-sync
+  cancel-in-progress: false
+
+jobs:
+  poke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Hit /api/plaid/cron
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SITE_URL: ${{ secrets.SITE_URL || 'https://onchecked.app' }}
+        run: |
+          set -e
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET secret is not set on this repo. Add it in Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          # NOTE: no -L. If proxy.ts ever stops allowlisting
+          #   /api/plaid/cron in MACHINE_ROUTES, this endpoint
+          #   307-redirects to /login. Following the redirect would
+          #   return a healthy 200 from the login page and hide the
+          #   outage — exactly the failure that let the Plaid
+          #   webhook sit broken. Fail loud on anything but 200.
+          #
+          # --max-time 90 gives headroom over the route's 60s
+          # maxDuration so a slow-but-succeeding drain isn't killed
+          # mid-flight and retried into a duplicate run.
+          RESPONSE_FILE=$(mktemp)
+          HTTP_STATUS=$(curl -sS --fail-with-body \
+            --retry 4 --retry-delay 5 --retry-all-errors --retry-connrefused \
+            --connect-timeout 15 --max-time 90 \
+            -H "Authorization: Bearer $CRON_SECRET" \
+            -H "Accept: application/json" \
+            -o "$RESPONSE_FILE" \
+            -w "%{http_code}" \
+            "$SITE_URL/api/plaid/cron")
+          echo "---"
+          cat "$RESPONSE_FILE"
+          echo ""
+          echo "---"
+          echo "status=$HTTP_STATUS"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "::error::Expected HTTP 200 from /api/plaid/cron, got $HTTP_STATUS"
+            exit 1
+          fi

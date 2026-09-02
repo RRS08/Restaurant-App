@@ -18,13 +18,23 @@ import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 // ----------------------------------------------------------------
 
 // Machine-authenticated routes. These endpoints are called by
-// external systems (GitHub Actions cron, Poynt webhook delivery)
-// that never carry a browser Supabase session. They authenticate
-// themselves at the route layer — CRON_SECRET Bearer for cron,
-// SHA1 HMAC of the raw body for webhooks. Running them through
-// the normal session-based redirect below sends every call to
-// /login (307), which silently kills the cron and prevents Poynt
-// from ever validating the webhook delivery URL.
+// external systems (GitHub Actions cron, Poynt + Plaid webhook
+// delivery) that never carry a browser Supabase session. They
+// authenticate themselves at the route layer — CRON_SECRET Bearer
+// for cron, SHA1 HMAC of the raw body for Poynt, and an ES256 JWT
+// (`plaid-verification`) whose request_body_sha256 claim must match
+// the raw body for Plaid. Running them through the normal
+// session-based redirect below sends every call to /login (307),
+// which silently kills the cron and prevents Poynt or Plaid from
+// ever delivering a webhook.
+//
+// This bit Plaid: /api/plaid/webhook shipped in 4fa7906 but was
+// never added here, so every SYNC_UPDATES_AVAILABLE Plaid sent
+// bounced to /login and no bank transaction ever auto-ingested.
+// /api/plaid/cron missed it too — it lives under /api/plaid/,
+// NOT the /api/cron/ prefix above, so the safety net was dead as
+// well. .github/workflows/plaid-sync.yml now fails loud on any
+// 3xx from the cron endpoint, so a regression here is visible.
 //
 // Short-circuit BEFORE creating the Supabase client so we don't
 // pay session-refresh overhead for these calls either. Anything
@@ -32,6 +42,8 @@ import { isMainHost, normalizeHost } from '@/lib/sites/hosts'
 const MACHINE_ROUTES = [
   '/api/cron/',            // any /api/cron/* — GitHub Actions poker
   '/api/godaddy/webhooks', // Poynt POSTs here — verified via HMAC
+  '/api/plaid/webhook',    // Plaid POSTs here — verified via ES256 JWT
+  '/api/plaid/cron',       // GitHub Actions poker — CRON_SECRET Bearer
 ] as const
 
 function isMachineRoute(path: string): boolean {

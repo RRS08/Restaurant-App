@@ -20,25 +20,28 @@ export default async function WebAnalyticsPage() {
   fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 13)
   fourteenDaysAgo.setHours(0, 0, 0, 0)
 
-  const [
-    { data: orders },
-    { data: orderItems },
-  ] = await Promise.all([
-    supabase
-      .from('orders')
-      .select('id, total_amount, created_at, payment_type, status')
-      .eq('status', 'completed')
-      .gte('created_at', fourteenDaysAgo.toISOString()),
-    supabase
-      .from('order_items')
-      .select(`
-        id, order_id, quantity, total_price,
-        menu_items ( id, name, menu_categories ( id, name ) ),
-        orders!inner ( created_at, status )
-      `)
-      .eq('orders.status', 'completed')
-      .gte('orders.created_at', fourteenDaysAgo.toISOString()),
-  ])
+  // Base orders query, no embeds — protects the daily / payment /
+  // KPI cards from a schema-cache hiccup on any child relation.
+  const { data: orders } = await supabase
+    .from('orders')
+    .select('id, total_amount, created_at, payment_type, status')
+    .eq('status', 'completed')
+    .gte('created_at', fourteenDaysAgo.toISOString())
+
+  // Category mix is a follow-up query keyed by the returned order
+  // IDs. If menu_items or menu_categories hits a schema-cache issue
+  // the category card degrades to empty; the rest of the page still
+  // renders. Same split pattern as the desktop analytics fix.
+  const orderIds = (orders ?? []).map((o) => o.id)
+  const { data: orderItems } = orderIds.length > 0
+    ? await supabase
+        .from('order_items')
+        .select(`
+          id, order_id, quantity, total_price,
+          menu_items ( id, name, menu_categories ( id, name ) )
+        `)
+        .in('order_id', orderIds)
+    : { data: [] as unknown[] }
 
   // Daily revenue buckets (14 days)
   const dailyMap = new Map<string, number>()

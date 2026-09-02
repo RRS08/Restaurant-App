@@ -147,7 +147,6 @@ export default async function DashboardPage({
     { data: periodBankTxns },
     { data: bankAccountSyncs },
     { data: activeMenuItems },
-    { data: todayOrderItems },
   ] = await Promise.all([
     supabase
       .from('orders')
@@ -306,23 +305,23 @@ export default async function DashboardPage({
       .select('id, current_price, category_id')
       .eq('active', true),
 
-    // 20. Today's order line items — feeds the Sales carousel's
-    //     "Best seller today" metric. Joins to menu_items for the
-    //     name + to orders to scope by today's status='completed'.
-    //     We rely on the inner-join semantics of `orders!inner` to
-    //     drop line items whose parent order isn't a today's
-    //     completed order.
-    //     Same business_date fix as the todayOrders query above.
-    //     Also scoped to the active place via the inner-joined
-    //     orders.location_id — a best seller at Mercado shouldn't
-    //     be tallied against web orders at the online location.
-    supabase
-      .from('order_items')
-      .select('quantity, menu_items ( name ), orders!inner ( status, business_date )')
-      .eq('orders.status', 'completed')
-      .eq('orders.business_date', viewingBusinessDate)
-      .eq('orders.location_id', orderScopeId),
   ])
+
+  // 20. Today's order line items — feeds the Sales carousel's
+  //     "Best seller today" metric. Split out of the Promise.all
+  //     above so we can key it by todayOrders IDs (which are
+  //     already scoped to status='completed' + business_date +
+  //     location_id). Previously used orders!inner as a filter,
+  //     which meant a schema-cache hiccup on either menu_items
+  //     or the orders join silently returned zero line items and
+  //     the best-seller card went blank without warning.
+  const todayOrderIds = ((todayOrders ?? []) as Array<{ id: string }>).map((o) => o.id)
+  const { data: todayOrderItems } = todayOrderIds.length > 0
+    ? await supabase
+        .from('order_items')
+        .select('quantity, menu_items ( name )')
+        .in('order_id', todayOrderIds)
+    : { data: [] as unknown[] }
 
   // ---- Metrics ----
   const ordersLast7Days = (weekOrders ?? []).length
@@ -518,9 +517,10 @@ export default async function DashboardPage({
   const avgTicketToday = ordersToday > 0 ? salesToday / ordersToday : 0
 
   // Best seller today — rank by total quantity sold today.
+  type BestSellerRow = { quantity: number | string | null; menu_items: { name: string } | null }
   const bestSellerCounts = new Map<string, number>()
-  for (const row of todayOrderItems ?? []) {
-    const name = ((row.menu_items as unknown) as { name: string } | null)?.name
+  for (const row of (todayOrderItems ?? []) as BestSellerRow[]) {
+    const name = row.menu_items?.name
     if (!name) continue
     bestSellerCounts.set(name, (bestSellerCounts.get(name) ?? 0) + Number(row.quantity ?? 0))
   }

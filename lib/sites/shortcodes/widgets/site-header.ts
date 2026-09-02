@@ -39,7 +39,16 @@ const FALLBACK_NAV: NavItem[] = [
 
 export function renderSiteHeader(_args: unknown, ctx: ShortcodeContext): string {
   const config = (ctx.site.config ?? {}) as Record<string, unknown>
-  const nav = (config.nav ?? {}) as { items?: unknown }
+  // Multilingual sites drop a `nav_<lang>` block next to `nav`
+  // (e.g. `nav_es`) with localized labels + hrefs. When the current
+  // page declares `seo.lang`, prefer that variant and fall back to
+  // the default `nav` if the variant is missing.
+  const pageLang = readPageLang(ctx)
+  const localizedKey = pageLang ? `nav_${pageLang}` : null
+  const localized = localizedKey ? (config[localizedKey] as unknown) : null
+  const nav = ((localized && typeof localized === 'object' ? localized : config.nav) ?? {}) as {
+    items?: unknown
+  }
   const rawItems: NavItemRaw[] = Array.isArray(nav.items) ? (nav.items as NavItemRaw[]) : []
   const items: NavItem[] = rawItems
     .filter((i): i is NavItem => typeof i?.label === 'string' && typeof i?.href === 'string')
@@ -228,4 +237,14 @@ function readBrandKicker(config: Record<string, unknown>, siteName: string): str
   if (typeof config.brand_kicker === 'string') return config.brand_kicker
   const idx = siteName.indexOf(' ')
   return idx === -1 ? '' : siteName.slice(idx + 1)
+}
+
+/** Read the current page's declared language (from seo.lang) as a
+ *  lowercase 2-letter tag, or null if unset/malformed. Used to pick
+ *  the lang-specific nav variant. */
+function readPageLang(ctx: ShortcodeContext): string | null {
+  const seo = (ctx.page.seo ?? {}) as { lang?: unknown }
+  if (typeof seo.lang !== 'string') return null
+  const m = seo.lang.trim().toLowerCase().match(/^([a-z]{2})(?:[-_].*)?$/)
+  return m ? m[1] : null
 }

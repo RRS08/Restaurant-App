@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   // shared links (Slack, iMessage, Twitter, etc.) always resolve
   // full absolute paths regardless of which deploy generated them.
   metadataBase: new URL("https://onchecked.app"),
-  title: "Checked — Restaurant and retail operations, checked.",
+  title: "Checked",
   description:
     "Sales, inventory, staffing, and finance for independent restaurants and retail shops — one surface, one truth, one tap to the next thing that needs attention.",
 };

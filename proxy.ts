@@ -229,9 +229,14 @@ export default async function proxy(request: NextRequest) {
 }
 
 // Tell Next.js which paths this proxy should run on.
-// We exclude Next.js internals and static files so we don't slow them down.
+// We exclude Next.js internals and static files so we don't slow them down —
+// and, more importantly, so tenant-host rewrites don't misroute /assets/*
+// files. Anything ending in a static-asset extension bypasses the middleware
+// entirely and is served directly from public/ by Next.js. Includes .js,
+// .json, and font/CSS extensions so hosted-site widgets (Valley's D3 map)
+// can pull their own scripts + data files off the platform origin.
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|mjs|json|woff|woff2|ttf|eot|map|txt|xml)$).*)',
   ],
 }

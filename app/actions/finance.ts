@@ -24,6 +24,14 @@ import { syncPlaidItem } from '@/lib/bank/providers/plaid'
 import { materializeFinanceMovements } from '@/lib/finance/materialize'
 import { clearCachedPosBatch } from '@/lib/finance/pos-batch-cache'
 import {
+  sumDenominations,
+  normalizeDenominations,
+  getOpenCashSession,
+  getLastClosedCashSession,
+  computeExpectedCash,
+  type GapReason,
+} from '@/lib/finance/cash'
+import {
   ACCOUNT_KIND_DEFAULTS,
   type FinanceAccountKind,
   type FinanceCategoryKind,
@@ -683,6 +691,229 @@ async function fetchPlaidBalances(
  *
  *  Non-plaid tiles get the same hard treatment — movements go,
  *  the tile goes. No provider secret to clean up. */
+// ---------------------------------------------------------------- cash register
+
+/** Open the register for a new session.
+ *
+ *  Sums the denomination count, then reconciles against whatever
+ *  the previous session closed at. A shortfall between the two is
+ *  NOT automatically a loss — cash legitimately leaves the drawer
+ *  overnight (bank run, moved to a safe), so the caller passes
+ *  `gapReason`:
+ *
+ *    'deposit'     → books a Register → Bank transfer for
+ *                    `gapDepositAmount`, which is what makes the
+ *                    bank side reconcile when Plaid sees it land
+ *    'unexplained' → records the shortfall with a required note.
+ *                    No movement is booked; the money is simply
+ *                    gone and the note is the audit trail
+ *    'none'        → no gap to explain (first session ever, or the
+ *                    count matches the previous close)
+ *
+ *  The partial unique index on cash_sessions means a second open
+ *  attempt fails at the DB rather than racing — we surface that as
+ *  a friendly message rather than a constraint error. */
+export async function openCashSession(input: {
+  locationId: string
+  registerAccountId: string
+  denominations: Record<string, number>
+  gapReason?: GapReason
+  gapDepositAmount?: number
+  gapNote?: string
+  depositToAccountId?: string
+}): Promise<ActionResult<{ id: string }>> {
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  const admin = createAdminClient()
+
+  const counts = normalizeDenominations(input.denominations)
+  const openingAmount = sumDenominations(counts)
+
+  // Guard both referenced rows belong to this tenant.
+  const [{ data: loc }, { data: register }] = await Promise.all([
+    admin.from('locations').select('id').eq('id', input.locationId)
+      .eq('restaurant_id', ctx.restaurantId).maybeSingle(),
+    admin.from('finance_accounts').select('id, kind').eq('id', input.registerAccountId)
+      .eq('restaurant_id', ctx.restaurantId).maybeSingle(),
+  ])
+  if (!loc) return { error: 'Location not found.' }
+  if (!register) return { error: 'Register account not found.' }
+
+  const existing = await getOpenCashSession(admin, ctx.restaurantId, input.locationId)
+  if (existing) return { error: 'The register is already open.' }
+
+  const prior = await getLastClosedCashSession(admin, ctx.restaurantId, input.locationId)
+  const priorClose = prior?.closing_amount ?? null
+  const gap = priorClose == null ? null : Math.round((openingAmount - priorClose) * 100) / 100
+
+  // Validate the gap explanation. A shortfall always needs one; a
+  // match or a surplus does not.
+  let gapReason: GapReason | null = null
+  let gapDeposit: number | null = null
+  let gapNote: string | null = null
+  if (gap != null && gap < 0) {
+    const reason = input.gapReason
+    if (reason !== 'deposit' && reason !== 'unexplained') {
+      return { error: 'Tell us whether the missing cash was a deposit.' }
+    }
+    gapReason = reason
+    if (reason === 'deposit') {
+      const amt = Number(input.gapDepositAmount)
+      if (!Number.isFinite(amt) || amt <= 0) {
+        return { error: 'Enter the deposit amount.' }
+      }
+      if (amt > Math.abs(gap) + 0.005) {
+        return { error: 'The deposit cannot be more than the missing amount.' }
+      }
+      gapDeposit = Math.round(amt * 100) / 100
+    } else {
+      const note = (input.gapNote ?? '').trim()
+      if (!note) return { error: 'Add a note explaining the missing cash.' }
+      gapNote = note
+    }
+  } else if (gap != null) {
+    gapReason = 'none'
+  }
+
+  const { data, error } = await admin
+    .from('cash_sessions')
+    .insert({
+      restaurant_id: ctx.restaurantId,
+      location_id: input.locationId,
+      opened_by: ctx.userId,
+      opening_amount: openingAmount,
+      opening_denominations: counts,
+      prior_close_amount: priorClose,
+      opening_gap: gap,
+      gap_reason: gapReason,
+      gap_deposit_amount: gapDeposit,
+      gap_note: gapNote,
+      status: 'open',
+    })
+    .select('id')
+    .single()
+
+  if (error || !data) {
+    // 23505 = unique_violation on the one-open-per-location index.
+    // Means another tab opened it between our check and this insert.
+    if ((error as { code?: string } | null)?.code === '23505') {
+      return { error: 'The register was just opened somewhere else.' }
+    }
+    console.error('[finance:openCashSession] insert failed', error)
+    return { error: 'Could not open the register.' }
+  }
+
+  // Book the deposit as a real transfer so the bank side reconciles
+  // when Plaid sees the matching credit land.
+  if (gapReason === 'deposit' && gapDeposit && input.depositToAccountId) {
+    const res = await createMovement({
+      source_account_id: input.registerAccountId,
+      dest_account_id: input.depositToAccountId,
+      amount: gapDeposit,
+      note: 'Register deposit',
+    })
+    if ('error' in res) {
+      // The session is already open and correct; a failed transfer
+      // is recoverable by hand. Log rather than unwinding.
+      console.error('[finance:openCashSession] deposit movement failed', res.error)
+    }
+  }
+
+  // Snap the register tile to the counted amount. The drawer IS
+  // what was counted — that is the whole point of counting it.
+  await admin
+    .from('finance_accounts')
+    .update({ balance: openingAmount, updated_at: new Date().toISOString() })
+    .eq('id', input.registerAccountId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  revalidatePath('/finance')
+  return { ok: true, data: { id: data.id as string } }
+}
+
+/** Close the open register session.
+ *
+ *  Computes what SHOULD be in the drawer (opening + cash sales −
+ *  cash paid out + cash added in), compares against the counted
+ *  total, and stores the variance. A non-zero variance requires a
+ *  note — that is the moment the owner actually wants an
+ *  explanation.
+ *
+ *  Deliberately does NOT book a deposit. Cash usually sits in a
+ *  safe overnight; the deposit gets reconciled at the next open
+ *  instead, where the operator actually knows what happened. */
+export async function closeCashSession(input: {
+  sessionId: string
+  registerAccountId: string
+  denominations: Record<string, number>
+  note?: string
+}): Promise<ActionResult<{ variance: number }>> {
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  const admin = createAdminClient()
+
+  const { data: sessionRow } = await admin
+    .from('cash_sessions')
+    .select('*')
+    .eq('id', input.sessionId)
+    .maybeSingle()
+  if (!sessionRow || sessionRow.restaurant_id !== ctx.restaurantId) {
+    return { error: 'Session not found.' }
+  }
+  if (sessionRow.status !== 'open') {
+    return { error: 'That session is already closed.' }
+  }
+
+  const counts = normalizeDenominations(input.denominations)
+  const closingAmount = sumDenominations(counts)
+
+  const breakdown = await computeExpectedCash(admin, {
+    restaurantId: ctx.restaurantId,
+    locationId: sessionRow.location_id as string,
+    registerAccountId: input.registerAccountId,
+    openedAt: sessionRow.opened_at as string,
+    openingAmount: Number(sessionRow.opening_amount),
+  })
+
+  const variance = Math.round((closingAmount - breakdown.expected) * 100) / 100
+  const note = (input.note ?? '').trim()
+  if (Math.abs(variance) >= 0.01 && !note) {
+    return { error: 'Add a note explaining the difference.' }
+  }
+
+  const { error } = await admin
+    .from('cash_sessions')
+    .update({
+      closed_at: new Date().toISOString(),
+      closed_by: ctx.userId,
+      closing_amount: closingAmount,
+      closing_denominations: counts,
+      expected_amount: breakdown.expected,
+      variance,
+      variance_note: note || null,
+      status: 'closed',
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', input.sessionId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  if (error) {
+    console.error('[finance:closeCashSession] update failed', error)
+    return { error: 'Could not close the register.' }
+  }
+
+  // Tile reflects the counted total, not the expected one — the
+  // drawer holds what it holds.
+  await admin
+    .from('finance_accounts')
+    .update({ balance: closingAmount, updated_at: new Date().toISOString() })
+    .eq('id', input.registerAccountId)
+    .eq('restaurant_id', ctx.restaurantId)
+
+  revalidatePath('/finance')
+  return { ok: true, data: { variance } }
+}
+
 /** Rename an account tile. Merchants link their own banks now, and
  *  the provider's account_name is often verbose or wrong for how
  *  they think about the account ("Rio Bank - Personal/Business

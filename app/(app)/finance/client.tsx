@@ -24,6 +24,8 @@ import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
 import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount, refreshPosBatch, renameFinanceAccount } from '@/app/actions/finance'
 import { createPlaidLinkToken, exchangePlaidPublicToken } from '@/app/actions/bank'
+import { OpenRegisterModal, CloseRegisterModal } from './register-modal'
+import type { CashSession, ExpectedCashBreakdown } from '@/lib/finance/cash'
 import type {
   FinanceAccount,
   FinanceCategory,
@@ -52,6 +54,7 @@ export default function FinanceClient({
   lang, accounts, categories, movements,
   cashOnHand, periodIn, periodOut, periodStart,
   activePlaceId, plaidConfigured,
+  openSession, expectedCash, lastClose,
 }: {
   lang: Lang
   accounts: FinanceAccount[]
@@ -69,6 +72,16 @@ export default function FinanceClient({
    *  When false, the + Add account tile disables itself with a
    *  short hint instead of triggering a call that would 500. */
   plaidConfigured: boolean
+  /** Register session state. Null at the online storefront (no
+   *  drawer to count) and null when the register is closed. */
+  openSession: CashSession | null
+  /** Live expected drawer total while a session is open — computed
+   *  server-side so the close modal opens with the number already
+   *  in hand. Null when no session is open. */
+  expectedCash: ExpectedCashBreakdown | null
+  /** Most recent closed session, used to seed the gap
+   *  reconciliation on the next open. Null before the first close. */
+  lastClose: CashSession | null
 }) {
   const t = makeT(lang)
   const locale = lang === 'es' ? 'es-ES' : 'en-US'
@@ -78,6 +91,13 @@ export default function FinanceClient({
   const [accountFilter, setAccountFilter] = useState<string | 'all' | 'expenses'>('all')
   const [expenseOpen, setExpenseOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  const [registerModal, setRegisterModal] = useState<'open' | 'close' | null>(null)
+
+  // Register workflow only applies at a physical place with a cash
+  // account. Bank accounts feed the deposit picker in the open flow.
+  const registerAccount = accounts.find(a => a.kind === 'cash') ?? null
+  const bankAccounts = accounts.filter(a => a.kind === 'bank')
+  const canCountRegister = !!registerAccount && !!activePlaceId
 
   // Month picker — click the title button, portal opens anchored
   // to the button's bottom-left. Anchor recomputes on scroll/resize
@@ -254,7 +274,22 @@ export default function FinanceClient({
             gap: 12,
           }}>
             {accounts.map(a => (
-              <AccountTile key={a.id} a={a} locale={locale} t={t} />
+              <AccountTile
+                key={a.id}
+                a={a}
+                locale={locale}
+                t={t}
+                registerState={
+                  a.kind === 'cash' && canCountRegister
+                    ? {
+                        isOpen: !!openSession,
+                        expected: expectedCash?.expected ?? null,
+                        onOpen: () => setRegisterModal('open'),
+                        onCloseSession: () => setRegisterModal('close'),
+                      }
+                    : null
+                }
+              />
             ))}
             <AddAccountTile
               t={t}
@@ -363,6 +398,26 @@ export default function FinanceClient({
         />
       )}
 
+      {registerModal === 'open' && registerAccount && activePlaceId && (
+        <OpenRegisterModal
+          locationId={activePlaceId}
+          register={registerAccount}
+          bankAccounts={bankAccounts}
+          priorCloseAmount={lastClose?.closing_amount ?? null}
+          onClose={() => setRegisterModal(null)}
+        />
+      )}
+
+      {registerModal === 'close' && registerAccount && openSession && expectedCash && (
+        <CloseRegisterModal
+          sessionId={openSession.id}
+          register={registerAccount}
+          expected={expectedCash.expected}
+          breakdown={expectedCash}
+          onClose={() => setRegisterModal(null)}
+        />
+      )}
+
       {/* Month picker — portaled to body so a scrolling ancestor's
           overflow can't clip it. Highlights the current month;
           disables future months. */}
@@ -388,7 +443,24 @@ export default function FinanceClient({
 // Tiles
 // ================================================================
 
-function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: string; t: (en: string, es?: string) => string }) {
+/** Register open/close affordance, threaded in only for the cash
+ *  tile at a physical place. Null everywhere else. */
+interface RegisterState {
+  isOpen: boolean
+  /** Live expected drawer total while a session is open. The tile
+   *  shows this instead of the stored balance so the number reflects
+   *  the day as it accumulates, not the last count. */
+  expected: number | null
+  onOpen: () => void
+  onCloseSession: () => void
+}
+
+function AccountTile({ a, locale: _locale, t, registerState }: {
+  a: FinanceAccount
+  locale: string
+  t: (en: string, es?: string) => string
+  registerState?: RegisterState | null
+}) {
   const router = useRouter()
   const tone = tintForAccount(a)
   const [hover, setHover] = useState(false)
@@ -610,7 +682,15 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
         fontFamily: MONO, fontSize: 20, fontWeight: 600,
         letterSpacing: '-0.035em', lineHeight: 1, color: INK,
       }}>
-        {fmtMoney(a.balance)}
+        {/* While a session is open the tile shows the LIVE expected
+            total (opening + sales − payouts), not the stored balance
+            from the last count. That is the number the operator
+            checks the drawer against. */}
+        {fmtMoney(
+          registerState?.isOpen && registerState.expected != null
+            ? registerState.expected
+            : a.balance
+        )}
       </span>
       <span style={{ fontSize: 11, color: FAINT, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
         {tileSubtitle(a, _locale, t)}
@@ -628,7 +708,45 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
             ⚠ {t('sync issue', 'error de sync')}
           </span>
         )}
+        {/* Bank tile equivalent. Only shows once a run has actually
+            failed — a healthy tile stays exactly as it was. The
+            failure count is in the tooltip because "failed once"
+            and "failed 40 times running" need different reactions. */}
+        {a.kind === 'bank' && (a.syncConsecutiveFailures ?? 0) > 0 && (
+          <span
+            title={t(
+              `Bank sync has failed ${a.syncConsecutiveFailures} time(s) in a row. Showing the last successful data.`,
+              `La sincronización bancaria ha fallado ${a.syncConsecutiveFailures} vez(ces) seguidas. Mostrando los últimos datos correctos.`,
+            )}
+            style={{ color: '#B45309', cursor: 'help', whiteSpace: 'nowrap' }}
+          >
+            ⚠ {t('sync issue', 'error de sync')}
+          </span>
+        )}
       </span>
+
+      {/* Register open/close. Full-width so it reads as the tile's
+          primary action rather than a corner control — counting the
+          drawer is the main thing you do with this tile. */}
+      {registerState && (
+        <button
+          type="button"
+          onClick={registerState.isOpen ? registerState.onCloseSession : registerState.onOpen}
+          style={{
+            marginTop: 4, height: 30, width: '100%',
+            border: `1px solid ${registerState.isOpen ? LINE : INK}`,
+            borderRadius: 8,
+            background: registerState.isOpen ? '#fff' : INK,
+            color: registerState.isOpen ? INK : PAPER,
+            font: 'inherit', fontSize: 12, fontWeight: 500,
+            cursor: 'pointer',
+          }}
+        >
+          {registerState.isOpen
+            ? t('Close register', 'Cerrar caja')
+            : t('Open register', 'Abrir caja')}
+        </button>
+      )}
     </div>
   )
 }

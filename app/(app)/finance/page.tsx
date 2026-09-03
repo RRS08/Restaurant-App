@@ -22,6 +22,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveActivePlace } from '@/lib/places'
 import { ensureFinanceSeeds } from '@/lib/finance/seed'
 import { listAccounts, listCategories, listMovements, cashOnHand, inOutTotals } from '@/lib/finance/data'
+import { getOpenCashSession, getLastClosedCashSession, computeExpectedCash } from '@/lib/finance/cash'
 import { getLang } from '@/lib/i18n-server'
 import { isPlaidConfigured } from '@/lib/plaid/client'
 import FinanceClient from './client'
@@ -80,6 +81,29 @@ export default async function FinancePage(props: {
     listMovements(admin, restaurantId, { from: windowStart, limit: 2000 }),
   ])
 
+  // Register session state. Only meaningful at a physical place —
+  // the online storefront has no drawer to count. When a session is
+  // open we also compute the live expected total so the close modal
+  // can show it without a second round trip.
+  const registerAccount = accounts.find(a => a.kind === 'cash') ?? null
+  let openSession = null
+  let expectedCash = null
+  let lastClose = null
+  if (activePlace?.id && activePlace.kind === 'retail' && registerAccount) {
+    openSession = await getOpenCashSession(admin, restaurantId, activePlace.id)
+    if (openSession) {
+      expectedCash = await computeExpectedCash(admin, {
+        restaurantId,
+        locationId: activePlace.id,
+        registerAccountId: registerAccount.id,
+        openedAt: openSession.opened_at,
+        openingAmount: openSession.opening_amount,
+      })
+    } else {
+      lastClose = await getLastClosedCashSession(admin, restaurantId, activePlace.id)
+    }
+  }
+
   const cash = cashOnHand(accounts)
   const io = inOutTotals(movements.filter(m => {
     const t = new Date(m.occurred_at).getTime()
@@ -100,6 +124,9 @@ export default async function FinancePage(props: {
       periodStart={selectedMonth.toISOString()}
       activePlaceId={activePlace?.id ?? null}
       plaidConfigured={isPlaidConfigured()}
+      openSession={openSession}
+      expectedCash={expectedCash}
+      lastClose={lastClose}
     />
   )
 }

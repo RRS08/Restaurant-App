@@ -52,7 +52,7 @@ const EXPENSE = '#DC2626'
 
 export default function FinanceClient({
   lang, accounts, categories, movements,
-  cashOnHand, periodIn, periodOut, periodStart,
+  cashOnHand, periodIn, periodOut, periodStart, periodEnd, periodYear, periodMonth,
   activePlaceId, plaidConfigured,
   openSession, expectedCash, lastClose,
 }: {
@@ -63,10 +63,21 @@ export default function FinanceClient({
   cashOnHand: number
   periodIn: number
   periodOut: number
-  /** ISO of the first day of the current period (a month, at v1).
-   *  Fed by the server so client/server share the same anchor
-   *  even across midnight. */
+  /** Absolute ISO instants for the selected period, BOTH computed
+   *  server-side in one consistent frame. The client must never
+   *  re-derive one from the other — reading local calendar fields
+   *  off an absolute instant re-anchors it to the browser's
+   *  timezone, and when that differs from the server's the window
+   *  shifts or collapses. (It collapsed: the spend donut read empty
+   *  for a month the header showed $4.7k of expenses in.) */
   periodStart: string
+  periodEnd: string
+  /** The selected month as plain numbers. Immune to timezone
+   *  reinterpretation, so the title, the picker highlight, and the
+   *  ?period= round-trip all agree no matter where the browser is. */
+  periodYear: number
+  /** 0-indexed, matching Date#getMonth. */
+  periodMonth: number
   activePlaceId: string | null
   /** Server tells us if PLAID_CLIENT_ID + PLAID_SECRET are set.
    *  When false, the + Add account tile disables itself with a
@@ -129,14 +140,17 @@ export default function FinanceClient({
   // total (90 days) read as if it were the month's spend: $46,370.18
   // of quarterly spend beside a monthly header. Same window now, so
   // the chart's total and the header's "out" agree by construction.
+  // Use the server's own two boundaries verbatim. Deriving `end`
+  // from `start` in the browser is what broke this before — see the
+  // prop docs above.
   const periodMovements = useMemo(() => {
-    const start = new Date(periodStart)
-    const end = new Date(start.getFullYear(), start.getMonth() + 1, 1)
+    const s = new Date(periodStart).getTime()
+    const e = new Date(periodEnd).getTime()
     return movements.filter(m => {
       const ts = new Date(m.occurred_at).getTime()
-      return ts >= start.getTime() && ts < end.getTime()
+      return ts >= s && ts <= e
     })
-  }, [movements, periodStart])
+  }, [movements, periodStart, periodEnd])
   const expenseCats = useMemo(() => expenseByCategory(periodMovements), [periodMovements])
 
   // Ledger view — filter chips are MUTUALLY EXCLUSIVE with the
@@ -146,29 +160,43 @@ export default function FinanceClient({
   // under "Expenses." Paired transfers still show under both
   // their source and dest accounts since neither side is an
   // expense from the operator's perspective.
+  // The ledger is a rolling 30-day view, independent of the month
+  // picker above it. The server fetches a wider window (the charts
+  // need it), so scope here rather than at the query.
+  const ledgerMovements = useMemo(() => {
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+    return movements.filter(m => new Date(m.occurred_at).getTime() >= cutoff)
+  }, [movements])
+
   const shown = useMemo(() => {
-    if (accountFilter === 'all') return movements
-    if (accountFilter === 'expenses') return movements.filter(m => m.direction === 'expense')
-    return movements.filter(m => {
+    if (accountFilter === 'all') return ledgerMovements
+    if (accountFilter === 'expenses') return ledgerMovements.filter(m => m.direction === 'expense')
+    return ledgerMovements.filter(m => {
       if (m.direction === 'expense') return false
       return m.source?.id === accountFilter || m.dest?.id === accountFilter
     })
-  }, [movements, accountFilter])
+  }, [ledgerMovements, accountFilter])
 
   // Chip counts follow the same exclusion so the numbers add up
   // (Chase Savings 4 + Expenses 1 = All 5, no double-count).
   const counts = useMemo(() => {
     const byId = new Map<string, number>()
     let expenseCount = 0
-    for (const m of movements) {
+    for (const m of ledgerMovements) {
       if (m.direction === 'expense') { expenseCount++; continue }
       if (m.source?.id) byId.set(m.source.id, (byId.get(m.source.id) ?? 0) + 1)
       if (m.dest?.id) byId.set(m.dest.id, (byId.get(m.dest.id) ?? 0) + 1)
     }
-    return { byAccount: byId, expenses: expenseCount, all: movements.length }
-  }, [movements])
+    return { byAccount: byId, expenses: expenseCount, all: ledgerMovements.length }
+  }, [ledgerMovements])
 
-  const periodStartDate = useMemo(() => new Date(periodStart), [periodStart])
+  // Built from plain numbers, not parsed from an ISO instant — so
+  // the title reads "August" in every timezone, not "July" for
+  // anyone west of the server.
+  const periodStartDate = useMemo(
+    () => new Date(periodYear, periodMonth, 1),
+    [periodYear, periodMonth],
+  )
   const monthTitle = useMemo(
     () => periodStartDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' }),
     [periodStartDate, locale],
@@ -352,7 +380,7 @@ export default function FinanceClient({
               {t('Every movement', 'Todo movimiento')}
             </span>
             <span style={{ fontFamily: MONO, fontSize: 10, color: FAINT, letterSpacing: '0.14em' }}>
-              {t('LAST 90 DAYS', 'ÚLTIMOS 90 DÍAS')}
+              {t('LAST 30 DAYS', 'ÚLTIMOS 30 DÍAS')}
             </span>
           </div>
           <div style={{

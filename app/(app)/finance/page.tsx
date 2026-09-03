@@ -122,6 +122,9 @@ export default async function FinancePage(props: {
       periodIn={io.in}
       periodOut={io.out}
       periodStart={selectedMonth.toISOString()}
+      periodEnd={monthEnd.toISOString()}
+      periodYear={selectedMonth.getFullYear()}
+      periodMonth={selectedMonth.getMonth()}
       activePlaceId={activePlace?.id ?? null}
       plaidConfigured={isPlaidConfigured()}
       openSession={openSession}

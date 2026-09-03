@@ -137,11 +137,19 @@ function renderCard(p: Card): string {
 </div>`
 }
 
-/** Inline dot picker for a card. One row: N dots followed by the
- *  label of the currently-selected choice. Radio inputs are
- *  visually hidden but functionally driving the state; a delegated
- *  client script re-paints `.is-active` and updates the price
- *  + Add-to-cart data-options on change. */
+/** Per-index palette so each choice's dot carries its own color.
+ *  First choice = sage green (matches Hatziri palette + PDP tone),
+ *  second = deep navy, third = amber, fourth = plum. Loops if the
+ *  product happens to declare more than 4 choices (rare). Colors
+ *  chosen to read well on the sage-cream card background AND to
+ *  differentiate at a glance without needing a legend. */
+const CHOICE_COLORS = ['#2f4a1f', '#1e3a5f', '#7a4a1f', '#4a1f4a'] as const
+
+/** Inline dot picker for a card. One row: N colored dots (each
+ *  choice gets its own hue) followed by the label of the currently-
+ *  selected choice. Radio inputs are visually hidden but drive the
+ *  state; a delegated client script re-paints `.is-active` and
+ *  updates the price + Add-to-cart data-options on change. */
 function renderCardPicker(
   slug: string,
   group: SiteProductOptionGroup,
@@ -151,7 +159,8 @@ function renderCardPicker(
   const dots = group.choices.map((c, i) => {
     const priceForChoice = typeof c.price === 'number' ? c.price : basePrice
     const isDefault = i === 0
-    return `    <label class="card-opt${isDefault ? ' is-active' : ''}">
+    const color = CHOICE_COLORS[i % CHOICE_COLORS.length]
+    return `    <label class="card-opt${isDefault ? ' is-active' : ''}" style="--dot-color:${color}">
       <input type="radio" name="card-opt-${escapeAttr(slug)}-${escapeAttr(group.key)}" value="${escapeAttr(c.key)}"${isDefault ? ' checked' : ''} data-price="${escapeAttr(String(priceForChoice))}" data-label="${escapeAttr(c.label)}">
       <span class="card-opt-dot" aria-hidden="true"></span>
       <span class="visually-hidden">${escapeHtml(c.label)}</span>
@@ -194,13 +203,13 @@ function parsePrice(raw: number | string): number {
 const CARD_PICKER_STYLE = `
 <style>
 .card .card-opts {
-  display: flex; align-items: center; gap: 10px;
-  padding: 6px 0 2px;
-  min-height: 24px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 0 4px;
+  min-height: 28px;
 }
 .card .card-opt {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px;
+  width: 24px; height: 24px;
   cursor: pointer; position: relative;
   border-radius: 999px;
 }
@@ -210,23 +219,23 @@ const CARD_PICKER_STYLE = `
 }
 .card .card-opt-dot {
   display: block;
-  width: 12px; height: 12px;
+  width: 14px; height: 14px;
   border-radius: 999px;
-  background: #d7ddd0;
-  transition: background-color .14s ease, box-shadow .14s ease, transform .14s ease;
+  background: var(--dot-color, #2f4a1f);
+  opacity: 0.35;
+  transition: opacity .14s ease, box-shadow .14s ease;
 }
-.card .card-opt:hover .card-opt-dot { background: #b7c3aa; }
+.card .card-opt:hover .card-opt-dot { opacity: 0.6; }
 .card .card-opt.is-active .card-opt-dot {
-  background: #2f4a1f;
-  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4px #2f4a1f;
-  transform: scale(1);
+  opacity: 1;
+  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4.5px var(--dot-color, #2f4a1f);
 }
 .card .card-opt input:focus-visible + .card-opt-dot {
-  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4px #2f4a1f;
+  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4.5px var(--dot-color, #2f4a1f);
 }
 .card .card-opt-label {
-  margin-left: 4px;
-  font-size: 12.5px; color: #55723e; font-weight: 500;
+  margin-left: 6px;
+  font-size: 13.5px; color: #2f4a1f; font-weight: 500;
   letter-spacing: -0.005em;
   line-height: 1.2;
 }

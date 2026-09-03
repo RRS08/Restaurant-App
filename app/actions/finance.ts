@@ -401,7 +401,7 @@ export async function bridgePlaidAccountsToFinance(
       // badly against the other tile labels.
       const subtypePretty = prettifyAccountSubtype(String(c.account_subtype ?? ''))
       const composed = [bank, subtypePretty].filter(Boolean).join(' ')
-      name = composed || titleCase(String(c.account_name ?? '').trim()) || 'Account'
+      name = composed || cleanAccountName(String(c.account_name ?? '')) || 'Account'
     }
 
     // Glyph slug — client AccountGlyph checks this first for a
@@ -574,6 +574,37 @@ const WALLET_TILE_COLOR: Record<WalletBrand, string> = {
  *  them into a title-cased word for tile labels. */
 function prettifyAccountSubtype(raw: string): string {
   return titleCase(raw)
+}
+
+/** Fallback tile name when the institution + subtype compose came
+ *  back empty and we have to lean on Plaid's raw `account_name`.
+ *
+ *  Small banks ship names like "Rio Bank - Personal/Business
+ *  Checking" — accurate, but it truncates on the tile and buries
+ *  the useful word ("Checking") behind filler. Strip the marketing
+ *  qualifiers, collapse the separator noise, then title-case. The
+ *  mask renders in the tile subtitle so we don't need the extra
+ *  words to disambiguate.
+ *
+ *    "Rio Bank - Personal/Business Checking" → "Rio Bank Checking"
+ *    "FREE BUSINESS CHECKING ACCOUNT"        → "Business Checking"
+ */
+function cleanAccountName(raw: string): string {
+  const FILLER = [
+    /\bpersonal\s*\/\s*business\b/gi,
+    /\bbusiness\s*\/\s*personal\b/gi,
+    /\bfree\b/gi,
+    /\baccount\b/gi,
+    /\bplus\b/gi,
+    /\bpremium\b/gi,
+    /\bpreferred\b/gi,
+  ]
+  let s = raw.trim()
+  for (const re of FILLER) s = s.replace(re, ' ')
+  // Collapse hyphen/slash separators and repeated whitespace left
+  // behind by the strips above.
+  s = s.replace(/[-–—/]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+  return titleCase(s)
 }
 
 /** Uppercase first letter of each word, lowercase the rest. Handles

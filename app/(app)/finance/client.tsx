@@ -570,25 +570,40 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
           }}
         />
       ) : (
-        <span
-          role="button"
-          tabIndex={0}
-          onClick={beginEdit}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginEdit() }
-          }}
-          title={t('Click to rename', 'Haz clic para renombrar')}
-          style={{
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+          <span style={{
             fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            cursor: 'text', borderRadius: 4,
-            padding: '2px 6px', margin: '-2px -6px',
-            background: hover ? '#F4F4F5' : 'transparent',
-            transition: 'background-color .12s ease',
-            outline: 'none',
-          }}
-        >
-          {a.name}
+          }}>
+            {a.name}
+          </span>
+          {/* Hover-revealed rename pencil. Sits inline with the name
+              rather than the tile's top-right corner, which already
+              carries remove + refresh. Reserved width keeps the name
+              from reflowing when the icon appears. */}
+          <button
+            type="button"
+            onClick={beginEdit}
+            aria-label={t('Rename account', 'Renombrar cuenta')}
+            title={t('Rename account', 'Renombrar cuenta')}
+            style={{
+              flex: 'none', width: 16, height: 16, padding: 0,
+              border: 'none', background: 'none', color: FAINT,
+              cursor: 'pointer', lineHeight: 0,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              opacity: hover ? 1 : 0,
+              transition: 'opacity .12s ease, color .12s ease',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = INK }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = FAINT }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="2.2"
+                 strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </button>
         </span>
       )}
       <span style={{

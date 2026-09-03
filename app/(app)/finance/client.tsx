@@ -562,10 +562,28 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => { setHover(false); setConfirming(false) }}
+      // The whole register card is the affordance — clicking it
+      // opens the count workflow. Inner controls (remove, rename,
+      // refresh) stopPropagation so they don't double-fire.
+      onClick={registerState
+        ? () => (registerState.isOpen ? registerState.onCloseSession() : registerState.onOpen())
+        : undefined}
+      role={registerState ? 'button' : undefined}
+      tabIndex={registerState ? 0 : undefined}
+      onKeyDown={registerState ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          registerState.isOpen ? registerState.onCloseSession() : registerState.onOpen()
+        }
+      } : undefined}
       style={{
         position: 'relative',
-        border: `1px solid ${LINE}`, borderRadius: 12, background: '#fff',
+        border: `1px solid ${registerState && hover ? INK : LINE}`,
+        borderRadius: 12, background: '#fff',
         padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: 8,
+        cursor: registerState ? 'pointer' : undefined,
+        transition: 'border-color .12s ease',
+        outline: 'none',
       }}
     >
       {/* Hover-revealed remove control. Two-step (× → Remove label)
@@ -577,7 +595,7 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
         <button
           type="button"
           disabled={removing}
-          onClick={() => confirming ? onRemove() : setConfirming(true)}
+          onClick={(e) => { e.stopPropagation(); confirming ? onRemove() : setConfirming(true) }}
           title={confirming
             ? t('Click again to remove', 'Haz clic de nuevo para quitar')
             : t('Remove account', 'Quitar cuenta')}
@@ -606,7 +624,7 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
         <button
           type="button"
           disabled={refreshing}
-          onClick={onRefreshBatch}
+          onClick={(e) => { e.stopPropagation(); onRefreshBatch() }}
           aria-label={t('Refresh batch total', 'Actualizar total del lote')}
           title={t('Refresh batch total', 'Actualizar total del lote')}
           style={{
@@ -643,6 +661,7 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
           disabled={saving}
           maxLength={60}
           onChange={(e) => setDraft(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
           onBlur={commitEdit}
           onKeyDown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
@@ -672,7 +691,7 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
               from reflowing when the icon appears. */}
           <button
             type="button"
-            onClick={beginEdit}
+            onClick={(e) => { e.stopPropagation(); beginEdit() }}
             aria-label={t('Rename account', 'Renombrar cuenta')}
             title={t('Rename account', 'Renombrar cuenta')}
             style={{
@@ -710,7 +729,12 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
         )}
       </span>
       <span style={{ fontSize: 11, color: FAINT, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-        {tileSubtitle(a, _locale, t)}
+        {/* An open register says so — the tile is showing a live
+            running total at that point, not a settled count, and
+            the operator needs to know which. */}
+        {registerState?.isOpen
+          ? t('Register open', 'Caja abierta')
+          : tileSubtitle(a, _locale, t)}
         {/* Sync warning. Deliberately subtle — the number beside it
             is still a real (last-known) balance, not an error
             state, so this informs without alarming. */}
@@ -742,28 +766,6 @@ function AccountTile({ a, locale: _locale, t, registerState }: {
         )}
       </span>
 
-      {/* Register open/close. Full-width so it reads as the tile's
-          primary action rather than a corner control — counting the
-          drawer is the main thing you do with this tile. */}
-      {registerState && (
-        <button
-          type="button"
-          onClick={registerState.isOpen ? registerState.onCloseSession : registerState.onOpen}
-          style={{
-            marginTop: 4, height: 30, width: '100%',
-            border: `1px solid ${registerState.isOpen ? LINE : INK}`,
-            borderRadius: 8,
-            background: registerState.isOpen ? '#fff' : INK,
-            color: registerState.isOpen ? INK : PAPER,
-            font: 'inherit', fontSize: 12, fontWeight: 500,
-            cursor: 'pointer',
-          }}
-        >
-          {registerState.isOpen
-            ? t('Close register', 'Cerrar caja')
-            : t('Open register', 'Abrir caja')}
-        </button>
-      )}
     </div>
   )
 }

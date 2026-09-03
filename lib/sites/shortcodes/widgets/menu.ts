@@ -204,8 +204,14 @@ const CARD_PICKER_STYLE = `
 <style>
 .card .card-opts {
   display: flex; align-items: center; gap: 3px;
-  padding: 10px 0 4px;
-  min-height: 28px;
+  padding: 6px 0 0;
+  min-height: 24px;
+}
+/* Pull the price + Add-to-cart row up so it sits close to the
+   picker instead of hanging with a big gap below the dots. */
+.card .card-opts + .card-foot {
+  margin-top: 6px !important;
+  padding-top: 0 !important;
 }
 .card .card-opt {
   display: inline-flex; align-items: center; justify-content: center;

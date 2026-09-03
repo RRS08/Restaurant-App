@@ -1349,6 +1349,7 @@ function OverviewPanel({
         hoveredCat={hoveredCatObj?.name ?? null}
         onHover={setHoverCat}
         t={t}
+        periodLabel={periodStartDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' })}
       />
     </div>
   )
@@ -1521,13 +1522,18 @@ function BalanceCard({
 // ---------------------------------------------------------------- donut card
 
 function DonutCard({
-  cats, total, hoveredCat, onHover, t,
+  cats, total, hoveredCat, onHover, t, periodLabel,
 }: {
   cats: CategorySlice[]
   total: number
   hoveredCat: string | null
   onHover: (n: string | null) => void
   t: (en: string, es?: string) => string
+  /** The month this card is actually showing. The eyebrow used to
+   *  read a hardcoded "30 days" while the data was already scoped
+   *  to the selected month — so an empty September read as "no
+   *  spend in the last 30 days", which was not what it meant. */
+  periodLabel: string
 }) {
   const R = 70
   const C = 2 * Math.PI * R
@@ -1544,7 +1550,7 @@ function DonutCard({
     <section style={cardStyles.card}>
       <div style={{ ...cardStyles.header, paddingBottom: 4 }}>
         <span style={cardStyles.title}>{t('Where the money went', 'A dónde fue el dinero')}</span>
-        <span style={cardStyles.eyebrow}>{t('30 days', '30 días')}</span>
+        <span style={cardStyles.eyebrow}>{periodLabel}</span>
       </div>
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column',

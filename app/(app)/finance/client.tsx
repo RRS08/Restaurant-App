@@ -1695,6 +1695,19 @@ function cumulativeBalance(
   }
 
   // Walk from `to` back to `from`, cumulating backward.
+  //
+  // DATA HORIZON: the rewind is only truthful as far back as our
+  // movement history reaches. A newly-linked bank arrives with a
+  // balance that predates the transactions Plaid backfills (~30
+  // days of activity, not the opening balance behind it), so
+  // rewinding past that point keeps subtracting outflows without
+  // ever crediting the money that was already in the account. The
+  // derived number goes negative and the chart shows a balance the
+  // merchant never had.
+  //
+  // A negative derived balance IS that signal. Stop the series
+  // there rather than charting fiction — a shorter honest line
+  // beats a longer invented one.
   const stack: BalancePoint[] = []
   const cursor = new Date(to)
   cursor.setHours(0, 0, 0, 0)
@@ -1702,6 +1715,11 @@ function cumulativeBalance(
   stop.setHours(0, 0, 0, 0)
   let bal = endBalance
   while (cursor >= stop) {
+    // Guard on `stack.length > 0` so a genuinely overdrawn account
+    // still renders today's real (negative) balance — we only treat
+    // negatives as a horizon signal once we've walked back past at
+    // least one known-good point.
+    if (bal < 0 && stack.length > 0) break
     const key = localDateKey(cursor)
     const delta = byDay.get(key) ?? 0
     stack.push({ date: key, balance: round2ish(bal), delta: round2ish(delta) })

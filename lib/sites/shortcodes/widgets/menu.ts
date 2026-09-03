@@ -153,13 +153,17 @@ function renderCard(p: Card): string {
 </div>`
 }
 
-/** Unit-only info row for single-variant products. Same visual
- *  slot as the dot picker so a grid mixing variant + non-variant
- *  products maintains uniform info density. Renders no dots,
- *  no radios — just the unit text in the same subtle sage tone
- *  as the picker's active label. */
+/** Unit-only info row for single-variant products. Renders a
+ *  non-interactive dot styled identically to the "active" variant
+ *  dot (first-choice color + ring) plus the unit text, so the
+ *  slot reads at a glance the same way variant cards do. No
+ *  radio inputs — nothing to switch to. */
 function renderCardUnit(unit: string): string {
+  const color = CHOICE_COLORS[0]
   return `<div class="card-opts card-opts-unit">
+    <span class="card-opt card-opt-static is-active" style="--dot-color:${color}" aria-hidden="true">
+      <span class="card-opt-dot"></span>
+    </span>
     <span class="card-opt-label">${escapeHtml(unit)}</span>
   </div>`
 }
@@ -272,9 +276,10 @@ const CARD_PICKER_STYLE = `
   letter-spacing: 0;
   line-height: 1.3;
 }
-/* Unit-only row (no dots preceding the label) — align flush left
-   so it doesn't look indented next to variant cards' pickers. */
-.card .card-opts-unit .card-opt-label { margin-left: 0; }
+/* Unit-only row — the single decorative dot is non-interactive
+   (no cursor / hover) but visually matches an active variant dot. */
+.card .card-opt-static { cursor: default; }
+.card .card-opt-static:hover .card-opt-dot { opacity: 1; }
 .card .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;

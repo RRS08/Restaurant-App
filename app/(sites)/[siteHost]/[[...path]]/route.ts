@@ -107,10 +107,32 @@ export async function POST(req: Request, { params }: Ctx) {
   // Redirect back to the same page with a query flag the widget
   // reads to render its thanks state. POST → 303 See Other means
   // the browser refetches with GET (idempotent, refresh-safe).
+  //
+  // The Location must be the PUBLIC path, not the internal one.
+  // proxy.ts rewrites `host/contact` → `/host/contact` so this
+  // route's `[siteHost]` segment can carry the hostname, but that
+  // rewrite is invisible to the browser — the address bar still
+  // says `/contact`. Reconstructing `/${siteHost}${urlPath}` here
+  // leaked that internal path into a Location header, and the
+  // browser resolved it against the current page, producing
+  // `https://www.valleycarriersllc.com/www.valleycarriersllc.com/contact`
+  // — the hostname doubled into the path, 404. The lead itself was
+  // always saved; only this redirect was wrong.
+  //
+  // Deliberately RELATIVE. A relative Location is resolved by the
+  // browser against the URL it actually requested, so this lands on
+  // whichever host the visitor submitted from — custom domain,
+  // `<slug>.onchecked.app`, or localhost — with no origin guessing
+  // and no dependence on req.url's host surviving the proxy hop.
+  // Note this is intentionally NOT siteOrigin(): that resolves to
+  // the site's canonical primary_hostname, which would bounce a
+  // visitor who submitted on the subdomain over to the custom
+  // domain mid-flow.
   const redirectUrl = new URL(req.url)
-  redirectUrl.pathname = `/${siteHost}${urlPath === '/' ? '' : urlPath}`
+  redirectUrl.pathname = urlPath
   redirectUrl.searchParams.set('lead-form-submitted', formKey)
-  return NextResponse.redirect(redirectUrl, 303)
+  const location = `${redirectUrl.pathname}${redirectUrl.search}`
+  return new NextResponse(null, { status: 303, headers: { Location: location } })
 }
 
 // ---- helpers ---------------------------------------------------

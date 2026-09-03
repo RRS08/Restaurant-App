@@ -50,6 +50,12 @@ export function expenseByCategory(movements: FinanceMovement[]): CategorySlice[]
       total: round2(r.total),
       share: grand > 0 ? r.total / grand : 0,
     }))
+    // A category that nets to zero has nothing to show. Cannot
+    // happen from a single movement (amount > 0 is enforced), but
+    // refunds or a future signed-amount path could zero one out —
+    // and an entry in the legend with no visible arc reads as a
+    // rendering bug rather than as data.
+    .filter(r => r.total > 0)
     .sort((a, b) => b.total - a.total)
   return rows
 }

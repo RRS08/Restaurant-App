@@ -1674,14 +1674,6 @@ function DonutCard({
                   background: c.color ?? FAINT, flex: '0 0 auto',
                 }} />
                 {c.name}
-                {/* Amount alongside the name. A category can be a
-                    real but sub-percent slice — $1.63 of a $4,230
-                    month draws an arc too thin to see, and a legend
-                    entry with no visible arc reads as a bug. The
-                    number makes it self-explanatory. */}
-                <span style={{ fontFamily: MONO, fontSize: 10.5, color: FAINT }}>
-                  {fmtMoney(c.total)}
-                </span>
               </span>
             )
           })}

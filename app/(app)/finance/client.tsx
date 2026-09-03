@@ -22,7 +22,7 @@ import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
 import { usePlaidLink } from 'react-plaid-link'
 import { makeT, type Lang } from '@/lib/i18n'
-import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount, refreshPosBatch } from '@/app/actions/finance'
+import { addExpense, bridgePlaidAccountsToFinance, disconnectFinanceAccount, refreshPosBatch, renameFinanceAccount } from '@/app/actions/finance'
 import { createPlaidLinkToken, exchangePlaidPublicToken } from '@/app/actions/bank'
 import type {
   FinanceAccount,
@@ -396,6 +396,46 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
   const [removing, setRemoving] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
+  // Inline rename. Click the tile name → it swaps to an input.
+  // Enter or blur commits, Escape reverts. Kept on the name itself
+  // rather than a pencil icon because the tile's top-right corner
+  // already carries remove + refresh; a third control there would
+  // crowd it.
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(a.name)
+  const [saving, setSaving] = useState(false)
+
+  const beginEdit = () => {
+    setDraft(a.name)
+    setEditing(true)
+  }
+
+  const commitEdit = () => {
+    const next = draft.trim()
+    if (!next || next === a.name) {
+      setEditing(false)
+      setDraft(a.name)
+      return
+    }
+    setSaving(true)
+    renameFinanceAccount(a.id, next)
+      .then((res) => {
+        if ('error' in res) {
+          window.alert(res.error)
+          setDraft(a.name)
+          return
+        }
+        router.refresh()
+      })
+      .catch(() => setDraft(a.name))
+      .finally(() => { setSaving(false); setEditing(false) })
+  }
+
+  const cancelEdit = () => {
+    setDraft(a.name)
+    setEditing(false)
+  }
+
   // Only a processor-backed POS tile has anything to re-read.
   const canRefreshBatch = a.kind === 'pos' && !!a.livePendingSource
 
@@ -507,12 +547,50 @@ function AccountTile({ a, locale: _locale, t }: { a: FinanceAccount; locale: str
       }}>
         <AccountGlyph kind={a.kind} glyph={a.glyph} />
       </span>
-      <span style={{
-        fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>
-        {a.name}
-      </span>
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          disabled={saving}
+          maxLength={60}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitEdit() }
+            if (e.key === 'Escape') { e.preventDefault(); cancelEdit() }
+          }}
+          onFocus={(e) => e.currentTarget.select()}
+          style={{
+            fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
+            font: 'inherit', fontFamily: 'inherit',
+            border: `1px solid ${INK}`, borderRadius: 6,
+            padding: '2px 6px', margin: '-3px -7px',
+            width: 'calc(100% + 14px)', background: '#fff',
+            opacity: saving ? 0.6 : 1,
+          }}
+        />
+      ) : (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={beginEdit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); beginEdit() }
+          }}
+          title={t('Click to rename', 'Haz clic para renombrar')}
+          style={{
+            fontSize: 13, fontWeight: 600, color: INK, letterSpacing: '-0.01em',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            cursor: 'text', borderRadius: 4,
+            padding: '2px 6px', margin: '-2px -6px',
+            background: hover ? '#F4F4F5' : 'transparent',
+            transition: 'background-color .12s ease',
+            outline: 'none',
+          }}
+        >
+          {a.name}
+        </span>
+      )}
       <span style={{
         fontFamily: MONO, fontSize: 20, fontWeight: 600,
         letterSpacing: '-0.035em', lineHeight: 1, color: INK,

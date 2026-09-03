@@ -683,6 +683,51 @@ async function fetchPlaidBalances(
  *
  *  Non-plaid tiles get the same hard treatment — movements go,
  *  the tile goes. No provider secret to clean up. */
+/** Rename an account tile. Merchants link their own banks now, and
+ *  the provider's account_name is often verbose or wrong for how
+ *  they think about the account ("Rio Bank - Personal/Business
+ *  Checking" when they just call it "Operating"). This lets them
+ *  fix it themselves instead of routing every correction through
+ *  a SQL trip.
+ *
+ *  Scoped to the caller's restaurant — an id from another tenant
+ *  returns "not found" rather than leaking that it exists. */
+export async function renameFinanceAccount(
+  id: string,
+  name: string,
+): Promise<ActionResult> {
+  if (!id) return { error: 'Missing account id.' }
+  const trimmed = name.trim()
+  if (!trimmed) return { error: 'Name cannot be empty.' }
+  if (trimmed.length > 60) return { error: 'Name is too long (60 characters max).' }
+
+  const ctx = await resolveOperator()
+  if ('error' in ctx) return ctx
+  const admin = createAdminClient()
+
+  const { data: account } = await admin
+    .from('finance_accounts')
+    .select('id, restaurant_id')
+    .eq('id', id)
+    .maybeSingle()
+  if (!account || account.restaurant_id !== ctx.restaurantId) {
+    return { error: 'Account not found.' }
+  }
+
+  const { error } = await admin
+    .from('finance_accounts')
+    .update({ name: trimmed })
+    .eq('id', id)
+    .eq('restaurant_id', ctx.restaurantId)
+  if (error) {
+    console.error('[finance:rename] update failed', error)
+    return { error: 'Could not rename the account.' }
+  }
+
+  revalidatePath('/finance')
+  return { ok: true }
+}
+
 export async function disconnectFinanceAccount(id: string): Promise<ActionResult> {
   if (!id) return { error: 'Missing account id.' }
   const ctx = await resolveOperator()

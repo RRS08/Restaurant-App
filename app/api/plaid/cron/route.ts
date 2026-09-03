@@ -76,7 +76,7 @@ export async function GET(req: Request) {
   // would just repeat the same work.
   for (const restaurantId of touchedRestaurants) {
     try {
-      const mat = await materializeFinanceMovements(admin, restaurantId)
+      const mat = await materializeFinanceMovements(admin, restaurantId, 'cron')
       if (!mat.error) summary.materialized += mat.inserted
     } catch (err) {
       console.error('[plaid:cron] materialize failed', restaurantId, err)

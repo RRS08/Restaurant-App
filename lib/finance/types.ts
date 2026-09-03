@@ -105,6 +105,34 @@ export interface FinanceAccount extends Omit<FinanceAccountRow, 'balance'> {
   /** Set when the processor read failed and `balance` therefore
    *  fell back to the stored value. */
   livePendingError?: 'sync_failed' | null
+  // ---- Bank sync health (kind === 'bank' only) ----
+  //
+  // Mirrors finance_sync_status onto the bank tile so a repeatedly
+  // failing materialize is visible on the page instead of only in
+  // Vercel logs. Null for tenants with no sync status row yet.
+  /** When the last materialize run completed (ISO), success or not. */
+  syncLastRunAt?: string | null
+  /** Last run's batch-level error, null when healthy. */
+  syncError?: string | null
+  /** Consecutive failed runs. >0 means currently broken; the count
+   *  is what distinguishes a blip from a persistent outage. */
+  syncConsecutiveFailures?: number | null
+}
+
+/** One row per restaurant: the outcome of the most recent
+ *  materialize run. Written by lib/finance/materialize.ts. */
+export interface FinanceSyncStatusRow {
+  restaurant_id: string
+  last_run_at: string
+  source: string
+  inserted: number
+  transfers_paired: number
+  rejected: number
+  rejected_reasons: Record<string, number> | null
+  error: string | null
+  last_success_at: string | null
+  consecutive_failures: number
+  updated_at: string
 }
 
 export interface FinanceCategory extends FinanceCategoryRow {}

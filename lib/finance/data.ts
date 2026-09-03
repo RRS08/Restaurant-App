@@ -69,7 +69,42 @@ export async function listAccounts(
   }
 
   const accounts = (rows ?? []).map(row => rowToAccount(row, maskByRef))
-  return applyLivePosBatch(accounts, restaurantId)
+  const withBankHealth = await applyBankSyncHealth(supabase, accounts, restaurantId)
+  return applyLivePosBatch(withBankHealth, restaurantId)
+}
+
+/** Attach the restaurant's current materialize status to its bank
+ *  tile(s).
+ *
+ *  One indexed primary-key read. Skipped entirely when the
+ *  restaurant has no bank tile, so tenants without Plaid pay
+ *  nothing and see no change. A missing status row (never synced,
+ *  or the table not yet migrated) leaves the fields null and the
+ *  tile renders exactly as before. */
+async function applyBankSyncHealth(
+  supabase: SupabaseClient,
+  accounts: FinanceAccount[],
+  restaurantId: string,
+): Promise<FinanceAccount[]> {
+  if (!accounts.some(a => a.kind === 'bank')) return accounts
+  try {
+    const { data } = await supabase
+      .from('finance_sync_status')
+      .select('last_run_at, error, consecutive_failures')
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle()
+    if (!data) return accounts
+    const row = data as { last_run_at: string | null; error: string | null; consecutive_failures: number | null }
+    return accounts.map(a => a.kind === 'bank' ? {
+      ...a,
+      syncLastRunAt: row.last_run_at ?? null,
+      syncError: row.error ?? null,
+      syncConsecutiveFailures: row.consecutive_failures ?? 0,
+    } : a)
+  } catch {
+    // Health display must never break the Finance page.
+    return accounts
+  }
 }
 
 /** Overlay the live processor batch onto this restaurant's POS

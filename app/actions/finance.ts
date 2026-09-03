@@ -438,7 +438,7 @@ export async function bridgePlaidAccountsToFinance(
     const sync = await syncPlaidItem(admin, ctx.restaurantId, itemId)
     if (sync.error) console.error('[finance:bridgePlaid] initial sync failed', itemId, sync.error)
   }
-  const mat = await materializeFinanceMovements(admin, ctx.restaurantId)
+  const mat = await materializeFinanceMovements(admin, ctx.restaurantId, 'bridge')
   if (mat.error) console.error('[finance:bridgePlaid] materialize failed', mat.error)
 
   revalidatePath('/finance')
@@ -472,7 +472,7 @@ export async function syncPlaidToFinance(): Promise<
     const sync = await syncPlaidItem(admin, ctx.restaurantId, itemId)
     if (sync.error) console.error('[finance:sync] item failed', itemId, sync.error)
   }
-  const mat = await materializeFinanceMovements(admin, ctx.restaurantId)
+  const mat = await materializeFinanceMovements(admin, ctx.restaurantId, 'manual')
   if (mat.error) console.error('[finance:sync] materialize failed', mat.error)
 
   // Refresh live balances on every Plaid tile so the header cash

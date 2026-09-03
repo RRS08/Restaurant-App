@@ -138,7 +138,7 @@ export async function POST(req: Request) {
   try {
     const sync = await syncPlaidItem(admin, secret.restaurant_id as string, event.item_id)
     if (sync.error) console.error('[plaid:webhook] sync error', event.item_id, sync.error)
-    const mat = await materializeFinanceMovements(admin, secret.restaurant_id as string)
+    const mat = await materializeFinanceMovements(admin, secret.restaurant_id as string, 'webhook')
     if (mat.error) console.error('[plaid:webhook] materialize error', mat.error)
   } catch (err) {
     console.error('[plaid:webhook] dispatch failed', event.item_id, err)

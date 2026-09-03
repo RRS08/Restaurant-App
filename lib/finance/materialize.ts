@@ -43,7 +43,19 @@ export interface MaterializeResult {
   inserted: number
   transfersPaired: number
   error: string | null
+  /** Rows in the window that did NOT become movements. */
+  rejected: number
+  /** Why they didn't, as {reason: count}. Reasons in use:
+   *   non_positive_amount — $0.00 (or negative) bank memo
+   *   no_finance_account  — no Finance tile mirrors that bank account
+   *   insert_rejected     — Postgres refused the row individually */
+  rejectedReasons: Record<string, number>
 }
+
+/** Which caller drove this run. Recorded on the status row so a
+ *  failing path can be told apart from a healthy one — e.g. cron
+ *  succeeding while the webhook never fires. */
+export type MaterializeSource = 'webhook' | 'cron' | 'manual' | 'bridge' | 'unknown'
 
 interface BankTxRow {
   id: string
@@ -73,7 +85,93 @@ interface AccountMapEntry {
   connectedBankAccountId: string
 }
 
+/** Materialize, then persist the outcome as this restaurant's
+ *  current sync status.
+ *
+ *  The wrapper exists so EVERY exit path is recorded — the early
+ *  "nothing to do" returns, the happy path, the partial-insert
+ *  path, and a thrown exception. That matters because the bug this
+ *  was built after was invisible precisely when the function
+ *  returned early or errored: Finance rendered "Nothing has moved
+ *  yet" and the only evidence was a console.error in Vercel.
+ *
+ *  Status persistence never affects the caller's result, and a
+ *  failure to write it is swallowed — observability must not be
+ *  able to break the thing it observes. */
 export async function materializeFinanceMovements(
+  admin: SupabaseClient,
+  restaurantId: string,
+  source: MaterializeSource = 'unknown',
+): Promise<MaterializeResult> {
+  let result: MaterializeResult
+  try {
+    result = await runMaterialize(admin, restaurantId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error('[finance:materialize] threw', restaurantId, err)
+    result = {
+      inserted: 0,
+      transfersPaired: 0,
+      error: message,
+      rejected: 0,
+      rejectedReasons: {},
+    }
+  }
+  await recordSyncStatus(admin, restaurantId, source, result)
+  return result
+}
+
+/** Write (or refresh) the single current-status row for this
+ *  restaurant.
+ *
+ *  `consecutive_failures` is the repeat-failure signal: it climbs
+ *  while runs keep failing and resets to 0 on the first clean run,
+ *  so "this has been broken for 14 straight syncs" is one column
+ *  read rather than a log excavation. */
+async function recordSyncStatus(
+  admin: SupabaseClient,
+  restaurantId: string,
+  source: MaterializeSource,
+  result: MaterializeResult,
+): Promise<void> {
+  try {
+    const failed = !!result.error
+    const now = new Date().toISOString()
+
+    const { data: prior } = await admin
+      .from('finance_sync_status')
+      .select('consecutive_failures, last_success_at')
+      .eq('restaurant_id', restaurantId)
+      .maybeSingle()
+
+    const priorFailures = (prior as { consecutive_failures?: number } | null)?.consecutive_failures ?? 0
+    const priorSuccessAt = (prior as { last_success_at?: string | null } | null)?.last_success_at ?? null
+
+    const { error } = await admin
+      .from('finance_sync_status')
+      .upsert({
+        restaurant_id: restaurantId,
+        last_run_at: now,
+        source,
+        inserted: result.inserted,
+        transfers_paired: result.transfersPaired,
+        rejected: result.rejected,
+        rejected_reasons: result.rejectedReasons,
+        error: result.error,
+        last_success_at: failed ? priorSuccessAt : now,
+        consecutive_failures: failed ? priorFailures + 1 : 0,
+        updated_at: now,
+      }, { onConflict: 'restaurant_id' })
+    if (error) {
+      console.error('[finance:materialize] could not record sync status', error)
+    }
+  } catch (err) {
+    // Deliberately swallowed — see the note on the wrapper.
+    console.error('[finance:materialize] sync-status write threw', err)
+  }
+}
+
+async function runMaterialize(
   admin: SupabaseClient,
   restaurantId: string,
 ): Promise<MaterializeResult> {
@@ -86,7 +184,9 @@ export async function materializeFinanceMovements(
     .eq('restaurant_id', restaurantId)
     .gte('posted_at', cutoff)
     .order('posted_at', { ascending: true })
-  if (!rawTx || rawTx.length === 0) return { inserted: 0, transfersPaired: 0, error: null }
+  if (!rawTx || rawTx.length === 0) {
+    return { inserted: 0, transfersPaired: 0, error: null, rejected: 0, rejectedReasons: {} }
+  }
 
   // 2. Pending → posted dedup pass.
   //    Plaid returns a NEW transaction_id when a pending row posts,
@@ -125,7 +225,9 @@ export async function materializeFinanceMovements(
     t => !materialized.has(t.provider_transaction_id) &&
          !supersededPendingIds.has(t.provider_transaction_id),
   )
-  if (fresh.length === 0) return { inserted: 0, transfersPaired: 0, error: null }
+  if (fresh.length === 0) {
+    return { inserted: 0, transfersPaired: 0, error: null, rejected: 0, rejectedReasons: {} }
+  }
 
   // 3. Build connected_bank_account → finance_account map.
   const { data: connectedRows } = await admin
@@ -248,9 +350,15 @@ export async function materializeFinanceMovements(
 
   const insertRows: Array<Record<string, unknown>> = []
 
+  // Counted, not just skipped. A bank account with no mirroring
+  // Finance tile silently drops every one of its transactions —
+  // the same class of invisible failure as the $0.00 row, so it
+  // gets a named reason on the status row rather than a `continue`.
+  let skippedNoAccount = 0
+
   for (const p of usable) {
     if (emittedInflowsCoveredByPair.has(p.raw.provider_transaction_id)) continue
-    if (!p.financeAccountId) continue // no matching Finance tile — skip
+    if (!p.financeAccountId) { skippedNoAccount++; continue }
 
     const paired = pairs.get(p.raw.provider_transaction_id)
 
@@ -303,19 +411,36 @@ export async function materializeFinanceMovements(
     })
   }
 
+  // Tally of everything the window held but the ledger won't show.
+  const baseReasons = (): Record<string, number> => {
+    const r: Record<string, number> = {}
+    if (skippedNonPositive > 0) r.non_positive_amount = skippedNonPositive
+    if (skippedNoAccount > 0) r.no_finance_account = skippedNoAccount
+    return r
+  }
+  const baseRejected = skippedNonPositive + skippedNoAccount
+
   if (insertRows.length === 0) {
-    if (skippedNonPositive > 0) {
-      console.info('[finance:materialize] skipped non-positive rows', { skippedNonPositive })
+    if (baseRejected > 0) console.info('[finance:materialize] skipped rows', baseReasons())
+    return {
+      inserted: 0,
+      transfersPaired: pairs.size,
+      error: null,
+      rejected: baseRejected,
+      rejectedReasons: baseReasons(),
     }
-    return { inserted: 0, transfersPaired: pairs.size, error: null }
   }
 
   const { error } = await admin.from('finance_movements').insert(insertRows)
   if (!error) {
-    if (skippedNonPositive > 0) {
-      console.info('[finance:materialize] skipped non-positive rows', { skippedNonPositive })
+    if (baseRejected > 0) console.info('[finance:materialize] skipped rows', baseReasons())
+    return {
+      inserted: insertRows.length,
+      transfersPaired: pairs.size,
+      error: null,
+      rejected: baseRejected,
+      rejectedReasons: baseReasons(),
     }
-    return { inserted: insertRows.length, transfersPaired: pairs.size, error: null }
   }
 
   // Batch insert failed. Retry row by row so ONE malformed row can't
@@ -345,13 +470,17 @@ export async function materializeFinanceMovements(
       sample: failures.slice(0, 5),
     })
   }
+  const reasons = baseReasons()
+  if (failures.length > 0) reasons.insert_rejected = failures.length
   return {
     inserted,
     transfersPaired: pairs.size,
     // Only surface an error when NOTHING landed. A partial batch is
     // a real, useful result — the ledger is populated and the
-    // rejected rows are named in the logs.
+    // rejected rows are named in the logs and on the status row.
     error: inserted === 0 ? error.message : null,
+    rejected: baseRejected + failures.length,
+    rejectedReasons: reasons,
   }
 }
 

@@ -205,6 +205,13 @@ export const SEED_CATEGORIES: Array<{
   { name: 'Utilities',  kind: 'expense', color: '#8B5CF6', tax_category: 'Utilities',            sort_order: 70 },
   { name: 'Supplies',   kind: 'expense', color: '#EC4899', tax_category: 'Supplies',             sort_order: 80 },
   { name: 'Inventory',  kind: 'expense', color: '#6366F1', tax_category: 'Cost of goods sold',   sort_order: 90 },
+  // Furniture, shelving, fixtures. Capitalized and depreciated
+  // rather than expensed in full — the tax_category points at the
+  // right Schedule C line so the accountant catches it.
+  { name: 'Equipment',  kind: 'expense', color: '#7C3AED', tax_category: 'Depreciation',         sort_order: 95 },
+  // Schedule C line 11. Contractors, muralists, installers — work
+  // that is not payroll because there is no W-2.
+  { name: 'Contract labor', kind: 'expense', color: '#DB2777', tax_category: 'Contract labor',   sort_order: 65 },
   { name: 'Fees',       kind: 'expense', color: '#F59E0B', tax_category: 'Commissions and fees', sort_order: 100 },
   { name: 'Marketing',  kind: 'expense', color: '#0EA5E9', tax_category: 'Advertising',          sort_order: 110 },
   { name: 'Other',      kind: 'expense', color: '#6B7280', tax_category: 'Other expenses',       sort_order: 120 },

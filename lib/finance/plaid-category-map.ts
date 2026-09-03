@@ -105,6 +105,22 @@ const DETAILED_OVERRIDES: Record<string, PlaidCategoryMapResult> = {
   'BANK_FEES_ATM_FEES':                               { seedName: 'Fees',       isTransferHint: false, confidence: 'high' },
   'BANK_FEES_OVERDRAFT_FEES':                         { seedName: 'Fees',       isTransferHint: false, confidence: 'high' },
   'GENERAL_SERVICES_ACCOUNTING_AND_FINANCIAL_PLANNING': { seedName: 'Fees',     isTransferHint: false, confidence: 'high' },
+  // Cash pulled out of a business account at an ATM is a draw, not
+  // an operating expense. Hatziri had six months of these landing
+  // Uncategorized and being summed against profit. Transfer-kind,
+  // so isOperational() keeps them out of the P&L while they stay
+  // visible in the ledger.
+  //
+  // Not universally true — some operators pull cash to stock a
+  // register, which is 'Between accounts'. Owner draw is the safer
+  // default: it errs toward NOT deducting something personal, and
+  // the operator can recategorize. The reverse error (deducting a
+  // personal withdrawal as a business expense) is the one with
+  // consequences.
+  'TRANSFER_OUT_WITHDRAWAL':                          { seedName: 'Owner draw', isTransferHint: false, confidence: 'medium' },
+  // Furniture, shelving, fixtures. Capitalized, not expensed.
+  'HOME_IMPROVEMENT_FURNITURE':                       { seedName: 'Equipment',  isTransferHint: false, confidence: 'medium' },
+  'GENERAL_MERCHANDISE_OFFICE_SUPPLIES':              { seedName: 'Supplies',   isTransferHint: false, confidence: 'high' },
 }
 
 export function mapPlaidCategory(

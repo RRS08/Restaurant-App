@@ -35,7 +35,7 @@ import { escapeAttr, escapeHtml } from '../utils'
 
 type Card = Pick<
   SiteProductRow,
-  'slug' | 'name' | 'category' | 'price' | 'benefit' | 'purpose' | 'image_url' | 'options'
+  'slug' | 'name' | 'category' | 'price' | 'benefit' | 'purpose' | 'image_url' | 'options' | 'unit'
 >
 
 export async function renderMenu(args: ShortcodeArgs, ctx: ShortcodeContext): Promise<string> {
@@ -46,7 +46,7 @@ export async function renderMenu(args: ShortcodeArgs, ctx: ShortcodeContext): Pr
 
   let query = admin
     .from('site_products')
-    .select('slug, name, category, price, benefit, purpose, image_url, options')
+    .select('slug, name, category, price, benefit, purpose, image_url, options, unit')
     .eq('site_id', ctx.site.id)
     .eq('status', 'live')
 
@@ -80,11 +80,15 @@ export async function renderMenu(args: ShortcodeArgs, ctx: ShortcodeContext): Pr
   const products = (data ?? []) as Card[]
   if (products.length === 0) return '<div class="card-grid"></div>'
 
-  // Only inject the picker CSS + client script if at least one card
-  // actually has options — no reason to ship the extra bytes to a
-  // grid of single-variant products (accessories, ointments, etc.).
+  // Inject the picker CSS whenever any card in the grid has an info
+  // row (dot picker OR unit-only). The client script only needs to
+  // ship when there's a real picker to react to — unit-only rows
+  // are static text, no interaction needed.
   const anyPicker = products.some(p => normalizeGroups(p.options).length > 0)
-  const pickerExtras = anyPicker ? CARD_PICKER_STYLE + CARD_PICKER_SCRIPT : ''
+  const anyInfoRow = anyPicker || products.some(p => !!p.unit)
+  const pickerExtras =
+    (anyInfoRow ? CARD_PICKER_STYLE : '') +
+    (anyPicker  ? CARD_PICKER_SCRIPT : '')
 
   return `<div class="card-grid">
 ${products.map(renderCard).join('\n')}
@@ -114,7 +118,19 @@ function renderCard(p: Card): string {
   const defaultUnit = resolveUnitPrice(basePriceNum, groups, defaultOptions)
   const price = formatPrice(defaultUnit)
 
-  const picker = firstGroup ? renderCardPicker(p.slug, firstGroup, basePriceNum) : ''
+  // Info row rendering rules:
+  //   - Product has variants → full dot picker
+  //   - Product has no variants but has a `unit` → show the unit
+  //     in the same slot as text-only, so cards keep uniform info
+  //     density across the grid (Aesop / Everlane / Le Labo pattern —
+  //     avoids dead space on cards that sit next to variant cards).
+  //   - Neither → render nothing (older products that predate `unit`
+  //     keep their current tighter card; grid rows will still align
+  //     to the tallest card so the dead space only shows up when a
+  //     row happens to mix a picker card with a bare card).
+  const picker = firstGroup
+    ? renderCardPicker(p.slug, firstGroup, basePriceNum)
+    : (p.unit ? renderCardUnit(p.unit) : '')
 
   const optionsAttr = firstGroup
     ? ` data-options='${escapeAttr(JSON.stringify(defaultOptions))}'`
@@ -135,6 +151,17 @@ function renderCard(p: Card): string {
     </button>
   </div>
 </div>`
+}
+
+/** Unit-only info row for single-variant products. Same visual
+ *  slot as the dot picker so a grid mixing variant + non-variant
+ *  products maintains uniform info density. Renders no dots,
+ *  no radios — just the unit text in the same subtle sage tone
+ *  as the picker's active label. */
+function renderCardUnit(unit: string): string {
+  return `<div class="card-opts card-opts-unit">
+    <span class="card-opt-label">${escapeHtml(unit)}</span>
+  </div>`
 }
 
 /** Per-index palette so each choice's dot carries its own color.
@@ -245,6 +272,9 @@ const CARD_PICKER_STYLE = `
   letter-spacing: 0;
   line-height: 1.3;
 }
+/* Unit-only row (no dots preceding the label) — align flush left
+   so it doesn't look indented next to variant cards' pickers. */
+.card .card-opts-unit .card-opt-label { margin-left: 0; }
 .card .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
   overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;

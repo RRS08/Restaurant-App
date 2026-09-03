@@ -203,13 +203,13 @@ function parsePrice(raw: number | string): number {
 const CARD_PICKER_STYLE = `
 <style>
 .card .card-opts {
-  display: flex; align-items: center; gap: 8px;
+  display: flex; align-items: center; gap: 3px;
   padding: 10px 0 4px;
   min-height: 28px;
 }
 .card .card-opt {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px;
+  width: 18px; height: 18px;
   cursor: pointer; position: relative;
   border-radius: 999px;
 }
@@ -234,7 +234,7 @@ const CARD_PICKER_STYLE = `
   box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4.5px var(--dot-color, #2f4a1f);
 }
 .card .card-opt-label {
-  margin-left: 6px;
+  margin-left: 4px;
   font-size: 13.5px; color: #2f4a1f; font-weight: 500;
   letter-spacing: -0.005em;
   line-height: 1.2;

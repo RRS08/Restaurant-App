@@ -3,7 +3,7 @@
 //
 // Runs after Plaid sync. Reads every unmaterialized
 // bank_transactions row (idempotent via origin_ref =
-// provider_transaction_id) inside the 30-day backfill window and:
+// provider_transaction_id) inside the 90-day backfill window and:
 //
 //   1. Resolves the finance_account tile that mirrors each
 //      bank account (by provider_ref = provider_account_id).
@@ -19,16 +19,24 @@
 // source of truth and is re-fetched separately on every sync so
 // the tile never drifts from the bank.
 //
-// Backfill window: 30 days. bank_transactions keeps every row
-// Plaid returns (raw truth); the operator-facing ledger only
-// shows recent history so an empty Finance doesn't get buried
-// under old noise. "Pull more history" is a future affordance.
+// Backfill window: 90 days. bank_transactions keeps every row
+// Plaid returns (raw truth); the operator-facing ledger mirrors
+// the last quarter, matching the window the Transactions tab
+// queries. "Pull more history" is a future affordance.
 // ----------------------------------------------------------------
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { mapPlaidCategory } from './plaid-category-map'
 
-const BACKFILL_DAYS = 30
+// Ledger backfill window. Raised 30 → 90 so the operator-facing
+// ledger covers the same 90 days the Finance → Transactions tab
+// already queries; at 30 the tab asked for a quarter of history and
+// could only ever be shown a month of it. bank_transactions still
+// keeps everything Plaid returns — this only bounds what gets
+// mirrored into finance_movements.
+//
+// Applies to every tenant, not just the one this was traced on.
+const BACKFILL_DAYS = 90
 const TRANSFER_MATCH_WINDOW_DAYS = 2
 
 export interface MaterializeResult {
@@ -186,17 +194,33 @@ export async function materializeFinanceMovements(
       amountNum: Number.isFinite(amt) ? amt : 0,
     }
   })
+  // Drop non-positive amounts BEFORE pairing or insertion.
+  //
+  // finance_movements carries a check constraint (amount > 0) — a
+  // movement is a signed quantity of money whose direction lives in
+  // source/dest, so zero is meaningless there. Banks nonetheless
+  // emit $0.00 informational rows: Rio Bank posts a monthly
+  // "CREDIT CHARGE MCBI INST FREE BUSDC" fee-waiver memo at $0.00.
+  //
+  // This mattered far more than one skipped row suggests. The
+  // insert below is a SINGLE batch, so Postgres rejected all of it
+  // on the one bad row — Hatziri had 237 real bank_transactions and
+  // exactly 0 finance_movements, and Finance read "Nothing has
+  // moved yet" while the error stayed in a server log nobody was
+  // watching. One $0.00 bank memo hid three months of ledger.
+  const skippedNonPositive = prepped.length - prepped.filter(p => p.amountNum > 0).length
+  const usable = prepped.filter(p => p.amountNum > 0)
 
   // Pair candidates: same amount, opposite direction, within a small
   // date window, both mapped to a finance account, at least one hinted.
   const pairs = new Map<string, string>() // provider_transaction_id (outflow) → provider_transaction_id (inflow)
   const usedInPair = new Set<string>()
-  for (const outflow of prepped) {
+  for (const outflow of usable) {
     if (outflow.raw.direction !== 'outflow') continue
     if (usedInPair.has(outflow.raw.provider_transaction_id)) continue
     if (!outflow.financeAccountId) continue
     const outDay = new Date(outflow.raw.posted_at).getTime()
-    for (const inflow of prepped) {
+    for (const inflow of usable) {
       if (inflow.raw.direction !== 'inflow') continue
       if (usedInPair.has(inflow.raw.provider_transaction_id)) continue
       if (!inflow.financeAccountId) continue
@@ -224,7 +248,7 @@ export async function materializeFinanceMovements(
 
   const insertRows: Array<Record<string, unknown>> = []
 
-  for (const p of prepped) {
+  for (const p of usable) {
     if (emittedInflowsCoveredByPair.has(p.raw.provider_transaction_id)) continue
     if (!p.financeAccountId) continue // no matching Finance tile — skip
 
@@ -232,7 +256,7 @@ export async function materializeFinanceMovements(
 
     if (paired) {
       // Transfer row: source = this (outflow), dest = the paired inflow's account
-      const inflowPrep = prepped.find(x => x.raw.provider_transaction_id === paired)
+      const inflowPrep = usable.find(x => x.raw.provider_transaction_id === paired)
       if (!inflowPrep?.financeAccountId) continue
       const cat = categoryByName.get('between accounts') ?? null
       insertRows.push({
@@ -279,14 +303,56 @@ export async function materializeFinanceMovements(
     })
   }
 
-  if (insertRows.length === 0) return { inserted: 0, transfersPaired: pairs.size, error: null }
+  if (insertRows.length === 0) {
+    if (skippedNonPositive > 0) {
+      console.info('[finance:materialize] skipped non-positive rows', { skippedNonPositive })
+    }
+    return { inserted: 0, transfersPaired: pairs.size, error: null }
+  }
 
   const { error } = await admin.from('finance_movements').insert(insertRows)
-  if (error) {
-    console.error('[finance:materialize] insert failed', error)
-    return { inserted: 0, transfersPaired: pairs.size, error: error.message }
+  if (!error) {
+    if (skippedNonPositive > 0) {
+      console.info('[finance:materialize] skipped non-positive rows', { skippedNonPositive })
+    }
+    return { inserted: insertRows.length, transfersPaired: pairs.size, error: null }
   }
-  return { inserted: insertRows.length, transfersPaired: pairs.size, error: null }
+
+  // Batch insert failed. Retry row by row so ONE malformed row can't
+  // keep every good row out of the ledger.
+  //
+  // This is the failure mode that produced the bug above: a single
+  // rejected row meant a customer's Finance tab read "Nothing has
+  // moved yet" across three months of real activity. The $0.00 case
+  // is now filtered upstream, but the batch is built from live bank
+  // data we don't fully control, so degrade to partial success
+  // instead of total failure and surface what was dropped.
+  console.error('[finance:materialize] batch insert failed, falling back to per-row', error)
+  let inserted = 0
+  const failures: Array<{ origin_ref: unknown; message: string }> = []
+  for (const row of insertRows) {
+    const { error: rowError } = await admin.from('finance_movements').insert(row)
+    if (rowError) {
+      failures.push({ origin_ref: row.origin_ref, message: rowError.message })
+    } else {
+      inserted++
+    }
+  }
+  if (failures.length > 0) {
+    console.error('[finance:materialize] rows rejected individually', {
+      rejected: failures.length,
+      inserted,
+      sample: failures.slice(0, 5),
+    })
+  }
+  return {
+    inserted,
+    transfersPaired: pairs.size,
+    // Only surface an error when NOTHING landed. A partial batch is
+    // a real, useful result — the ledger is populated and the
+    // rejected rows are named in the logs.
+    error: inserted === 0 ? error.message : null,
+  }
 }
 
 // ---------------------------------------------------------------- merchant cleanup

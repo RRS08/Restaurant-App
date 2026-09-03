@@ -235,9 +235,9 @@ const CARD_PICKER_STYLE = `
 }
 .card .card-opt-label {
   margin-left: 4px;
-  font-size: 13.5px; color: #2f4a1f; font-weight: 500;
-  letter-spacing: -0.005em;
-  line-height: 1.2;
+  font-size: 12px; color: #55723e; font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.3;
 }
 .card .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

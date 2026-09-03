@@ -3,12 +3,16 @@
 -- One current-status row per restaurant recording the outcome of
 -- the most recent materialize run (webhook / cron / manual /
 -- bridge). Exists because a materialize failure was previously
--- invisible: Hatziri's Finance read "Nothing has moved yet" across
+-- invisible: the Finance tab read "Nothing has moved yet" across
 -- 237 real bank transactions while the only evidence was a
 -- console.error in Vercel logs.
 --
 -- Additive only. Creates a new table; touches no existing table,
 -- column, or data.
+--
+-- NOTE: no apostrophes anywhere in these comments. The Supabase SQL
+-- editor reads one as an opening string literal and breaks the
+-- parse of everything after it.
 
 create table if not exists public.finance_sync_status (
   restaurant_id        uuid primary key

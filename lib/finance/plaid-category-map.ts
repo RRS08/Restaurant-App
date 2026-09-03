@@ -117,9 +117,9 @@ const DETAILED_OVERRIDES: Record<string, PlaidCategoryMapResult> = {
   // the operator can recategorize. The reverse error (deducting a
   // personal withdrawal as a business expense) is the one with
   // consequences.
-  'TRANSFER_OUT_WITHDRAWAL':                          { seedName: 'Owner draw', isTransferHint: false, confidence: 'medium' },
+  'TRANSFER_OUT_WITHDRAWAL':                          { seedName: 'Owner draw', isTransferHint: false, confidence: 'low' },
   // Furniture, shelving, fixtures. Capitalized, not expensed.
-  'HOME_IMPROVEMENT_FURNITURE':                       { seedName: 'Equipment',  isTransferHint: false, confidence: 'medium' },
+  'HOME_IMPROVEMENT_FURNITURE':                       { seedName: 'Equipment',  isTransferHint: false, confidence: 'low' },
   'GENERAL_MERCHANDISE_OFFICE_SUPPLIES':              { seedName: 'Supplies',   isTransferHint: false, confidence: 'high' },
 }
 

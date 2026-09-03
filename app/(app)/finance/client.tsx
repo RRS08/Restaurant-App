@@ -120,7 +120,24 @@ export default function FinanceClient({
     }
   }, [calOpen])
 
-  const expenseCats = useMemo(() => expenseByCategory(movements), [movements])
+  // Scope the spend chart to the SAME period as the header counters.
+  //
+  // This received the full movement list — a 90-day window since the
+  // backfill widened — while "+$ in / −$ out" directly above it was
+  // computed for the selected month only. Two flow figures sat inches
+  // apart on one screen answering different questions, and the chart
+  // total (90 days) read as if it were the month's spend: $46,370.18
+  // of quarterly spend beside a monthly header. Same window now, so
+  // the chart's total and the header's "out" agree by construction.
+  const periodMovements = useMemo(() => {
+    const start = new Date(periodStart)
+    const end = new Date(start.getFullYear(), start.getMonth() + 1, 1)
+    return movements.filter(m => {
+      const ts = new Date(m.occurred_at).getTime()
+      return ts >= start.getTime() && ts < end.getTime()
+    })
+  }, [movements, periodStart])
+  const expenseCats = useMemo(() => expenseByCategory(periodMovements), [periodMovements])
 
   // Ledger view — filter chips are MUTUALLY EXCLUSIVE with the
   // Expenses chip: money leaving an account belongs under

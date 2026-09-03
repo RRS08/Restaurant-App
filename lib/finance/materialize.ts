@@ -394,9 +394,25 @@ async function runMaterialize(
     const kindOk =
       !seed ||
       (isInflow && seed.kind === 'income') ||
-      (!isInflow && seed.kind === 'expense')
-      // Note: seed.kind === 'transfer' intentionally NOT allowed
-      // for standalone rows — we already checked for pairing above.
+      (!isInflow && seed.kind === 'expense') ||
+      // Transfer-kind seeds on a STANDALONE row.
+      //
+      // 0920cf1 refused all of these, for a good reason: a Zelle to
+      // a person maps to TRANSFER_OUT → 'Between accounts', and
+      // labelling that an internal transfer would hide a real
+      // payment from the P&L. That reasoning holds only for
+      // 'Between accounts', which is meaningless without a paired
+      // leg on another linked account.
+      //
+      // It does not hold for the rest. 'Financing', 'Owner draw',
+      // 'Owner contribution' and 'Personal' are non-operational by
+      // their nature, not by whether a second leg happens to be
+      // visible — a bank loan is not revenue whether or not we can
+      // see where the money went. Blanket-refusing them sent every
+      // such row to Uncategorized, where it was counted as ordinary
+      // income or spend. That is how a $25,000 loan became 84% of
+      // reported revenue.
+      (seed.kind === 'transfer' && seed.name.toLowerCase() !== 'between accounts')
     insertRows.push({
       restaurant_id: restaurantId,
       occurred_at: p.raw.posted_at,

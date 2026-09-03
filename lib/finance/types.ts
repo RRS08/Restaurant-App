@@ -217,4 +217,11 @@ export const SEED_CATEGORIES: Array<{
   { name: 'Owner contribution', kind: 'transfer', color: '#16A34A', tax_category: null, sort_order: 160 },
   { name: 'Personal',         kind: 'transfer', color: '#A855F7', tax_category: null, sort_order: 165 },
   { name: 'Between accounts', kind: 'transfer', color: '#6B7280', tax_category: null, sort_order: 170 },
+  // Borrowed money in / principal repaid out. Transfer-kind on
+  // purpose: a loan disbursement is not revenue and a principal
+  // repayment is not an operating expense, so both stay out of the
+  // P&L while remaining visible in the ledger. seedCategories()
+  // diffs by name, so this reaches existing tenants on their next
+  // Finance visit with no migration.
+  { name: 'Financing',        kind: 'transfer', color: '#0D9488', tax_category: null, sort_order: 175 },
 ]

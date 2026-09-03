@@ -23,6 +23,7 @@ export type PlaidPrimaryCategory =
   | 'TRANSFER_IN'
   | 'TRANSFER_OUT'
   | 'LOAN_PAYMENTS'
+  | 'LOAN_DISBURSEMENTS'
   | 'BANK_FEES'
   | 'ENTERTAINMENT'
   | 'FOOD_AND_DRINK'
@@ -55,6 +56,17 @@ const PRIMARY_MAP: Record<PlaidPrimaryCategory, PlaidCategoryMapResult> = {
   TRANSFER_IN:              { seedName: 'Between accounts', isTransferHint: true, confidence: 'high' },
   TRANSFER_OUT:             { seedName: 'Between accounts', isTransferHint: true, confidence: 'high' },
   LOAN_PAYMENTS:            { seedName: 'Other',      isTransferHint: true, confidence: 'low' },
+  // Loan/financing money ARRIVING. Borrowed principal is not
+  // revenue — it is a balance-sheet event that has to be paid back.
+  // This bucket was missing entirely, so a $25,000 WebBank/Reprise
+  // disbursement fell through to seedName null, landed
+  // Uncategorized, and was summed as income: 84% of Hatziri's
+  // reported 30-day "revenue" was a loan.
+  //
+  // 'Financing' is transfer-kind, so isOperational() keeps it out
+  // of BOTH the income and the spend totals while it stays visible
+  // in the ledger.
+  LOAN_DISBURSEMENTS:       { seedName: 'Financing',  isTransferHint: false, confidence: 'high' },
   BANK_FEES:                { seedName: 'Fees',       isTransferHint: false, confidence: 'high' },
   RENT_AND_UTILITIES:       { seedName: 'Utilities',  isTransferHint: false, confidence: 'low' },
   GOVERNMENT_AND_NON_PROFIT:{ seedName: 'Other',      isTransferHint: false, confidence: 'low' },

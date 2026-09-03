@@ -138,12 +138,12 @@ function renderCard(p: Card): string {
 }
 
 /** Per-index palette so each choice's dot carries its own color.
- *  First choice = sage green (matches Hatziri palette + PDP tone),
- *  second = deep navy, third = amber, fourth = plum. Loops if the
- *  product happens to declare more than 4 choices (rare). Colors
- *  chosen to read well on the sage-cream card background AND to
- *  differentiate at a glance without needing a legend. */
-const CHOICE_COLORS = ['#2f4a1f', '#1e3a5f', '#7a4a1f', '#4a1f4a'] as const
+ *  Colors per Claude Design spec:
+ *    0 (loose leaf)  → forest green
+ *    1 (tea bags)    → indigo
+ *    2 / 3           → amber / plum fallbacks for future variants
+ *  Loops if the product happens to declare more than 4 choices. */
+const CHOICE_COLORS = ['#3d6e2a', '#27306f', '#7a4a1f', '#4a1f4a'] as const
 
 /** Inline dot picker for a card. One row: N colored dots (each
  *  choice gets its own hue) followed by the label of the currently-
@@ -221,17 +221,17 @@ const CARD_PICKER_STYLE = `
   display: block;
   width: 14px; height: 14px;
   border-radius: 999px;
-  background: var(--dot-color, #2f4a1f);
-  opacity: 0.35;
+  background: var(--dot-color, #3d6e2a);
+  opacity: 0.4;
   transition: opacity .14s ease, box-shadow .14s ease;
 }
-.card .card-opt:hover .card-opt-dot { opacity: 0.6; }
+.card .card-opt:hover .card-opt-dot { opacity: 0.7; }
 .card .card-opt.is-active .card-opt-dot {
   opacity: 1;
-  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4.5px var(--dot-color, #2f4a1f);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--dot-color, #3d6e2a);
 }
 .card .card-opt input:focus-visible + .card-opt-dot {
-  box-shadow: 0 0 0 3px #f0f3ea, 0 0 0 4.5px var(--dot-color, #2f4a1f);
+  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--dot-color, #3d6e2a);
 }
 .card .card-opt-label {
   margin-left: 4px;

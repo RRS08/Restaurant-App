@@ -247,8 +247,14 @@ export default async function proxy(request: NextRequest) {
 // entirely and is served directly from public/ by Next.js. Includes .js,
 // .json, and font/CSS extensions so hosted-site widgets (Valley's D3 map)
 // can pull their own scripts + data files off the platform origin.
+//
+// tv-k7m2q9x4 is the office TV display (public/tv-k7m2q9x4/index.html) —
+// a static, unlisted slideshow that has to load in a kiosk browser with no
+// session. Excluded by path prefix so it never hits the login redirect.
+// The slug is the only thing keeping it unlisted; do not link to it from
+// anywhere indexable.
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|mjs|json|woff|woff2|ttf|eot|map|txt|xml)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|tv-k7m2q9x4|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|mjs|json|woff|woff2|ttf|eot|map|txt|xml)$).*)',
   ],
 }

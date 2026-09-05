@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Checked — workspace display</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #18181B; overflow: hidden; cursor: none; }
+  #wrap { position: relative; width: 100vw; height: 100vh; overflow: hidden; background: #18181B; }
+  #stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; transform: translate(-50%,-50%); transform-origin: center center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+<div id="stage">
+<section data-slide="1" data-screen-label="01 Logo" style="position:absolute;inset:0;opacity:1;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:52px;background-color:#18181B;background-image:conic-gradient(#1E1E22 0 25%,#18181B 0 50%,#1E1E22 0 75%,#18181B 0);background-size:144px 144px;background-position:0 0;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<svg width="134" height="230" viewBox="18 8 28 48" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Checked">
+<path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#FAF9F6"></path>
+<rect x="26" y="16" width="14" height="3" rx="1.5" fill="#18181B"></rect>
+<rect x="26" y="23" width="11" height="3" rx="1.5" fill="#18181B"></rect>
+<rect x="26" y="30" width="8" height="3" rx="1.5" fill="#18181B"></rect>
+<path d="M27 41l4 4 8-9" fill="none" stroke="#18181B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<div style="font-size:124px;font-weight:600;letter-spacing:-0.045em;line-height:1;color:#FAF9F6">checked</div>
+</section>
+
+<section data-slide="2" data-screen-label="02 Slogan" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;justify-content:center;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="max-width:1300px;font-size:196px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;text-wrap:pretty">
+<span style="color:#FAF9F6">Manage your business.</span><br /><span data-accent="fg" style="color:#8C9A6B">Build your brand.</span>
+</div>
+<div style="position:absolute;right:96px;bottom:76px;display:flex;flex-direction:row;align-items:center;gap:18px">
+<svg width="42" height="72" viewBox="18 8 28 48" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Checked">
+<path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#FAF9F6"></path>
+<rect x="26" y="16" width="14" height="3" rx="1.5" fill="#18181B"></rect>
+<rect x="26" y="23" width="11" height="3" rx="1.5" fill="#18181B"></rect>
+<rect x="26" y="30" width="8" height="3" rx="1.5" fill="#18181B"></rect>
+<path d="M27 41l4 4 8-9" fill="none" stroke="#18181B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+<div style="font-size:42px;font-weight:600;letter-spacing:-0.04em;line-height:1;color:#FAF9F6">checked</div>
+</div>
+</section>
+
+<section data-slide="3" data-screen-label="03 Partners" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div data-partners-title="1" style="font-size:132px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;color:#FAF9F6">Partners.</div>
+<div data-wall="1" style="flex:1;position:relative;margin-top:24px">
+<span data-partner="1" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center"><img src="/assets/logo-tree.png" alt="Hatziri Tea &amp; Botanicals" style="width:100%;height:auto;display:block" /></span>
+<span data-partner="2" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center"><img data-logo="valley" src="/assets/valley/logo-light.png" alt="Valley Carriers" style="width:100%;height:auto;display:block" /></span>
+<span data-partner="3" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="4" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="5" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="6" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="7" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="8" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="9" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="10" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="11" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="12" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="13" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="14" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="15" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="16" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="17" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="18" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="19" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+<span data-partner="20" style="position:absolute;display:flex;align-items:center;justify-content:center;font-size:38px;font-weight:500;letter-spacing:0.12em;color:rgba(250,249,246,0.3);white-space:nowrap;transform-origin:center center">COMING SOON</span>
+</div>
+</section>
+
+<section data-slide="4" data-screen-label="04 Pipeline" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:64px">
+<div style="font-size:104px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;color:#FAF9F6">Pipeline.</div>
+</div>
+<div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0 140px;margin-top:48px">
+<div style="display:flex;flex-direction:column">
+<div style="display:grid;grid-template-columns:1fr 130px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:36px;font-weight:400;color:#FAF9F6;opacity:0.55">Leads</div>
+<div style="margin-top:14px;height:10px;background:rgba(250,249,246,0.1)"><div style="width:100%;height:10px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="leads" style="font-size:52px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">40</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 130px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:36px;font-weight:400;color:#FAF9F6;opacity:0.55">Conversations</div>
+<div style="margin-top:14px;height:10px;background:rgba(250,249,246,0.1)"><div style="width:20%;height:10px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="conversations" style="font-size:52px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">8</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 130px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:36px;font-weight:400;color:#FAF9F6;opacity:0.55">Proposals</div>
+<div style="margin-top:14px;height:10px;background:rgba(250,249,246,0.1)"><div style="width:8%;height:10px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="proposals" style="font-size:52px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">3</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 130px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:36px;font-weight:400;color:#FAF9F6;opacity:0.85">Signed</div>
+<div style="margin-top:14px;height:10px;background:rgba(250,249,246,0.1)"><div style="width:5%;height:10px;background:rgba(250,249,246,0.9)"></div></div>
+</div>
+<div data-name="signed" style="font-size:52px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">2</div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;justify-content:center">
+<div style="display:flex;align-items:baseline;gap:24px">
+<div data-accent="fg" data-name="active_clients" data-count="2" data-format="int" style="font-size:300px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#8C9A6B;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1">2</div>
+</div>
+<div style="margin-top:22px;font-size:44px;font-weight:400;color:#FAF9F6;opacity:0.55">active clients</div>
+<div data-accent="border" style="margin-top:40px;padding-top:40px;border-top:3px solid #8C9A6B">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;padding:16px 0">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.6">Leads that signed</div>
+<div data-name="lead_to_signed" style="font-size:44px;font-weight:600;letter-spacing:-0.02em;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">5%</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;padding:16px 0">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.45">Lead to conversation</div>
+<div data-name="conv_lead" style="font-size:40px;font-weight:500;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.8;font-variant-numeric:tabular-nums lining-nums">20%</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;padding:16px 0">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.45">Conversation to proposal</div>
+<div data-name="conv_prop" style="font-size:40px;font-weight:500;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.8;font-variant-numeric:tabular-nums lining-nums">38%</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;padding:16px 0">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.45">Proposal to signed</div>
+<div data-name="conv_signed" style="font-size:40px;font-weight:500;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.8;font-variant-numeric:tabular-nums lining-nums">67%</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<section data-slide="5" data-screen-label="05 The books" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="display:flex;align-items:flex-start;gap:150px">
+<div>
+<div data-name="mrr" data-count="100" data-format="currency" style="font-size:210px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1">$100</div>
+<div style="margin-top:22px;font-size:44px;font-weight:400;letter-spacing:-0.01em;color:#FAF9F6;opacity:0.55">MRR today</div>
+</div>
+<div style="margin-left:auto;text-align:right">
+<div data-name="arr" data-accent="fg" data-count="1200" data-format="currency" style="font-size:210px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#8C9A6B;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1">$1,200</div>
+<div style="margin-top:22px;font-size:44px;font-weight:400;letter-spacing:-0.01em;color:#FAF9F6;opacity:0.55">ARR at this run rate</div>
+</div>
+</div>
+<div style="margin-top:auto">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:40px;margin-bottom:26px">
+<div style="font-size:36px;font-weight:400;color:#FAF9F6;opacity:0.5">Next twelve months on today&rsquo;s subscriptions</div>
+<div style="font-family:'Geist Mono',ui-monospace,monospace;font-size:26px;letter-spacing:0.08em;color:#FAF9F6;opacity:0.4">RUNNING TOTAL, <span data-name="mrr_flat">$100</span>/MO</div>
+</div>
+<svg width="1728" height="460" viewBox="0 0 1728 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cumulative revenue over twelve months">
+<line x1="24" y1="390" x2="1704" y2="390" stroke="#FAF9F6" stroke-opacity="0.18" stroke-width="2"></line>
+<path data-accent="svgfill" d="M24,363 L177,337 L329,310 L482,283 L635,257 L788,230 L940,203 L1093,177 L1246,150 L1399,123 L1551,97 L1704,70 L1704,390 L24,390 Z" fill="#8C9A6B" fill-opacity="0.22"></path>
+<path data-accent="svgstroke" d="M24,363 L177,337 L329,310 L482,283 L635,257 L788,230 L940,203 L1093,177 L1246,150 L1399,123 L1551,97 L1704,70" fill="none" stroke="#8C9A6B" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"></path>
+<circle cx="24" cy="363" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="177" cy="337" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="329" cy="310" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="482" cy="283" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="635" cy="257" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="788" cy="230" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="940" cy="203" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="1093" cy="177" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="1246" cy="150" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="1399" cy="123" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle cx="1551" cy="97" r="6" fill="#FAF9F6" fill-opacity="0.5"></circle>
+<circle data-accent="svgfill" cx="1704" cy="70" r="12" fill="#8C9A6B"></circle>
+<text data-accent="svgfill" data-name="cum_year_end" x="1704" y="40" text-anchor="end" fill="#8C9A6B" font-size="52" font-weight="600" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">$1,200</text>
+<text x="24" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Oct</text>
+<text x="177" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Nov</text>
+<text x="329" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Dec</text>
+<text x="482" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Jan</text>
+<text x="635" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Feb</text>
+<text x="788" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Mar</text>
+<text x="940" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Apr</text>
+<text x="1093" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">May</text>
+<text x="1246" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Jun</text>
+<text x="1399" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Jul</text>
+<text x="1551" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Aug</text>
+<text x="1704" y="435" text-anchor="middle" fill="#FAF9F6" fill-opacity="0.4" font-size="30" font-family="'Instrument Sans',Helvetica,Arial,sans-serif">Sep</text>
+</svg>
+</div>
+</section>
+
+<section data-slide="9" data-screen-label="05b Finance" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="font-size:104px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;color:#FAF9F6">Finance.</div>
+<div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:0 140px;margin-top:48px">
+<div style="display:flex;flex-direction:column;justify-content:center">
+<div data-name="cash_in_hand" data-count="2400" data-format="currency" style="font-size:260px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1">$2,400</div>
+<div style="margin-top:22px;font-size:44px;font-weight:400;color:#FAF9F6;opacity:0.55">Cash in hand</div>
+<div style="margin-top:40px;padding-top:40px;border-top:3px solid #8C9A6B" data-accent="border">
+<div style="display:flex;align-items:baseline;gap:24px">
+<div data-accent="fg" data-name="runway_months" style="font-size:190px;font-weight:600;letter-spacing:-0.05em;line-height:0.86;color:#8C9A6B;font-variant-numeric:tabular-nums lining-nums">10</div>
+<div style="font-size:44px;font-weight:400;color:#FAF9F6;opacity:0.55">months of runway</div>
+</div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:32px;padding-bottom:20px">
+<div style="font-size:44px;font-weight:400;color:#FAF9F6;opacity:0.55">Monthly costs</div>
+<div data-name="monthly_costs_total" style="font-size:88px;font-weight:600;letter-spacing:-0.04em;line-height:1;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$340</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Design & dev tooling</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:100%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_tooling" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$90</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Hosting & infrastructure</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:89%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_hosting" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$80</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Payments & banking</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:67%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_payments" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$60</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Database & storage</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:50%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_database" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$45</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Insurance & filings</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:44%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_insurance" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$40</div>
+</div>
+<div style="display:grid;grid-template-columns:1fr 150px;align-items:center;gap:0 32px;padding:20px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div>
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">Domains & email</div>
+<div style="margin-top:12px;height:8px;background:rgba(250,249,246,0.1)"><div style="width:28%;height:8px;background:rgba(250,249,246,0.55)"></div></div>
+</div>
+<div data-name="cost_domains" style="font-size:44px;font-weight:500;letter-spacing:-0.02em;text-align:right;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">$25</div>
+</div>
+</div>
+</div>
+</section>
+
+<section data-slide="6" data-screen-label="06 This week" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:64px">
+<div style="font-size:104px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;color:#FAF9F6">This week.</div>
+<div style="font-family:'Geist Mono',ui-monospace,monospace;font-size:26px;letter-spacing:0.08em;color:rgba(250,249,246,0.4);padding-bottom:22px"><span data-name="week_targets_met">36</span>% OF TARGETS MET</div>
+</div>
+<div style="flex:1;display:flex;flex-direction:column;margin-top:40px">
+<div style="display:grid;grid-template-columns:300px 1fr;align-items:center;gap:0 56px;padding:28px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="display:flex;align-items:baseline;gap:14px;font-variant-numeric:tabular-nums lining-nums">
+<div data-name="week_conversations" style="font-size:118px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#FAF9F6">4</div>
+<div data-name="week_conversations_target" style="font-size:48px;font-weight:400;color:#FAF9F6;opacity:0.35">/ 10</div>
+</div>
+<div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.55">Conversations started</div>
+<div style="margin-top:20px;height:18px;background:rgba(250,249,246,0.1)"><div style="width:40%;height:18px;background:rgba(250,249,246,0.8)"></div></div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:300px 1fr;align-items:center;gap:0 56px;padding:28px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="display:flex;align-items:baseline;gap:14px;font-variant-numeric:tabular-nums lining-nums">
+<div data-name="week_meetings" style="font-size:118px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#FAF9F6">1</div>
+<div data-name="week_meetings_target" style="font-size:48px;font-weight:400;color:#FAF9F6;opacity:0.35">/ 3</div>
+</div>
+<div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.55">Meetings booked</div>
+<div style="margin-top:20px;height:18px;background:rgba(250,249,246,0.1)"><div style="width:33%;height:18px;background:rgba(250,249,246,0.8)"></div></div>
+</div>
+</div>
+<div style="display:grid;grid-template-columns:300px 1fr;align-items:center;gap:0 56px;padding:28px 0;flex:1;align-content:center;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="display:flex;align-items:baseline;gap:14px;font-variant-numeric:tabular-nums lining-nums">
+<div data-name="week_builds" style="font-size:118px;font-weight:500;letter-spacing:-0.05em;line-height:0.86;color:#FAF9F6">0</div>
+<div data-name="week_builds_target" style="font-size:48px;font-weight:400;color:#FAF9F6;opacity:0.35">/ 1</div>
+</div>
+<div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.55">Builds shipped</div>
+<div style="margin-top:20px;height:18px;background:rgba(250,249,246,0.1)"><div style="width:0%;height:18px;background:rgba(250,249,246,0.8)"></div></div>
+</div>
+</div>
+</div>
+<div data-accent="border" style="margin-top:40px;padding-top:36px;border-top:3px solid #8C9A6B;display:flex;align-items:baseline;gap:28px">
+<div data-accent="fg" data-name="week_followups" data-count="3" data-format="int" style="font-size:150px;font-weight:600;letter-spacing:-0.05em;line-height:0.86;color:#8C9A6B;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:'tnum' 1,'lnum' 1">3</div>
+<div style="font-size:48px;font-weight:400;color:#FAF9F6;opacity:0.55">follow-ups due today</div>
+</div>
+</section>
+
+<section data-slide="7" data-screen-label="07 The road to 100" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<div style="display:flex;align-items:flex-end;justify-content:space-between;gap:64px">
+<div style="font-size:104px;font-weight:700;letter-spacing:-0.045em;line-height:0.94;color:#FAF9F6">The road to 100.</div>
+</div>
+<div style="flex:1;display:grid;grid-template-columns:repeat(3,1fr);gap:0 72px;margin-top:64px">
+<div style="display:flex;flex-direction:column;height:100%;justify-content:space-between;padding-top:30px;border-top:3px solid rgba(250,249,246,0.28)">
+<div style="height:40px;font-family:'Geist Mono',ui-monospace,monospace;font-size:26px;letter-spacing:0.14em;color:#FAF9F6;opacity:0.35">WAYPOINT</div>
+<div style="display:flex;align-items:baseline;gap:16px;margin-top:6px">
+<div style="font-size:172px;font-weight:600;letter-spacing:-0.05em;line-height:0.84;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">30</div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.45">clients</div>
+</div>
+<div style="margin-top:44px;height:14px;background:rgba(250,249,246,0.14)"><div style="width:7%;height:14px;background:#FAF9F6"></div></div>
+<div style="margin-top:20px;font-family:'Geist Mono',ui-monospace,monospace;font-size:28px;letter-spacing:0.06em;color:#FAF9F6;opacity:0.4"><span data-name="m30_pct">7</span>% THERE</div>
+<div style="margin-top:48px">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">MRR</div>
+<div data-name="m30_mrr" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$2,250</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">One-offs/mo</div>
+<div data-name="m30_oneoffs" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$4,330</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">Total/mo</div>
+<div data-name="m30_total" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$6,580</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">ARR</div>
+<div data-name="m30_arr" style="font-size:62px;font-weight:600;letter-spacing:-0.02em;color:#FAF9F6;opacity:1;font-variant-numeric:tabular-nums lining-nums">$78,960</div>
+</div>
+</div>
+</div>
+<div style="display:flex;flex-direction:column;height:100%;justify-content:space-between;padding-top:30px;border-top:3px solid rgba(250,249,246,0.28)">
+<div style="height:40px;font-family:'Geist Mono',ui-monospace,monospace;font-size:26px;letter-spacing:0.14em;color:#FAF9F6;opacity:0.35">WAYPOINT</div>
+<div style="display:flex;align-items:baseline;gap:16px;margin-top:6px">
+<div style="font-size:172px;font-weight:600;letter-spacing:-0.05em;line-height:0.84;color:#FAF9F6;font-variant-numeric:tabular-nums lining-nums">50</div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.45">clients</div>
+</div>
+<div style="margin-top:44px;height:14px;background:rgba(250,249,246,0.14)"><div style="width:4%;height:14px;background:#FAF9F6"></div></div>
+<div style="margin-top:20px;font-family:'Geist Mono',ui-monospace,monospace;font-size:28px;letter-spacing:0.06em;color:#FAF9F6;opacity:0.4"><span data-name="m50_pct">4</span>% THERE</div>
+<div style="margin-top:48px">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">MRR</div>
+<div data-name="m50_mrr" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$3,750</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">One-offs/mo</div>
+<div data-name="m50_oneoffs" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$4,330</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">Total/mo</div>
+<div data-name="m50_total" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#FAF9F6;opacity:0.75;font-variant-numeric:tabular-nums lining-nums">$8,080</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">ARR</div>
+<div data-name="m50_arr" style="font-size:62px;font-weight:600;letter-spacing:-0.02em;color:#FAF9F6;opacity:1;font-variant-numeric:tabular-nums lining-nums">$96,960</div>
+</div>
+</div>
+</div>
+<div data-accent="border" style="display:flex;flex-direction:column;height:100%;justify-content:space-between;padding-top:30px;border-top:3px solid #8C9A6B">
+<div style="height:40px;font-family:'Geist Mono',ui-monospace,monospace;font-size:26px;letter-spacing:0.14em;color:#FAF9F6;opacity:0.35">THE ROUND</div>
+<div style="display:flex;align-items:baseline;gap:16px;margin-top:6px">
+<div data-accent="fg" style="font-size:172px;font-weight:600;letter-spacing:-0.05em;line-height:0.84;color:#8C9A6B;font-variant-numeric:tabular-nums lining-nums">100</div>
+<div style="font-size:40px;font-weight:400;color:#FAF9F6;opacity:0.45">clients</div>
+</div>
+<div style="margin-top:44px;height:14px;background:rgba(250,249,246,0.14)"><div data-accent="bg" style="width:2%;height:14px;background:#8C9A6B"></div></div>
+<div style="margin-top:20px;font-family:'Geist Mono',ui-monospace,monospace;font-size:28px;letter-spacing:0.06em;color:rgba(250,249,246,0.4)"><span data-accent="fg" style="color:#8C9A6B"><span data-name="m100_pct">2</span>%</span> THERE</div>
+<div style="margin-top:48px">
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">MRR</div>
+<div data-name="m100_mrr" data-accent="fg" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#8C9A6B;opacity:1;font-variant-numeric:tabular-nums lining-nums">$7,500</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">One-offs/mo</div>
+<div data-name="m100_oneoffs" data-accent="fg" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#8C9A6B;opacity:1;font-variant-numeric:tabular-nums lining-nums">$4,330</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:32px;font-weight:400;color:#FAF9F6;opacity:0.42">Total/mo</div>
+<div data-name="m100_total" data-accent="fg" style="font-size:40px;font-weight:400;letter-spacing:-0.02em;color:#8C9A6B;opacity:1;font-variant-numeric:tabular-nums lining-nums">$11,830</div>
+</div>
+<div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;padding:22px 0;border-top:1px solid rgba(250,249,246,0.12)">
+<div style="font-size:34px;font-weight:400;color:#FAF9F6;opacity:0.6">ARR</div>
+<div data-name="m100_arr" data-accent="fg" style="font-size:62px;font-weight:600;letter-spacing:-0.02em;color:#8C9A6B;opacity:1;font-variant-numeric:tabular-nums lining-nums">$141,960</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+
+<section data-slide="8" data-screen-label="08 Mission" style="position:absolute;inset:0;opacity:0;transition:opacity 800ms ease-in-out;padding:54px 96px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#18181B;font-family:'Instrument Sans','Helvetica Neue',Helvetica,Arial,sans-serif">
+<p style="margin:0;max-width:1500px;font-size:84px;font-weight:500;letter-spacing:-0.022em;line-height:1.28;color:#FAF9F6;text-align:center;text-wrap:pretty">We aspire to solve real problems with simple, thoughtful, and beautiful solutions. We want to build a company that inspires people to take risks, pursue their ideas, and turn their passion projects into real businesses.</p>
+<div style="width:1500px;height:1px;background:rgba(250,249,246,0.16);margin:88px 0 72px"></div>
+<div style="display:flex;flex-direction:row;align-items:center;gap:26px">
+<svg width="96" height="96" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Checked">
+<rect width="120" height="120" rx="28" fill="#FAF9F6"></rect>
+<g transform="translate(8.8,8.8) scale(1.6)">
+<path d="M24 10h16a4 4 0 0 1 4 4v36a4 4 0 0 1-4 4H24a4 4 0 0 1-4-4V14a4 4 0 0 1 4-4z" fill="#18181B"></path>
+<rect x="26" y="16" width="14" height="3" rx="1.5" fill="#FAF9F6"></rect>
+<rect x="26" y="23" width="11" height="3" rx="1.5" fill="#FAF9F6"></rect>
+<rect x="26" y="30" width="8" height="3" rx="1.5" fill="#FAF9F6"></rect>
+<path d="M27 41l4 4 8-9" fill="none" stroke="#FAF9F6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+</g>
+</svg>
+<div style="font-size:88px;font-weight:700;letter-spacing:-0.05em;line-height:1;color:#FAF9F6">checked</div>
+</div>
+</section>
+</div>
+</div>
+<script>
+(function () {
+  // ---- Content. Edit these; everything on screen derives from them. ----
+  var ORDER = [1, 2, 3, 4, 5, 9, 6, 7, 8];          // slide sequence (9 = Finance)
+  var GUEST_ORDER = [1, 2, 3, 4, 6, 8];             // press G: hides the money slides
+  var DWELL = function (n) { return n <= 3 ? 8000 : n === 8 ? 12000 : 15000; };
+  var ACCENT = { 2: '#9A8CB0', 3: '#B8724A', 4: '#6E8CA0', 5: '#6E9E8E', 6: '#8A8FB5', 7: '#A8807A', 9: '#B0839A' };
+  var PARTNER_COUNT = 2;                             // signed partners with a logo on the wall
+  // Sticker slots: [x%, y%, rotate deg, width px]. Slot i belongs to partner i+1.
+  var SLOTS = [
+    [26, 34, -5, 400], [70, 66, 4, 470],
+    [51, 5, 3, 250], [90, 9, -7, 250], [67, 21, 5, 240], [46, 25, -4, 240],
+    [93, 41, 6, 240], [5, 9, -5, 240], [50, 49, 4, 230], [77, 43, -8, 230],
+    [4, 47, 7, 230], [19, 67, -3, 230], [37, 63, 5, 220], [6, 86, -6, 220],
+    [29, 93, 4, 220], [53, 77, -5, 220], [47, 95, 8, 210], [93, 67, -4, 210],
+    [70, 92, 3, 210], [88, 80, -7, 210]
+  ];
+
+  var wrap = document.getElementById('wrap');
+  var stage = document.getElementById('stage');
+  var idx = 0, z = 1, guest = false, paused = false, timer = null;
+
+  function fit() {
+    var s = Math.min(wrap.clientWidth / 1920, wrap.clientHeight / 1080);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+
+  function applyAccents() {
+    stage.querySelectorAll('[data-slide]').forEach(function (sec) {
+      var accent = ACCENT[Number(sec.getAttribute('data-slide'))] || '#8C9A6B';
+      sec.querySelectorAll('[data-accent]').forEach(function (el) {
+        var kind = el.getAttribute('data-accent');
+        if (kind === 'bg') el.style.background = accent;
+        else if (kind === 'svgfill') el.setAttribute('fill', accent);
+        else if (kind === 'svgstroke') el.setAttribute('stroke', accent);
+        else if (kind === 'border') el.style.borderTopColor = accent;
+        else el.style.color = accent;
+      });
+    });
+  }
+
+  function layoutWall() {
+    stage.querySelectorAll('[data-partner]').forEach(function (el) {
+      var i = Number(el.getAttribute('data-partner'));
+      var s = SLOTS[i - 1] || SLOTS[0];
+      var hasLogo = !!el.querySelector('img');
+      el.style.display = (i <= PARTNER_COUNT || !hasLogo) ? 'flex' : 'none';
+      el.style.left = s[0] + '%';
+      el.style.top = s[1] + '%';
+      el.style.width = hasLogo ? s[3] + 'px' : 'auto';
+      el.style.transform = 'translate(-50%,-50%) rotate(' + s[2] + 'deg)';
+      el.style.fontSize = Math.max(26, Math.round(s[3] / 9)) + 'px';
+      if (!hasLogo) el.style.color = ACCENT[3];
+    });
+  }
+
+  function fmt(v, kind) {
+    var r = Math.round(v);
+    if (kind === 'currency') return '$' + r.toLocaleString('en-US');
+    if (kind === 'percent') return r + '%';
+    return String(r);
+  }
+
+  function countUp(root) {
+    root.querySelectorAll('[data-count]').forEach(function (el) {
+      var target = parseFloat(el.getAttribute('data-count'));
+      var kind = el.getAttribute('data-format') || 'int';
+      if (!isFinite(target) || target === 0) { el.textContent = fmt(target || 0, kind); return; }
+      var t0 = performance.now(), dur = 1000;
+      function step(t) {
+        var p = Math.min(1, (t - t0) / dur);
+        var e = 1 - Math.pow(1 - p, 3);
+        el.textContent = fmt(target * e, kind);
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
+  function order() { return guest ? GUEST_ORDER : ORDER; }
+  function current() { return order()[idx]; }
+
+  function show() {
+    var n = current(), active = null;
+    stage.querySelectorAll('[data-slide]').forEach(function (el) {
+      var on = Number(el.getAttribute('data-slide')) === n;
+      if (on) { active = el; el.style.zIndex = String(++z); }
+      el.style.opacity = on ? '1' : '0';
+    });
+    if (active) countUp(active);
+  }
+
+  function queue() {
+    clearTimeout(timer);
+    if (paused) return;
+    timer = setTimeout(function () { step(1); }, DWELL(current()));
+  }
+
+  function step(d) {
+    var len = order().length;
+    idx = (idx + d + len) % len;
+    show(); queue();
+  }
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'g' || e.key === 'G') { guest = !guest; idx = idx % order().length; show(); queue(); }
+    else if (e.key === ' ') { e.preventDefault(); paused = !paused; queue(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+  });
+  window.addEventListener('resize', fit);
+
+  fit(); applyAccents(); layoutWall(); show(); queue();
+})();
+</script>
+</body>
+</html>
